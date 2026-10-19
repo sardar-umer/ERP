@@ -35,7 +35,8 @@ import {
   ListItemIcon,
   Accordion,
   AccordionSummary,
-  AccordionDetails
+  AccordionDetails,
+  Stack
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
@@ -330,12 +331,31 @@ const LoanDetail = () => {
               <Typography variant="body2" color="text.secondary">
                 Status
               </Typography>
-              <Chip
-                label={loan.status}
-                color={getStatusColor(loan.status)}
-                size="small"
-              />
+              <Stack direction="row" gap={0.75} flexWrap="wrap" useFlexGap sx={{ mt: 0.5 }}>
+                <Chip
+                  label={loan.status}
+                  color={getStatusColor(loan.status)}
+                  size="small"
+                />
+                {loan.isOngoingLoan && (
+                  <Chip label="Already Ongoing" color="warning" size="small" variant="outlined" />
+                )}
+              </Stack>
             </Box>
+            {loan.isOngoingLoan && (
+              <Box sx={{ mb: 2 }}>
+                <Typography variant="body2" color="text.secondary">Loan Start Date</Typography>
+                <Typography variant="body1">
+                  {loan.loanStartDate ? formatDate(loan.loanStartDate) : '—'}
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>EMIs already paid</Typography>
+                <Typography variant="body1">
+                  {loan.installmentsAlreadyPaid ?? 0}
+                  {' · '}
+                  {formatPKR(loan.amountAlreadyPaid || loan.totalPaid || 0)}
+                </Typography>
+              </Box>
+            )}
           </Grid>
           
           <Grid item xs={12} md={6}>
@@ -749,6 +769,15 @@ const LoanDetail = () => {
 
   return (
     <Box sx={{ p: 3 }}>
+      {loan.isOngoingLoan && (
+        <Alert severity="warning" sx={{ mb: 2 }}>
+          <strong>Already Ongoing Loan</strong> — started{' '}
+          {loan.loanStartDate ? formatDate(loan.loanStartDate) : '—'}, with{' '}
+          <strong>{loan.installmentsAlreadyPaid ?? 0} EMI(s)</strong> already paid
+          ({formatPKR(loan.amountAlreadyPaid || loan.totalPaid || 0)}).
+          Remaining balance: {formatPKR(loan.outstandingBalance)}.
+        </Alert>
+      )}
       <Box display="flex" alignItems="center" justifyContent="space-between" flexWrap="wrap" gap={2} mb={3}>
         <Box display="flex" alignItems="center">
           <Button

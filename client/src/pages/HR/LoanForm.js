@@ -62,6 +62,9 @@ const LoanForm = () => {
     purpose: '',
     collateral: '',
     collateralValue: '',
+    isOngoingLoan: false,
+    loanStartDate: '',
+    installmentsAlreadyPaid: '',
     guarantor: {
       name: '',
       relationship: '',
@@ -81,7 +84,10 @@ const LoanForm = () => {
     totalPayable: 0,
     totalInterest: 0,
     lastInstallment: 0,
-    suggestedEmi: 0
+    suggestedEmi: 0,
+    paidInstallments: 0,
+    paidSoFar: 0,
+    remainingBalance: 0
   });
   const [emiManual, setEmiManual] = useState(false);
   const [emiInput, setEmiInput] = useState('');
@@ -99,7 +105,15 @@ const LoanForm = () => {
   useEffect(() => {
     recalculatePlan();
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [formData.loanAmount, formData.interestRate, formData.loanTerm, emiManual, emiInput]);
+  }, [
+    formData.loanAmount,
+    formData.interestRate,
+    formData.loanTerm,
+    formData.isOngoingLoan,
+    formData.installmentsAlreadyPaid,
+    emiManual,
+    emiInput
+  ]);
 
   const fetchEmployees = async () => {
     try {
@@ -164,7 +178,10 @@ const LoanForm = () => {
         totalPayable: 0,
         totalInterest: 0,
         lastInstallment: 0,
-        suggestedEmi: 0
+        suggestedEmi: 0,
+        paidInstallments: 0,
+        paidSoFar: 0,
+        remainingBalance: 0
       });
       setEmiPlanError('');
       return;
@@ -181,12 +198,32 @@ const LoanForm = () => {
 
     const plan = loanService.previewInstallmentPlan(principal, rate, time, emiToUse);
     setEmiPlanError(plan.valid ? '' : (plan.error || ''));
+
+    const paidCount = formData.isOngoingLoan
+      ? Math.min(Math.max(0, parseInt(formData.installmentsAlreadyPaid, 10) || 0), time)
+      : 0;
+
+    // Derive paid amount from EMI count (last installment may differ)
+    let paidSoFar = 0;
+    if (paidCount > 0 && plan.valid) {
+      const regularMonths = Math.max(0, time - 1);
+      const fullRegular = Math.min(paidCount, regularMonths);
+      paidSoFar += fullRegular * emiToUse;
+      if (paidCount > regularMonths) {
+        paidSoFar += Number(plan.lastInstallment) || 0;
+      }
+      paidSoFar = Math.round(paidSoFar * 100) / 100;
+    }
+
     setCalculatedValues({
       monthlyInstallment: emiToUse,
       totalPayable: plan.totalPayable,
       totalInterest: plan.totalInterest,
       lastInstallment: plan.lastInstallment,
-      suggestedEmi: suggested
+      suggestedEmi: suggested,
+      paidInstallments: paidCount,
+      paidSoFar,
+      remainingBalance: Math.max(0, (plan.totalPayable || 0) - paidSoFar)
     });
   };
 
@@ -263,6 +300,22 @@ const LoanForm = () => {
         if (emiPlanError) {
           newErrors.monthlyInstallment = emiPlanError;
         }
+        if (formData.isOngoingLoan) {
+          if (!formData.loanStartDate) {
+            newErrors.loanStartDate = 'Start date is required for ongoing loans';
+          }
+          const paidCount = parseInt(formData.installmentsAlreadyPaid, 10);
+          const term = parseInt(formData.loanTerm, 10) || 0;
+          if (
+            formData.installmentsAlreadyPaid === '' ||
+            Number.isNaN(paidCount) ||
+            paidCount < 0
+          ) {
+            newErrors.installmentsAlreadyPaid = 'Enter how many EMIs are already paid (0 if none)';
+          } else if (term > 0 && paidCount > term) {
+            newErrors.installmentsAlreadyPaid = `Cannot exceed loan term (${term} months)`;
+          }
+        }
         break;
 
       case 2: // Guarantor & Documents
@@ -307,7 +360,12 @@ const LoanForm = () => {
         ...formData,
         monthlyInstallment: calculatedValues.monthlyInstallment,
         totalPayable: calculatedValues.totalPayable,
-        emiManuallyAdjusted: emiManual
+        emiManuallyAdjusted: emiManual,
+        isOngoingLoan: Boolean(formData.isOngoingLoan),
+        loanStartDate: formData.isOngoingLoan ? formData.loanStartDate : undefined,
+        installmentsAlreadyPaid: formData.isOngoingLoan
+          ? (parseInt(formData.installmentsAlreadyPaid, 10) || 0)
+          : 0
       };
 
       if (isEdit) {
@@ -315,7 +373,11 @@ const LoanForm = () => {
         setSuccess('Loan application updated successfully');
       } else {
         await loanService.createLoan(loanData);
-        setSuccess('Loan application submitted successfully');
+        setSuccess(
+          formData.isOngoingLoan
+            ? 'Ongoing loan imported successfully'
+            : 'Loan application submitted successfully'
+        );
       }
 
       setTimeout(() => {
@@ -519,6 +581,101 @@ const LoanForm = () => {
                       Month {formData.loanTerm}: <strong>{formatPKR(calculatedValues.lastInstallment)}</strong>
                       {' '}(balances remaining principal)
                     </Alert>
+                  )}
+                </CardContent>
+              </Card>
+            </Grid>
+
+            <Grid item xs={12}>
+              <Card
+                variant="outlined"
+                sx={{
+                  borderColor: formData.isOngoingLoan ? 'warning.main' : 'divider',
+                  bgcolor: formData.isOngoingLoan ? 'warning.50' : 'background.paper'
+                }}
+              >
+                <CardContent>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+                    <Box>
+                      <Typography variant="h6" fontWeight={700}>
+                        Already Ongoing Loan
+                      </Typography>
+                      <Typography variant="body2" color="text.secondary">
+                        Turn on if this loan is already running outside the system — import history and continue from here.
+                      </Typography>
+                    </Box>
+                    <FormControlLabel
+                      control={
+                        <Switch
+                          checked={Boolean(formData.isOngoingLoan)}
+                          onChange={(e) => {
+                            const on = e.target.checked;
+                            handleInputChange('isOngoingLoan', on);
+                            if (on && !formData.purpose) {
+                              handleInputChange('purpose', 'Existing ongoing loan imported into system');
+                            }
+                          }}
+                          color="warning"
+                        />
+                      }
+                      label={formData.isOngoingLoan ? 'Ongoing' : 'New application'}
+                    />
+                  </Stack>
+
+                  {formData.isOngoingLoan && (
+                    <Box sx={{ mt: 2 }}>
+                      <Alert severity="warning" sx={{ mb: 2 }}>
+                        This will create the loan as <strong>Active / Already going on</strong>.
+                        The first N EMIs will be marked Paid; paid amount is calculated automatically.
+                      </Alert>
+                      <Grid container spacing={2}>
+                        <Grid item xs={12} sm={6}>
+                          <TextField
+                            fullWidth
+                            type="date"
+                            label="Loan Start Date"
+                            value={formData.loanStartDate}
+                            onChange={(e) => handleInputChange('loanStartDate', e.target.value)}
+                            error={!!errors.loanStartDate}
+                            helperText={errors.loanStartDate || 'When EMI deductions originally started'}
+                            InputLabelProps={{ shrink: true }}
+                          />
+                        </Grid>
+                        <Grid item xs={12} sm={6}>
+                          <TextField
+                            fullWidth
+                            type="number"
+                            label="EMIs Already Paid"
+                            value={formData.installmentsAlreadyPaid}
+                            onChange={(e) => handleInputChange('installmentsAlreadyPaid', e.target.value)}
+                            error={!!errors.installmentsAlreadyPaid}
+                            helperText={
+                              errors.installmentsAlreadyPaid ||
+                              `How many monthly EMIs paid so far (0–${formData.loanTerm || 'term'})`
+                            }
+                            inputProps={{ min: 0, max: Number(formData.loanTerm) || 120, step: 1 }}
+                          />
+                        </Grid>
+                        <Grid item xs={12} sm={4}>
+                          <Typography variant="caption" color="text.secondary">EMIs paid</Typography>
+                          <Typography variant="subtitle1" fontWeight={700}>
+                            {calculatedValues.paidInstallments} / {formData.loanTerm || 0}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={12} sm={4}>
+                          <Typography variant="caption" color="text.secondary">Paid so far (auto)</Typography>
+                          <Typography variant="subtitle1" fontWeight={700}>
+                            {formatPKR(calculatedValues.paidSoFar)}
+                          </Typography>
+                        </Grid>
+                        <Grid item xs={12} sm={4}>
+                          <Typography variant="caption" color="text.secondary">Remaining balance</Typography>
+                          <Typography variant="subtitle1" fontWeight={700} color="warning.dark">
+                            {formatPKR(calculatedValues.remainingBalance)}
+                          </Typography>
+                        </Grid>
+                      </Grid>
+                    </Box>
                   )}
                 </CardContent>
               </Card>

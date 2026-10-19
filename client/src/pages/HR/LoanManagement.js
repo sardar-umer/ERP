@@ -28,7 +28,8 @@ import {
   Alert,
   CircularProgress,
   Tooltip,
-  Fab
+  Fab,
+  Stack
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -428,11 +429,21 @@ const LoanManagement = () => {
                                       <TableCell>{formatPKR(loan.loanAmount)}</TableCell>
                   <TableCell>{formatPKR(loan.monthlyInstallment)}</TableCell>
                     <TableCell>
-                      <Chip
-                        label={loan.status}
-                        color={getStatusColor(loan.status)}
-                        size="small"
-                      />
+                      <Stack direction="row" gap={0.5} flexWrap="wrap" useFlexGap>
+                        <Chip
+                          label={loan.status}
+                          color={getStatusColor(loan.status)}
+                          size="small"
+                        />
+                        {loan.isOngoingLoan && (
+                          <Chip
+                            label="Already Ongoing"
+                            color="warning"
+                            size="small"
+                            variant="outlined"
+                          />
+                        )}
+                      </Stack>
                     </TableCell>
                     <TableCell>{formatDate(loan.applicationDate)}</TableCell>
                     <TableCell>

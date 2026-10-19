@@ -181,7 +181,10 @@ router.post('/', authMiddleware, async (req, res) => {
       salaryDeduction,
       documents,
       monthlyInstallment: requestedEmi,
-      emiManuallyAdjusted
+      emiManuallyAdjusted,
+      isOngoingLoan,
+      loanStartDate,
+      installmentsAlreadyPaid
     } = req.body;
 
     // Validate employee exists
@@ -190,16 +193,29 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'Employee not found' });
     }
 
-    // Check if employee has any active loans
-    const activeLoans = await Loan.find({
-      employee,
-      status: { $in: ['Active', 'Disbursed'] }
-    });
+    const ongoing = Boolean(isOngoingLoan);
 
-    if (activeLoans.length > 0) {
-      return res.status(400).json({
-        message: 'Employee has active loans. Cannot apply for new loan until existing loans are completed.'
+    if (ongoing && !loanStartDate) {
+      return res.status(400).json({ message: 'Loan start date is required for ongoing loans' });
+    }
+
+    const paidEmiCount = Math.max(0, parseInt(installmentsAlreadyPaid, 10) || 0);
+    if (ongoing && paidEmiCount < 0) {
+      return res.status(400).json({ message: 'EMIs already paid must be 0 or greater' });
+    }
+
+    // Check if employee has any active loans (skip for ongoing import)
+    if (!ongoing) {
+      const activeLoans = await Loan.find({
+        employee,
+        status: { $in: ['Active', 'Disbursed'] }
       });
+
+      if (activeLoans.length > 0) {
+        return res.status(400).json({
+          message: 'Employee has active loans. Cannot apply for new loan until existing loans are completed.'
+        });
+      }
     }
 
     // Calculate required fields before creating loan
@@ -219,6 +235,14 @@ router.post('/', authMiddleware, async (req, res) => {
       monthlyInstallment = principal * (rate * Math.pow(1 + rate, time)) / (Math.pow(1 + rate, time) - 1);
     }
 
+    const startDate = ongoing ? new Date(loanStartDate) : undefined;
+
+    if (ongoing && paidEmiCount > time) {
+      return res.status(400).json({
+        message: `EMIs already paid cannot exceed loan term (${time} months)`
+      });
+    }
+
     // Create loan object with calculated fields (schedule sets totalPayable with last-installment balance)
     const loanData = {
       employee,
@@ -230,6 +254,10 @@ router.post('/', authMiddleware, async (req, res) => {
       totalPayable: monthlyInstallment * time,
       outstandingBalance: monthlyInstallment * time,
       emiManuallyAdjusted: useManualEmi,
+      isOngoingLoan: ongoing,
+      loanStartDate: startDate,
+      installmentsAlreadyPaid: ongoing ? paidEmiCount : 0,
+      amountAlreadyPaid: 0,
       purpose,
       collateral,
       collateralValue,
@@ -238,6 +266,15 @@ router.post('/', authMiddleware, async (req, res) => {
       documents,
       createdBy: req.user.id
     };
+
+    if (ongoing) {
+      loanData.applicationDate = startDate;
+      loanData.approvalDate = startDate;
+      loanData.disbursementDate = startDate;
+      loanData.approvedBy = req.user.id;
+      loanData.disbursedBy = req.user.id;
+      loanData.status = 'Active';
+    }
 
     const loan = new Loan(loanData);
 
@@ -257,13 +294,19 @@ router.post('/', authMiddleware, async (req, res) => {
       });
     }
 
+    if (ongoing) {
+      loan.applyPriorInstallments(paidEmiCount);
+    }
+
     await loan.save();
 
     // Populate employee details for response
     await loan.populate('employee', 'employeeId firstName lastName email');
 
     res.status(201).json({
-      message: 'Loan application submitted successfully',
+      message: ongoing
+        ? 'Ongoing loan imported successfully'
+        : 'Loan application submitted successfully',
       loan
     });
   } catch (error) {

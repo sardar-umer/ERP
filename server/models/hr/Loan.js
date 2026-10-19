@@ -61,6 +61,29 @@ const loanSchema = new mongoose.Schema({
   disbursementDate: {
     type: Date
   },
+
+  /** Imported already-running loan (history + remaining schedule) */
+  isOngoingLoan: {
+    type: Boolean,
+    default: false,
+    index: true
+  },
+  /** When EMI cycle originally started (used for schedule due dates) */
+  loanStartDate: {
+    type: Date
+  },
+  /** How many EMIs were already paid before import into ERP */
+  installmentsAlreadyPaid: {
+    type: Number,
+    default: 0,
+    min: [0, 'Installments already paid cannot be negative']
+  },
+  /** Derived from paid installments at import (kept for reporting/display) */
+  amountAlreadyPaid: {
+    type: Number,
+    default: 0,
+    min: [0, 'Amount already paid cannot be negative']
+  },
   approvedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
@@ -381,8 +404,12 @@ loanSchema.methods.generateLoanSchedule = function () {
       remainingBalance = round2(Math.max(0, remainingBalance - principalPart));
     }
 
-    const dueDate = new Date(this.applicationDate || Date.now());
-    dueDate.setMonth(dueDate.getMonth() + i);
+    const baseDate = new Date(
+      this.loanStartDate || this.disbursementDate || this.applicationDate || Date.now()
+    );
+    const dueDate = new Date(baseDate);
+    // Ongoing loans: first EMI on start month; new loans: first EMI one month after application
+    dueDate.setMonth(dueDate.getMonth() + (this.isOngoingLoan || this.loanStartDate ? (i - 1) : i));
 
     schedule.push({
       installmentNumber: i,
@@ -402,6 +429,56 @@ loanSchema.methods.generateLoanSchedule = function () {
   this.totalPayable = round2(scheduleTotal);
   this.outstandingBalance = round2(this.totalPayable - (this.totalPaid || 0));
   return schedule;
+};
+
+/**
+ * Mark the first N schedule installments as Paid (ongoing loan import).
+ * Amount already paid is derived from those EMI amounts (incl. balancing last EMI if included).
+ */
+loanSchema.methods.applyPriorInstallments = function (installmentsPaid) {
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const schedule = this.loanSchedule || [];
+  const maxCount = schedule.length;
+  const count = Math.min(Math.max(0, parseInt(installmentsPaid, 10) || 0), maxCount);
+
+  this.totalPaid = 0;
+  this.totalPrincipalPaid = 0;
+  this.totalInterestPaid = 0;
+
+  for (let i = 0; i < schedule.length; i++) {
+    const inst = schedule[i];
+    if (i < count) {
+      const amt = round2(inst.amount);
+      inst.status = 'Paid';
+      inst.paymentDate = inst.dueDate;
+      inst.paymentMethod = 'Direct Payment';
+      this.totalPaid = round2(this.totalPaid + amt);
+      this.totalPrincipalPaid = round2(this.totalPrincipalPaid + (Number(inst.principal) || 0));
+      this.totalInterestPaid = round2(this.totalInterestPaid + (Number(inst.interest) || 0));
+    } else if (inst.status === 'Paid' || inst.status === 'Partial') {
+      // leave future rows pending for a fresh import
+      inst.status = 'Pending';
+      inst.paymentDate = undefined;
+      inst.paymentMethod = undefined;
+    }
+  }
+
+  this.installmentsAlreadyPaid = count;
+  this.amountAlreadyPaid = this.totalPaid;
+  this.outstandingBalance = round2(Math.max(0, (this.totalPayable || 0) - this.totalPaid));
+
+  if (this.outstandingBalance <= 0.01) {
+    this.status = 'Completed';
+    this.outstandingBalance = 0;
+  } else {
+    this.status = 'Active';
+  }
+
+  return {
+    totalPaid: this.totalPaid,
+    outstandingBalance: this.outstandingBalance,
+    paidInstallments: count
+  };
 };
 
 /**
