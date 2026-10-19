@@ -179,7 +179,9 @@ router.post('/', authMiddleware, async (req, res) => {
       collateralValue,
       guarantor,
       salaryDeduction,
-      documents
+      documents,
+      monthlyInstallment: requestedEmi,
+      emiManuallyAdjusted
     } = req.body;
 
     // Validate employee exists
@@ -202,29 +204,32 @@ router.post('/', authMiddleware, async (req, res) => {
 
     // Calculate required fields before creating loan
     const principal = parseFloat(loanAmount);
-    const rate = parseFloat(interestRate) / 100 / 12; // Monthly interest rate
-    const time = parseInt(loanTerm);
+    const annualRate = parseFloat(interestRate) || 0;
+    const rate = annualRate / 100 / 12; // Monthly interest rate
+    const time = parseInt(loanTerm, 10);
+    const manualEmi = parseFloat(requestedEmi);
+    const useManualEmi = Boolean(emiManuallyAdjusted) && Number.isFinite(manualEmi) && manualEmi > 0;
 
     let monthlyInstallment;
-    if (rate === 0) {
+    if (useManualEmi) {
+      monthlyInstallment = manualEmi;
+    } else if (rate === 0) {
       monthlyInstallment = principal / time;
     } else {
       monthlyInstallment = principal * (rate * Math.pow(1 + rate, time)) / (Math.pow(1 + rate, time) - 1);
     }
 
-    const totalPayable = monthlyInstallment * time;
-    const outstandingBalance = totalPayable;
-
-    // Create loan object with calculated fields
+    // Create loan object with calculated fields (schedule sets totalPayable with last-installment balance)
     const loanData = {
       employee,
       loanType,
       loanAmount,
-      interestRate,
-      loanTerm,
+      interestRate: annualRate,
+      loanTerm: time,
       monthlyInstallment,
-      totalPayable,
-      outstandingBalance,
+      totalPayable: monthlyInstallment * time,
+      outstandingBalance: monthlyInstallment * time,
+      emiManuallyAdjusted: useManualEmi,
       purpose,
       collateral,
       collateralValue,
@@ -236,8 +241,21 @@ router.post('/', authMiddleware, async (req, res) => {
 
     const loan = new Loan(loanData);
 
-    // Generate loan schedule
+    // Generate loan schedule (balances last installment)
     loan.generateLoanSchedule();
+
+    // If schedule could not clear principal, reject
+    const lastRow = loan.loanSchedule?.[loan.loanSchedule.length - 1];
+    if (lastRow && Number(lastRow.balance) > 0.01) {
+      return res.status(400).json({
+        message: 'Monthly EMI is too low to clear this loan in the selected months. Increase EMI or months.'
+      });
+    }
+    if (lastRow && Number(lastRow.amount) <= 0) {
+      return res.status(400).json({
+        message: 'Monthly EMI is too high for this loan amount and term. Reduce EMI.'
+      });
+    }
 
     await loan.save();
 
@@ -281,16 +299,49 @@ router.put('/:id', authMiddleware, async (req, res) => {
     delete updateData.disbursementDate;
     delete updateData.approvedBy;
     delete updateData.disbursedBy;
+    delete updateData.createdBy;
+    delete updateData.loanSchedule;
 
-    const updatedLoan = await Loan.findByIdAndUpdate(
-      req.params.id,
-      updateData,
-      { new: true, runValidators: true }
-    ).populate('employee', 'employeeId firstName lastName email');
+    const manualEmi =
+      Boolean(updateData.emiManuallyAdjusted) && Number(updateData.monthlyInstallment) > 0;
+
+    // Assign then save so pre-save + schedule regeneration run
+    const editable = [
+      'employee', 'loanType', 'loanAmount', 'interestRate', 'loanTerm',
+      'purpose', 'collateral', 'collateralValue', 'guarantor', 'salaryDeduction',
+      'documents', 'updatedBy'
+    ];
+    editable.forEach((k) => {
+      if (updateData[k] !== undefined) loan[k] = updateData[k];
+    });
+
+    if (manualEmi) {
+      loan.monthlyInstallment = Math.round(Number(updateData.monthlyInstallment) * 100) / 100;
+      loan.emiManuallyAdjusted = true;
+    } else if (updateData.emiManuallyAdjusted === false) {
+      loan.emiManuallyAdjusted = false;
+    }
+
+    loan.generateLoanSchedule();
+
+    const lastRow = loan.loanSchedule?.[loan.loanSchedule.length - 1];
+    if (lastRow && Number(lastRow.balance) > 0.5) {
+      return res.status(400).json({
+        message: 'Monthly EMI is too low to clear this loan in the selected months. Increase EMI or months.'
+      });
+    }
+    if (lastRow && Number(lastRow.amount) <= 0) {
+      return res.status(400).json({
+        message: 'Monthly EMI is too high for this loan amount and term. Reduce EMI.'
+      });
+    }
+
+    await loan.save();
+    await loan.populate('employee', 'employeeId firstName lastName email');
 
     res.json({
       message: 'Loan application updated successfully',
-      loan: updatedLoan
+      loan
     });
   } catch (error) {
     console.error('Error updating loan:', error);
@@ -764,7 +815,7 @@ router.get('/:id/schedule', authMiddleware, async (req, res) => {
   }
 });
 
-// Delete loan (only if pending)
+// Delete loan (Pending for normal users; developer may delete at any status)
 router.delete('/:id', authMiddleware, checkPermission('loan_management'), async (req, res) => {
   try {
     const loan = await Loan.findById(req.params.id);
@@ -773,7 +824,11 @@ router.delete('/:id', authMiddleware, checkPermission('loan_management'), async 
       return res.status(404).json({ message: 'Loan not found' });
     }
 
-    if (loan.status !== 'Pending') {
+    const isDeveloper =
+      req.user?.role === 'developer' ||
+      (Array.isArray(req.user?.roles) && req.user.roles.includes('developer'));
+
+    if (loan.status !== 'Pending' && !isDeveloper) {
       return res.status(400).json({
         message: 'Only pending loans can be deleted'
       });
@@ -781,7 +836,11 @@ router.delete('/:id', authMiddleware, checkPermission('loan_management'), async 
 
     await Loan.findByIdAndDelete(req.params.id);
 
-    res.json({ message: 'Loan deleted successfully' });
+    res.json({
+      message: isDeveloper && loan.status !== 'Pending'
+        ? `Loan deleted successfully (developer override, was ${loan.status})`
+        : 'Loan deleted successfully'
+    });
   } catch (error) {
     console.error('Error deleting loan:', error);
     res.status(500).json({ message: 'Error deleting loan', error: error.message });

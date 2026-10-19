@@ -306,7 +306,12 @@ loanSchema.virtual('nextDueDate').get(function () {
 
 // Pre-save middleware to calculate loan details
 loanSchema.pre('save', function (next) {
-  if (this.isModified('loanAmount') || this.isModified('interestRate')) {
+  // Don't wipe an intentional EMI override (create/edit with emiManuallyAdjusted: true)
+  if (
+    !this.isNew &&
+    (this.isModified('loanAmount') || this.isModified('interestRate')) &&
+    !this.isModified('emiManuallyAdjusted')
+  ) {
     this.emiManuallyAdjusted = false;
   }
 
@@ -338,54 +343,64 @@ loanSchema.pre('save', function (next) {
   next();
 });
 
-// Method to generate loan schedule
+// Method to generate loan schedule (last installment balances remaining principal)
 loanSchema.methods.generateLoanSchedule = function () {
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
   const schedule = [];
-  let remainingBalance = this.loanAmount;
-  const monthlyRate = this.interestRate / 100 / 12;
+  let remainingBalance = Number(this.loanAmount) || 0;
+  const monthlyRate = (Number(this.interestRate) || 0) / 100 / 12;
+  const term = parseInt(this.loanTerm, 10) || 0;
 
   // Ensure monthlyInstallment is calculated and valid
   if (!this.monthlyInstallment || isNaN(this.monthlyInstallment) || this.monthlyInstallment <= 0) {
-    // Recalculate EMI
     const principal = this.loanAmount;
-    const rate = this.interestRate / 100 / 12;
-    const time = this.loanTerm;
+    const rate = monthlyRate;
+    const time = term;
 
     if (rate === 0) {
       this.monthlyInstallment = principal / time;
     } else {
       this.monthlyInstallment = principal * (rate * Math.pow(1 + rate, time)) / (Math.pow(1 + rate, time) - 1);
     }
-
-    // Update totalPayable and outstandingBalance if they're not set
-    if (!this.totalPayable || isNaN(this.totalPayable)) {
-      this.totalPayable = this.monthlyInstallment * this.loanTerm;
-    }
-    if (!this.outstandingBalance || isNaN(this.outstandingBalance)) {
-      this.outstandingBalance = this.totalPayable - (this.totalPaid || 0);
-    }
   }
 
-  for (let i = 1; i <= this.loanTerm; i++) {
-    const interest = remainingBalance * monthlyRate;
-    const principal = this.monthlyInstallment - interest;
-    remainingBalance = Math.max(0, remainingBalance - principal);
+  this.monthlyInstallment = round2(this.monthlyInstallment);
 
-    const dueDate = new Date(this.applicationDate);
+  for (let i = 1; i <= term; i++) {
+    const interest = round2(remainingBalance * monthlyRate);
+    const isLast = i === term;
+    let principalPart = round2(this.monthlyInstallment - interest);
+    let amount = this.monthlyInstallment;
+
+    if (isLast || principalPart >= remainingBalance) {
+      principalPart = round2(remainingBalance);
+      amount = round2(principalPart + interest);
+      remainingBalance = 0;
+    } else {
+      principalPart = Math.max(0, principalPart);
+      remainingBalance = round2(Math.max(0, remainingBalance - principalPart));
+    }
+
+    const dueDate = new Date(this.applicationDate || Date.now());
     dueDate.setMonth(dueDate.getMonth() + i);
 
     schedule.push({
       installmentNumber: i,
       dueDate: dueDate,
-      amount: this.monthlyInstallment,
-      principal: Math.max(0, principal),
-      interest: Math.max(0, interest),
-      balance: Math.max(0, remainingBalance),
+      amount: round2(amount),
+      principal: round2(Math.max(0, principalPart)),
+      interest: round2(Math.max(0, interest)),
+      balance: round2(Math.max(0, remainingBalance)),
       status: 'Pending'
     });
+
+    if (remainingBalance <= 0 && !isLast) break;
   }
 
   this.loanSchedule = schedule;
+  const scheduleTotal = schedule.reduce((s, row) => s + (Number(row.amount) || 0), 0);
+  this.totalPayable = round2(scheduleTotal);
+  this.outstandingBalance = round2(this.totalPayable - (this.totalPaid || 0));
   return schedule;
 };
 

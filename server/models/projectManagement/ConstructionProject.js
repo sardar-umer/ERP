@@ -100,8 +100,14 @@ const constructionProjectSchema = new mongoose.Schema({
   expectedEndDate: { type: Date },
   actualEndDate: { type: Date },
 
-  // Budget breakdown by category
+  // Budget breakdown by category (Sub projects — after Main allocates a lump sum)
   budgetCategories: { type: [budgetCategorySchema], default: () => BUDGET_CATEGORIES.map(c => ({ category: c, estimatedAmount: 0, approvedAmount: 0 })) },
+
+  // Main project: portfolio lump-sum envelope (not category-wise)
+  lumpSumBudget: { type: Number, default: 0, min: 0 },
+
+  // Sub project: amount allocated from Main lump-sum pool
+  allocatedBudget: { type: Number, default: 0, min: 0 },
 
   // Aggregated totals (auto-computed on save)
   totalEstimatedCost: { type: Number, default: 0, min: 0 },
@@ -154,51 +160,72 @@ constructionProjectSchema.pre('save', async function (next) {
   }
 
   // Recompute totals
-  if (this.isMasterProject) {
-    const children = await this.constructor.find({ parentProject: this._id, status: { $ne: 'Cancelled' } }).select('totalEstimatedCost totalApprovedBudget');
-    this.totalEstimatedCost = children.reduce((s, c) => s + (c.totalEstimatedCost || 0), 0);
-    this.totalApprovedBudget = children.reduce((s, c) => s + (c.totalApprovedBudget || 0), 0);
-  } else if (this.budgetCategories && this.budgetCategories.length) {
-    this.totalEstimatedCost = this.budgetCategories.reduce((s, c) => s + (c.estimatedAmount || 0), 0);
-    this.totalApprovedBudget = this.budgetCategories.reduce((s, c) => s + (c.approvedAmount || 0), 0);
+  // Main / root: lump-sum envelope drives budget (not child rollup, not categories)
+  if (!this.parentProject) {
+    const lump = Number(this.lumpSumBudget) || 0;
+    this.totalEstimatedCost = lump;
+    this.totalApprovedBudget = this.budgetStatus === 'Approved' ? lump : 0;
+  } else {
+    // Sub: categories if detailed; otherwise allocated ceiling from Main
+    const catEst = (this.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+    const catApp = (this.budgetCategories || []).reduce((s, c) => s + (c.approvedAmount || 0), 0);
+    const allocated = Number(this.allocatedBudget) || 0;
+    this.totalEstimatedCost = catEst > 0 ? catEst : allocated;
+    this.totalApprovedBudget = this.budgetStatus === 'Approved'
+      ? (catApp > 0 ? catApp : allocated)
+      : 0;
   }
 
   next();
 });
 
-// Recompute totals from budgetCategories before findOneAndUpdate
+// Recompute totals from budgetCategories / lumpSum before findOneAndUpdate
 constructionProjectSchema.pre('findOneAndUpdate', async function (next) {
   const update = this.getUpdate();
-  if (update) {
-    const doc = await this.model.findOne(this.getQuery()).select('isMasterProject');
-    if (doc && doc.isMasterProject) {
-      // If it is a master project, prevent query updates from overriding totals from categories
-      if (update.$set) {
-        delete update.$set.totalEstimatedCost;
-        delete update.$set.totalApprovedBudget;
-      } else {
-        delete update.totalEstimatedCost;
-        delete update.totalApprovedBudget;
-      }
-      return next();
-    }
+  if (!update) return next();
 
-    let cats = null;
-    let target = null;
+  const doc = await this.model.findOne(this.getQuery()).select('isMasterProject parentProject budgetStatus lumpSumBudget allocatedBudget budgetCategories');
+  if (!doc) return next();
 
-    if (update.$set && update.$set.budgetCategories) {
-      cats = update.$set.budgetCategories;
-      target = update.$set;
-    } else if (update.budgetCategories) {
-      cats = update.budgetCategories;
-      target = update;
-    }
+  const target = update.$set || update;
+  const isRoot = !doc.parentProject;
 
-    if (cats && Array.isArray(cats)) {
-      target.totalEstimatedCost = cats.reduce((s, c) => s + (c.estimatedAmount || 0), 0);
-      target.totalApprovedBudget = cats.reduce((s, c) => s + (c.approvedAmount || 0), 0);
+  if (isRoot) {
+    // Keep Main totals tied to lumpSumBudget; allow explicit lumpSumBudget updates
+    const lump = target.lumpSumBudget !== undefined
+      ? Number(target.lumpSumBudget) || 0
+      : Number(doc.lumpSumBudget) || 0;
+    const status = target.budgetStatus || doc.budgetStatus || 'Draft';
+    target.totalEstimatedCost = lump;
+    target.totalApprovedBudget = status === 'Approved' ? lump : 0;
+    return next();
+  }
+
+  let cats = null;
+  if (target.budgetCategories && Array.isArray(target.budgetCategories)) {
+    cats = target.budgetCategories;
+  }
+
+  if (cats) {
+    const catEst = cats.reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+    const catApp = cats.reduce((s, c) => s + (c.approvedAmount || 0), 0);
+    const allocated = target.allocatedBudget !== undefined
+      ? Number(target.allocatedBudget) || 0
+      : Number(doc.allocatedBudget) || 0;
+    const status = target.budgetStatus || doc.budgetStatus || 'Draft';
+    target.totalEstimatedCost = catEst > 0 ? catEst : allocated;
+    target.totalApprovedBudget = status === 'Approved' ? (catApp > 0 ? catApp : allocated) : 0;
+  } else if (target.allocatedBudget !== undefined) {
+    const allocated = Number(target.allocatedBudget) || 0;
+    const existingCats = doc.budgetCategories || [];
+    const catEst = existingCats.reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+    const status = target.budgetStatus || doc.budgetStatus || 'Draft';
+    target.totalEstimatedCost = catEst > 0 ? catEst : allocated;
+    if (status === 'Approved' && catEst === 0) {
+      target.totalApprovedBudget = allocated;
     }
   }
+
   next();
 });
 
@@ -211,31 +238,27 @@ constructionProjectSchema.index({ projectManager: 1 });
 const syncParentHelper = async (parentProjectId) => {
   if (!parentProjectId) return;
   const model = mongoose.model('ConstructionProject');
-  const children = await model.find({ 
-    parentProject: parentProjectId, 
-    status: { $ne: 'Cancelled' } 
-  }).select('overallProgress totalEstimatedCost totalApprovedBudget');
+  const parent = await model.findById(parentProjectId).select('parentProject lumpSumBudget budgetStatus');
+  if (!parent) return;
 
-  if (!children.length) {
-    await model.findByIdAndUpdate(parentProjectId, { 
-      overallProgress: 0,
-      totalEstimatedCost: 0,
-      totalApprovedBudget: 0
-    });
+  const children = await model.find({
+    parentProject: parentProjectId,
+    status: { $ne: 'Cancelled' }
+  }).select('overallProgress');
+
+  const avg = children.length
+    ? Math.round(children.reduce((s, c) => s + (c.overallProgress || 0), 0) / children.length)
+    : 0;
+
+  // Root / Main keeps its own lump-sum budget — only roll up progress
+  if (!parent.parentProject) {
+    await model.findByIdAndUpdate(parentProjectId, { overallProgress: avg });
     return;
   }
 
-  const avg = Math.round(children.reduce((s, c) => s + (c.overallProgress || 0), 0) / children.length);
-  const totalEst = children.reduce((s, c) => s + (c.totalEstimatedCost || 0), 0);
-  const totalApp = children.reduce((s, c) => s + (c.totalApprovedBudget || 0), 0);
-
-  const parent = await model.findByIdAndUpdate(parentProjectId, { 
-    overallProgress: avg,
-    totalEstimatedCost: totalEst,
-    totalApprovedBudget: totalApp
-  }, { new: true });
-
-  if (parent && parent.parentProject) {
+  // Intermediate parents (legacy): progress only (budget lives on leaves + root lump sum)
+  await model.findByIdAndUpdate(parentProjectId, { overallProgress: avg });
+  if (parent.parentProject) {
     await syncParentHelper(parent.parentProject);
   }
 };

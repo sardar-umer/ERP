@@ -43,6 +43,7 @@ import {
   Cancel as RejectIcon,
   AccountBalance as DisburseIcon,
   Edit as EditIcon,
+  Delete as DeleteIcon,
   Schedule as ScheduleIcon,
   Person as PersonIcon,
   Description as DescriptionIcon,
@@ -58,6 +59,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
 import { formatPKR } from '../../utils/currency';
 import { downloadLoanDetailPDF } from '../../utils/loanDetailPDF';
+import { useAuth } from '../../contexts/AuthContext';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -87,6 +89,10 @@ const buildConsecutivePauseMonths = (startMonth, startYear, monthCount) => {
 const LoanDetail = () => {
   const navigate = useNavigate();
   const { id } = useParams();
+  const { user } = useAuth();
+  const isDeveloper =
+    user?.role === 'developer' ||
+    (Array.isArray(user?.roles) && user.roles.includes('developer'));
   
   const [loan, setLoan] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -98,6 +104,8 @@ const LoanDetail = () => {
   const [rejectionDialog, setRejectionDialog] = useState(false);
   const [disbursementDialog, setDisbursementDialog] = useState(false);
   const [noteDialog, setNoteDialog] = useState(false);
+  const [deleteDialog, setDeleteDialog] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const [pauseDialog, setPauseDialog] = useState(false);
   const [adjustDialog, setAdjustDialog] = useState(false);
 
@@ -144,6 +152,20 @@ const LoanDetail = () => {
       fetchLoan();
     } catch (error) {
       setError(error.message || 'Failed to approve loan');
+    }
+  };
+
+  const handleDelete = async () => {
+    setDeleting(true);
+    try {
+      await loanService.deleteLoan(id);
+      setDeleteDialog(false);
+      navigate('/hr/loans');
+    } catch (error) {
+      setError(error.response?.data?.message || error.message || 'Failed to delete loan');
+      setDeleteDialog(false);
+    } finally {
+      setDeleting(false);
     }
   };
 
@@ -685,8 +707,23 @@ const LoanDetail = () => {
           variant="outlined"
           startIcon={<EditIcon />}
           onClick={() => navigate(`/hr/loans/${id}/edit`)}
+          sx={{ mr: 1 }}
         >
           Edit
+        </Button>
+      );
+    }
+
+    if (loan.status === 'Pending' || isDeveloper) {
+      buttons.push(
+        <Button
+          key="delete"
+          variant="outlined"
+          color="error"
+          startIcon={<DeleteIcon />}
+          onClick={() => setDeleteDialog(true)}
+        >
+          {loan.status === 'Pending' ? 'Delete' : 'Delete (Developer)'}
         </Button>
       );
     }
@@ -769,6 +806,27 @@ const LoanDetail = () => {
           <Button onClick={() => setApprovalDialog(false)}>Cancel</Button>
           <Button onClick={handleApprove} color="success" variant="contained">
             Approve
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Delete Dialog (Pending for all; any status for developer) */}
+      <Dialog open={deleteDialog} onClose={() => !deleting && setDeleteDialog(false)}>
+        <DialogTitle>Confirm Delete</DialogTitle>
+        <DialogContent>
+          <Typography>
+            Are you sure you want to delete this loan application? This action cannot be undone.
+          </Typography>
+          {loan?.status && loan.status !== 'Pending' && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Developer override: this loan is currently <strong>{loan.status}</strong>.
+            </Alert>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDeleteDialog(false)} disabled={deleting}>Cancel</Button>
+          <Button onClick={handleDelete} color="error" variant="contained" disabled={deleting}>
+            {deleting ? 'Deleting…' : 'Delete'}
           </Button>
         </DialogActions>
       </Dialog>

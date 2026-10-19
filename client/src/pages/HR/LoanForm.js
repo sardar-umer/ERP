@@ -22,7 +22,8 @@ import {
   StepLabel,
   FormHelperText,
   InputAdornment,
-  Chip
+  Chip,
+  Stack
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -78,8 +79,13 @@ const LoanForm = () => {
   const [calculatedValues, setCalculatedValues] = useState({
     monthlyInstallment: 0,
     totalPayable: 0,
-    totalInterest: 0
+    totalInterest: 0,
+    lastInstallment: 0,
+    suggestedEmi: 0
   });
+  const [emiManual, setEmiManual] = useState(false);
+  const [emiInput, setEmiInput] = useState('');
+  const [emiPlanError, setEmiPlanError] = useState('');
 
   const [errors, setErrors] = useState({});
 
@@ -91,8 +97,9 @@ const LoanForm = () => {
   }, [isEdit, id]);
 
   useEffect(() => {
-    calculateEMI();
-  }, [formData.loanAmount, formData.interestRate, formData.loanTerm]);
+    recalculatePlan();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.loanAmount, formData.interestRate, formData.loanTerm, emiManual, emiInput]);
 
   const fetchEmployees = async () => {
     try {
@@ -133,6 +140,10 @@ const LoanForm = () => {
           fixedAmount: loan.salaryDeduction?.fixedAmount || ''
         }
       });
+      if (loan.emiManuallyAdjusted && loan.monthlyInstallment) {
+        setEmiManual(true);
+        setEmiInput(String(Math.round(Number(loan.monthlyInstallment) * 100) / 100));
+      }
     } catch (error) {
       setError(error.message || 'Failed to fetch loan details');
     } finally {
@@ -140,24 +151,53 @@ const LoanForm = () => {
     }
   };
 
-  const calculateEMI = () => {
-    const { loanAmount, interestRate, loanTerm } = formData;
+  const recalculatePlan = () => {
+    const principal = parseFloat(formData.loanAmount);
+    const rate = formData.interestRate === '' || formData.interestRate == null
+      ? NaN
+      : parseFloat(formData.interestRate);
+    const time = parseInt(formData.loanTerm, 10);
 
-    if (loanAmount && interestRate && loanTerm) {
-      const principal = parseFloat(loanAmount);
-      const rate = parseFloat(interestRate);
-      const time = parseInt(loanTerm);
-
-      const monthlyInstallment = loanService.calculateEMI(principal, rate, time);
-      const totalPayable = loanService.calculateTotalPayable(monthlyInstallment, time);
-      const totalInterest = totalPayable - principal;
-
+    if (!principal || principal <= 0 || !time || time <= 0 || Number.isNaN(rate) || rate < 0) {
       setCalculatedValues({
-        monthlyInstallment,
-        totalPayable,
-        totalInterest
+        monthlyInstallment: 0,
+        totalPayable: 0,
+        totalInterest: 0,
+        lastInstallment: 0,
+        suggestedEmi: 0
       });
+      setEmiPlanError('');
+      return;
     }
+
+    const suggested = Math.round(loanService.calculateEMI(principal, rate, time) * 100) / 100;
+    const emiToUse = emiManual
+      ? Math.max(0, parseFloat(emiInput) || 0)
+      : suggested;
+
+    if (!emiManual) {
+      setEmiInput(String(suggested || ''));
+    }
+
+    const plan = loanService.previewInstallmentPlan(principal, rate, time, emiToUse);
+    setEmiPlanError(plan.valid ? '' : (plan.error || ''));
+    setCalculatedValues({
+      monthlyInstallment: emiToUse,
+      totalPayable: plan.totalPayable,
+      totalInterest: plan.totalInterest,
+      lastInstallment: plan.lastInstallment,
+      suggestedEmi: suggested
+    });
+  };
+
+  const handleEmiChange = (value) => {
+    setEmiManual(true);
+    setEmiInput(value);
+  };
+
+  const handleUseSuggestedEmi = () => {
+    setEmiManual(false);
+    setEmiInput(String(calculatedValues.suggestedEmi || ''));
   };
 
   const handleInputChange = (field, value) => {
@@ -211,11 +251,17 @@ const LoanForm = () => {
         if (!formData.loanAmount || formData.loanAmount < 1000) {
           newErrors.loanAmount = 'Loan amount must be at least 1,000 PKR';
         }
-        if (!formData.interestRate || formData.interestRate < 0) {
-          newErrors.interestRate = 'Interest rate must be a positive number';
+        if (formData.interestRate === '' || formData.interestRate == null || Number(formData.interestRate) < 0) {
+          newErrors.interestRate = 'Interest rate must be 0 or greater';
         }
         if (!formData.loanTerm || formData.loanTerm < 1 || formData.loanTerm > 120) {
           newErrors.loanTerm = 'Loan term must be between 1 and 120 months';
+        }
+        if (!calculatedValues.monthlyInstallment || calculatedValues.monthlyInstallment <= 0) {
+          newErrors.monthlyInstallment = 'Monthly EMI must be greater than zero';
+        }
+        if (emiPlanError) {
+          newErrors.monthlyInstallment = emiPlanError;
         }
         break;
 
@@ -260,7 +306,8 @@ const LoanForm = () => {
       const loanData = {
         ...formData,
         monthlyInstallment: calculatedValues.monthlyInstallment,
-        totalPayable: calculatedValues.totalPayable
+        totalPayable: calculatedValues.totalPayable,
+        emiManuallyAdjusted: emiManual
       };
 
       if (isEdit) {
@@ -396,20 +443,58 @@ const LoanForm = () => {
             <Grid item xs={12}>
               <Card sx={{ bgcolor: 'grey.50' }}>
                 <CardContent>
-                  <Typography variant="h6" gutterBottom>
-                    <CalculateIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
-                    Loan Calculation Summary
-                  </Typography>
+                  <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1} sx={{ mb: 2 }}>
+                    <Typography variant="h6">
+                      <CalculateIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+                      Loan Calculation Summary
+                    </Typography>
+                    {emiManual && (
+                      <Chip size="small" color="warning" label="Custom EMI" />
+                    )}
+                  </Stack>
+
                   <Grid container spacing={2}>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={12} sm={6} md={3}>
+                      <TextField
+                        fullWidth
+                        type="number"
+                        label="Monthly EMI"
+                        value={emiInput}
+                        onChange={(e) => handleEmiChange(e.target.value)}
+                        error={!!errors.monthlyInstallment || !!emiPlanError}
+                        helperText={
+                          errors.monthlyInstallment ||
+                          emiPlanError ||
+                          (emiManual
+                            ? 'Editable — last installment will auto-balance'
+                            : `Suggested ${formatPKR(calculatedValues.suggestedEmi)} — edit to customize`)
+                        }
+                        InputProps={{
+                          startAdornment: <InputAdornment position="start">₨</InputAdornment>,
+                        }}
+                      />
+                      {emiManual && calculatedValues.suggestedEmi > 0 && (
+                        <Button size="small" sx={{ mt: 0.5 }} onClick={handleUseSuggestedEmi}>
+                          Use calculated EMI ({formatPKR(calculatedValues.suggestedEmi)})
+                        </Button>
+                      )}
+                    </Grid>
+                    <Grid item xs={12} sm={6} md={3}>
                       <Typography variant="body2" color="text.secondary">
-                        Monthly EMI
+                        Last Installment
                       </Typography>
-                      <Typography variant="h6" color="primary">
-                        {formatPKR(calculatedValues.monthlyInstallment)}
+                      <Typography variant="h6" color={
+                        Math.abs((calculatedValues.lastInstallment || 0) - (calculatedValues.monthlyInstallment || 0)) > 0.5
+                          ? 'warning.main'
+                          : 'text.primary'
+                      }>
+                        {formatPKR(calculatedValues.lastInstallment)}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        Auto-adjusted to fit loan amount
                       </Typography>
                     </Grid>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={12} sm={6} md={3}>
                       <Typography variant="body2" color="text.secondary">
                         Total Payable
                       </Typography>
@@ -417,7 +502,7 @@ const LoanForm = () => {
                         {formatPKR(calculatedValues.totalPayable)}
                       </Typography>
                     </Grid>
-                    <Grid item xs={12} sm={4}>
+                    <Grid item xs={12} sm={6} md={3}>
                       <Typography variant="body2" color="text.secondary">
                         Total Interest
                       </Typography>
@@ -426,6 +511,15 @@ const LoanForm = () => {
                       </Typography>
                     </Grid>
                   </Grid>
+
+                  {formData.loanTerm > 1 && calculatedValues.monthlyInstallment > 0 && (
+                    <Alert severity="info" sx={{ mt: 2 }}>
+                      Months 1–{Math.max(1, Number(formData.loanTerm) - 1)}: <strong>{formatPKR(calculatedValues.monthlyInstallment)}</strong>
+                      {' · '}
+                      Month {formData.loanTerm}: <strong>{formatPKR(calculatedValues.lastInstallment)}</strong>
+                      {' '}(balances remaining principal)
+                    </Alert>
+                  )}
                 </CardContent>
               </Card>
             </Grid>

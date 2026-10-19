@@ -94,6 +94,9 @@ const syncProjectBOQBudget = async (projectId) => {
   const project = await ConstructionProject.findById(projectId);
   if (!project) return;
 
+  // Main lump-sum envelope must not be overwritten by BOQ totals
+  if (!project.parentProject) return;
+
   const update = { totalEstimatedCost: totalEstimated };
   if (project.budgetStatus === 'Approved') {
     update.totalApprovedBudget = totalEstimated;
@@ -103,6 +106,40 @@ const syncProjectBOQBudget = async (projectId) => {
 
   // Use findByIdAndUpdate to trigger parent rollup hooks automatically
   await ConstructionProject.findByIdAndUpdate(projectId, { $set: update }, { new: true });
+};
+
+/** Build Main ↔ Sub monetary allocation summary */
+const buildBudgetAllocationSummary = async (mainProject) => {
+  const lumpSumBudget = Number(mainProject.lumpSumBudget) || 0;
+  const subs = await ConstructionProject.find({
+    parentProject: mainProject._id,
+    status: { $ne: 'Cancelled' }
+  })
+    .select('name projectNumber sector projectType allocatedBudget totalEstimatedCost totalApprovedBudget budgetStatus status')
+    .sort({ name: 1 })
+    .lean();
+
+  const totalAllocated = subs.reduce((s, c) => s + (Number(c.allocatedBudget) || 0), 0);
+  const remaining = Math.max(0, lumpSumBudget - totalAllocated);
+
+  return {
+    lumpSumBudget,
+    totalAllocated,
+    remaining,
+    budgetStatus: mainProject.budgetStatus,
+    subProjects: subs.map((s) => ({
+      _id: s._id,
+      name: s.name,
+      projectNumber: s.projectNumber,
+      sector: s.sector,
+      projectType: s.projectType,
+      allocatedBudget: Number(s.allocatedBudget) || 0,
+      totalEstimatedCost: Number(s.totalEstimatedCost) || 0,
+      totalApprovedBudget: Number(s.totalApprovedBudget) || 0,
+      budgetStatus: s.budgetStatus,
+      status: s.status
+    }))
+  };
 };
 
 // ─── PROJECTS ────────────────────────────────────────────────────────────────
@@ -201,11 +238,138 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
     .populate('projectManager', 'firstName lastName email')
     .populate('budgetApprovedBy', 'firstName lastName')
     .populate('createdBy', 'firstName lastName')
-    .populate('parentProject', 'name projectNumber isMasterProject projectType status')
+    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget')
     .lean();
 
   if (!project) return notFound(res, 'Project');
+
+  // Main: include allocation pool summary; Sub: include parent remaining context
+  if (!project.parentProject) {
+    project.budgetAllocation = await buildBudgetAllocationSummary(project);
+  } else if (project.parentProject?._id) {
+    const parentDoc = await ConstructionProject.findById(project.parentProject._id).lean();
+    if (parentDoc) {
+      project.budgetAllocation = await buildBudgetAllocationSummary(parentDoc);
+    }
+  }
+
   res.json({ success: true, data: project });
+}));
+
+// PUT /api/project-management/projects/:id/lump-sum-budget — set Main lump-sum envelope
+router.put('/projects/:id/lump-sum-budget', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const project = await ConstructionProject.findById(req.params.id);
+  if (!project) return notFound(res, 'Project');
+  if (project.parentProject) {
+    return badRequest(res, 'Lump-sum budget can only be set on a Main Project');
+  }
+
+  const amount = Math.max(0, Number(req.body.lumpSumBudget) || 0);
+  const summary = await buildBudgetAllocationSummary(project);
+  if (amount < summary.totalAllocated) {
+    return badRequest(
+      res,
+      `Lump-sum budget (${amount}) cannot be less than already allocated to sub projects (${summary.totalAllocated})`
+    );
+  }
+
+  project.lumpSumBudget = amount;
+  project.updatedBy = req.user?._id;
+  // Changing the envelope returns budget to Draft so it can be re-submitted
+  if (project.budgetStatus === 'Approved' || project.budgetStatus === 'Submitted') {
+    project.budgetStatus = 'Draft';
+    project.budgetApprovedBy = null;
+    project.budgetApprovedAt = null;
+  }
+  await project.save();
+
+  const populated = await ConstructionProject.findById(project._id)
+    .populate('projectManager', 'firstName lastName email')
+    .lean();
+  populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
+
+  res.json({ success: true, message: 'Lump-sum budget updated', data: populated });
+}));
+
+// PUT /api/project-management/projects/:id/budget-allocations — allocate Main pool to Subs
+router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const main = await ConstructionProject.findById(req.params.id);
+  if (!main) return notFound(res, 'Project');
+  if (main.parentProject) {
+    return badRequest(res, 'Budget allocation can only be done from a Main Project');
+  }
+
+  const lump = Number(main.lumpSumBudget) || 0;
+  if (lump <= 0) {
+    return badRequest(res, 'Set a lump-sum budget on the Main Project first');
+  }
+
+  let allocations = req.body.allocations;
+  // Allow single-item shorthand
+  if (!Array.isArray(allocations) && req.body.subProjectId !== undefined) {
+    allocations = [{ subProjectId: req.body.subProjectId, amount: req.body.amount }];
+  }
+  if (!Array.isArray(allocations) || !allocations.length) {
+    return badRequest(res, 'Provide allocations: [{ subProjectId, amount }]');
+  }
+
+  const subs = await ConstructionProject.find({
+    parentProject: main._id,
+    status: { $ne: 'Cancelled' }
+  });
+  const byId = new Map(subs.map((s) => [String(s._id), s]));
+
+  // Start from current allocations, then apply updates
+  const nextAmounts = new Map(subs.map((s) => [String(s._id), Number(s.allocatedBudget) || 0]));
+
+  for (const row of allocations) {
+    const sid = String(row.subProjectId || '');
+    if (!byId.has(sid)) {
+      return badRequest(res, `Sub project not found under this Main: ${row.subProjectId}`);
+    }
+    const amount = Math.max(0, Number(row.amount) || 0);
+    const sub = byId.get(sid);
+    const catEst = (sub.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+    if (amount > 0 && catEst > amount) {
+      return badRequest(
+        res,
+        `${sub.name}: allocated amount (${amount}) cannot be less than category estimates (${catEst})`
+      );
+    }
+    nextAmounts.set(sid, amount);
+  }
+
+  const totalAllocated = [...nextAmounts.values()].reduce((s, v) => s + v, 0);
+  if (totalAllocated > lump) {
+    return badRequest(
+      res,
+      `Total allocation (${totalAllocated}) exceeds Main lump-sum budget (${lump}). Remaining would be negative.`
+    );
+  }
+
+  for (const [sid, amount] of nextAmounts.entries()) {
+    const sub = byId.get(sid);
+    if ((Number(sub.allocatedBudget) || 0) === amount) continue;
+    sub.allocatedBudget = amount;
+    sub.updatedBy = req.user?._id;
+    // If no category breakdown yet, keep totals aligned with allocation
+    const catEst = (sub.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+    if (catEst === 0) {
+      // leave budgetStatus as-is; pre-save will set totalEstimatedCost from allocatedBudget
+    }
+    await sub.save();
+  }
+
+  const populated = await ConstructionProject.findById(main._id)
+    .populate('projectManager', 'firstName lastName email')
+    .lean();
+  populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
+
+  res.json({ success: true, message: 'Budget allocated to sub projects', data: populated });
 }));
 
 
@@ -268,7 +432,22 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     }
   });
 
-  const oldProject = await ConstructionProject.findById(req.params.id).select('parentProject overallProgress').lean();
+  const oldProject = await ConstructionProject.findById(req.params.id)
+    .select('parentProject overallProgress allocatedBudget')
+    .lean();
+  if (!oldProject) return notFound(res, 'Project');
+
+  // Sub category totals cannot exceed Main allocation
+  if (oldProject.parentProject && Array.isArray(updates.budgetCategories)) {
+    const catEst = updates.budgetCategories.reduce((s, c) => s + (Number(c.estimatedAmount) || 0), 0);
+    const ceiling = Number(oldProject.allocatedBudget) || 0;
+    if (ceiling > 0 && catEst > ceiling) {
+      return badRequest(
+        res,
+        `Category total (${catEst}) exceeds allocated budget from Main (${ceiling})`
+      );
+    }
+  }
 
   const project = await ConstructionProject.findByIdAndUpdate(
     req.params.id,
@@ -299,7 +478,25 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
 
   project.updatedBy = req.user?._id;
 
+  const isMain = !project.parentProject;
+
   if (action === 'submit') {
+    if (isMain && !(Number(project.lumpSumBudget) > 0)) {
+      return badRequest(res, 'Set a lump-sum budget before submitting');
+    }
+    if (!isMain) {
+      const catEst = (project.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
+      const ceiling = Number(project.allocatedBudget) || 0;
+      if (ceiling <= 0) {
+        return badRequest(res, 'This sub project has no budget allocated from the Main Project yet');
+      }
+      if (catEst > ceiling) {
+        return badRequest(res, `Category total (${catEst}) exceeds allocated budget (${ceiling})`);
+      }
+      if (catEst <= 0 && ceiling <= 0) {
+        return badRequest(res, 'Enter category amounts or wait for Main allocation before submitting');
+      }
+    }
     project.budgetStatus = 'Submitted';
     project.budgetSubmittedAt = new Date();
   } else if (action === 'approve') {
@@ -307,9 +504,9 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
     project.budgetApprovedBy = req.user?._id;
     project.budgetApprovedAt = new Date();
     project.budgetNotes = notes || '';
-    
-    // Copy estimatedAmount to approvedAmount upon approval
-    if (project.budgetCategories && project.budgetCategories.length) {
+
+    if (!isMain && project.budgetCategories && project.budgetCategories.length) {
+      // Copy estimatedAmount to approvedAmount upon approval (category-wise Sub budget)
       project.budgetCategories.forEach(cat => {
         cat.approvedAmount = cat.estimatedAmount;
       });
@@ -318,7 +515,7 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
     project.budgetStatus = 'Draft';
     project.budgetApprovedBy = null;
     project.budgetApprovedAt = null;
-    if (project.budgetCategories && project.budgetCategories.length) {
+    if (!isMain && project.budgetCategories && project.budgetCategories.length) {
       project.budgetCategories.forEach(cat => {
         cat.approvedAmount = 0;
       });
@@ -330,7 +527,13 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
   await project.save();
 
   const populated = await ConstructionProject.findById(project._id)
-    .populate('projectManager', 'firstName lastName email').lean();
+    .populate('projectManager', 'firstName lastName email')
+    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget')
+    .lean();
+
+  if (!populated.parentProject) {
+    populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
+  }
 
   res.json({ success: true, message: `Budget ${action}d successfully`, data: populated });
 }));

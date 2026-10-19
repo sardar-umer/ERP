@@ -16,7 +16,8 @@ import {
   ExpandLess, ExpandMore, FiberManualRecord as DotIcon, Flag as FlagIcon,
   PhotoCamera as PhotoIcon, Refresh as RefreshIcon, Search as SearchIcon,
   Warning as WarnIcon, ShoppingCart as POIcon, Receipt as InvoiceIcon,
-  Visibility as ViewIcon, Engineering as ContractorIcon
+  Visibility as ViewIcon, Engineering as ContractorIcon,
+  AccountTree as TreeIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -24,7 +25,7 @@ import { Checkbox } from '@mui/material';
 import dayjs from 'dayjs';
 import { getImageUrl } from '../../utils/imageService';
 import {
-  getProjectById, updateProject, updateBudgetStatus,
+  getProjectById, updateProject, updateBudgetStatus, setLumpSumBudget, allocateBudgetToSubs,
   getBOQHeaders, createBOQHeader, updateBOQHeader, deleteBOQHeader, allocateBOQItem,
   getBOQ, addBOQItem, updateBOQItem, deleteBOQItem,
   updateBoqDiscount, batchAssignBOQContractor, getSuppliers,
@@ -38,11 +39,32 @@ import {
 import api from '../../services/api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
-const BUDGET_CATEGORIES = [
-  'Civil Works', 'Finishes', 'Electrical', 'Plumbing', 'HVAC System',
-  'Sewerage', 'Water Supply & Gas', 'Sui Gas',
-  'Labor', 'Consultancy', 'Materials', 'Contingency', 'Miscellaneous'
+/** Segregated budget groups for Sub project category allocation */
+const BUDGET_CATEGORY_GROUPS = [
+  {
+    id: 'works',
+    title: 'Construction Works',
+    subtitle: 'Civil, finishes, materials & labor',
+    accent: '#1d4ed8',
+    categories: ['Civil Works', 'Finishes', 'Materials', 'Labor']
+  },
+  {
+    id: 'mep',
+    title: 'MEP & Utilities',
+    subtitle: 'Electrical, plumbing, HVAC & networks',
+    accent: '#0f766e',
+    categories: ['Electrical', 'Plumbing', 'HVAC System', 'Sewerage', 'Water Supply & Gas']
+  },
+  {
+    id: 'soft',
+    title: 'Soft Costs & Contingency',
+    subtitle: 'Consultancy, contingency and other',
+    accent: '#b45309',
+    categories: ['Consultancy', 'Contingency', 'Miscellaneous']
+  }
 ];
+
+const BUDGET_CATEGORIES = BUDGET_CATEGORY_GROUPS.flatMap((g) => g.categories);
 
 const STATUS_COLOR = {
   Draft: 'default', Planning: 'info', Active: 'success',
@@ -58,15 +80,18 @@ const MS_STATUS_COLOR = {
   Pending: 'default', 'In Progress': 'info', Completed: 'success', Delayed: 'error'
 };
 
-const TAB_META = [
-  { label: 'Overview', icon: <ViewIcon fontSize="small" /> },
-  { label: 'Bill of Quantities', icon: <POIcon fontSize="small" /> },
-  { label: 'Tasks / WBS', icon: <TaskIcon fontSize="small" /> },
-  { label: 'Expenses', icon: <MoneyIcon fontSize="small" /> },
-  { label: 'Daily Reports', icon: <PhotoIcon fontSize="small" /> },
-  { label: 'Gantt Chart', icon: <ChartIcon fontSize="small" /> },
-  { label: 'Invoices', icon: <InvoiceIcon fontSize="small" /> }
+/** Main projects only show portfolio tabs; Subs get the full execution suite. */
+const ALL_TABS = [
+  { id: 'overview', label: 'Overview', icon: <ViewIcon fontSize="small" />, onMain: true, onSub: true },
+  { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
+  { id: 'tasks', label: 'Tasks / WBS', icon: <TaskIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'expenses', label: 'Expenses', icon: <MoneyIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'dpr', label: 'Daily Reports', icon: <PhotoIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'gantt', label: 'Gantt Chart', icon: <ChartIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true }
 ];
+
+const getVisibleTabs = (isMain) => ALL_TABS.filter((t) => (isMain ? t.onMain : t.onSub));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (v) =>
@@ -2719,8 +2744,720 @@ const DPRTab = ({ projectId }) => {
   );
 };
 
+const MainKpi = ({ label, value, hint, accent = '#0f766e' }) => (
+  <Box
+    sx={{
+      p: 2,
+      height: '100%',
+      borderRadius: 2,
+      bgcolor: '#fff',
+      border: '1px solid',
+      borderColor: 'rgba(15, 118, 110, 0.14)',
+      borderTop: `3px solid ${accent}`,
+      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
+    }}
+  >
+    <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>
+      {label}
+    </Typography>
+    <Typography variant="h6" fontWeight={800} sx={{ mt: 0.5, color: '#0f172a', lineHeight: 1.2 }}>
+      {value}
+    </Typography>
+    {hint && (
+      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+        {hint}
+      </Typography>
+    )}
+  </Box>
+);
+
+// ─── Main portfolio overview (distinct from Sub execution view) ───────────────
+const MainProjectOverview = ({ project, onRefresh }) => {
+  const navigate = useNavigate();
+  const alloc = project.budgetAllocation || {};
+  const [lumpInput, setLumpInput] = useState(String(project.lumpSumBudget || alloc.lumpSumBudget || ''));
+  const [rowAmounts, setRowAmounts] = useState({});
+  const [savingLump, setSavingLump] = useState(false);
+  const [savingAlloc, setSavingAlloc] = useState(false);
+  const [budgetActionLoading, setBudgetActionLoading] = useState(false);
+  const [msg, setMsg] = useState('');
+  const [err, setErr] = useState('');
+
+  useEffect(() => {
+    setLumpInput(String(project.lumpSumBudget || alloc.lumpSumBudget || ''));
+    const next = {};
+    (alloc.subProjects || []).forEach((s) => {
+      next[s._id] = String(s.allocatedBudget || '');
+    });
+    setRowAmounts(next);
+  }, [project._id, project.lumpSumBudget, project.budgetStatus, alloc.lumpSumBudget, alloc.totalAllocated, alloc.subProjects]);
+
+  const lump = Number(alloc.lumpSumBudget) || Number(project.lumpSumBudget) || 0;
+  const totalAllocated = Number(alloc.totalAllocated) || 0;
+  const remaining = Number(alloc.remaining) || Math.max(0, lump - totalAllocated);
+  const usedPct = lump > 0 ? Math.min(100, Math.round((totalAllocated / lump) * 100)) : 0;
+  const spent = Number(project.totalActualSpent) || 0;
+  const subs = alloc.subProjects || [];
+
+  const handleSaveLump = async () => {
+    setSavingLump(true);
+    setErr('');
+    setMsg('');
+    try {
+      await setLumpSumBudget(project._id, Number(lumpInput) || 0);
+      setMsg('Lump-sum budget saved');
+      onRefresh();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Failed to save lump-sum budget');
+    } finally {
+      setSavingLump(false);
+    }
+  };
+
+  const handleSaveAllocations = async () => {
+    setSavingAlloc(true);
+    setErr('');
+    setMsg('');
+    try {
+      const allocations = subs.map((s) => ({
+        subProjectId: s._id,
+        amount: Number(rowAmounts[s._id]) || 0
+      }));
+      await allocateBudgetToSubs(project._id, allocations);
+      setMsg('Budget allocated to sub projects');
+      onRefresh();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Failed to allocate budget');
+    } finally {
+      setSavingAlloc(false);
+    }
+  };
+
+  const handleBudgetAction = async (action) => {
+    setBudgetActionLoading(true);
+    setErr('');
+    setMsg('');
+    try {
+      await updateBudgetStatus(project._id, action);
+      setMsg(`Budget ${action}d`);
+      onRefresh();
+    } catch (e) {
+      setErr(e.response?.data?.message || `Failed to ${action} budget`);
+    } finally {
+      setBudgetActionLoading(false);
+    }
+  };
+
+  return (
+    <Box>
+      <Grid container spacing={2} sx={{ mb: 2.5 }}>
+        <Grid item xs={12} sm={6} md={3}>
+          <MainKpi label="Lump Sum" value={fmt(lump)} hint={`Status: ${project.budgetStatus || 'Draft'}`} accent="#0f766e" />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <MainKpi label="Allocated" value={fmt(totalAllocated)} hint={`${usedPct}% of envelope`} accent="#0369a1" />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <MainKpi
+            label="Remaining"
+            value={fmt(remaining)}
+            hint={remaining === 0 && lump > 0 ? 'Fully allocated' : 'Still available'}
+            accent={remaining === 0 && lump > 0 ? '#15803d' : '#b45309'}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6} md={3}>
+          <MainKpi label="Portfolio Progress" value={`${project.overallProgress || 0}%`} hint={`Spent ${fmt(spent)}`} accent="#334155" />
+        </Grid>
+      </Grid>
+
+      <Grid container spacing={2.5}>
+        <Grid item xs={12} lg={8}>
+          <Paper
+            elevation={0}
+            sx={{
+              p: { xs: 2, sm: 2.5 },
+              borderRadius: 2.5,
+              border: '1px solid',
+              borderColor: 'rgba(15, 118, 110, 0.18)',
+              background: 'linear-gradient(180deg, #f0fdfa 0%, #ffffff 42%)'
+            }}
+          >
+            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5} sx={{ mb: 2 }}>
+              <Box>
+                <Stack direction="row" alignItems="center" gap={1}>
+                  <MoneyIcon sx={{ color: '#0f766e' }} />
+                  <Typography variant="h6" fontWeight={800} sx={{ color: '#134e4a' }}>
+                    Budget Envelope
+                  </Typography>
+                </Stack>
+                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
+                  Set one lump-sum pool for the Main project, then distribute to Subs.
+                </Typography>
+              </Box>
+              <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+                <Chip
+                  label={project.budgetStatus}
+                  size="small"
+                  color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'}
+                  sx={{ fontWeight: 700 }}
+                />
+                {project.budgetStatus === 'Draft' && (
+                  <Button size="small" variant="outlined" disabled={budgetActionLoading || lump <= 0} onClick={() => handleBudgetAction('submit')}>
+                    Submit
+                  </Button>
+                )}
+                {project.budgetStatus === 'Submitted' && (
+                  <Button size="small" variant="contained" color="success" disabled={budgetActionLoading} onClick={() => handleBudgetAction('approve')}>
+                    Approve
+                  </Button>
+                )}
+                {(project.budgetStatus === 'Submitted' || project.budgetStatus === 'Approved') && (
+                  <Button size="small" disabled={budgetActionLoading} onClick={() => handleBudgetAction('reset')}>
+                    Reset
+                  </Button>
+                )}
+              </Stack>
+            </Stack>
+
+            {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
+            {msg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsg('')}>{msg}</Alert>}
+
+            <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5} alignItems={{ sm: 'center' }} sx={{ mb: 2 }}>
+              <TextField
+                fullWidth
+                size="small"
+                label="Lump Sum Budget (PKR)"
+                type="number"
+                value={lumpInput}
+                onChange={(e) => setLumpInput(e.target.value)}
+                InputProps={{ startAdornment: <InputAdornment position="start">Rs</InputAdornment> }}
+                sx={{ maxWidth: { sm: 320 }, bgcolor: '#fff' }}
+              />
+              <Button variant="contained" onClick={handleSaveLump} disabled={savingLump} sx={{ bgcolor: '#0f766e', '&:hover': { bgcolor: '#0d9488' } }}>
+                {savingLump ? 'Saving…' : 'Save Envelope'}
+              </Button>
+            </Stack>
+
+            <Box sx={{ mb: 1 }}>
+              <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+                <Typography variant="caption" fontWeight={700} color="text.secondary">Allocation coverage</Typography>
+                <Typography variant="caption" fontWeight={700}>{usedPct}%</Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={usedPct}
+                sx={{
+                  height: 10,
+                  borderRadius: 999,
+                  bgcolor: 'rgba(15, 118, 110, 0.12)',
+                  '& .MuiLinearProgress-bar': { bgcolor: '#0f766e', borderRadius: 999 }
+                }}
+              />
+            </Box>
+            <Typography variant="caption" color="text.secondary">
+              {fmt(totalAllocated)} allocated · {fmt(remaining)} remaining
+            </Typography>
+          </Paper>
+
+          <Paper
+            elevation={0}
+            sx={{
+              mt: 2.5,
+              p: { xs: 2, sm: 2.5 },
+              borderRadius: 2.5,
+              border: '1px solid',
+              borderColor: 'divider',
+              bgcolor: '#fff'
+            }}
+          >
+            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }} flexWrap="wrap" gap={1}>
+              <Box>
+                <Typography variant="h6" fontWeight={800}>Allocate to Sub Projects</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  Assign each Sub its share of the Main envelope.
+                </Typography>
+              </Box>
+              <Button
+                variant="contained"
+                onClick={handleSaveAllocations}
+                disabled={savingAlloc || lump <= 0 || !subs.length}
+                sx={{ bgcolor: '#0f766e', '&:hover': { bgcolor: '#0d9488' } }}
+              >
+                {savingAlloc ? 'Saving…' : 'Save Allocations'}
+              </Button>
+            </Stack>
+
+            {!subs.length ? (
+              <Alert severity="info">Create Sub Projects under this Main first, then allocate budget here.</Alert>
+            ) : (
+              <TableContainer sx={{ borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                      <TableCell sx={{ fontWeight: 700 }}>Sub Project</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>Sector</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700 }}>Allocated (PKR)</TableCell>
+                      <TableCell sx={{ fontWeight: 700 }}>Budget</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {subs.map((s) => (
+                      <TableRow key={s._id} hover>
+                        <TableCell>
+                          <Typography
+                            variant="body2"
+                            fontWeight={700}
+                            sx={{ cursor: 'pointer', color: '#0f766e', '&:hover': { textDecoration: 'underline' } }}
+                            onClick={() => navigate(`/general/project-management/${s._id}`)}
+                          >
+                            {s.name}
+                          </Typography>
+                          <Typography variant="caption" color="text.secondary">{s.projectNumber}</Typography>
+                        </TableCell>
+                        <TableCell>{s.sector || '—'}</TableCell>
+                        <TableCell>
+                          <Typography variant="caption">{s.projectType}</Typography>
+                        </TableCell>
+                        <TableCell align="right" sx={{ minWidth: 150 }}>
+                          <TextField
+                            size="small"
+                            type="number"
+                            value={rowAmounts[s._id] ?? ''}
+                            onChange={(e) => setRowAmounts((prev) => ({ ...prev, [s._id]: e.target.value }))}
+                            inputProps={{ min: 0, style: { textAlign: 'right' } }}
+                          />
+                        </TableCell>
+                        <TableCell>
+                          <Chip label={s.budgetStatus || 'Draft'} size="small" variant="outlined" />
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            )}
+          </Paper>
+        </Grid>
+
+        <Grid item xs={12} lg={4}>
+          <Paper
+            elevation={0}
+            sx={{
+              p: 2.5,
+              borderRadius: 2.5,
+              border: '1px solid',
+              borderColor: 'divider',
+              bgcolor: '#0f172a',
+              color: '#e2e8f0',
+              mb: 2.5
+            }}
+          >
+            <Typography variant="overline" sx={{ color: '#94a3b8', letterSpacing: 1.2 }}>Portfolio</Typography>
+            <Typography variant="h6" fontWeight={800} sx={{ color: '#fff', mb: 2 }}>{project.name}</Typography>
+            <Stack spacing={1.25}>
+              {[
+                ['Code', project.projectNumber],
+                ['Society', project.society || '—'],
+                ['Status', project.status],
+                ['Start', project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'],
+                ['Expected End', project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'],
+                ['Sub Projects', String(subs.length)]
+              ].map(([label, value]) => (
+                <Stack key={label} direction="row" justifyContent="space-between" gap={1}>
+                  <Typography variant="caption" sx={{ color: '#94a3b8' }}>{label}</Typography>
+                  <Typography variant="caption" fontWeight={700} align="right" sx={{ color: '#f8fafc' }}>{value}</Typography>
+                </Stack>
+              ))}
+            </Stack>
+          </Paper>
+
+          <Paper elevation={0} sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
+            <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
+              <TreeIcon sx={{ color: '#0f766e' }} fontSize="small" />
+              <Typography variant="subtitle1" fontWeight={800}>Sub Projects</Typography>
+            </Stack>
+            {!subs.length ? (
+              <Typography variant="body2" color="text.secondary">No sub projects yet.</Typography>
+            ) : (
+              <Stack spacing={1}>
+                {subs.map((s) => (
+                  <Box
+                    key={s._id}
+                    onClick={() => navigate(`/general/project-management/${s._id}`)}
+                    sx={{
+                      p: 1.5,
+                      borderRadius: 2,
+                      border: '1px solid',
+                      borderColor: 'divider',
+                      cursor: 'pointer',
+                      transition: 'all .15s ease',
+                      '&:hover': { borderColor: '#0f766e', bgcolor: 'rgba(15, 118, 110, 0.04)' }
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
+                      <Box>
+                        <Typography variant="body2" fontWeight={700}>{s.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {[s.sector, s.projectType].filter(Boolean).join(' · ') || s.projectNumber}
+                        </Typography>
+                      </Box>
+                      <Typography variant="caption" fontWeight={800} sx={{ color: '#0f766e' }}>
+                        {fmt(s.allocatedBudget)}
+                      </Typography>
+                    </Stack>
+                  </Box>
+                ))}
+              </Stack>
+            )}
+          </Paper>
+        </Grid>
+      </Grid>
+    </Box>
+  );
+};
+
+// ─── Sub project budget (allocated ceiling + segregated categories) ───────────
+const SubBudgetPanel = ({ project, onRefresh }) => {
+  const ceiling = Number(project.allocatedBudget) || 0;
+  const locked = project.budgetStatus === 'Approved';
+  const [cats, setCats] = useState([]);
+  const [saving, setSaving] = useState(false);
+  const [budgetActionLoading, setBudgetActionLoading] = useState(false);
+  const [err, setErr] = useState('');
+  const [msg, setMsg] = useState('');
+
+  useEffect(() => {
+    const existing = project.budgetCategories || [];
+    const byName = new Map(existing.map((c) => [c.category, c]));
+    setCats(BUDGET_CATEGORIES.map((name) => ({
+      category: name,
+      estimatedAmount: byName.get(name)?.estimatedAmount || 0,
+      approvedAmount: byName.get(name)?.approvedAmount || 0
+    })));
+  }, [project._id, project.budgetCategories, project.allocatedBudget]);
+
+  const amountByName = (name) => Number(cats.find((c) => c.category === name)?.estimatedAmount) || 0;
+  const setAmount = (name, value) => {
+    setCats((prev) => prev.map((c) => (
+      c.category === name ? { ...c, estimatedAmount: Math.max(0, Number(value) || 0) } : c
+    )));
+  };
+
+  const catTotal = cats.reduce((s, c) => s + (Number(c.estimatedAmount) || 0), 0);
+  const remaining = Math.max(0, ceiling - catTotal);
+  const over = catTotal > ceiling && ceiling > 0;
+  const coverage = ceiling > 0 ? Math.min(100, Math.round((catTotal / ceiling) * 100)) : 0;
+  const parentName = project.parentProject?.name || 'Main Project';
+
+  const handleSaveCategories = async () => {
+    if (over) {
+      setErr(`Category total (${fmt(catTotal)}) exceeds allocated budget (${fmt(ceiling)})`);
+      return;
+    }
+    setSaving(true);
+    setErr('');
+    setMsg('');
+    try {
+      await updateProject(project._id, { budgetCategories: cats });
+      setMsg('Category budget saved');
+      onRefresh();
+    } catch (e) {
+      setErr(e.response?.data?.message || 'Failed to save categories');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBudgetAction = async (action) => {
+    setBudgetActionLoading(true);
+    setErr('');
+    setMsg('');
+    try {
+      await updateBudgetStatus(project._id, action);
+      setMsg(`Budget ${action}d`);
+      onRefresh();
+    } catch (e) {
+      setErr(e.response?.data?.message || `Failed to ${action} budget`);
+    } finally {
+      setBudgetActionLoading(false);
+    }
+  };
+
+  return (
+    <Box sx={{ mt: 2 }}>
+      {/* Ceiling banner */}
+      <Paper
+        elevation={0}
+        sx={{
+          p: { xs: 2, sm: 2.5 },
+          mb: 2,
+          borderRadius: 2.5,
+          border: '1px solid',
+          borderColor: over ? 'error.light' : 'rgba(29, 78, 216, 0.2)',
+          background: over
+            ? 'linear-gradient(135deg, #fef2f2 0%, #fff 70%)'
+            : 'linear-gradient(135deg, #eff6ff 0%, #ffffff 55%)'
+        }}
+      >
+        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5} sx={{ mb: 2 }}>
+          <Box>
+            <Typography variant="overline" sx={{ color: '#64748b', letterSpacing: 1.1, fontWeight: 700 }}>
+              Budget Allocation · Sub Project
+            </Typography>
+            <Typography variant="h6" fontWeight={800} sx={{ color: '#0f172a' }}>
+              Distribute allocated funds by category
+            </Typography>
+            <Typography variant="body2" color="text.secondary">
+              Ceiling from <strong>{parentName}</strong> — segregate into groups, then submit for approval.
+            </Typography>
+          </Box>
+          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
+            <Chip
+              label={project.budgetStatus}
+              size="small"
+              color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'}
+              sx={{ fontWeight: 700 }}
+            />
+            {project.budgetStatus === 'Draft' && (
+              <Button size="small" variant="outlined" disabled={budgetActionLoading || ceiling <= 0} onClick={() => handleBudgetAction('submit')}>
+                Submit Budget
+              </Button>
+            )}
+            {project.budgetStatus === 'Submitted' && (
+              <Button size="small" variant="contained" color="success" disabled={budgetActionLoading} onClick={() => handleBudgetAction('approve')}>
+                Approve
+              </Button>
+            )}
+            {(project.budgetStatus === 'Submitted' || project.budgetStatus === 'Approved') && (
+              <Button size="small" disabled={budgetActionLoading} onClick={() => handleBudgetAction('reset')}>
+                Reset
+              </Button>
+            )}
+          </Stack>
+        </Stack>
+
+        {ceiling <= 0 && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            No budget allocated yet. Open the Main Project and allocate lump-sum budget to this Sub first.
+          </Alert>
+        )}
+        {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
+        {msg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsg('')}>{msg}</Alert>}
+        {over && (
+          <Alert severity="error" sx={{ mb: 2 }}>
+            Category total exceeds the Main allocation by {fmt(catTotal - ceiling)}. Reduce one or more categories.
+          </Alert>
+        )}
+
+        <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
+          {[
+            { label: 'Allocated from Main', value: fmt(ceiling), color: '#1d4ed8' },
+            { label: 'Distributed', value: fmt(catTotal), color: over ? '#b91c1c' : '#0f172a' },
+            { label: 'Unassigned', value: fmt(remaining), color: remaining === 0 && ceiling > 0 ? '#15803d' : '#b45309' },
+            { label: 'Coverage', value: `${coverage}%`, color: '#334155' }
+          ].map((kpi) => (
+            <Grid item xs={6} md={3} key={kpi.label}>
+              <Box
+                sx={{
+                  p: 1.5,
+                  borderRadius: 2,
+                  bgcolor: '#fff',
+                  border: '1px solid',
+                  borderColor: 'divider',
+                  borderLeft: `3px solid ${kpi.color}`
+                }}
+              >
+                <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>
+                  {kpi.label}
+                </Typography>
+                <Typography variant="subtitle1" fontWeight={800} sx={{ color: kpi.color, mt: 0.25 }}>
+                  {kpi.value}
+                </Typography>
+              </Box>
+            </Grid>
+          ))}
+        </Grid>
+
+        <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+          <Typography variant="caption" fontWeight={700} color="text.secondary">Distribution vs allocation</Typography>
+          <Typography variant="caption" fontWeight={700}>{coverage}%</Typography>
+        </Stack>
+        <LinearProgress
+          variant="determinate"
+          value={Math.min(coverage, 100)}
+          color={over ? 'error' : 'primary'}
+          sx={{ height: 10, borderRadius: 999, bgcolor: 'rgba(29, 78, 216, 0.12)' }}
+        />
+      </Paper>
+
+      {/* Grouped category tables */}
+      <Stack spacing={2}>
+        {BUDGET_CATEGORY_GROUPS.map((group) => {
+          const groupTotal = group.categories.reduce((s, name) => s + amountByName(name), 0);
+          const groupPct = ceiling > 0 ? Math.round((groupTotal / ceiling) * 100) : 0;
+          return (
+            <Paper
+              key={group.id}
+              elevation={0}
+              sx={{
+                borderRadius: 2.5,
+                border: '1px solid',
+                borderColor: 'divider',
+                overflow: 'hidden',
+                bgcolor: '#fff'
+              }}
+            >
+              <Box
+                sx={{
+                  px: 2,
+                  py: 1.5,
+                  display: 'flex',
+                  justifyContent: 'space-between',
+                  alignItems: 'center',
+                  gap: 1,
+                  flexWrap: 'wrap',
+                  bgcolor: `${group.accent}0d`,
+                  borderBottom: '1px solid',
+                  borderColor: 'divider',
+                  borderLeft: `4px solid ${group.accent}`
+                }}
+              >
+                <Box>
+                  <Typography variant="subtitle1" fontWeight={800} sx={{ color: group.accent }}>
+                    {group.title}
+                  </Typography>
+                  <Typography variant="caption" color="text.secondary">{group.subtitle}</Typography>
+                </Box>
+                <Box sx={{ textAlign: 'right' }}>
+                  <Typography variant="subtitle2" fontWeight={800}>{fmt(groupTotal)}</Typography>
+                  <Typography variant="caption" color="text.secondary">{groupPct}% of allocation</Typography>
+                </Box>
+              </Box>
+
+              <TableContainer>
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                      <TableCell sx={{ fontWeight: 700, width: '36%' }}>Category</TableCell>
+                      <TableCell sx={{ fontWeight: 700, width: '28%' }} align="right">Amount (PKR)</TableCell>
+                      <TableCell sx={{ fontWeight: 700, width: '12%' }} align="right">Share</TableCell>
+                      <TableCell sx={{ fontWeight: 700, width: '24%' }}>Of allocation</TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {group.categories.map((name) => {
+                      const amount = amountByName(name);
+                      const share = ceiling > 0 ? Math.min(100, (amount / ceiling) * 100) : 0;
+                      return (
+                        <TableRow key={name} hover>
+                          <TableCell>
+                            <Typography variant="body2" fontWeight={600}>{name}</Typography>
+                          </TableCell>
+                          <TableCell align="right">
+                            <TextField
+                              size="small"
+                              type="number"
+                              value={amount || ''}
+                              disabled={locked || ceiling <= 0}
+                              onChange={(e) => setAmount(name, e.target.value)}
+                              inputProps={{ min: 0, style: { textAlign: 'right' } }}
+                              sx={{ width: { xs: 120, sm: 160 } }}
+                              InputProps={{
+                                startAdornment: <InputAdornment position="start">Rs</InputAdornment>
+                              }}
+                            />
+                          </TableCell>
+                          <TableCell align="right">
+                            <Typography variant="caption" fontWeight={700}>
+                              {share ? `${share.toFixed(1)}%` : '—'}
+                            </Typography>
+                          </TableCell>
+                          <TableCell>
+                            <LinearProgress
+                              variant="determinate"
+                              value={share}
+                              sx={{
+                                height: 6,
+                                borderRadius: 999,
+                                bgcolor: 'rgba(15, 23, 42, 0.06)',
+                                '& .MuiLinearProgress-bar': { bgcolor: group.accent, borderRadius: 999 }
+                              }}
+                            />
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
+                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
+                      <TableCell>
+                        <Typography variant="body2" fontWeight={800}>Group total</Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="body2" fontWeight={800}>{fmt(groupTotal)}</Typography>
+                      </TableCell>
+                      <TableCell align="right">
+                        <Typography variant="caption" fontWeight={700}>{groupPct}%</Typography>
+                      </TableCell>
+                      <TableCell />
+                    </TableRow>
+                  </TableBody>
+                </Table>
+              </TableContainer>
+            </Paper>
+          );
+        })}
+      </Stack>
+
+      {!locked && (
+        <Paper
+          elevation={0}
+          sx={{
+            mt: 2,
+            p: 2,
+            borderRadius: 2.5,
+            border: '1px solid',
+            borderColor: 'divider',
+            bgcolor: '#fff',
+            position: 'sticky',
+            bottom: 8,
+            zIndex: 2
+          }}
+        >
+          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1.5}>
+            <Box>
+              <Typography variant="body2" fontWeight={700}>
+                Total distributed: {fmt(catTotal)}
+                {ceiling > 0 && (
+                  <Typography component="span" variant="body2" color="text.secondary"> · Remaining {fmt(remaining)}</Typography>
+                )}
+              </Typography>
+              <Typography variant="caption" color={over ? 'error.main' : 'text.secondary'}>
+                {over ? 'Fix over-allocation before saving' : 'Save categories, then Submit → Approve'}
+              </Typography>
+            </Box>
+            <Button
+              variant="contained"
+              onClick={handleSaveCategories}
+              disabled={saving || ceiling <= 0 || over}
+              sx={{ minWidth: 160 }}
+            >
+              {saving ? 'Saving…' : 'Save Category Budget'}
+            </Button>
+          </Stack>
+        </Paper>
+      )}
+    </Box>
+  );
+};
+
 // ─── Overview Tab ─────────────────────────────────────────────────────────────
-const OverviewTab = ({ project, onRefresh }) => {
+const OverviewTab = ({ project, onRefresh }) => (
+  !project.parentProject
+    ? <MainProjectOverview project={project} onRefresh={onRefresh} />
+    : <SubProjectOverview project={project} onRefresh={onRefresh} />
+);
+
+const SubProjectOverview = ({ project, onRefresh }) => {
   const [msDialogOpen, setMsDialogOpen] = useState(false);
   const [editMs, setEditMs] = useState(null);
   const [viewMs, setViewMs] = useState(null);
@@ -2773,13 +3510,6 @@ const OverviewTab = ({ project, onRefresh }) => {
     } catch { /* silent */ }
   };
 
-  const handleUpdateBudget = async (action) => {
-    try {
-      await updateBudgetStatus(project._id, action);
-      onRefresh();
-    } catch { /* silent */ }
-  };
-
   const handleGenerateInvoice = async (ms) => {
     if (!project.contractValue) {
       setGenInvError('Set the project contract value first before generating invoices.');
@@ -2797,7 +3527,8 @@ const OverviewTab = ({ project, onRefresh }) => {
 
   const setMs = (field) => (e) => setMsForm(prev => ({ ...prev, [field]: e.target.value }));
 
-  const budgetPct = pct(project.totalActualSpent, project.totalApprovedBudget);
+  const displayBudget = project.allocatedBudget || project.totalApprovedBudget || project.totalEstimatedCost;
+  const budgetPct = pct(project.totalActualSpent, displayBudget);
   const daysLeft = project.expectedEndDate
     ? dayjs(project.expectedEndDate).diff(dayjs(), 'day')
     : null;
@@ -2821,8 +3552,8 @@ const OverviewTab = ({ project, onRefresh }) => {
           <Grid item xs={6} sm={3}>
             <Card variant="outlined">
               <CardContent sx={{ py: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">Total Budget</Typography>
-                <Typography variant="h6" fontWeight={700}>{fmt(project.totalApprovedBudget || project.totalEstimatedCost)}</Typography>
+                <Typography variant="caption" color="text.secondary">Allocated Budget</Typography>
+                <Typography variant="h6" fontWeight={700}>{fmt(displayBudget)}</Typography>
               </CardContent>
             </Card>
           </Grid>
@@ -2849,39 +3580,7 @@ const OverviewTab = ({ project, onRefresh }) => {
           </Grid>
         </Grid>
 
-        {/* Budget categories */}
-        <Card variant="outlined" sx={{ mt: 2 }}>
-          <CardContent>
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
-              <Typography variant="subtitle2" fontWeight={600}>Budget by Category</Typography>
-              <Stack direction="row" gap={1} alignItems="center">
-                <Chip label={project.budgetStatus} size="small"
-                  color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'} />
-                {project.budgetStatus === 'Draft' && (
-                  <Button size="small" variant="outlined" onClick={() => handleUpdateBudget('submit')}>Submit Budget</Button>
-                )}
-                {project.budgetStatus === 'Submitted' && (
-                  <Button size="small" variant="contained" color="success" onClick={() => handleUpdateBudget('approve')}>Approve Budget</Button>
-                )}
-              </Stack>
-            </Stack>
-            <Grid container spacing={1}>
-              {(project.budgetCategories || []).filter(c => c.estimatedAmount > 0).map(cat => (
-                <Grid item xs={12} sm={6} key={cat.category}>
-                  <Stack direction="row" justifyContent="space-between">
-                    <Typography variant="caption">{cat.category}</Typography>
-                    <Typography variant="caption" fontWeight={600}>{fmt(cat.approvedAmount || cat.estimatedAmount)}</Typography>
-                  </Stack>
-                  <LinearProgress
-                    variant="determinate"
-                    value={Math.min(pct(cat.approvedAmount, project.totalApprovedBudget), 100)}
-                    sx={{ height: 4, borderRadius: 2 }}
-                  />
-                </Grid>
-              ))}
-            </Grid>
-          </CardContent>
-        </Card>
+        <SubBudgetPanel project={project} onRefresh={onRefresh} />
       </Grid>
 
       {/* Project Details */}
@@ -3161,7 +3860,7 @@ const OverviewTab = ({ project, onRefresh }) => {
 };
 
 // ─── Main Detail Page ─────────────────────────────────────────────────────────
-/** Construction project detail (tabs: Overview, BOQ, Tasks, Expenses, DPR, Gantt, Invoices). */
+/** Construction project detail — Main: Overview + BOQ; Sub: full execution tabs. */
 const ProjectDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -3171,12 +3870,6 @@ const ProjectDetail = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [tab, setTab] = useState(0);
-
-  useEffect(() => {
-    const tabParam = Number(searchParams.get('tab') || 0);
-    const normalized = Number.isFinite(tabParam) ? Math.max(0, Math.min(6, tabParam)) : 0;
-    setTab(normalized);
-  }, [searchParams]);
 
   useEffect(() => {
     if (id) {
@@ -3195,6 +3888,25 @@ const ProjectDetail = () => {
   }, [id]);
 
   useEffect(() => { loadProject(); }, [loadProject]);
+
+  const isMainProject = project ? !project.parentProject : false;
+  const visibleTabs = getVisibleTabs(isMainProject);
+  const activeTab = visibleTabs[Math.min(tab, Math.max(0, visibleTabs.length - 1))] || visibleTabs[0];
+
+  useEffect(() => {
+    if (!project) return;
+    const tabs = getVisibleTabs(!project.parentProject);
+    const raw = searchParams.get('tab');
+    const tabParam = Number(raw || 0);
+    const normalized = Number.isFinite(tabParam)
+      ? Math.max(0, Math.min(tabs.length - 1, tabParam))
+      : 0;
+    setTab(normalized);
+    // Clamp deep-links that point past Main's limited tabs (e.g. old ?tab=5)
+    if (raw != null && Number(raw) !== normalized) {
+      setSearchParams({ tab: String(normalized) }, { replace: true });
+    }
+  }, [project, searchParams, setSearchParams]);
 
   if (loading) {
     return (
@@ -3216,39 +3928,102 @@ const ProjectDetail = () => {
     );
   }
 
+  const alloc = project.budgetAllocation || {};
+  const mainLump = Number(project.lumpSumBudget) || Number(alloc.lumpSumBudget) || 0;
+  const mainAllocated = Number(alloc.totalAllocated) || 0;
+  const mainRemaining = Number(alloc.remaining) || Math.max(0, mainLump - mainAllocated);
+
   return (
-    <Box sx={{ p: { xs: 1.5, sm: 3 }, bgcolor: 'grey.50', minHeight: '100%' }}>
+    <Box
+      sx={{
+        p: { xs: 1.5, sm: 3 },
+        minHeight: '100%',
+        bgcolor: isMainProject ? '#f1f5f9' : 'grey.50',
+        backgroundImage: isMainProject
+          ? 'radial-gradient(ellipse at top left, rgba(15,118,110,0.08), transparent 45%), radial-gradient(ellipse at top right, rgba(15,23,42,0.06), transparent 40%)'
+          : 'none'
+      }}
+    >
       {/* Breadcrumb + Header */}
       <Paper
         elevation={0}
         sx={{
           mb: 3,
-          p: { xs: 1.5, sm: 2 },
-          borderRadius: 2,
+          p: { xs: 2, sm: 2.5 },
+          borderRadius: 2.5,
           border: '1px solid',
-          borderColor: 'divider',
-          background: 'linear-gradient(135deg, rgba(25,118,210,0.08) 0%, rgba(25,118,210,0.02) 100%)'
+          borderColor: isMainProject ? 'rgba(15, 118, 110, 0.22)' : 'divider',
+          overflow: 'hidden',
+          position: 'relative',
+          background: isMainProject
+            ? 'linear-gradient(135deg, #0f172a 0%, #134e4a 55%, #0f766e 100%)'
+            : 'linear-gradient(135deg, rgba(25,118,210,0.08) 0%, rgba(25,118,210,0.02) 100%)'
         }}
       >
-        <Stack direction="row" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1.5}>
+        {isMainProject && (
+          <Box
+            sx={{
+              position: 'absolute',
+              inset: 0,
+              opacity: 0.12,
+              backgroundImage: 'linear-gradient(90deg, transparent 0%, rgba(255,255,255,0.25) 50%, transparent 100%)',
+              pointerEvents: 'none'
+            }}
+          />
+        )}
+        <Stack direction="row" alignItems="flex-start" justifyContent="space-between" flexWrap="wrap" gap={1.5} sx={{ position: 'relative' }}>
           <Box>
             <Button
               startIcon={<BackIcon />}
               onClick={() => navigate('/general/project-management')}
               size="small"
-              sx={{ mb: 1, color: 'text.secondary' }}
+              sx={{ mb: 1, color: isMainProject ? 'rgba(255,255,255,0.75)' : 'text.secondary' }}
             >
               Project Management
             </Button>
             <Stack direction="row" alignItems="center" gap={1.5}>
-              <ConstructionIcon sx={{ color: 'primary.main', fontSize: 32 }} />
+              <Box
+                sx={{
+                  width: 48,
+                  height: 48,
+                  borderRadius: 2,
+                  display: 'grid',
+                  placeItems: 'center',
+                  bgcolor: isMainProject ? 'rgba(255,255,255,0.12)' : 'rgba(25, 118, 210, 0.08)',
+                  color: isMainProject ? '#fff' : 'primary.main'
+                }}
+              >
+                {isMainProject ? <TreeIcon /> : <ConstructionIcon />}
+              </Box>
               <Box>
-                <Stack direction="row" alignItems="center" gap={1}>
-                  <Typography variant="h5" fontWeight={700}>{project.name}</Typography>
-                  <Chip label={project.status} size="small" color={STATUS_COLOR[project.status] || 'default'} />
+                {isMainProject && (
+                  <Typography
+                    variant="caption"
+                    sx={{ color: 'rgba(255,255,255,0.7)', fontWeight: 700, letterSpacing: 1.4, textTransform: 'uppercase' }}
+                  >
+                    Main Project · Portfolio Control
+                  </Typography>
+                )}
+                <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
+                  <Typography variant="h5" fontWeight={800} sx={{ color: isMainProject ? '#fff' : 'inherit' }}>
+                    {project.name}
+                  </Typography>
+                  <Chip
+                    label={isMainProject ? 'Main' : 'Sub'}
+                    size="small"
+                    sx={isMainProject ? { bgcolor: 'rgba(255,255,255,0.16)', color: '#fff', fontWeight: 700 } : undefined}
+                    color={isMainProject ? undefined : 'default'}
+                  />
+                  <Chip
+                    label={project.status}
+                    size="small"
+                    color={STATUS_COLOR[project.status] || 'default'}
+                    sx={isMainProject ? { bgcolor: 'rgba(255,255,255,0.9)', fontWeight: 600 } : undefined}
+                  />
                 </Stack>
-                <Typography variant="body2" color="text.secondary">
-                  {project.projectNumber} · {project.projectType}
+                <Typography variant="body2" sx={{ color: isMainProject ? 'rgba(255,255,255,0.72)' : 'text.secondary' }}>
+                  {project.projectNumber}
+                  {!isMainProject && project.projectType ? ` · ${project.projectType}` : ''}
                   {project.society && ` · ${project.society}`}
                   {project.sector && `, ${project.sector}`}
                 </Typography>
@@ -3256,104 +4031,152 @@ const ProjectDetail = () => {
             </Stack>
           </Box>
 
-          <Stack direction="row" gap={1}>
+          <Stack direction="row" gap={1} alignItems="center">
             <Tooltip title="Refresh">
-              <IconButton onClick={loadProject}><RefreshIcon /></IconButton>
+              <IconButton
+                onClick={loadProject}
+                sx={isMainProject ? { color: '#fff', bgcolor: 'rgba(255,255,255,0.1)', '&:hover': { bgcolor: 'rgba(255,255,255,0.18)' } } : undefined}
+              >
+                <RefreshIcon />
+              </IconButton>
             </Tooltip>
           </Stack>
         </Stack>
+
+        {isMainProject && (
+          <Grid container spacing={1.5} sx={{ mt: 2, position: 'relative' }}>
+            {[
+              { label: 'Lump Sum', value: fmt(mainLump) },
+              { label: 'Allocated', value: fmt(mainAllocated) },
+              { label: 'Remaining', value: fmt(mainRemaining) },
+              { label: 'Progress', value: `${project.overallProgress || 0}%` }
+            ].map((item) => (
+              <Grid item xs={6} md={3} key={item.label}>
+                <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}>
+                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.65)', fontWeight: 600 }}>{item.label}</Typography>
+                  <Typography variant="subtitle1" fontWeight={800} sx={{ color: '#fff' }}>{item.value}</Typography>
+                </Box>
+              </Grid>
+            ))}
+          </Grid>
+        )}
       </Paper>
 
-      {/* Progress bar */}
-      <Card variant="outlined" sx={{ mb: 2, borderRadius: 2 }}>
-        <CardContent sx={{ py: 1.5 }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="center">
-            <Typography variant="body2" color="text.secondary">Overall Progress</Typography>
-            <Typography variant="body2" fontWeight={600}>{project.overallProgress || 0}%</Typography>
-          </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={project.overallProgress || 0}
-            sx={{ height: 10, borderRadius: 5, mt: 0.5 }}
-            color={project.overallProgress >= 80 ? 'success' : project.overallProgress >= 40 ? 'warning' : 'primary'}
-          />
-        </CardContent>
-      </Card>
+      {!isMainProject && (
+        <>
+          <Card variant="outlined" sx={{ mb: 2, borderRadius: 2 }}>
+            <CardContent sx={{ py: 1.5 }}>
+              <Stack direction="row" justifyContent="space-between" alignItems="center">
+                <Typography variant="body2" color="text.secondary">Overall Progress</Typography>
+                <Typography variant="body2" fontWeight={600}>{project.overallProgress || 0}%</Typography>
+              </Stack>
+              <LinearProgress
+                variant="determinate"
+                value={project.overallProgress || 0}
+                sx={{ height: 10, borderRadius: 5, mt: 0.5 }}
+                color={project.overallProgress >= 80 ? 'success' : project.overallProgress >= 40 ? 'warning' : 'primary'}
+              />
+            </CardContent>
+          </Card>
 
-      {/* Quick project context */}
-      <Grid container spacing={1.5} sx={{ mb: 2 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-            <Typography variant="caption" color="text.secondary">Budget</Typography>
-            <Typography variant="body2" fontWeight={700}>
-              {fmt(project.totalApprovedBudget || project.totalEstimatedCost)}
-            </Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-            <Typography variant="caption" color="text.secondary">Spent</Typography>
-            <Typography variant="body2" fontWeight={700}>
-              {fmt(project.totalActualSpent || 0)}
-            </Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-            <Typography variant="caption" color="text.secondary">Timeline</Typography>
-            <Typography variant="body2" fontWeight={700}>
-              {project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'}
-            </Typography>
-          </Paper>
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-            <Typography variant="caption" color="text.secondary">Expected End</Typography>
-            <Typography variant="body2" fontWeight={700}>
-              {project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'}
-            </Typography>
-          </Paper>
-        </Grid>
-      </Grid>
+          <Grid container spacing={1.5} sx={{ mb: 2 }}>
+            <Grid item xs={12} sm={6} md={3}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
+                <Typography variant="caption" color="text.secondary">Allocated Budget</Typography>
+                <Typography variant="body2" fontWeight={700}>
+                  {fmt(project.allocatedBudget || project.totalApprovedBudget || project.totalEstimatedCost)}
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
+                <Typography variant="caption" color="text.secondary">Spent</Typography>
+                <Typography variant="body2" fontWeight={700}>
+                  {fmt(project.totalActualSpent || 0)}
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
+                <Typography variant="caption" color="text.secondary">Timeline</Typography>
+                <Typography variant="body2" fontWeight={700}>
+                  {project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'}
+                </Typography>
+              </Paper>
+            </Grid>
+            <Grid item xs={12} sm={6} md={3}>
+              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
+                <Typography variant="caption" color="text.secondary">Expected End</Typography>
+                <Typography variant="body2" fontWeight={700}>
+                  {project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'}
+                </Typography>
+              </Paper>
+            </Grid>
+          </Grid>
+        </>
+      )}
 
       {/* Tabs */}
-      <Box sx={{ borderBottom: 1, borderColor: 'divider', mb: 2, bgcolor: '#fff', borderRadius: 2, px: 1 }}>
+      <Box
+        sx={{
+          borderBottom: 1,
+          borderColor: 'divider',
+          mb: 2,
+          bgcolor: '#fff',
+          borderRadius: 2,
+          px: 1,
+          border: isMainProject ? '1px solid rgba(15, 118, 110, 0.16)' : undefined
+        }}
+      >
         <Tabs
-          value={tab}
+          value={Math.min(tab, visibleTabs.length - 1)}
           onChange={(_, v) => {
             setTab(v);
             setSearchParams({ tab: String(v) }, { replace: true });
           }}
           variant="scrollable"
           scrollButtons="auto"
+          textColor={isMainProject ? 'inherit' : 'primary'}
+          TabIndicatorProps={isMainProject ? { style: { backgroundColor: '#0f766e' } } : undefined}
         >
-          <Tab label="Overview" icon={<ViewIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Bill of Quantities" icon={<POIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Tasks / WBS" icon={<TaskIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Expenses" icon={<MoneyIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Daily Reports" icon={<PhotoIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Gantt Chart" icon={<ChartIcon fontSize="small" />} iconPosition="start" />
-          <Tab label="Invoices" icon={<InvoiceIcon fontSize="small" />} iconPosition="start" />
+          {visibleTabs.map((t) => (
+            <Tab
+              key={t.id}
+              label={t.label}
+              icon={t.icon}
+              iconPosition="start"
+              sx={isMainProject ? { '&.Mui-selected': { color: '#0f766e', fontWeight: 700 } } : undefined}
+            />
+          ))}
         </Tabs>
       </Box>
 
-      <Paper variant="outlined" sx={{ borderRadius: 2, bgcolor: '#fff' }}>
-        <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
-          <Stack direction="row" alignItems="center" gap={1}>
-            {TAB_META[tab]?.icon}
-            <Typography variant="subtitle1" fontWeight={700}>
-              {TAB_META[tab]?.label}
-            </Typography>
-          </Stack>
-        </Box>
-        <Box sx={{ p: { xs: 1.5, sm: 2 } }}>
-          {tab === 0 && <OverviewTab project={project} onRefresh={loadProject} />}
-          {tab === 1 && <BOQTab projectId={id} project={project} />}
-          {tab === 2 && <TasksTab projectId={id} />}
-          {tab === 3 && <ExpensesTab projectId={id} project={project} />}
-          {tab === 4 && <DPRTab projectId={id} />}
-          {tab === 5 && <GanttChart project={project} />}
-          {tab === 6 && <ProjectInvoicesTab project={project} />}
+      <Paper
+        variant="outlined"
+        sx={{
+          borderRadius: 2.5,
+          bgcolor: '#fff',
+          borderColor: isMainProject ? 'rgba(15, 118, 110, 0.16)' : 'divider'
+        }}
+      >
+        {!isMainProject && (
+          <Box sx={{ px: 2, py: 1.25, borderBottom: '1px solid', borderColor: 'divider' }}>
+            <Stack direction="row" alignItems="center" gap={1}>
+              {activeTab?.icon}
+              <Typography variant="subtitle1" fontWeight={700}>
+                {activeTab?.label}
+              </Typography>
+            </Stack>
+          </Box>
+        )}
+        <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 } }}>
+          {activeTab?.id === 'overview' && <OverviewTab project={project} onRefresh={loadProject} />}
+          {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
+          {activeTab?.id === 'tasks' && <TasksTab projectId={id} />}
+          {activeTab?.id === 'expenses' && <ExpensesTab projectId={id} project={project} />}
+          {activeTab?.id === 'dpr' && <DPRTab projectId={id} />}
+          {activeTab?.id === 'gantt' && <GanttChart project={project} />}
+          {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} />}
         </Box>
       </Paper>
     </Box>

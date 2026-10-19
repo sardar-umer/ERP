@@ -24,6 +24,12 @@ export const cancelProject = (id) =>
 export const updateBudgetStatus = (id, action, notes = '') =>
   api.put(`${BASE}/projects/${id}/budget-status`, { action, notes });
 
+export const setLumpSumBudget = (id, lumpSumBudget) =>
+  api.put(`${BASE}/projects/${id}/lump-sum-budget`, { lumpSumBudget });
+
+export const allocateBudgetToSubs = (id, allocations) =>
+  api.put(`${BASE}/projects/${id}/budget-allocations`, { allocations });
+
 export const getProjectRollup = (id) =>
   api.get(`${BASE}/projects/${id}/rollup`);
 
@@ -143,7 +149,8 @@ export const deleteProjectInvoice = (projectId, invoiceId) =>
 
 const projectManagementService = {
   getProjects, getProjectStats, getProjectById, createProject, updateProject, cancelProject,
-  updateBudgetStatus, addMilestone, updateMilestone, deleteMilestone,
+  updateBudgetStatus, setLumpSumBudget, allocateBudgetToSubs,
+  addMilestone, updateMilestone, deleteMilestone,
   getBOQ, addBOQItem, bulkAddBOQItems, updateBOQItem, updateBoqDiscount, deleteBOQItem,
   getTasks, createTask, updateTask, deleteTask,
   getExpenses, addExpense, updateExpense, deleteExpense,

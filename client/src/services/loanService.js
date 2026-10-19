@@ -168,7 +168,7 @@ export const loanService = {
     }
   },
 
-  // Delete loan (only if pending)
+  // Delete loan (Pending for normal users; developer may delete at any status)
   deleteLoan: async (id) => {
     try {
       const response = await api.delete(`${LOAN_API_BASE}/${id}`);
@@ -180,16 +180,103 @@ export const loanService = {
 
   // Calculate loan EMI
   calculateEMI: (principal, rate, time) => {
-    const monthlyRate = rate / 100 / 12;
+    const p = Number(principal) || 0;
+    const t = Number(time) || 0;
+    if (p <= 0 || t <= 0) return 0;
+    const monthlyRate = (Number(rate) || 0) / 100 / 12;
     if (monthlyRate === 0) {
-      return principal / time;
+      return p / t;
     }
-    return principal * (monthlyRate * Math.pow(1 + monthlyRate, time)) / (Math.pow(1 + monthlyRate, time) - 1);
+    return p * (monthlyRate * Math.pow(1 + monthlyRate, t)) / (Math.pow(1 + monthlyRate, t) - 1);
   },
 
   // Calculate total payable
   calculateTotalPayable: (emi, time) => {
     return emi * time;
+  },
+
+  /**
+   * Preview schedule totals with fixed EMI and balancing last installment.
+   * Returns { regularEmi, lastInstallment, totalPayable, totalInterest, months }
+   */
+  previewInstallmentPlan: (principal, annualRate, months, monthlyEmi) => {
+    const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const p0 = Math.max(0, Number(principal) || 0);
+    const n = Math.max(0, parseInt(months, 10) || 0);
+    const emi = Math.max(0, Number(monthlyEmi) || 0);
+    const monthlyRate = (Number(annualRate) || 0) / 100 / 12;
+
+    if (p0 <= 0 || n <= 0 || emi <= 0) {
+      return {
+        regularEmi: emi,
+        lastInstallment: 0,
+        totalPayable: 0,
+        totalInterest: 0,
+        months: n,
+        valid: false,
+        error: 'Enter loan amount, months, and a valid monthly EMI'
+      };
+    }
+
+    let balance = p0;
+    let totalPayable = 0;
+    let lastInstallment = emi;
+
+    for (let i = 0; i < n; i++) {
+      const interest = round2(balance * monthlyRate);
+      const isLast = i === n - 1;
+      let principalPart = round2(emi - interest);
+      let amount = emi;
+
+      if (isLast || principalPart >= balance) {
+        principalPart = round2(balance);
+        amount = round2(principalPart + interest);
+        balance = 0;
+      } else {
+        if (principalPart <= 0) {
+          return {
+            regularEmi: emi,
+            lastInstallment: 0,
+            totalPayable: 0,
+            totalInterest: 0,
+            months: n,
+            valid: false,
+            error: 'Monthly EMI is too low to cover interest — increase EMI'
+          };
+        }
+        balance = round2(Math.max(0, balance - principalPart));
+      }
+
+      totalPayable = round2(totalPayable + amount);
+      lastInstallment = amount;
+
+      if (balance <= 0 && !isLast) {
+        // EMI clears principal early — last months would be unused; still mark last as this amount
+        break;
+      }
+    }
+
+    if (balance > 0.01) {
+      return {
+        regularEmi: emi,
+        lastInstallment: round2(lastInstallment + balance),
+        totalPayable: round2(totalPayable + balance),
+        totalInterest: round2(totalPayable + balance - p0),
+        months: n,
+        valid: false,
+        error: 'Monthly EMI is too low to clear the loan in the selected months — increase EMI or months'
+      };
+    }
+
+    return {
+      regularEmi: round2(emi),
+      lastInstallment: round2(lastInstallment),
+      totalPayable: round2(totalPayable),
+      totalInterest: round2(Math.max(0, totalPayable - p0)),
+      months: n,
+      valid: true,
+      error: ''
+    };
   },
 
   // Format currency

@@ -46,9 +46,14 @@ import { useNavigate } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
 import { formatPKR } from '../../utils/currency';
 import LoanProgressIndicator from '../../components/LoanProgressIndicator';
+import { useAuth } from '../../contexts/AuthContext';
 
 const LoanManagement = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isDeveloper =
+    user?.role === 'developer' ||
+    (Array.isArray(user?.roles) && user.roles.includes('developer'));
   const [loans, setLoans] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -64,7 +69,7 @@ const LoanManagement = () => {
   });
   const [showFilters, setShowFilters] = useState(false);
   const [stats, setStats] = useState(null);
-  const [deleteDialog, setDeleteDialog] = useState({ open: false, loanId: null });
+  const [deleteDialog, setDeleteDialog] = useState({ open: false, loanId: null, status: null });
   useEffect(() => {
     fetchLoans();
     fetchStats();
@@ -115,10 +120,10 @@ const LoanManagement = () => {
   const handleDeleteLoan = async () => {
     try {
       await loanService.deleteLoan(deleteDialog.loanId);
-      setDeleteDialog({ open: false, loanId: null });
+      setDeleteDialog({ open: false, loanId: null, status: null });
       fetchLoans();
     } catch (error) {
-      setError(error.message || 'Failed to delete loan');
+      setError(error.response?.data?.message || error.message || 'Failed to delete loan');
     }
   };
 
@@ -469,25 +474,30 @@ const LoanManagement = () => {
                         </Tooltip>
                         
                         {loan.status === 'Pending' && (
-                          <>
-                            <Tooltip title="Edit">
-                              <IconButton
-                                size="small"
-                                onClick={() => navigate(`/hr/loans/${loan._id}/edit`)}
-                              >
-                                <EditIcon />
-                              </IconButton>
-                            </Tooltip>
-                            <Tooltip title="Delete">
-                              <IconButton
-                                size="small"
-                                color="error"
-                                onClick={() => setDeleteDialog({ open: true, loanId: loan._id })}
-                              >
-                                <DeleteIcon />
-                              </IconButton>
-                            </Tooltip>
-                          </>
+                          <Tooltip title="Edit">
+                            <IconButton
+                              size="small"
+                              onClick={() => navigate(`/hr/loans/${loan._id}/edit`)}
+                            >
+                              <EditIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+
+                        {(loan.status === 'Pending' || isDeveloper) && (
+                          <Tooltip title={loan.status === 'Pending' ? 'Delete' : 'Delete (Developer)'}>
+                            <IconButton
+                              size="small"
+                              color="error"
+                              onClick={() => setDeleteDialog({
+                                open: true,
+                                loanId: loan._id,
+                                status: loan.status
+                              })}
+                            >
+                              <DeleteIcon />
+                            </IconButton>
+                          </Tooltip>
                         )}
                         
                         {loan.status === 'Approved' && (
@@ -523,15 +533,20 @@ const LoanManagement = () => {
       </Paper>
 
       {/* Delete Confirmation Dialog */}
-      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, loanId: null })}>
+      <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, loanId: null, status: null })}>
         <DialogTitle>Confirm Delete</DialogTitle>
         <DialogContent>
           <Typography>
             Are you sure you want to delete this loan application? This action cannot be undone.
           </Typography>
+          {deleteDialog.status && deleteDialog.status !== 'Pending' && (
+            <Alert severity="warning" sx={{ mt: 2 }}>
+              Developer override: this loan is currently <strong>{deleteDialog.status}</strong>.
+            </Alert>
+          )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setDeleteDialog({ open: false, loanId: null })}>
+          <Button onClick={() => setDeleteDialog({ open: false, loanId: null, status: null })}>
             Cancel
           </Button>
           <Button onClick={handleDeleteLoan} color="error" variant="contained">
