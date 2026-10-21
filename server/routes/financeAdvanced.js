@@ -7980,19 +7980,28 @@ router.get('/reports/bank-reconciliation',
     };
 
     const allLedgerTxns = ledgerEntries.map(mapLedgerRowToTxn);
+    allLedgerTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
-    // Unpresented = TB ledger lines for this bank that are still uncleared as-of
-    const unpresentedTxns = allLedgerTxns.filter((t) => !t.isCleared);
-    unpresentedTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
-    const unpresentedTotal = unpresentedTxns.reduce(
+    // Upper list = full TB period ledger (same lines / same net as Trial Balance Debit−Credit).
+    // Cleared rows stay visible so totals & voucher counts match TB; only uncleared are actionable.
+    const unpresentedTxns = allLedgerTxns;
+    const periodMovementTotal = unpresentedTxns.reduce(
       (s, t) => s + (t.type === 'Cr' ? -t.amount : t.amount),
       0
     );
+    // True uncleared subset — used only for bank-statement recon math
+    const unclearedTxns = allLedgerTxns.filter((t) => !t.isCleared);
+    const unclearedTotal = unclearedTxns.reduce(
+      (s, t) => s + (t.type === 'Cr' ? -t.amount : t.amount),
+      0
+    );
+    // Difference shown to user = TB Debit−Credit (period movement)
+    const unpresentedTotal = periodMovementTotal;
 
     let reconciledUpTo = new Date(asOf);
-    if (unpresentedTxns.length > 0) {
+    if (unclearedTxns.length > 0) {
       const oldestUnpresentedDate = new Date(
-        Math.min(...unpresentedTxns.map((t) => new Date(t.date).getTime()))
+        Math.min(...unclearedTxns.map((t) => new Date(t.date).getTime()))
       );
       reconciledUpTo = new Date(oldestUnpresentedDate.getTime() - 24 * 60 * 60 * 1000);
     } else if (allLedgerTxns.length > 0) {
@@ -8002,7 +8011,7 @@ router.get('/reports/bank-reconciliation',
       reconciledUpTo = new Date(Math.min(asOf.getTime(), latestTxnDate.getTime()));
     }
 
-    const bankStatementBalance = netGlBalance - unpresentedTotal;
+    const bankStatementBalance = netGlBalance - unclearedTotal;
 
     // ── Period Activity: cleared GL rows by clearing date (From/To) ─────────
     // Load clearance-bearing GL for this account up through period end (TB-aligned posted)
@@ -8090,12 +8099,15 @@ router.get('/reports/bank-reconciliation',
         },
         glBalance: netGlBalance,
         glBalanceType: netGlBalance >= 0 ? 'Dr' : 'Cr',
+        // Matches Trial Balance Debit − Credit for this account / date range
         difference: Math.round(unpresentedTotal * 100) / 100,
         differenceType: unpresentedTotal >= 0 ? 'Dr' : 'Cr',
         bankStatementBalance: Math.round(bankStatementBalance * 100) / 100,
         bankStatementBalanceType: bankStatementBalance >= 0 ? 'Dr' : 'Cr',
         unpresentedTransactions: unpresentedTxns,
         unpresentedTotal: Math.round(unpresentedTotal * 100) / 100,
+        unclearedCount: unclearedTxns.length,
+        unclearedTotal: Math.round(unclearedTotal * 100) / 100,
         openingBalance: Math.round(openingBalance * 100) / 100,
         openingBalanceType: openingBalance >= 0 ? 'Dr' : 'Cr',
         periodTransactions,

@@ -491,7 +491,9 @@ export default function BankReconciliation() {
             bankStatementBalance: reportData.bankStatementBalance,
             bankStatementBalanceType: reportData.bankStatementBalanceType,
             unpresentedTransactions: reportData.unpresentedTransactions,
-            unpresentedTotal: reportData.unpresentedTotal
+            unpresentedTotal: reportData.unpresentedTotal,
+            unclearedCount: reportData.unclearedCount,
+            unclearedTotal: reportData.unclearedTotal
           };
         }
         if (scope === 'period') {
@@ -527,10 +529,14 @@ export default function BankReconciliation() {
   }, [filters]);
 
   const unpresentedRows = data?.unpresentedTransactions || [];
+  const clearableUnpresentedRows = useMemo(
+    () => unpresentedRows.filter((t) => !t.isCleared),
+    [unpresentedRows]
+  );
   const periodRows = data?.periodTransactions || [];
   const duplicateUnpresentedKeys = useMemo(
-    () => buildDuplicateRowKeySet(unpresentedRows),
-    [unpresentedRows]
+    () => buildDuplicateRowKeySet(clearableUnpresentedRows),
+    [clearableUnpresentedRows]
   );
   const unpresentedWindow = useMemo(
     () => getWindowRange(unpresentedRows.length, unpresentedScrollTop),
@@ -660,16 +666,17 @@ export default function BankReconciliation() {
 
   const toggleSelectAllUnpresented = () => {
     setSelectedUnpresented((prev) => {
-      if (unpresentedRows.length && prev.size === unpresentedRows.length) {
+      const clearableKeys = clearableUnpresentedRows.map((t) => rowKey(t)).filter(Boolean);
+      if (clearableKeys.length && prev.size === clearableKeys.length) {
         return new Set();
       }
-      return new Set(unpresentedRows.map((t) => rowKey(t)).filter(Boolean));
+      return new Set(clearableKeys);
     });
   };
 
   const handleBulkClearSelected = async () => {
     if (!selectedUnpresented.size) {
-      setError('Select at least one unpresented record.');
+      setError('Select at least one uncleared record.');
       return;
     }
     const ymd = String(bulkClearDate || '').trim();
@@ -678,9 +685,9 @@ export default function BankReconciliation() {
       return;
     }
 
-    const toClear = unpresentedRows.filter((t) => selectedUnpresented.has(rowKey(t)));
+    const toClear = clearableUnpresentedRows.filter((t) => selectedUnpresented.has(rowKey(t)));
     if (!toClear.length) {
-      setError('Selected records are no longer in the unpresented list. Refresh and try again.');
+      setError('Selected records are already cleared or no longer available. Refresh and try again.');
       return;
     }
 
@@ -916,7 +923,7 @@ export default function BankReconciliation() {
                   </TableCell>
                 </TableRow>
                 <TableRow hover>
-                  <TableCell sx={{ fontWeight: 600 }}>Difference (Unpresented / Uncleared Cheques)</TableCell>
+                  <TableCell sx={{ fontWeight: 600 }}>Difference (Trial Balance Debit − Credit)</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 700, color: data.differenceType === 'Cr' ? 'error.main' : 'success.main' }}>
                     {data.difference < 0 ? `-${fmt(data.difference)}` : fmt(data.difference)}{' '}
                     <Typography component="span" fontWeight={800} color={data.differenceType === 'Cr' ? 'error.main' : 'success.main'}>
@@ -944,7 +951,8 @@ export default function BankReconciliation() {
         <Box sx={{ mb: 5 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
             <Typography variant="h6" fontWeight={700}>
-              Unpresented / Uncleared Cheques &amp; Payments ({(data.unpresentedTransactions || []).length})
+              Unpresented / Uncleared Cheques &amp; Payments ({unpresentedRows.length}
+              {typeof data.unclearedCount === 'number' ? ` · ${data.unclearedCount} uncleared` : ''})
             </Typography>
             <Stack direction="row" spacing={2} alignItems="center">
               <Button 
@@ -969,7 +977,7 @@ export default function BankReconciliation() {
                 />
               )}
               <Chip
-                label={`Total Difference: ${data.difference < 0 ? `-${fmt(data.difference)}` : fmt(data.difference)} ${data.differenceType}.`}
+                label={`TB Debit−Credit: ${data.difference < 0 ? `-${fmt(data.difference)}` : fmt(data.difference)} ${data.differenceType}.`}
                 color={data.differenceType === 'Cr' ? 'error' : 'success'}
                 variant="outlined"
                 sx={{ fontWeight: 700 }}
@@ -977,7 +985,7 @@ export default function BankReconciliation() {
             </Stack>
           </Box>
 
-          {unpresentedRows.length > 0 && (
+          {clearableUnpresentedRows.length > 0 && (
             <Paper
               variant="outlined"
               sx={{
@@ -996,7 +1004,7 @@ export default function BankReconciliation() {
                 <Typography variant="body2" fontWeight={600}>
                   {selectedUnpresented.size
                     ? `${selectedUnpresented.size} selected`
-                    : 'Select rows, set clearing date, then Clear Selected'}
+                    : 'Same lines as Trial Balance for this period. Select uncleared rows, set clearing date, then Clear Selected'}
                 </Typography>
                 <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5} alignItems={{ xs: 'stretch', sm: 'center' }}>
                   <TextField
@@ -1040,15 +1048,15 @@ export default function BankReconciliation() {
                       size="small"
                       indeterminate={
                         selectedUnpresented.size > 0
-                        && selectedUnpresented.size < unpresentedRows.length
+                        && selectedUnpresented.size < clearableUnpresentedRows.length
                       }
                       checked={
-                        unpresentedRows.length > 0
-                        && selectedUnpresented.size === unpresentedRows.length
+                        clearableUnpresentedRows.length > 0
+                        && selectedUnpresented.size === clearableUnpresentedRows.length
                       }
                       onChange={toggleSelectAllUnpresented}
-                      disabled={!unpresentedRows.length || bulkClearing}
-                      inputProps={{ 'aria-label': 'Select all unpresented' }}
+                      disabled={!clearableUnpresentedRows.length || bulkClearing}
+                      inputProps={{ 'aria-label': 'Select all uncleared' }}
                     />
                   </TableCell>
                   <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.date }}>Date</TableCell>
@@ -1068,7 +1076,7 @@ export default function BankReconciliation() {
                 {unpresentedRows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={12} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                      No unpresented/uncleared cheques found up to {formatDate(filters.asOfDate)}.
+                      No Trial Balance ledger lines for this bank in the selected period.
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -1078,19 +1086,30 @@ export default function BankReconciliation() {
                       const absIdx = unpresentedWindow.start + idx;
                       const key = rowKey(t) || `row-${absIdx}`;
                       const isSigned = t.signedDocumentStatus === 'signed';
+                      const rowCleared = Boolean(t.isCleared);
                       const isSelected = selectedUnpresented.has(key);
-                      const isDuplicate = duplicateUnpresentedKeys.has(key);
-                      // Blank until user picks a date (do not prefill today / As of)
-                      const defaultClearDate = rowClearDates[key] ?? '';
+                      const isDuplicate = !rowCleared && duplicateUnpresentedKeys.has(key);
+                      // Blank until user picks a date (do not prefill today / As of); cleared rows show saved date
+                      const defaultClearDate = rowCleared
+                        ? (clearedAtToYmd(t.clearingDate) || rowClearDates[key] || '')
+                        : (rowClearDates[key] ?? '');
                       const hasClearDate = isValidYmd(defaultClearDate);
                       return (
-                        <TableRow key={key} hover selected={isSelected} sx={RECON_DATA_ROW_SX}>
+                        <TableRow
+                          key={key}
+                          hover
+                          selected={isSelected}
+                          sx={{
+                            ...RECON_DATA_ROW_SX,
+                            ...(rowCleared ? { bgcolor: 'action.hover', opacity: 0.85 } : {})
+                          }}
+                        >
                           <TableCell padding="checkbox">
                             <Checkbox
                               size="small"
                               checked={isSelected}
                               onChange={() => toggleUnpresentedSelect(key)}
-                              disabled={bulkClearing}
+                              disabled={bulkClearing || rowCleared}
                               inputProps={{ 'aria-label': `Select ${t.vrNo || key}` }}
                             />
                           </TableCell>
@@ -1100,6 +1119,15 @@ export default function BankReconciliation() {
                               <Typography variant="body2" fontWeight={600} noWrap sx={{ minWidth: 0 }}>
                                 {t.vrNo}
                               </Typography>
+                              {rowCleared && (
+                                <Chip
+                                  label="Cleared"
+                                  size="small"
+                                  color="success"
+                                  variant="outlined"
+                                  sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0 }}
+                                />
+                              )}
                               {isDuplicate && (
                                 <Tooltip title="Possible duplicate — same VrNo/Reference + Amount + Dr/Cr as another uncleared row">
                                   <Chip
@@ -1198,6 +1226,7 @@ export default function BankReconciliation() {
                               size="small"
                               fullWidth
                               value={defaultClearDate}
+                              disabled={rowCleared}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setRowClearDates((prev) => ({ ...prev, [key]: val }));
@@ -1208,12 +1237,20 @@ export default function BankReconciliation() {
                           </TableCell>
                           <TableCell align="center" sx={UP_COL.action}>
                             <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                              <Tooltip title={hasClearDate ? 'Clear cheque & reconcile (removes from unpresented)' : 'Select a Clearing Date first'}>
+                              <Tooltip
+                                title={
+                                  rowCleared
+                                    ? 'Already cleared — use Period Activity to un-clear'
+                                    : hasClearDate
+                                      ? 'Clear cheque & reconcile'
+                                      : 'Select a Clearing Date first'
+                                }
+                              >
                                 <span>
                                   <IconButton
                                     size="small"
                                     color="success"
-                                    disabled={Boolean(clearingLoading[key]) || !hasClearDate}
+                                    disabled={rowCleared || Boolean(clearingLoading[key]) || !hasClearDate}
                                     onClick={() => handleDirectClear(t)}
                                     sx={{
                                       bgcolor: 'rgba(46, 125, 50, 0.1)',

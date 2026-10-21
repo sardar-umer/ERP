@@ -344,7 +344,7 @@ export async function exportBankReconciliationPDF(data, filters, bankName, compa
     headStyles: { fillColor: [240, 240, 240], textColor: [40, 40, 40], fontStyle: 'bold' },
     body: [
       ['Balance as Per Bank Ledger', `${data.glBalance < 0 ? `-${fmtPKR(data.glBalance)}` : fmtPKR(data.glBalance)} ${data.glBalanceType}`],
-      ['Difference (Unpresented / Uncleared Cheques)', `${data.difference < 0 ? `-${fmtPKR(data.difference)}` : fmtPKR(data.difference)} ${data.differenceType}`],
+      ['Difference (Trial Balance Debit − Credit)', `${data.difference < 0 ? `-${fmtPKR(data.difference)}` : fmtPKR(data.difference)} ${data.differenceType}`],
       [{ content: 'Balance as Per Bank Statement', styles: { fontStyle: 'bold' } }, { content: `${data.bankStatementBalance < 0 ? `-${fmtPKR(data.bankStatementBalance)}` : fmtPKR(data.bankStatementBalance)} ${data.bankStatementBalanceType}`, styles: { fontStyle: 'bold' } }]
     ]
   });
