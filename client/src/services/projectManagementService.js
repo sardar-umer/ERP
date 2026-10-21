@@ -131,6 +131,53 @@ export const createPOFromBOQ = (projectId, data) =>
 export const getProjectPurchaseOrders = (projectId) =>
   api.get(`${BASE}/projects/${projectId}/purchase-orders`);
 
+// ─── Sublet Contracts (BOQ lines → subcontractors) ────────────────────────────
+export const getSubletContracts = (projectId, params = {}) =>
+  api.get(`${BASE}/projects/${projectId}/sublet-contracts`, { params });
+
+export const getSubletContractById = (projectId, scId) =>
+  api.get(`${BASE}/projects/${projectId}/sublet-contracts/${scId}`);
+
+export const createSubletContract = (projectId, data) =>
+  api.post(`${BASE}/projects/${projectId}/sublet-contracts`, data);
+
+export const updateSubletContract = (projectId, scId, data) =>
+  api.put(`${BASE}/projects/${projectId}/sublet-contracts/${scId}`, data);
+
+export const activateSubletContract = (projectId, scId) =>
+  api.post(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/activate`);
+
+export const completeSubletContract = (projectId, scId) =>
+  api.post(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/complete`);
+
+export const cancelSubletContract = (projectId, scId) =>
+  api.delete(`${BASE}/projects/${projectId}/sublet-contracts/${scId}`);
+
+// ─── Check Requests (gate before IPC / payment) ───────────────────────────────
+export const getCheckRequests = (projectId, params = {}) =>
+  api.get(`${BASE}/projects/${projectId}/check-requests`, { params });
+
+export const getCheckRequestById = (projectId, crId) =>
+  api.get(`${BASE}/projects/${projectId}/check-requests/${crId}`);
+
+export const createCheckRequest = (projectId, data) =>
+  api.post(`${BASE}/projects/${projectId}/check-requests`, data);
+
+export const updateCheckRequest = (projectId, crId, data) =>
+  api.put(`${BASE}/projects/${projectId}/check-requests/${crId}`, data);
+
+export const submitCheckRequest = (projectId, crId) =>
+  api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/submit`);
+
+export const verifyCheckRequest = (projectId, crId, data) =>
+  api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/verify`, data);
+
+export const rejectCheckRequest = (projectId, crId, data) =>
+  api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/reject`, data);
+
+export const cancelCheckRequest = (projectId, crId) =>
+  api.delete(`${BASE}/projects/${projectId}/check-requests/${crId}`);
+
 // ─── Project Invoices (Milestone Billing) ────────────────────────────────────
 export const getProjectInvoices = (projectId) =>
   api.get(`${BASE}/projects/${projectId}/invoices`);
@@ -153,6 +200,10 @@ const projectManagementService = {
   addMilestone, updateMilestone, deleteMilestone,
   getBOQ, addBOQItem, bulkAddBOQItems, updateBOQItem, updateBoqDiscount, deleteBOQItem,
   getTasks, createTask, updateTask, deleteTask,
+  getSubletContracts, getSubletContractById, createSubletContract, updateSubletContract,
+  activateSubletContract, completeSubletContract, cancelSubletContract,
+  getCheckRequests, getCheckRequestById, createCheckRequest, updateCheckRequest,
+  submitCheckRequest, verifyCheckRequest, rejectCheckRequest, cancelCheckRequest,
   getExpenses, addExpense, updateExpense, deleteExpense,
   getDPRList, getDPRById, submitDPR, deleteDPR,
   createPOFromBOQ, getProjectPurchaseOrders,

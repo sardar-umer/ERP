@@ -143,6 +143,8 @@ const evaluationLevel0AuthoritiesRoutes = require('./routes/evaluationLevel0Auth
 const indentsRoutes = require('./routes/indents');
 const storesRoutes = require('./routes/stores');
 const projectManagementRoutes = require('./routes/projectManagement');
+const presidentMeetingsRoutes = require('./routes/presidentMeetings');
+const presidentEventsRoutes = require('./routes/presidentEvents');
 const userTrackingRoutes = require('./routes/userTracking');
 const developerRoutes = require('./routes/developer');
 const activityLogger = require('./middleware/activityLogger');
@@ -732,6 +734,8 @@ app.use('/api/evaluation-documents', authMiddleware, activityLogger, evaluationD
 app.use('/api/indents', authMiddleware, activityLogger, indentsRoutes);
 app.use('/api/stores', authMiddleware, activityLogger, storesRoutes);
 app.use('/api/project-management', authMiddleware, activityLogger, projectManagementRoutes);
+app.use('/api/president-meetings', authMiddleware, activityLogger, presidentMeetingsRoutes);
+app.use('/api/president-events', authMiddleware, activityLogger, presidentEventsRoutes);
 app.use('/api/kpi/worksheets', authMiddleware, activityLogger, require('./routes/kpiWorksheet'));
 app.use('/api/kpi', authMiddleware, activityLogger, require('./routes/kpi'));
 app.use('/api/items', authMiddleware, activityLogger, require('./routes/items'));

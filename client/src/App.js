@@ -240,6 +240,15 @@ import ProjectManagement from './pages/General/ProjectManagement';
 import ProjectDetail from './pages/General/ProjectDetail';
 import ProjectWorkspaceRedirect from './pages/General/ProjectWorkspaceRedirect';
 import GeneralCostCenters from './pages/General/CostCenters/GeneralCostCenters';
+import PresidentSecretariatDashboard from './pages/General/PresidentSecretariat/Dashboard';
+import PresidentMeetings from './pages/General/PresidentSecretariat/Meetings';
+import PresidentMeetingDetail from './pages/General/PresidentSecretariat/MeetingDetail';
+import PresidentMeetingPrintView from './pages/General/PresidentSecretariat/MeetingPrintView';
+import PresidentMeetingsListPrintView from './pages/General/PresidentSecretariat/MeetingsListPrintView';
+import PresidentEvents from './pages/General/PresidentSecretariat/Events';
+import PresidentEventDetail from './pages/General/PresidentSecretariat/EventDetail';
+import PresidentEventPrintView from './pages/General/PresidentSecretariat/EventPrintView';
+import PresidentEventsListPrintView from './pages/General/PresidentSecretariat/EventsListPrintView';
 import ServerMonitor from './pages/Developer/ServerMonitor';
 import FinancialsDashboard from './pages/Developer/FinancialsDashboard';
 import LoanManagement from './pages/HR/LoanManagement';
@@ -817,6 +826,46 @@ function App() {
                     <Route
                       path="/general/ceo-secretariat/payments"
                       element={<ProtectedRoute><Payments /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat"
+                      element={<ProtectedRoute><Navigate to="/general/president-secretariat/dashboard" replace /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/dashboard"
+                      element={<ProtectedRoute><PresidentSecretariatDashboard /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/meetings"
+                      element={<ProtectedRoute><PresidentMeetings /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/meetings/print"
+                      element={<ProtectedRoute><PresidentMeetingsListPrintView /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/meetings/:id/print"
+                      element={<ProtectedRoute><PresidentMeetingPrintView /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/meetings/:id"
+                      element={<ProtectedRoute><PresidentMeetingDetail /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/events"
+                      element={<ProtectedRoute><PresidentEvents /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/events/print"
+                      element={<ProtectedRoute><PresidentEventsListPrintView /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/events/:id/print"
+                      element={<ProtectedRoute><PresidentEventPrintView /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-secretariat/events/:id"
+                      element={<ProtectedRoute><PresidentEventDetail /></ProtectedRoute>}
                     />
                     <Route
                       path="/general/payments"

@@ -985,6 +985,9 @@ const ProjectManagement = () => {
                                 <IconButton size="small" color="primary"
                                   onClick={() => {
                                     localStorage.setItem('pmLastProjectId', project._id);
+                                    if (getParentId(project)) {
+                                      localStorage.setItem('pmLastSubProjectId', project._id);
+                                    }
                                     navigate(`/general/project-management/${project._id}`);
                                   }}>
                                   <ViewIcon fontSize="small" />

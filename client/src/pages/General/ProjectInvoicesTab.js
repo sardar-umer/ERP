@@ -13,7 +13,8 @@ import {
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import {
-  getProjectInvoices, createProjectInvoice, updateProjectInvoice, deleteProjectInvoice, getBOQ, getSuppliers
+  getProjectInvoices, createProjectInvoice, updateProjectInvoice, deleteProjectInvoice,
+  getBOQ, getSuppliers, getCheckRequests
 } from '../../services/projectManagementService';
 
 const fmt = (v) =>
@@ -28,6 +29,7 @@ const STATUS_COLOR = {
 const EMPTY_FORM = {
   invoiceType: 'Subcontractor_IPC',
   contractor: '',
+  checkRequestId: '',
   invoiceAmount: '', description: '', issueDate: dayjs().format('YYYY-MM-DD'),
   dueDate: '', billingPercentage: '', clientName: '', clientContact: '',
   clientAddress: '', notes: '', status: 'Draft', boqItemId: '',
@@ -39,6 +41,7 @@ const ProjectInvoicesTab = ({ project }) => {
   const [data, setData] = useState(null);
   const [boqItems, setBoqItems] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
+  const [billableCheckRequests, setBillableCheckRequests] = useState([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -56,15 +59,17 @@ const ProjectInvoicesTab = ({ project }) => {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [res, boqRes, suppRes] = await Promise.all([
+      const [res, boqRes, suppRes, crRes] = await Promise.all([
         getProjectInvoices(project._id),
         getBOQ(project._id),
-        getSuppliers().catch(() => ({ data: { data: [] } }))
+        getSuppliers().catch(() => ({ data: { data: [] } })),
+        getCheckRequests(project._id, { billable: 'true' }).catch(() => ({ data: { data: { checkRequests: [] } } }))
       ]);
       setData(res.data?.data || null);
       setBoqItems(boqRes.data?.data?.items || []);
       const suppList = suppRes.data?.data?.suppliers || suppRes.data?.data || [];
       setSuppliers(suppList);
+      setBillableCheckRequests(crRes.data?.data?.checkRequests || []);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load invoices');
     } finally { setLoading(false); }
@@ -111,10 +116,41 @@ const ProjectInvoicesTab = ({ project }) => {
     setDialogOpen(true);
   };
 
-  // Prepare IPC items when contractor is chosen
+  // Prepare IPC items from a Verified Check Request
+  const handleCheckRequestChange = (checkRequestId) => {
+    const cr = billableCheckRequests.find((r) => r._id === checkRequestId);
+    if (!cr) {
+      setForm((prev) => ({ ...prev, checkRequestId: '', ipcItems: [], contractor: '' }));
+      return;
+    }
+    const ipcItems = (cr.remainingItems || cr.items || [])
+      .map((i) => {
+        const billableQty = i.billableQuantity !== undefined
+          ? Number(i.billableQuantity)
+          : Math.max(0, (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0));
+        if (billableQty <= 0) return null;
+        return {
+          boqItemId: i.boqItem?._id || i.boqItem,
+          label: i.title || i.description,
+          unit: i.unit,
+          currentQuantity: billableQty,
+          unitPrice: i.unitPrice || 0
+        };
+      })
+      .filter(Boolean);
+
+    setForm((prev) => ({
+      ...prev,
+      checkRequestId,
+      contractor: cr.contractor?._id || cr.contractor || prev.contractor || '',
+      ipcItems,
+      description: prev.description || `IPC from ${cr.checkRequestNumber}`
+    }));
+  };
+
+  // Legacy helper for non-IPC invoice types
   const handleContractorChange = (contractorId) => {
     setForm(prev => {
-      // Filter BOQ items assigned to contractor, or show all BOQ items if contractor selected
       const assigned = contractorId
         ? boqItems.filter(b => (b.contractor?._id || b.contractor) === contractorId || !b.contractor)
         : boqItems;
@@ -157,23 +193,14 @@ const ProjectInvoicesTab = ({ project }) => {
   const handleSave = async () => {
     setError('');
     if (form.invoiceType === 'Subcontractor_IPC') {
-      const activeItems = form.ipcItems.filter(i => Number(i.currentQuantity) > 0);
-      if (!activeItems.length && (!form.invoiceAmount || Number(form.invoiceAmount) <= 0)) {
-        setError('Please enter executed quantities for at least one BOQ item or enter manual amount.');
+      if (!form.checkRequestId) {
+        setError('Select a Verified Check Request first. IPC cannot be created without it.');
         return;
       }
-
-      // Check cumulative over-billing
-      for (const itemInput of activeItems) {
-        const boq = boqItems.find(b => b._id === itemInput.boqItemId);
-        if (boq) {
-          const prevQty = boq.contractorBilledQuantity || 0;
-          const cumQty = prevQty + Number(itemInput.currentQuantity);
-          if (cumQty > boq.estimatedQuantity) {
-            setError(`Over-billing warning: Item "${boq.title || boq.description}" total billed (${cumQty} ${boq.unit}) exceeds BOQ estimate (${boq.estimatedQuantity} ${boq.unit}).`);
-            return;
-          }
-        }
+      const activeItems = form.ipcItems.filter(i => Number(i.currentQuantity) > 0);
+      if (!activeItems.length) {
+        setError('Enter billable quantities from the Check Request.');
+        return;
       }
     } else {
       if (!form.invoiceAmount || Number(form.invoiceAmount) <= 0) {
@@ -185,6 +212,7 @@ const ProjectInvoicesTab = ({ project }) => {
     try {
       const payload = {
         ...form,
+        checkRequestId: form.checkRequestId || undefined,
         items: form.ipcItems.filter(i => Number(i.currentQuantity) > 0),
         invoiceAmount: form.invoiceType === 'Subcontractor_IPC' && grossAmt > 0 ? netPayableAmt : Number(form.invoiceAmount)
       };
@@ -414,6 +442,38 @@ const ProjectInvoicesTab = ({ project }) => {
             </Grid>
 
             {form.invoiceType === 'Subcontractor_IPC' && (
+              <Grid item xs={12}>
+                <Alert severity="info" sx={{ mb: 1.5 }}>
+                  Subcontractor IPC must be created from a <strong>Verified Check Request</strong>.
+                  Create and verify one under the Check Requests tab first.
+                </Alert>
+                <FormControl fullWidth size="small" required>
+                  <InputLabel>Verified Check Request</InputLabel>
+                  <Select
+                    label="Verified Check Request"
+                    value={form.checkRequestId}
+                    onChange={(e) => handleCheckRequestChange(e.target.value)}
+                    disabled={Boolean(editInvoice)}
+                  >
+                    <MenuItem value="">Select check request…</MenuItem>
+                    {billableCheckRequests.map((cr) => (
+                      <MenuItem key={cr._id} value={cr._id}>
+                        {cr.checkRequestNumber} — {cr.title}
+                        {cr.contractor?.name ? ` (${cr.contractor.name})` : ''}
+                        {` · ${fmt(cr.billableTotal || cr.verifiedTotal || 0)}`}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                {billableCheckRequests.length === 0 && (
+                  <Alert severity="warning" sx={{ mt: 1 }}>
+                    No verified unpaid Check Requests available on this Sub Project.
+                  </Alert>
+                )}
+              </Grid>
+            )}
+
+            {form.invoiceType === 'Subcontractor_IPC' && form.checkRequestId && (
               <Grid item xs={12} sm={6}>
                 <Autocomplete
                   options={suppliers}
@@ -426,30 +486,29 @@ const ProjectInvoicesTab = ({ project }) => {
                   }}
                   value={suppliers.find(s => String(s._id) === String(form.contractor)) || null}
                   onChange={(event, newValue) => {
-                    handleContractorChange(newValue ? newValue._id : '');
+                    setForm((p) => ({ ...p, contractor: newValue ? newValue._id : '' }));
                   }}
                   isOptionEqualToValue={(option, value) => String(option._id) === String(value._id || value)}
                   renderInput={(params) => (
                     <TextField
                       {...params}
-                      label="Assign Subcontractor"
+                      label="Subcontractor"
                       size="small"
-                      required
-                      placeholder="Type to search subcontractor by name or ID..."
+                      placeholder="From check request (editable)"
                     />
                   )}
                 />
               </Grid>
             )}
 
-            {/* Subcontractor IPC BOQ Line Items Execution Table */}
+            {/* Subcontractor IPC lines from Check Request */}
             {form.invoiceType === 'Subcontractor_IPC' && (
               <Grid item xs={12}>
                 <Typography variant="subtitle2" fontWeight={700} sx={{ mt: 1, mb: 1, color: 'primary.dark' }}>
-                  Subcontractor BOQ Line Items (Executed Quantities)
+                  Verified Check Request Quantities (billable)
                 </Typography>
                 {form.ipcItems.length === 0 ? (
-                  <Alert severity="info">Please select a subcontractor above to load assigned BOQ items.</Alert>
+                  <Alert severity="info">Select a Verified Check Request to load billable quantities.</Alert>
                 ) : (
                   <TableContainer component={Paper} variant="outlined" sx={{ maxHeight: 280 }}>
                     <Table size="small" stickyHeader>
@@ -466,19 +525,21 @@ const ProjectInvoicesTab = ({ project }) => {
                       </TableHead>
                       <TableBody>
                         {form.ipcItems.map(itemInput => {
-                          const boq = boqItems.find(b => b._id === itemInput.boqItemId);
-                          if (!boq) return null;
-                          const prevQty = boq.contractorBilledQuantity || 0;
+                          const boq = boqItems.find(b => String(b._id) === String(itemInput.boqItemId));
+                          const prevQty = boq?.contractorBilledQuantity || 0;
+                          const estQty = boq?.estimatedQuantity;
                           const cumQty = prevQty + Number(itemInput.currentQuantity || 0);
-                          const isOver = cumQty > boq.estimatedQuantity;
+                          const isOver = estQty != null && cumQty > estQty;
 
                           return (
-                            <TableRow key={boq._id} hover sx={{ bgcolor: isOver ? 'error.50' : 'inherit' }}>
+                            <TableRow key={itemInput.boqItemId} hover sx={{ bgcolor: isOver ? 'error.50' : 'inherit' }}>
                               <TableCell>
-                                <Typography variant="body2" fontWeight={600}>{boq.title || boq.description}</Typography>
+                                <Typography variant="body2" fontWeight={600}>
+                                  {itemInput.label || boq?.title || boq?.description || 'BOQ item'}
+                                </Typography>
                               </TableCell>
-                              <TableCell>{boq.unit}</TableCell>
-                              <TableCell align="right">{boq.estimatedQuantity}</TableCell>
+                              <TableCell>{itemInput.unit || boq?.unit || '—'}</TableCell>
+                              <TableCell align="right">{estQty ?? '—'}</TableCell>
                               <TableCell align="right">{prevQty}</TableCell>
                               <TableCell align="right">
                                 <TextField

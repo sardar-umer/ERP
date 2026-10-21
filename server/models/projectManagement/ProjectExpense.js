@@ -9,6 +9,14 @@ const projectExpenseSchema = new mongoose.Schema({
   },
   task: { type: mongoose.Schema.Types.ObjectId, ref: 'ProjectTask', default: null },
 
+  /** Optional link — payment expense against an approved Check Request */
+  checkRequest: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CheckRequest',
+    default: null,
+    index: true
+  },
+
   expenseNumber: { type: String, unique: true, sparse: true, trim: true },
 
   category: {

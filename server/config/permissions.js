@@ -156,7 +156,8 @@ const SUBMODULES = {
     'indents',
     'centralized_store',
     'user_tracking',
-    'ceo_secretariat'
+    'ceo_secretariat',
+    'president_secretariat'
   ]
 };
 

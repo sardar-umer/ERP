@@ -57,6 +57,49 @@ const isValidYmd = (value) => /^\d{4}-\d{2}-\d{2}$/.test(String(value || '').tri
 /** Stable string key per unpresented row (Dr/Cr on same voucher must differ). */
 const rowKey = (txn) => String(txn?._id ?? '');
 
+const normDupField = (v) => String(v || '').trim().toLowerCase();
+const roundDupAmt = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+/**
+ * Match keys for duplicate detection in Unpresented list.
+ * - Reference + Amount + Dr/Cr (when reference present)
+ * - VrNo + Amount + Dr/Cr (when VrNo present)
+ * - Fallback: Date + Amount + Dr/Cr + Narration
+ */
+const getDuplicateMatchKeys = (txn) => {
+  const amount = roundDupAmt(txn?.amount);
+  const type = txn?.type || (Number(txn?.credit) > 0 ? 'Cr' : 'Dr');
+  const ref = normDupField(txn?.reference);
+  const vr = normDupField(txn?.vrNo);
+  const keys = [];
+  if (ref) keys.push(`ref:${ref}|${amount}|${type}`);
+  if (vr) keys.push(`vr:${vr}|${amount}|${type}`);
+  if (!ref && !vr) {
+    const date = txn?.date ? clearedAtToYmd(txn.date) : '';
+    const narr = normDupField(txn?.narration);
+    keys.push(`fb:${date}|${amount}|${type}|${narr}`);
+  }
+  return keys;
+};
+
+/** Returns Set of rowKey values that appear in a duplicate group (2+ matches). */
+const buildDuplicateRowKeySet = (rows) => {
+  const keyToIds = new Map();
+  (rows || []).forEach((txn, idx) => {
+    const id = rowKey(txn) || `row-${idx}`;
+    getDuplicateMatchKeys(txn).forEach((matchKey) => {
+      if (!keyToIds.has(matchKey)) keyToIds.set(matchKey, []);
+      keyToIds.get(matchKey).push(id);
+    });
+  });
+  const dupIds = new Set();
+  keyToIds.forEach((ids) => {
+    if (ids.length < 2) return;
+    ids.forEach((id) => dupIds.add(id));
+  });
+  return dupIds;
+};
+
 /** Virtual window inside scrollable recon tables — only mount visible rows. */
 const RECON_TABLE_MAX_H = 480;
 /** Keep in sync with data-row minHeight so scroll math stays accurate. */
@@ -65,6 +108,51 @@ const RECON_OVERSCAN = 16;
 const RECON_DATA_ROW_SX = {
   height: RECON_ROW_H,
   '& > td': { py: 0.75, verticalAlign: 'middle' }
+};
+
+/** Fit tables to page width — vertical scroll only, fixed column sizes. */
+const RECON_TABLE_CONTAINER_SX = {
+  maxHeight: RECON_TABLE_MAX_H,
+  overflowX: 'hidden',
+  overflowY: 'auto',
+  width: '100%',
+  maxWidth: '100%'
+};
+const RECON_TABLE_SX = {
+  tableLayout: 'fixed',
+  width: '100%'
+};
+const RECON_CELL_CLIP = {
+  overflow: 'hidden',
+  textOverflow: 'ellipsis',
+  whiteSpace: 'nowrap'
+};
+
+/** Unpresented column widths (sum ≈ 100%) — keeps columns from shrinking unevenly. */
+const UP_COL = {
+  check: { width: '3%' },
+  date: { width: '7%' },
+  vrNo: { width: '10%' },
+  narration: { width: '16%' },
+  reference: { width: '8%' },
+  amount: { width: '9%' },
+  attach: { width: '5%' },
+  signedDoc: { width: '10%' },
+  signedBy: { width: '11%' },
+  signedDate: { width: '7%' },
+  clearDate: { width: '8%' },
+  action: { width: '6%' }
+};
+
+/** Period activity column widths. */
+const PD_COL = {
+  date: { width: '12%' },
+  vrNo: { width: '12%' },
+  narration: { width: '28%' },
+  reference: { width: '14%' },
+  amount: { width: '14%' },
+  clearDate: { width: '12%' },
+  action: { width: '8%' }
 };
 
 const getWindowRange = (rowCount, scrollTop, viewportH = RECON_TABLE_MAX_H) => {
@@ -432,6 +520,10 @@ export default function BankReconciliation() {
 
   const unpresentedRows = data?.unpresentedTransactions || [];
   const periodRows = data?.periodTransactions || [];
+  const duplicateUnpresentedKeys = useMemo(
+    () => buildDuplicateRowKeySet(unpresentedRows),
+    [unpresentedRows]
+  );
   const unpresentedWindow = useMemo(
     () => getWindowRange(unpresentedRows.length, unpresentedScrollTop),
     [unpresentedRows.length, unpresentedScrollTop]
@@ -680,9 +772,9 @@ export default function BankReconciliation() {
   const selectedAccount = bankAccounts.find(a => a._id === filters.bankAccountId);
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box sx={{ p: 3, width: '100%', maxWidth: '100%', overflowX: 'hidden', boxSizing: 'border-box' }}>
       {/* Header */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
+      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3} flexWrap="wrap" gap={1}>
         <Box>
           <Typography variant="h5" fontWeight={700} display="flex" alignItems="center" gap={1}>
             <BankIcon color="primary" /> Bank Reconciliation
@@ -900,13 +992,13 @@ export default function BankReconciliation() {
             ref={unpresentedScrollRef}
             component={Paper}
             variant="outlined"
-            sx={{ maxHeight: RECON_TABLE_MAX_H, overflow: 'auto' }}
+            sx={RECON_TABLE_CONTAINER_SX}
             onScroll={handleUnpresentedScroll}
           >
-            <Table size="small" stickyHeader>
+            <Table size="small" stickyHeader sx={RECON_TABLE_SX}>
               <TableHead>
                 <TableRow>
-                  <TableCell padding="checkbox" sx={{ bgcolor: 'grey.50', width: 48 }}>
+                  <TableCell padding="checkbox" sx={{ bgcolor: 'grey.50', ...UP_COL.check }}>
                     <Checkbox
                       size="small"
                       indeterminate={
@@ -922,17 +1014,17 @@ export default function BankReconciliation() {
                       inputProps={{ 'aria-label': 'Select all unpresented' }}
                     />
                   </TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Date</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>VrNo</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Narration</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Reference</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Amount</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Attachment</TableCell>
-                  <TableCell sx={{ fontWeight: 700, minWidth: 130, bgcolor: 'grey.50' }}>Signed Document</TableCell>
-                  <TableCell sx={{ fontWeight: 700, minWidth: 160, bgcolor: 'grey.50' }}>Signed By</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Signed Date</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, minWidth: 155, bgcolor: 'grey.50' }}>Clearing.Date</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, minWidth: 100, bgcolor: 'grey.50' }}>Action</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.date }}>Date</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.vrNo }}>VrNo</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.narration }}>Narration</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.reference }}>Reference</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.amount }}>Amount</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.attach }}>Attachment</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedDoc }}>Signed Document</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedBy }}>Signed By</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedDate }}>Signed Date</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.clearDate }}>Clearing.Date</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.action }}>Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
@@ -950,6 +1042,7 @@ export default function BankReconciliation() {
                       const key = rowKey(t) || `row-${absIdx}`;
                       const isSigned = t.signedDocumentStatus === 'signed';
                       const isSelected = selectedUnpresented.has(key);
+                      const isDuplicate = duplicateUnpresentedKeys.has(key);
                       const defaultClearDate = rowClearDates[key] ?? (t.clearingDate ? clearedAtToYmd(t.clearingDate) : (filters.asOfDate || new Date().toISOString().split('T')[0]));
                       return (
                         <TableRow key={key} hover selected={isSelected} sx={RECON_DATA_ROW_SX}>
@@ -962,28 +1055,45 @@ export default function BankReconciliation() {
                               inputProps={{ 'aria-label': `Select ${t.vrNo || key}` }}
                             />
                           </TableCell>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(t.date)}</TableCell>
-                          <TableCell sx={{ fontWeight: 600 }}>{t.vrNo}</TableCell>
-                          <TableCell sx={{ maxWidth: 260, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.date }}>{formatDate(t.date)}</TableCell>
+                          <TableCell sx={{ fontWeight: 600, ...UP_COL.vrNo, overflow: 'hidden' }}>
+                            <Stack direction="row" alignItems="center" gap={0.5} sx={{ minWidth: 0 }}>
+                              <Typography variant="body2" fontWeight={600} noWrap sx={{ minWidth: 0 }}>
+                                {t.vrNo}
+                              </Typography>
+                              {isDuplicate && (
+                                <Tooltip title="Possible duplicate — same VrNo/Reference + Amount + Dr/Cr as another uncleared row">
+                                  <Chip
+                                    label="Duplicate"
+                                    size="small"
+                                    color="warning"
+                                    variant="outlined"
+                                    sx={{ height: 18, fontSize: '0.62rem', fontWeight: 700, flexShrink: 0 }}
+                                  />
+                                </Tooltip>
+                              )}
+                            </Stack>
+                          </TableCell>
+                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.narration }}>
                             <Tooltip title={t.narration || ''} enterDelay={500}>
                               <span>{t.narration}</span>
                             </Tooltip>
                           </TableCell>
-                          <TableCell sx={{ minWidth: 120 }}>
-                            <Stack direction="row" alignItems="center" gap={0.5}>
-                              <Typography variant="body2" noWrap>{t.reference || '—'}</Typography>
-                              <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, '&:hover': { opacity: 1 } }}>
+                          <TableCell sx={{ ...UP_COL.reference, overflow: 'hidden' }}>
+                            <Stack direction="row" alignItems="center" gap={0.25} sx={{ minWidth: 0 }}>
+                              <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>{t.reference || '—'}</Typography>
+                              <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, flexShrink: 0, '&:hover': { opacity: 1 } }}>
                                 <EditIcon fontSize="small" />
                               </IconButton>
                             </Stack>
                           </TableCell>
-                          <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>
+                          <TableCell align="right" sx={{ fontWeight: 600, ...RECON_CELL_CLIP, ...UP_COL.amount }}>
                             {t.type === 'Cr' ? `-${fmt(t.amount)}` : fmt(t.amount)}{' '}
                             <Typography component="span" fontWeight={700} color={t.type === 'Cr' ? 'error.main' : 'success.main'}>
                               {t.type}.
                             </Typography>
                           </TableCell>
-                          <TableCell align="center">
+                          <TableCell align="center" sx={UP_COL.attach}>
                             <Tooltip title={`Attachments (${(t.attachments || []).length}) — click to add or view`}>
                               <span>
                                 <IconButton
@@ -1001,67 +1111,63 @@ export default function BankReconciliation() {
                               </span>
                             </Tooltip>
                           </TableCell>
-                          <TableCell>
-                            <Box sx={{ minWidth: 120 }}>
-                              <TextField
-                                select
-                                fullWidth
-                                size="small"
-                                value={isSigned ? 'signed' : 'not_signed'}
-                                onChange={(e) => saveSignedDocumentStatus(t, e.target.value, t.signedBySignatory)}
-                                SelectProps={{
-                                  displayEmpty: true,
-                                  MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
-                                }}
-                              >
-                                <MenuItem value="signed">Signed</MenuItem>
-                                <MenuItem value="not_signed">Not Signed</MenuItem>
-                              </TextField>
-                            </Box>
+                          <TableCell sx={{ ...UP_COL.signedDoc, overflow: 'hidden' }}>
+                            <TextField
+                              select
+                              fullWidth
+                              size="small"
+                              value={isSigned ? 'signed' : 'not_signed'}
+                              onChange={(e) => saveSignedDocumentStatus(t, e.target.value, t.signedBySignatory)}
+                              SelectProps={{
+                                displayEmpty: true,
+                                MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
+                              }}
+                            >
+                              <MenuItem value="signed">Signed</MenuItem>
+                              <MenuItem value="not_signed">Not Signed</MenuItem>
+                            </TextField>
                           </TableCell>
-                          <TableCell>
-                            <Box sx={{ minWidth: 150 }}>
-                              <TextField
-                                select
-                                fullWidth
-                                size="small"
-                                disabled={!isSigned}
-                                value={t.signedBySignatory || ''}
-                                onChange={(e) => saveSignedDocumentStatus(t, 'signed', e.target.value)}
-                                SelectProps={{
-                                  displayEmpty: true,
-                                  MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
-                                }}
-                              >
-                                <MenuItem value="">
-                                  <em>Select Signatory</em>
+                          <TableCell sx={{ ...UP_COL.signedBy, overflow: 'hidden' }}>
+                            <TextField
+                              select
+                              fullWidth
+                              size="small"
+                              disabled={!isSigned}
+                              value={t.signedBySignatory || ''}
+                              onChange={(e) => saveSignedDocumentStatus(t, 'signed', e.target.value)}
+                              SelectProps={{
+                                displayEmpty: true,
+                                MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
+                              }}
+                            >
+                              <MenuItem value="">
+                                <em>Select Signatory</em>
+                              </MenuItem>
+                              {SIGNATORY_OPTIONS.map((opt) => (
+                                <MenuItem key={opt.value} value={opt.value}>
+                                  {opt.label}
                                 </MenuItem>
-                                {SIGNATORY_OPTIONS.map((opt) => (
-                                  <MenuItem key={opt.value} value={opt.value}>
-                                    {opt.label}
-                                  </MenuItem>
-                                ))}
-                              </TextField>
-                            </Box>
+                              ))}
+                            </TextField>
                           </TableCell>
-                          <TableCell sx={{ whiteSpace: 'nowrap' }}>
+                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.signedDate }}>
                             {t.signedDocumentAt ? formatDate(t.signedDocumentAt) : '—'}
                           </TableCell>
-                          <TableCell align="center">
+                          <TableCell align="center" sx={{ ...UP_COL.clearDate, overflow: 'hidden' }}>
                             <TextField
                               type="date"
                               size="small"
+                              fullWidth
                               value={defaultClearDate}
                               onChange={(e) => {
                                 const val = e.target.value;
                                 setRowClearDates((prev) => ({ ...prev, [key]: val }));
                               }}
                               InputLabelProps={{ shrink: true }}
-                              inputProps={{ style: { fontSize: '0.85rem', padding: '6px 8px' } }}
-                              sx={{ width: 145 }}
+                              inputProps={{ style: { fontSize: '0.8rem', padding: '6px 4px' } }}
                             />
                           </TableCell>
-                          <TableCell align="center">
+                          <TableCell align="center" sx={UP_COL.action}>
                             <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
                               <Tooltip title="Clear cheque & reconcile (removes from unpresented)">
                                 <span>
@@ -1137,7 +1243,7 @@ export default function BankReconciliation() {
             </Box>
 
             {/* Date Range Filter for Lower Table */}
-            <Stack direction="row" gap={1.5} alignItems="center">
+            <Stack direction="row" gap={1.5} alignItems="center" flexWrap="wrap" justifyContent="flex-end">
               <TextField
                 label="Date.From"
                 type="date"
@@ -1208,67 +1314,67 @@ export default function BankReconciliation() {
             ref={periodScrollRef}
             component={Paper}
             variant="outlined"
-            sx={{ maxHeight: RECON_TABLE_MAX_H, overflow: 'auto' }}
+            sx={RECON_TABLE_CONTAINER_SX}
             onScroll={handlePeriodScroll}
           >
-            <Table size="small" stickyHeader>
+            <Table size="small" stickyHeader sx={RECON_TABLE_SX}>
               <TableHead>
                 <TableRow>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Date</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>VrNo</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Narration</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Reference</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Amount</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Clearing.Date</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50' }}>Action</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.date }}>Date</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.vrNo }}>VrNo</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.narration }}>Narration</TableCell>
+                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.reference }}>Reference</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.amount }}>Amount</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.clearDate }}>Clearing.Date</TableCell>
+                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...PD_COL.action }}>Action</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>
                 {/* Opening Balance Row */}
                 <TableRow sx={{ bgcolor: 'info.50' }}>
-                  <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>—</TableCell>
-                  <TableCell sx={{ fontWeight: 600 }}>—</TableCell>
-                  <TableCell sx={{ fontWeight: 700 }}>Opening Balance</TableCell>
-                  <TableCell>—</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 800 }}>
+                  <TableCell sx={{ fontWeight: 600, ...PD_COL.date }}>—</TableCell>
+                  <TableCell sx={{ fontWeight: 600, ...PD_COL.vrNo }}>—</TableCell>
+                  <TableCell sx={{ fontWeight: 700, ...PD_COL.narration }}>Opening Balance</TableCell>
+                  <TableCell sx={PD_COL.reference}>—</TableCell>
+                  <TableCell align="right" sx={{ fontWeight: 800, ...PD_COL.amount }}>
                     {data.openingBalance < 0 ? `-${fmt(data.openingBalance)}` : fmt(data.openingBalance)}{' '}
                     <Typography component="span" fontWeight={800} color={data.openingBalanceType === 'Cr' ? 'error.main' : 'success.main'}>
                       {data.openingBalanceType}.
                     </Typography>
                   </TableCell>
-                  <TableCell align="center">—</TableCell>
-                  <TableCell align="center">—</TableCell>
+                  <TableCell align="center" sx={PD_COL.clearDate}>—</TableCell>
+                  <TableCell align="center" sx={PD_COL.action}>—</TableCell>
                 </TableRow>
 
                 {/* Period Transactions (windowed) */}
                 <ScrollPadRow height={periodWindow.topPad} colSpan={7} />
                 {periodRows.slice(periodWindow.start, periodWindow.end).map((t, idx) => (
                   <TableRow key={t._id || `period-${periodWindow.start + idx}`} hover sx={RECON_DATA_ROW_SX}>
-                    <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(t.date)}</TableCell>
-                    <TableCell sx={{ fontWeight: 600 }}>{t.vrNo}</TableCell>
-                    <TableCell sx={{ maxWidth: 280, overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                    <TableCell sx={{ ...RECON_CELL_CLIP, ...PD_COL.date }}>{formatDate(t.date)}</TableCell>
+                    <TableCell sx={{ fontWeight: 600, ...RECON_CELL_CLIP, ...PD_COL.vrNo }}>{t.vrNo}</TableCell>
+                    <TableCell sx={{ ...RECON_CELL_CLIP, ...PD_COL.narration }}>
                       <Tooltip title={t.narration || ''} enterDelay={500}>
                         <span>{t.narration}</span>
                       </Tooltip>
                     </TableCell>
-                    <TableCell sx={{ minWidth: 120 }}>
-                      <Stack direction="row" alignItems="center" gap={0.5}>
-                        <Typography variant="body2" noWrap>{t.reference || '—'}</Typography>
-                        <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, '&:hover': { opacity: 1 } }}>
+                    <TableCell sx={{ ...PD_COL.reference, overflow: 'hidden' }}>
+                      <Stack direction="row" alignItems="center" gap={0.25} sx={{ minWidth: 0 }}>
+                        <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>{t.reference || '—'}</Typography>
+                        <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, flexShrink: 0, '&:hover': { opacity: 1 } }}>
                           <EditIcon fontSize="small" />
                         </IconButton>
                       </Stack>
                     </TableCell>
-                    <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>
+                    <TableCell align="right" sx={{ fontWeight: 600, ...RECON_CELL_CLIP, ...PD_COL.amount }}>
                       {t.type === 'Cr' ? `-${fmt(t.amount)}` : fmt(t.amount)}{' '}
                       <Typography component="span" fontWeight={700} color={t.type === 'Cr' ? 'error.main' : 'success.main'}>
                         {t.type}.
                       </Typography>
                     </TableCell>
-                    <TableCell align="center">
+                    <TableCell align="center" sx={{ ...RECON_CELL_CLIP, ...PD_COL.clearDate }}>
                       {t.clearingDate ? formatDate(t.clearingDate) : '—'}
                     </TableCell>
-                    <TableCell align="center">
+                    <TableCell align="center" sx={PD_COL.action}>
                       <Tooltip title="Un-clear / Move back to Unpresented Cheques">
                         <span>
                           <IconButton

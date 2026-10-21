@@ -17,7 +17,9 @@ import {
   PhotoCamera as PhotoIcon, Refresh as RefreshIcon, Search as SearchIcon,
   Warning as WarnIcon, ShoppingCart as POIcon, Receipt as InvoiceIcon,
   Visibility as ViewIcon, Engineering as ContractorIcon,
-  AccountTree as TreeIcon
+  AccountTree as TreeIcon,
+  FactCheck as CheckRequestIcon,
+  Handshake as SubletIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -37,6 +39,8 @@ import {
   generateMilestoneInvoice
 } from '../../services/projectManagementService';
 import api from '../../services/api';
+import CheckRequestsTab from './CheckRequestsTab';
+import SubletContractsTab from './SubletContractsTab';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 /** Segregated budget groups for Sub project category allocation */
@@ -84,7 +88,9 @@ const MS_STATUS_COLOR = {
 const ALL_TABS = [
   { id: 'overview', label: 'Overview', icon: <ViewIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
+  { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'tasks', label: 'Tasks / WBS', icon: <TaskIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'expenses', label: 'Expenses', icon: <MoneyIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'dpr', label: 'Daily Reports', icon: <PhotoIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'gantt', label: 'Gantt Chart', icon: <ChartIcon fontSize="small" />, onMain: false, onSub: true },
@@ -392,8 +398,10 @@ const BOQTab = ({ projectId, project }) => {
   const handleSave = async () => {
     const desc = form.description || form.title;
     if (!desc) { setError('Item Title / Description is required'); return; }
+    // Contractor + agreed rate are assigned via Sublet Contracts — do not send from BOQ item form
+    const { contractor, contractorUnitPrice, ...rest } = form;
     const payload = {
-      ...form,
+      ...rest,
       title: form.title || desc,
       description: desc
     };
@@ -461,7 +469,9 @@ const BOQTab = ({ projectId, project }) => {
 
       {isSubProject && (
         <Alert severity="info" sx={{ mb: 2 }}>
-          <strong>Sub-Project Scope View:</strong> Master BOQ Documents are created and managed at the Main Portfolio Project level. Below are the specific BOQ item scope allocations assigned from the Main Portfolio Project to this Sub-Project.
+          <strong>Sub-Project BOQ:</strong> Shows items created on this Sub Project and items
+          allocated from the Main Project. You can add new line items here; assign subcontractors
+          via <strong>Sublet Contracts</strong>.
         </Alert>
       )}
 
@@ -471,18 +481,18 @@ const BOQTab = ({ projectId, project }) => {
           <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end">
             {selectedItems.size > 0 && (
               <>
-                <Button size="small" startIcon={<ContractorIcon />} onClick={() => { setBatchContractorId(''); setBatchContractorUnitPrice(''); setBatchAssignOpen(true); }} variant="contained" color="secondary">
-                  Assign Subcontractor ({selectedItems.size})
-                </Button>
+                {!isSubProject && (
+                  <Button size="small" startIcon={<ContractorIcon />} onClick={() => { setBatchContractorId(''); setBatchContractorUnitPrice(''); setBatchAssignOpen(true); }} variant="contained" color="secondary">
+                    Assign Subcontractor ({selectedItems.size})
+                  </Button>
+                )}
                 <Button size="small" startIcon={<POIcon />} onClick={openCreatePO} variant="outlined" color="secondary">
                   Create PO ({selectedItems.size})
                 </Button>
               </>
             )}
             <Button size="small" startIcon={<RefreshIcon />} onClick={load} variant="outlined">Refresh</Button>
-            {!isSubProject && (
-              <Button size="small" startIcon={<AddIcon />} onClick={openAdd} variant="contained">Add Line Item</Button>
-            )}
+            <Button size="small" startIcon={<AddIcon />} onClick={openAdd} variant="contained">Add Line Item</Button>
           </Stack>
         }
       />
@@ -502,7 +512,7 @@ const BOQTab = ({ projectId, project }) => {
                 sx={{ borderRadius: 1.5, fontWeight: activeBoqHeaderId ? 600 : 400, bgcolor: 'grey.50' }}
               >
                 <MenuItem value="">
-                  <em>📁 All BOQ Documents (Master Project)</em>
+                  <em>📁 All BOQ Documents</em>
                 </MenuItem>
                 {boqHeaders.map((h) => (
                   <MenuItem key={h._id} value={h._id}>
@@ -881,11 +891,58 @@ const BOQTab = ({ projectId, project }) => {
       )}
 
       {/* Add/Edit BOQ Item Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>{editItem ? 'Edit BOQ Item' : 'Add BOQ Item'}</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           <Grid container spacing={2}>
+            <Grid item xs={12}>
+              <Paper
+                variant="outlined"
+                sx={{ p: 2, bgcolor: 'grey.50', borderColor: 'divider' }}
+              >
+                <Typography variant="caption" color="text.secondary" fontWeight={700} display="block" mb={1}>
+                  Project context (auto-fetched)
+                </Typography>
+                <Grid container spacing={1.5}>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Main Project"
+                      value={
+                        isSubProject
+                          ? (project?.parentProject?.name || '—')
+                          : (project?.name || '—')
+                      }
+                      InputProps={{ readOnly: true }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Sub Project"
+                      value={isSubProject ? (project?.name || '—') : '—'}
+                      InputProps={{ readOnly: true }}
+                    />
+                  </Grid>
+                  <Grid item xs={12} md={4}>
+                    <TextField
+                      fullWidth
+                      size="small"
+                      label="Sector / Block"
+                      value={
+                        project?.sector ||
+                        project?.parentProject?.sector ||
+                        '—'
+                      }
+                      InputProps={{ readOnly: true }}
+                    />
+                  </Grid>
+                </Grid>
+              </Paper>
+            </Grid>
             <Grid item xs={12}>
               <TextField fullWidth label="Title" value={form.title} onChange={set('title')} placeholder="Short name e.g. Inner Ceiling Paint" />
             </Grid>
@@ -940,34 +997,6 @@ const BOQTab = ({ projectId, project }) => {
               </Grid>
             )}
 
-            <Grid item xs={6}>
-              <Autocomplete
-                options={subcontractors}
-                getOptionLabel={(option) => {
-                  if (typeof option === 'string') return option;
-                  if (!option) return '';
-                  const idStr = option.supplierId ? ` (${option.supplierId})` : '';
-                  const catStr = option.vendorCategory ? ` - [${option.vendorCategory}]` : '';
-                  return `${option.name || ''}${idStr}${catStr}`;
-                }}
-                value={subcontractors.find(s => String(s._id) === String(form.contractor)) || null}
-                onChange={(event, newValue) => {
-                  setForm(p => ({ ...p, contractor: newValue ? newValue._id : '' }));
-                }}
-                isOptionEqualToValue={(option, value) => String(option._id) === String(value._id || value)}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Assigned Subcontractor"
-                    size="small"
-                    placeholder="Search subcontractor..."
-                  />
-                )}
-              />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth size="small" label="Contractor Agreed Rate (PKR)" type="number" value={form.contractorUnitPrice || ''} onChange={set('contractorUnitPrice')} inputProps={{ min: 0 }} />
-            </Grid>
             <Grid item xs={4}>
               <TextField fullWidth label="Unit" required value={form.unit} onChange={set('unit')} placeholder="Bags, Kg, Sq Ft…" />
             </Grid>
@@ -1960,7 +1989,8 @@ const TasksTab = ({ projectId }) => {
         <DialogContent sx={{ pt: 3 }}>
           <Stack spacing={2.5}>
             <Typography variant="body2" color="text.secondary">
-              Review and sign off on physical completion of: <strong>{verifyTaskItem?.title}</strong>
+              Optional WBS task sign-off for: <strong>{verifyTaskItem?.title}</strong>.
+              For payment / IPC, use the <strong>Check Requests</strong> tab instead.
             </Typography>
             
             <FormControl fullWidth>
@@ -3881,7 +3911,15 @@ const ProjectDetail = () => {
     try {
       setLoading(true);
       const res = await getProjectById(id);
-      setProject(res.data?.data || null);
+      const data = res.data?.data || null;
+      setProject(data);
+      // Workspace shortcuts (Tasks/Expenses/…) must reopen a Sub, not the Main envelope
+      if (data) {
+        localStorage.setItem('pmLastProjectId', data._id);
+        if (data.parentProject) {
+          localStorage.setItem('pmLastSubProjectId', data._id);
+        }
+      }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load project');
     } finally { setLoading(false); }
@@ -3897,14 +3935,23 @@ const ProjectDetail = () => {
     if (!project) return;
     const tabs = getVisibleTabs(!project.parentProject);
     const raw = searchParams.get('tab');
-    const tabParam = Number(raw || 0);
-    const normalized = Number.isFinite(tabParam)
-      ? Math.max(0, Math.min(tabs.length - 1, tabParam))
-      : 0;
-    setTab(normalized);
-    // Clamp deep-links that point past Main's limited tabs (e.g. old ?tab=5)
-    if (raw != null && Number(raw) !== normalized) {
-      setSearchParams({ tab: String(normalized) }, { replace: true });
+    let idx = 0;
+    if (raw != null && raw !== '') {
+      const byId = tabs.findIndex((t) => t.id === raw);
+      if (byId >= 0) {
+        idx = byId;
+      } else {
+        const asNumber = Number(raw);
+        if (Number.isFinite(asNumber)) {
+          idx = Math.max(0, Math.min(tabs.length - 1, asNumber));
+        }
+      }
+    }
+    setTab(idx);
+    const canonical = tabs[idx]?.id;
+    // Prefer tab ids in the URL so Main/Sub different tab counts never mis-route
+    if (canonical && raw !== canonical) {
+      setSearchParams({ tab: canonical }, { replace: true });
     }
   }, [project, searchParams, setSearchParams]);
 
@@ -4132,7 +4179,8 @@ const ProjectDetail = () => {
           value={Math.min(tab, visibleTabs.length - 1)}
           onChange={(_, v) => {
             setTab(v);
-            setSearchParams({ tab: String(v) }, { replace: true });
+            const nextId = visibleTabs[v]?.id || 'overview';
+            setSearchParams({ tab: nextId }, { replace: true });
           }}
           variant="scrollable"
           scrollButtons="auto"
@@ -4172,7 +4220,9 @@ const ProjectDetail = () => {
         <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 } }}>
           {activeTab?.id === 'overview' && <OverviewTab project={project} onRefresh={loadProject} />}
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
+          {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} />}
           {activeTab?.id === 'tasks' && <TasksTab projectId={id} />}
+          {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} />}
           {activeTab?.id === 'expenses' && <ExpensesTab projectId={id} project={project} />}
           {activeTab?.id === 'dpr' && <DPRTab projectId={id} />}
           {activeTab?.id === 'gantt' && <GanttChart project={project} />}

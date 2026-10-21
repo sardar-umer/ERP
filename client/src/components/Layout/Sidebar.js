@@ -231,6 +231,10 @@ const Sidebar = () => {
       '/general/subcontractors': 'project_management',
       '/general/ceo-secretariat': 'ceo_secretariat',
       '/general/ceo-secretariat/payments': 'ceo_secretariat',
+      '/general/president-secretariat': 'president_secretariat',
+      '/general/president-secretariat/dashboard': 'president_secretariat',
+      '/general/president-secretariat/meetings': 'president_secretariat',
+      '/general/president-secretariat/events': 'president_secretariat',
 
       '/asset-tagging': 'asset_tagging_dashboard',
       '/asset-tagging/register': 'asset_tagging_assets',
@@ -424,6 +428,7 @@ const Sidebar = () => {
       '/indents': 'general',
       '/user-tracking': 'general',
       '/ceo-secretariat': 'general',
+      '/president-secretariat': 'general',
       '/developer': 'developer_module'
     };
     
@@ -906,7 +911,25 @@ const Sidebar = () => {
   };
 
   const isActive = (path) => {
-    return location.pathname === path || location.pathname.startsWith(path + '/');
+    const raw = String(path || '');
+    const [pathname, query = ''] = raw.split('?');
+    const pathMatches =
+      location.pathname === pathname || location.pathname.startsWith(`${pathname}/`);
+    if (!pathMatches) return false;
+
+    // Support menu items with query (e.g. Meeting Schedule ?tab=schedule)
+    if (query) {
+      const wanted = new URLSearchParams(query);
+      const current = new URLSearchParams(location.search);
+      return [...wanted.entries()].every(([k, v]) => current.get(k) === v);
+    }
+
+    // Bare /meetings should not stay highlighted when ?tab=schedule is open
+    if (pathname === '/general/president-secretariat/meetings') {
+      return new URLSearchParams(location.search).get('tab') !== 'schedule';
+    }
+
+    return true;
   };
 
   const isSubmenuActive = (subItems) => {

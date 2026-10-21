@@ -378,7 +378,8 @@ export const SUBMODULES = {
     'centralized_store',
     'user_tracking',
     'project_management',
-    'ceo_secretariat'
+    'ceo_secretariat',
+    'president_secretariat'
   ]
 };
 
@@ -1079,7 +1080,9 @@ export const MODULES = {
           { name: 'Projects', path: '/general/project-management/projects' },
           { name: 'Subcontractors', path: '/general/subcontractors' },
           { name: 'BOQ', path: '/general/project-management/workspace/boq' },
+          { name: 'Sublet Contracts', path: '/general/project-management/workspace/sublet-contracts' },
           { name: 'Tasks / WBS', path: '/general/project-management/workspace/tasks' },
+          { name: 'Check Requests', path: '/general/project-management/workspace/check-requests' },
           { name: 'Expenses', path: '/general/project-management/workspace/expenses' },
           { name: 'Daily Reports', path: '/general/project-management/workspace/dpr' },
           { name: 'Gantt Chart', path: '/general/project-management/workspace/gantt' },
@@ -1102,6 +1105,28 @@ export const MODULES = {
           {
             name: 'Payments',
             path: '/general/ceo-secretariat/payments'
+          }
+        ]
+      },
+      {
+        name: 'President Secretariat',
+        path: '/general/president-secretariat',
+        subItems: [
+          {
+            name: 'Dashboard',
+            path: '/general/president-secretariat/dashboard'
+          },
+          {
+            name: 'Meeting Request',
+            path: '/general/president-secretariat/meetings'
+          },
+          {
+            name: 'Meeting Schedule',
+            path: '/general/president-secretariat/meetings?tab=schedule'
+          },
+          {
+            name: 'Events',
+            path: '/general/president-secretariat/events'
           }
         ]
       }
@@ -1498,6 +1523,10 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/general/project-management/workspace': 'project_management',
       '/general/ceo-secretariat': 'ceo_secretariat',
       '/general/ceo-secretariat/payments': 'ceo_secretariat',
+      '/general/president-secretariat': 'president_secretariat',
+      '/general/president-secretariat/dashboard': 'president_secretariat',
+      '/general/president-secretariat/meetings': 'president_secretariat',
+      '/general/president-secretariat/events': 'president_secretariat',
 
       // Asset Tagging Module
       '/asset-tagging': 'asset_tagging_dashboard',

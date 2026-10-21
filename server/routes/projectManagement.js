@@ -12,6 +12,8 @@ const ProjectTask = require('../models/projectManagement/ProjectTask');
 const ProjectExpense = require('../models/projectManagement/ProjectExpense');
 const DailyProgressReport = require('../models/projectManagement/DailyProgressReport');
 const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+const CheckRequest = require('../models/projectManagement/CheckRequest');
+const SubletContract = require('../models/projectManagement/SubletContract');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 
@@ -238,7 +240,7 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
     .populate('projectManager', 'firstName lastName email')
     .populate('budgetApprovedBy', 'firstName lastName')
     .populate('createdBy', 'firstName lastName')
-    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget')
+    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget society sector')
     .lean();
 
   if (!project) return notFound(res, 'Project');
@@ -614,15 +616,34 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const buildBoqFilter = (projectId, { search, phase, category, boqHeaderId, isSubProject } = {}) => {
   const pId = new mongoose.Types.ObjectId(projectId);
-  const projectFilter = isSubProject ? { subProject: pId } : { project: pId };
-  const filter = { ...projectFilter };
+
+  // Sub: own items + items tagged/allocated to this Sub from Main
+  const scopeOr = isSubProject
+    ? [{ project: pId }, { subProject: pId }, { 'allocations.subProject': pId }]
+    : null;
+
+  const projectFilter = isSubProject ? { $or: scopeOr } : { project: pId };
+  const filter = {};
+
   if (phase) filter.phase = phase;
   if (category) filter.category = category;
   if (boqHeaderId && isValidId(boqHeaderId)) filter.boqHeader = boqHeaderId;
+
   if (search) {
     const re = { $regex: search, $options: 'i' };
-    filter.$or = ['title', 'description', 'specification', 'itemCode', 'category', 'unit', 'phase'].map((f) => ({ [f]: re }));
+    const searchOr = ['title', 'description', 'specification', 'itemCode', 'category', 'unit', 'phase'].map((f) => ({ [f]: re }));
+    if (isSubProject) {
+      filter.$and = [{ $or: scopeOr }, { $or: searchOr }];
+    } else {
+      filter.project = pId;
+      filter.$or = searchOr;
+    }
+  } else if (isSubProject) {
+    filter.$or = scopeOr;
+  } else {
+    filter.project = pId;
   }
+
   return { filter, projectFilter };
 };
 
@@ -631,7 +652,16 @@ const buildBoqFilter = (projectId, { search, phase, category, boqHeaderId, isSub
 // GET /api/project-management/projects/:id/boq-headers — list all BOQ documents for a project
 router.get('/projects/:id/boq-headers', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-  const headers = await ProjectBOQ.find({ project: req.params.id })
+
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+
+  const projectIds = [req.params.id];
+  if (project.parentProject) {
+    projectIds.push(String(project.parentProject));
+  }
+
+  const headers = await ProjectBOQ.find({ project: { $in: projectIds } })
     .populate('createdBy', 'firstName lastName')
     .sort({ createdAt: 1 })
     .lean();
@@ -876,7 +906,11 @@ router.put('/projects/:id/boq/batch-assign-contractor', asyncHandler(async (req,
 router.post('/projects/:id/boq', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
-  const { title, description, unit, estimatedQuantity, estimatedUnitPrice, discountAmount, phase, category, specification, itemCode, notes, orderIndex, contractor, subProject, boqHeader, contractorUnitPrice } = req.body;
+  const projectDoc = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!projectDoc) return notFound(res, 'Project');
+  const isSub = Boolean(projectDoc.parentProject);
+
+  const { title, description, unit, estimatedQuantity, estimatedUnitPrice, discountAmount, phase, category, specification, itemCode, notes, orderIndex, contractor, subProject, boqHeader, contractorUnitPrice, cbsCategory } = req.body;
   if (!description) return badRequest(res, 'Description is required');
   if (!unit) return badRequest(res, 'Unit is required');
   if (estimatedQuantity == null) return badRequest(res, 'Estimated quantity is required');
@@ -893,10 +927,12 @@ router.post('/projects/:id/boq', asyncHandler(async (req, res) => {
     discountAmount: Number(discountAmount) || 0,
     phase: phase || 'General',
     category,
+    cbsCategory: cbsCategory || 'Materials',
     specification,
     itemCode,
     contractor: contractor || null,
-    subProject: subProject || null,
+    // On Sub Project, tag the item to this Sub so it always appears in Sub BOQ scope
+    subProject: isSub ? req.params.id : (subProject || null),
     contractorUnitPrice: Number(contractorUnitPrice) || 0,
     notes,
     orderIndex: orderIndex || 0,
@@ -911,6 +947,10 @@ router.post('/projects/:id/boq', asyncHandler(async (req, res) => {
 // POST /api/project-management/projects/:id/boq/bulk — bulk import
 router.post('/projects/:id/boq/bulk', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const projectDoc = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!projectDoc) return notFound(res, 'Project');
+  const isSub = Boolean(projectDoc.parentProject);
 
   const { items, boqHeader } = req.body;
   if (!Array.isArray(items) || !items.length) return badRequest(res, 'Items array is required');
@@ -929,7 +969,7 @@ router.post('/projects/:id/boq/bulk', asyncHandler(async (req, res) => {
     specification: item.specification || '',
     itemCode: item.itemCode || '',
     contractor: item.contractor || null,
-    subProject: item.subProject || null,
+    subProject: isSub ? req.params.id : (item.subProject || null),
     contractorUnitPrice: Number(item.contractorUnitPrice) || 0,
     notes: item.notes || '',
     orderIndex: item.orderIndex ?? idx,
@@ -1125,11 +1165,22 @@ router.post('/projects/:id/expenses', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
   const { category, description, amount, expenseDate, vendor, invoiceNumber,
-    paymentStatus, paymentMethod, paymentDate, task, notes } = req.body;
+    paymentStatus, paymentMethod, paymentDate, task, checkRequest, notes } = req.body;
 
   if (!description) return badRequest(res, 'Description is required');
   if (!category) return badRequest(res, 'Category is required');
   if (!amount || Number(amount) <= 0) return badRequest(res, 'Valid amount is required');
+
+  let checkRequestId = null;
+  if (checkRequest) {
+    if (!isValidId(checkRequest)) return badRequest(res, 'Invalid check request ID');
+    const cr = await CheckRequest.findOne({ _id: checkRequest, project: req.params.id });
+    if (!cr) return badRequest(res, 'Check request not found on this project');
+    if (!['Verified', 'Billed'].includes(cr.status)) {
+      return badRequest(res, 'Expense can only be linked to a Verified (or billed) Check Request');
+    }
+    checkRequestId = cr._id;
+  }
 
   const expense = await ProjectExpense.create({
     project: req.params.id,
@@ -1141,6 +1192,7 @@ router.post('/projects/:id/expenses', asyncHandler(async (req, res) => {
     paymentMethod: paymentMethod || 'Bank Transfer',
     paymentDate: paymentDate ? new Date(paymentDate) : undefined,
     task: task || null,
+    checkRequest: checkRequestId,
     notes,
     createdBy: req.user?._id
   });
@@ -1423,13 +1475,30 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
 
   const { invoiceType = 'Subcontractor_IPC', contractor, items = [], retentionPercentage = 0,
     advanceRecoveryAmount = 0, whtPercentage = 0, invoiceAmount, description, issueDate, dueDate,
-    billingPercentage, milestoneId, milestoneName, notes, clientName, clientContact, clientAddress, boqItemId } = req.body;
+    billingPercentage, milestoneId, milestoneName, notes, clientName, clientContact, clientAddress,
+    boqItemId, checkRequestId } = req.body;
 
   let processedItems = [];
   let grossAmount = 0;
   let ipcNumber = 1;
+  let linkedCheckRequest = null;
 
-  if (Array.isArray(items) && items.length > 0) {
+  // Subcontractor IPC must come from a Verified Check Request
+  if (invoiceType === 'Subcontractor_IPC') {
+    if (!checkRequestId || !isValidId(checkRequestId)) {
+      return badRequest(res, 'Select a Verified Check Request before creating a Subcontractor IPC');
+    }
+    linkedCheckRequest = await CheckRequest.findOne({
+      _id: checkRequestId,
+      project: req.params.id,
+      status: 'Verified'
+    });
+    if (!linkedCheckRequest) {
+      return badRequest(res, 'Check Request not found or not in Verified status');
+    }
+  }
+
+  if (linkedCheckRequest) {
     if (contractor && isValidId(contractor)) {
       const existingIpcCount = await ProjectInvoice.countDocuments({
         $or: [{ project: req.params.id }, { masterProject: req.params.id }],
@@ -1438,11 +1507,69 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
         status: { $ne: 'Cancelled' }
       });
       ipcNumber = existingIpcCount + 1;
+    } else if (linkedCheckRequest.contractor) {
+      const existingIpcCount = await ProjectInvoice.countDocuments({
+        $or: [{ project: req.params.id }, { masterProject: req.params.id }],
+        contractor: linkedCheckRequest.contractor,
+        invoiceType: 'Subcontractor_IPC',
+        status: { $ne: 'Cancelled' }
+      });
+      ipcNumber = existingIpcCount + 1;
     }
 
+    const inputByBoq = new Map();
+    (Array.isArray(items) ? items : []).forEach((itemInput) => {
+      const key = String(itemInput.boqItemId || itemInput.boqItem || '');
+      if (key) inputByBoq.set(key, itemInput);
+    });
+
+    for (const crItem of linkedCheckRequest.items) {
+      const billableQty = Math.max(
+        0,
+        (Number(crItem.verifiedQuantity) || 0) - (Number(crItem.billedQuantity) || 0)
+      );
+      if (billableQty <= 0) continue;
+
+      const override = inputByBoq.get(String(crItem.boqItem));
+      let currentQuantity = override?.currentQuantity !== undefined
+        ? Number(override.currentQuantity) || 0
+        : billableQty;
+      if (currentQuantity <= 0) continue;
+      if (currentQuantity > billableQty) {
+        return badRequest(
+          res,
+          `Quantity for "${crItem.title || crItem.description}" exceeds verified unpaid qty (${billableQty} ${crItem.unit}).`
+        );
+      }
+
+      const unitPrice = Number(override?.unitPrice) || Number(crItem.unitPrice) || 0;
+      const currentAmount = currentQuantity * unitPrice;
+      grossAmount += currentAmount;
+
+      const boq = await BOQItem.findById(crItem.boqItem).select('contractorBilledQuantity estimatedQuantity').lean();
+      const previousQuantity = Number(boq?.contractorBilledQuantity) || 0;
+
+      processedItems.push({
+        boqItem: crItem.boqItem,
+        title: crItem.title || '',
+        description: crItem.description || '',
+        unit: crItem.unit || '',
+        previousQuantity,
+        currentQuantity,
+        cumulativeQuantity: previousQuantity + currentQuantity,
+        unitPrice,
+        currentAmount,
+        _crItemId: crItem._id
+      });
+    }
+
+    if (!processedItems.length) {
+      return badRequest(res, 'No billable verified quantities left on this Check Request');
+    }
+  } else if (Array.isArray(items) && items.length > 0) {
+    // Non-IPC invoices may still use free BOQ lines
     for (const itemInput of items) {
       if (!itemInput.boqItemId || !isValidId(itemInput.boqItemId)) continue;
-      // Search BOQ item under current project OR Master Project
       const searchCriteria = masterProjectId
         ? { _id: itemInput.boqItemId, $or: [{ project: req.params.id }, { project: masterProjectId }] }
         : { _id: itemInput.boqItemId, project: req.params.id };
@@ -1454,7 +1581,6 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
       const currentQuantity = Number(itemInput.currentQuantity) || 0;
       const cumulativeQuantity = previousQuantity + currentQuantity;
 
-      // Over-billing validation against Master BOQ estimated quantity
       if (cumulativeQuantity > boq.estimatedQuantity) {
         return badRequest(
           res,
@@ -1494,13 +1620,17 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
   const netPayableAmount = Math.max(0, Math.round((finalGross - retentionAmount - advRec - whtAmount) * 100) / 100);
   const finalInvoiceAmt = processedItems.length > 0 ? netPayableAmount : Number(invoiceAmount);
 
+  const invoiceContractor = (contractor && isValidId(contractor))
+    ? contractor
+    : (linkedCheckRequest?.contractor || null);
+
   const invoice = await ProjectInvoice.create({
     project: req.params.id,
     masterProject: masterProjectId,
-    contractor: contractor && isValidId(contractor) ? contractor : null,
+    contractor: invoiceContractor,
     invoiceType,
     ipcNumber,
-    items: processedItems,
+    items: processedItems.map(({ _crItemId, ...rest }) => rest),
     grossAmount: finalGross,
     retentionPercentage: retentionP,
     retentionAmount,
@@ -1511,22 +1641,25 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     milestoneId: milestoneId || null,
     milestoneName: milestoneName || '',
     boqItemId: boqItemId || null,
+    checkRequest: linkedCheckRequest?._id || null,
     clientName: clientName || project.clientName || '',
     clientContact: clientContact || project.clientContact || '',
     clientAddress: clientAddress || project.address || '',
     contractValue: project.contractValue || 0,
     billingPercentage: Number(billingPercentage) || 0,
     invoiceAmount: finalInvoiceAmt,
-    description: description || (invoiceType === 'Subcontractor_IPC' ? `IPC #${ipcNumber} Subcontractor Bill` : ''),
+    description: description || (invoiceType === 'Subcontractor_IPC'
+      ? `IPC #${ipcNumber} from ${linkedCheckRequest.checkRequestNumber}`
+      : ''),
     issueDate: issueDate ? new Date(issueDate) : new Date(),
     dueDate: dueDate ? new Date(dueDate) : undefined,
     notes,
     createdBy: req.user?._id
   });
 
-  // Update BOQ items billed quantities
+  // Update BOQ + Check Request billed quantities
   if (processedItems.length > 0) {
-    await Promise.all(processedItems.map(item =>
+    await Promise.all(processedItems.map((item) =>
       BOQItem.findByIdAndUpdate(item.boqItem, {
         $inc: {
           contractorBilledQuantity: item.currentQuantity,
@@ -1534,6 +1667,23 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
         }
       })
     ));
+  }
+
+  if (linkedCheckRequest) {
+    for (const item of processedItems) {
+      const crItem = linkedCheckRequest.items.id(item._crItemId)
+        || linkedCheckRequest.items.find((i) => String(i.boqItem) === String(item.boqItem));
+      if (crItem) {
+        crItem.billedQuantity = (Number(crItem.billedQuantity) || 0) + item.currentQuantity;
+      }
+    }
+    const stillBillable = linkedCheckRequest.items.some(
+      (i) => (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0) > 0.0001
+    );
+    linkedCheckRequest.status = stillBillable ? 'Verified' : 'Billed';
+    linkedCheckRequest.linkedInvoice = invoice._id;
+    linkedCheckRequest.updatedBy = req.user?._id;
+    await linkedCheckRequest.save();
   }
 
   await syncProjectInvoiceTotals(req.params.id);
@@ -1544,6 +1694,7 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
   const populated = await ProjectInvoice.findById(invoice._id)
     .populate('contractor', 'name email phone vendorType')
     .populate('createdBy', 'firstName lastName')
+    .populate('checkRequest', 'checkRequestNumber title status')
     .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractorBilledQuantity')
     .lean();
 
@@ -1634,6 +1785,725 @@ router.delete('/projects/:id/invoices/:invoiceId', asyncHandler(async (req, res)
 
   await syncProjectInvoiceTotals(req.params.id);
   res.json({ success: true, message: 'Invoice deleted' });
+}));
+
+// ─── CHECK REQUESTS (commercial gate before IPC / payment) ───────────────────
+
+const populateCheckRequest = (query) =>
+  query
+    .populate('contractor', 'name email phone vendorType')
+    .populate('task', 'title status progressPercent')
+    .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractorBilledQuantity')
+    .populate('createdBy', 'firstName lastName')
+    .populate('submittedBy', 'firstName lastName')
+    .populate('linkedInvoice', 'invoiceNumber ipcNumber status invoiceAmount');
+
+const buildCheckRequestItems = async (projectId, masterProjectId, rawItems = []) => {
+  const items = [];
+  let claimedTotal = 0;
+
+  for (const row of rawItems) {
+    const boqId = row.boqItemId || row.boqItem;
+    if (!boqId || !isValidId(boqId)) continue;
+
+    const searchCriteria = masterProjectId
+      ? { _id: boqId, $or: [{ project: projectId }, { project: masterProjectId }] }
+      : { _id: boqId, project: projectId };
+
+    const boq = await BOQItem.findOne(searchCriteria).lean();
+    if (!boq) continue;
+
+    const claimedQuantity = Math.max(0, Number(row.claimedQuantity) || 0);
+    if (claimedQuantity <= 0) continue;
+
+    const unitPrice = Number(row.unitPrice) || Number(boq.contractorUnitPrice) || Number(boq.estimatedUnitPrice) || 0;
+    const claimedAmount = claimedQuantity * unitPrice;
+    claimedTotal += claimedAmount;
+
+    items.push({
+      boqItem: boq._id,
+      title: boq.title || '',
+      description: boq.description || '',
+      unit: boq.unit || '',
+      claimedQuantity,
+      verifiedQuantity: 0,
+      billedQuantity: 0,
+      unitPrice,
+      claimedAmount,
+      verifiedAmount: 0,
+      notes: row.notes || ''
+    });
+  }
+
+  return { items, claimedTotal };
+};
+
+// GET /api/project-management/projects/:id/check-requests
+router.get('/projects/:id/check-requests', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const filter = { project: req.params.id };
+  if (req.query.status) filter.status = req.query.status;
+  if (req.query.billable === 'true') {
+    filter.status = 'Verified';
+  }
+
+  const rows = await populateCheckRequest(
+    CheckRequest.find(filter).sort({ createdAt: -1 })
+  ).lean();
+
+  const billable = rows
+    .filter((cr) => cr.status === 'Verified')
+    .map((cr) => {
+      const remainingItems = (cr.items || [])
+        .map((i) => ({
+          ...i,
+          billableQuantity: Math.max(0, (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0))
+        }))
+        .filter((i) => i.billableQuantity > 0);
+      const billableTotal = remainingItems.reduce(
+        (s, i) => s + i.billableQuantity * (Number(i.unitPrice) || 0),
+        0
+      );
+      return { ...cr, remainingItems, billableTotal };
+    })
+    .filter((cr) => (req.query.billable === 'true' ? cr.remainingItems.length > 0 : true));
+
+  res.json({
+    success: true,
+    data: {
+      checkRequests: req.query.billable === 'true' ? billable : rows,
+      counts: {
+        draft: rows.filter((r) => r.status === 'Draft').length,
+        submitted: rows.filter((r) => r.status === 'Submitted').length,
+        verified: rows.filter((r) => r.status === 'Verified').length,
+        rejected: rows.filter((r) => r.status === 'Rejected').length,
+        billed: rows.filter((r) => r.status === 'Billed').length
+      }
+    }
+  });
+}));
+
+// GET /api/project-management/projects/:id/check-requests/:crId
+router.get('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await populateCheckRequest(
+    CheckRequest.findOne({ _id: req.params.crId, project: req.params.id })
+  ).lean();
+  if (!cr) return notFound(res, 'Check Request');
+
+  res.json({ success: true, data: cr });
+}));
+
+// POST /api/project-management/projects/:id/check-requests
+router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const project = await ConstructionProject.findById(req.params.id).lean();
+  if (!project) return notFound(res, 'Project');
+  if (!project.parentProject) {
+    return badRequest(res, 'Check Requests are created on Sub Projects only');
+  }
+
+  const { title, contractor, task, items = [], notes } = req.body;
+  if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
+
+  const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
+    req.params.id,
+    project.parentProject,
+    items
+  );
+  if (!builtItems.length) {
+    return badRequest(res, 'Add at least one BOQ line with claimed quantity');
+  }
+
+  const cr = await CheckRequest.create({
+    project: req.params.id,
+    masterProject: project.parentProject,
+    title: String(title).trim(),
+    contractor: contractor && isValidId(contractor) ? contractor : null,
+    task: task && isValidId(task) ? task : null,
+    items: builtItems,
+    claimedTotal,
+    verifiedTotal: 0,
+    notes: notes || '',
+    status: 'Draft',
+    createdBy: req.user?._id,
+    updatedBy: req.user?._id
+  });
+
+  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
+  res.status(201).json({ success: true, message: 'Check Request created', data: populated });
+}));
+
+// PUT /api/project-management/projects/:id/check-requests/:crId
+router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (!['Draft', 'Rejected'].includes(cr.status)) {
+    return badRequest(res, 'Only Draft or Rejected Check Requests can be edited');
+  }
+
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const { title, contractor, task, items, notes } = req.body;
+
+  if (title !== undefined) {
+    if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
+    cr.title = String(title).trim();
+  }
+  if (contractor !== undefined) {
+    cr.contractor = contractor && isValidId(contractor) ? contractor : null;
+  }
+  if (task !== undefined) {
+    cr.task = task && isValidId(task) ? task : null;
+  }
+  if (notes !== undefined) cr.notes = notes || '';
+
+  if (Array.isArray(items)) {
+    const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
+      req.params.id,
+      project?.parentProject,
+      items
+    );
+    if (!builtItems.length) {
+      return badRequest(res, 'Add at least one BOQ line with claimed quantity');
+    }
+    cr.items = builtItems;
+    cr.claimedTotal = claimedTotal;
+    cr.verifiedTotal = 0;
+  }
+
+  if (cr.status === 'Rejected') {
+    cr.status = 'Draft';
+    cr.rejectionReason = '';
+    cr.rejectedAt = undefined;
+    cr.rejectedBy = undefined;
+  }
+
+  cr.updatedBy = req.user?._id;
+  await cr.save();
+
+  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
+  res.json({ success: true, message: 'Check Request updated', data: populated });
+}));
+
+// POST submit
+router.post('/projects/:id/check-requests/:crId/submit', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (!['Draft', 'Rejected'].includes(cr.status)) {
+    return badRequest(res, 'Only Draft or Rejected Check Requests can be submitted');
+  }
+  if (!cr.items?.length) return badRequest(res, 'Check Request has no items');
+
+  cr.status = 'Submitted';
+  cr.submittedAt = new Date();
+  cr.submittedBy = req.user?._id;
+  cr.rejectionReason = '';
+  cr.updatedBy = req.user?._id;
+  await cr.save();
+
+  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
+  res.json({ success: true, message: 'Check Request submitted for verification', data: populated });
+}));
+
+// POST verify (physical verification of Check Request)
+router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (cr.status !== 'Submitted') {
+    return badRequest(res, 'Only Submitted Check Requests can be verified');
+  }
+
+  const {
+    verifiedBy = '',
+    verificationNotes = '',
+    verificationPhotoUrl = '',
+    items: verifiedRows = []
+  } = req.body;
+
+  if (!String(verifiedBy).trim()) {
+    return badRequest(res, 'Verified by (auditor name) is required');
+  }
+
+  const overrideMap = new Map();
+  (Array.isArray(verifiedRows) ? verifiedRows : []).forEach((row) => {
+    const key = String(row.boqItemId || row.boqItem || row._id || '');
+    if (key) overrideMap.set(key, row);
+  });
+
+  let verifiedTotal = 0;
+  for (const item of cr.items) {
+    const key = String(item.boqItem);
+    const override = overrideMap.get(key) || overrideMap.get(String(item._id));
+    let verifiedQuantity = override?.verifiedQuantity !== undefined
+      ? Number(override.verifiedQuantity) || 0
+      : Number(item.claimedQuantity) || 0;
+
+    if (verifiedQuantity < 0) verifiedQuantity = 0;
+    if (verifiedQuantity > Number(item.claimedQuantity)) {
+      return badRequest(
+        res,
+        `Verified qty for "${item.title || item.description}" cannot exceed claimed qty (${item.claimedQuantity} ${item.unit})`
+      );
+    }
+
+    // Cap against remaining BOQ estimate after already-verified (other CRs) + billed
+    const boq = await BOQItem.findById(item.boqItem).select('estimatedQuantity title description unit').lean();
+    if (boq) {
+      const otherVerified = await CheckRequest.aggregate([
+        {
+          $match: {
+            project: new mongoose.Types.ObjectId(req.params.id),
+            _id: { $ne: cr._id },
+            status: { $in: ['Verified', 'Billed', 'Submitted'] }
+          }
+        },
+        { $unwind: '$items' },
+        { $match: { 'items.boqItem': boq._id } },
+        {
+          $group: {
+            _id: null,
+            qty: {
+              $sum: {
+                $cond: [
+                  { $in: ['$status', ['Verified', 'Billed']] },
+                  '$items.verifiedQuantity',
+                  '$items.claimedQuantity'
+                ]
+              }
+            }
+          }
+        }
+      ]);
+      const reserved = Number(otherVerified[0]?.qty) || 0;
+      const remainingEst = Math.max(0, (Number(boq.estimatedQuantity) || 0) - reserved);
+      if (verifiedQuantity > remainingEst) {
+        return badRequest(
+          res,
+          `Verified qty for "${boq.title || boq.description}" exceeds remaining BOQ quantity (${remainingEst} ${boq.unit})`
+        );
+      }
+    }
+
+    item.verifiedQuantity = verifiedQuantity;
+    item.verifiedAmount = verifiedQuantity * (Number(item.unitPrice) || 0);
+    verifiedTotal += item.verifiedAmount;
+  }
+
+  if (verifiedTotal <= 0 && !cr.items.some((i) => (Number(i.verifiedQuantity) || 0) > 0)) {
+    return badRequest(res, 'At least one line must have verified quantity greater than zero');
+  }
+
+  cr.status = 'Verified';
+  cr.verifiedTotal = verifiedTotal;
+  cr.verifiedAt = new Date();
+  cr.verifiedBy = String(verifiedBy).trim();
+  cr.verifiedByUser = req.user?._id;
+  cr.verificationNotes = verificationNotes || '';
+  cr.verificationPhotoUrl = verificationPhotoUrl || '';
+  cr.updatedBy = req.user?._id;
+  await cr.save();
+
+  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
+  res.json({ success: true, message: 'Check Request verified — ready for IPC / expense', data: populated });
+}));
+
+// POST reject
+router.post('/projects/:id/check-requests/:crId/reject', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (cr.status !== 'Submitted') {
+    return badRequest(res, 'Only Submitted Check Requests can be rejected');
+  }
+
+  const reason = String(req.body?.rejectionReason || '').trim();
+  if (!reason) return badRequest(res, 'Rejection reason is required');
+
+  cr.status = 'Rejected';
+  cr.rejectionReason = reason;
+  cr.rejectedAt = new Date();
+  cr.rejectedBy = req.user?._id;
+  cr.updatedBy = req.user?._id;
+  await cr.save();
+
+  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
+  res.json({ success: true, message: 'Check Request rejected', data: populated });
+}));
+
+// DELETE / cancel
+router.delete('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (['Billed'].includes(cr.status)) {
+    return badRequest(res, 'Billed Check Requests cannot be cancelled');
+  }
+  if (cr.status === 'Verified' && cr.items.some((i) => (Number(i.billedQuantity) || 0) > 0)) {
+    return badRequest(res, 'Check Request already partially billed — cannot cancel');
+  }
+
+  cr.status = 'Cancelled';
+  cr.updatedBy = req.user?._id;
+  await cr.save();
+
+  res.json({ success: true, message: 'Check Request cancelled' });
+}));
+
+// ─── SUBLET CONTRACTS (sublet BOQ lines to subcontractors) ───────────────────
+
+const populateSublet = (query) =>
+  query
+    .populate('contractor', 'name email phone vendorType vendorCategory supplierId')
+    .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractor')
+    .populate('createdBy', 'firstName lastName')
+    .populate('activatedBy', 'firstName lastName');
+
+const getAlreadySublettedQty = async (projectId, boqItemId, excludeContractId = null) => {
+  const match = {
+    project: new mongoose.Types.ObjectId(projectId),
+    status: { $in: ['Draft', 'Active', 'Completed'] }
+  };
+  if (excludeContractId) {
+    match._id = { $ne: new mongoose.Types.ObjectId(excludeContractId) };
+  }
+  const rows = await SubletContract.aggregate([
+    { $match: match },
+    { $unwind: '$items' },
+    { $match: { 'items.boqItem': new mongoose.Types.ObjectId(boqItemId) } },
+    { $group: { _id: null, qty: { $sum: '$items.quantity' } } }
+  ]);
+  return Number(rows[0]?.qty) || 0;
+};
+
+const buildSubletItems = async (projectId, masterProjectId, rawItems = [], excludeContractId = null) => {
+  const items = [];
+  let totalAmount = 0;
+
+  for (const row of rawItems) {
+    const boqId = row.boqItemId || row.boqItem;
+    if (!boqId || !isValidId(boqId)) continue;
+
+    const searchCriteria = masterProjectId
+      ? { _id: boqId, $or: [{ project: projectId }, { project: masterProjectId }] }
+      : { _id: boqId, project: projectId };
+
+    const boq = await BOQItem.findOne(searchCriteria).lean();
+    if (!boq) continue;
+
+    const quantity = Math.max(0, Number(row.quantity) || 0);
+    if (quantity <= 0) continue;
+
+    const already = await getAlreadySublettedQty(projectId, boq._id, excludeContractId);
+    const ceiling = Number(boq.estimatedQuantity) || 0;
+    if (already + quantity > ceiling + 0.0001) {
+      const err = new Error(
+        `Cannot sublet ${quantity} ${boq.unit} of "${boq.title || boq.description}". ` +
+        `Already subletted ${already}, BOQ qty ${ceiling}, remaining ${Math.max(0, ceiling - already)}.`
+      );
+      err.statusCode = 400;
+      throw err;
+    }
+
+    const unitPrice = Number(row.unitPrice) || Number(boq.contractorUnitPrice) || Number(boq.estimatedUnitPrice) || 0;
+    const amount = quantity * unitPrice;
+    totalAmount += amount;
+
+    items.push({
+      boqItem: boq._id,
+      title: boq.title || '',
+      description: boq.description || '',
+      unit: boq.unit || '',
+      quantity,
+      unitPrice,
+      amount,
+      notes: row.notes || ''
+    });
+  }
+
+  return { items, totalAmount };
+};
+
+const syncSubletToBoq = async (contract, projectId) => {
+  for (const line of contract.items) {
+    const boq = await BOQItem.findById(line.boqItem);
+    if (!boq) continue;
+
+    boq.contractor = contract.contractor;
+    boq.contractorUnitPrice = Number(line.unitPrice) || boq.contractorUnitPrice || 0;
+    boq.subProject = projectId;
+
+    // Upsert allocation row for this sub + contractor
+    const existing = (boq.allocations || []).find(
+      (a) =>
+        String(a.subProject || '') === String(projectId) &&
+        String(a.contractor || '') === String(contract.contractor)
+    );
+    if (existing) {
+      existing.allocatedQuantity = Number(line.quantity) || 0;
+      existing.contractorUnitPrice = Number(line.unitPrice) || 0;
+      existing.notes = `Sublet ${contract.contractNumber}`;
+    } else {
+      boq.allocations = boq.allocations || [];
+      boq.allocations.push({
+        subProject: projectId,
+        contractor: contract.contractor,
+        allocatedQuantity: Number(line.quantity) || 0,
+        contractorUnitPrice: Number(line.unitPrice) || 0,
+        notes: `Sublet ${contract.contractNumber}`
+      });
+    }
+    await boq.save();
+  }
+};
+
+// GET /api/project-management/projects/:id/sublet-contracts
+router.get('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const filter = { project: req.params.id };
+  if (req.query.status) filter.status = req.query.status;
+  if (req.query.contractor && isValidId(req.query.contractor)) {
+    filter.contractor = req.query.contractor;
+  }
+
+  const contracts = await populateSublet(
+    SubletContract.find(filter).sort({ createdAt: -1 })
+  ).lean();
+
+  res.json({
+    success: true,
+    data: {
+      contracts,
+      counts: {
+        draft: contracts.filter((c) => c.status === 'Draft').length,
+        active: contracts.filter((c) => c.status === 'Active').length,
+        completed: contracts.filter((c) => c.status === 'Completed').length,
+        cancelled: contracts.filter((c) => c.status === 'Cancelled').length
+      }
+    }
+  });
+}));
+
+// GET one
+router.get('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+
+  const contract = await populateSublet(
+    SubletContract.findOne({ _id: req.params.scId, project: req.params.id })
+  ).lean();
+  if (!contract) return notFound(res, 'Sublet Contract');
+
+  res.json({ success: true, data: contract });
+}));
+
+// POST create
+router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+
+  const project = await ConstructionProject.findById(req.params.id)
+    .populate('parentProject', 'name projectNumber society sector')
+    .lean();
+  if (!project) return notFound(res, 'Project');
+  if (!project.parentProject) {
+    return badRequest(res, 'Sublet Contracts are created on Sub Projects only');
+  }
+
+  const masterProjectId = project.parentProject._id || project.parentProject;
+  const mainProjectName = project.parentProject.name || '';
+  const subProjectName = project.name || '';
+  const sector = project.sector || project.parentProject.sector || '';
+  const society = project.society || project.parentProject.society || '';
+
+  const { title, contractor, items = [], notes, startDate, endDate, activate } = req.body;
+  if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
+  if (!contractor || !isValidId(contractor)) return badRequest(res, 'Subcontractor is required');
+
+  let built;
+  try {
+    built = await buildSubletItems(req.params.id, masterProjectId, items);
+  } catch (err) {
+    if (err.statusCode === 400) return badRequest(res, err.message);
+    throw err;
+  }
+  if (!built.items.length) {
+    return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
+  }
+
+  const contract = await SubletContract.create({
+    project: req.params.id,
+    masterProject: masterProjectId,
+    mainProjectName,
+    subProjectName,
+    sector,
+    society,
+    title: String(title).trim(),
+    contractor,
+    items: built.items,
+    totalAmount: built.totalAmount,
+    notes: notes || '',
+    startDate: startDate ? new Date(startDate) : undefined,
+    endDate: endDate ? new Date(endDate) : undefined,
+    status: 'Draft',
+    createdBy: req.user?._id,
+    updatedBy: req.user?._id
+  });
+
+  if (activate) {
+    contract.status = 'Active';
+    contract.activatedAt = new Date();
+    contract.activatedBy = req.user?._id;
+    await contract.save();
+    await syncSubletToBoq(contract, req.params.id);
+  }
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  res.status(201).json({
+    success: true,
+    message: activate ? 'Sublet contract created and activated' : 'Sublet contract created',
+    data: populated
+  });
+}));
+
+// PUT update (Draft only)
+router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status !== 'Draft') {
+    return badRequest(res, 'Only Draft sublet contracts can be edited');
+  }
+
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const { title, contractor, items, notes, startDate, endDate } = req.body;
+
+  if (title !== undefined) {
+    if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
+    contract.title = String(title).trim();
+  }
+  if (contractor !== undefined) {
+    if (!contractor || !isValidId(contractor)) return badRequest(res, 'Subcontractor is required');
+    contract.contractor = contractor;
+  }
+  if (notes !== undefined) contract.notes = notes || '';
+  if (startDate !== undefined) contract.startDate = startDate ? new Date(startDate) : undefined;
+  if (endDate !== undefined) contract.endDate = endDate ? new Date(endDate) : undefined;
+
+  if (Array.isArray(items)) {
+    let built;
+    try {
+      built = await buildSubletItems(
+        req.params.id,
+        project?.parentProject,
+        items,
+        contract._id
+      );
+    } catch (err) {
+      if (err.statusCode === 400) return badRequest(res, err.message);
+      throw err;
+    }
+    if (!built.items.length) {
+      return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
+    }
+    contract.items = built.items;
+    contract.totalAmount = built.totalAmount;
+  }
+
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  res.json({ success: true, message: 'Sublet contract updated', data: populated });
+}));
+
+// POST activate — sync BOQ contractor assignment
+router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status !== 'Draft') {
+    return badRequest(res, 'Only Draft contracts can be activated');
+  }
+  if (!contract.items?.length) return badRequest(res, 'Contract has no items');
+
+  // Re-validate quantities against other contracts
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  try {
+    await buildSubletItems(
+      req.params.id,
+      project?.parentProject,
+      contract.items.map((i) => ({
+        boqItemId: i.boqItem,
+        quantity: i.quantity,
+        unitPrice: i.unitPrice
+      })),
+      contract._id
+    );
+  } catch (err) {
+    if (err.statusCode === 400) return badRequest(res, err.message);
+    throw err;
+  }
+
+  contract.status = 'Active';
+  contract.activatedAt = new Date();
+  contract.activatedBy = req.user?._id;
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+  await syncSubletToBoq(contract, req.params.id);
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  res.json({
+    success: true,
+    message: 'Sublet contract activated — BOQ lines assigned to subcontractor',
+    data: populated
+  });
+}));
+
+// POST complete
+router.post('/projects/:id/sublet-contracts/:scId/complete', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status !== 'Active') {
+    return badRequest(res, 'Only Active contracts can be completed');
+  }
+
+  contract.status = 'Completed';
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  res.json({ success: true, message: 'Sublet contract marked completed', data: populated });
+}));
+
+// DELETE cancel
+router.delete('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status === 'Completed') {
+    return badRequest(res, 'Completed contracts cannot be cancelled');
+  }
+
+  contract.status = 'Cancelled';
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+
+  res.json({ success: true, message: 'Sublet contract cancelled' });
 }));
 
 module.exports = router;
