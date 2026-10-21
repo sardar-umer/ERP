@@ -420,6 +420,14 @@ export default function BankReconciliation() {
         setError('Please enter a valid As of Date.');
         return;
       }
+      if (!isValidYmd(fromDate)) {
+        setError('Please enter a valid Date From (same window as Trial Balance).');
+        return;
+      }
+      if (fromDate > asOfDate) {
+        setError('Date From cannot be after As of Date.');
+        return;
+      }
     } else if (scope === 'period') {
       if (!isValidYmd(fromDate) || !isValidYmd(toDate)) {
         setError('Please enter valid Date From / Date To.');
@@ -569,11 +577,15 @@ export default function BankReconciliation() {
 
   const openClearanceDialog = (txn) => {
     const isCleared = txn?.clearanceStatus === 'cleared';
+    const key = rowKey(txn);
     setClearanceDialog({
       open: true,
       transaction: txn,
       status: isCleared ? 'cleared' : (txn?.clearanceStatus || 'pending'),
-      clearedAtDate: isCleared && txn?.clearingDate ? clearedAtToYmd(txn.clearingDate) : new Date().toISOString().split('T')[0]
+      // Blank by default — only use an existing clear date or a date the user already picked on the row
+      clearedAtDate:
+        (isCleared && txn?.clearingDate ? clearedAtToYmd(txn.clearingDate) : '')
+        || (rowClearDates[key] || '')
     });
   };
 
@@ -610,10 +622,11 @@ export default function BankReconciliation() {
   const handleDirectClear = async (txn) => {
     if (!txn?._id) return;
     const key = rowKey(txn);
-    const selectedDate = rowClearDates[key] ?? (txn.clearingDate ? clearedAtToYmd(txn.clearingDate) : (filters.asOfDate || new Date().toISOString().split('T')[0]));
+    // Clearing date must be chosen explicitly — never auto-fill today / As of
+    const selectedDate = (rowClearDates[key] || '').trim();
 
-    if (!selectedDate) {
-      setError('Please provide a valid clearing date.');
+    if (!isValidYmd(selectedDate)) {
+      setError('Please select a Clearing Date for this row before clearing.');
       return;
     }
 
@@ -659,9 +672,9 @@ export default function BankReconciliation() {
       setError('Select at least one unpresented record.');
       return;
     }
-    const ymd = (bulkClearDate || filters.asOfDate || '').trim();
+    const ymd = String(bulkClearDate || '').trim();
     if (!isValidYmd(ymd)) {
-      setError('Please select a clearing date for the selected records.');
+      setError('Please select a Clearing Date (bulk) before clearing selected records.');
       return;
     }
 
@@ -800,7 +813,7 @@ export default function BankReconciliation() {
       {/* Main Filter & Parameters Bar */}
       <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={6}>
+          <Grid item xs={12} md={4}>
             <FormControl fullWidth size="small">
               <InputLabel>Account Code / Bank Account</InputLabel>
               <Select
@@ -820,7 +833,31 @@ export default function BankReconciliation() {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={12} sm={6} md={2}>
+            <TextField
+              fullWidth
+              label="From Date"
+              type="date"
+              size="small"
+              value={filters.fromDate}
+              onChange={(e) => {
+                const fromDate = e.target.value;
+                setFilters((prev) => ({
+                  ...prev,
+                  fromDate,
+                  toDate: prev.toDate && fromDate && prev.toDate < fromDate ? fromDate : prev.toDate
+                }));
+              }}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter') {
+                  e.preventDefault();
+                  load('unpresented');
+                }
+              }}
+              InputLabelProps={{ shrink: true }}
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={2}>
             <TextField
               fullWidth
               label="As of Date"
@@ -840,10 +877,9 @@ export default function BankReconciliation() {
                 }
               }}
               InputLabelProps={{ shrink: true }}
-              helperText="Then click Generate — Unpresented / Uncleared only"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={3}>
+          <Grid item xs={12} sm={6} md={4}>
             <Button
               fullWidth
               variant="contained"
@@ -967,9 +1003,10 @@ export default function BankReconciliation() {
                     label="Clearing Date (bulk)"
                     type="date"
                     size="small"
-                    value={bulkClearDate || filters.asOfDate || ''}
+                    value={bulkClearDate || ''}
                     onChange={(e) => setBulkClearDate(e.target.value)}
                     InputLabelProps={{ shrink: true }}
+                    placeholder="Select date"
                     sx={{ width: { xs: '100%', sm: 180 } }}
                   />
                   <Button
@@ -977,7 +1014,7 @@ export default function BankReconciliation() {
                     color="success"
                     size="small"
                     startIcon={bulkClearing ? <CircularProgress size={16} color="inherit" /> : <ReconcileIcon />}
-                    disabled={!selectedUnpresented.size || bulkClearing}
+                    disabled={!selectedUnpresented.size || bulkClearing || !isValidYmd(bulkClearDate)}
                     onClick={handleBulkClearSelected}
                     sx={{ whiteSpace: 'nowrap' }}
                   >
@@ -1043,7 +1080,9 @@ export default function BankReconciliation() {
                       const isSigned = t.signedDocumentStatus === 'signed';
                       const isSelected = selectedUnpresented.has(key);
                       const isDuplicate = duplicateUnpresentedKeys.has(key);
-                      const defaultClearDate = rowClearDates[key] ?? (t.clearingDate ? clearedAtToYmd(t.clearingDate) : (filters.asOfDate || new Date().toISOString().split('T')[0]));
+                      // Blank until user picks a date (do not prefill today / As of)
+                      const defaultClearDate = rowClearDates[key] ?? '';
+                      const hasClearDate = isValidYmd(defaultClearDate);
                       return (
                         <TableRow key={key} hover selected={isSelected} sx={RECON_DATA_ROW_SX}>
                           <TableCell padding="checkbox">
@@ -1169,12 +1208,12 @@ export default function BankReconciliation() {
                           </TableCell>
                           <TableCell align="center" sx={UP_COL.action}>
                             <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                              <Tooltip title="Clear cheque & reconcile (removes from unpresented)">
+                              <Tooltip title={hasClearDate ? 'Clear cheque & reconcile (removes from unpresented)' : 'Select a Clearing Date first'}>
                                 <span>
                                   <IconButton
                                     size="small"
                                     color="success"
-                                    disabled={Boolean(clearingLoading[key])}
+                                    disabled={Boolean(clearingLoading[key]) || !hasClearDate}
                                     onClick={() => handleDirectClear(t)}
                                     sx={{
                                       bgcolor: 'rgba(46, 125, 50, 0.1)',

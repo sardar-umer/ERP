@@ -7809,51 +7809,47 @@ router.get('/reports/customer-statement/:customerName',
 router.get('/reports/bank-reconciliation',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
+    /**
+     * Unpresented = Trial Balance account ledger for the selected bank (same engine as
+     * GET /general-ledger/account/:id) minus rows cleared as-of the As of Date.
+     * Period Activity still uses clearance dates within From/To.
+     */
     const { accountId, asOfDate, fromDate, toDate } = req.query;
+    if (!accountId) {
+      return res.status(400).json({ success: false, message: 'Bank account is required' });
+    }
+
     let asOf = new Date();
     if (asOfDate) {
       asOf = new Date(asOfDate);
+      if (Number.isNaN(asOf.getTime())) {
+        return res.status(400).json({ success: false, message: 'Invalid As of Date' });
+      }
+      asOf.setHours(23, 59, 59, 999);
+    } else {
       asOf.setHours(23, 59, 59, 999);
     }
 
-    let periodStartDate = fromDate ? new Date(fromDate) : new Date(new Date(asOf).getFullYear(), new Date(asOf).getMonth(), 1);
+    let periodStartDate = fromDate
+      ? new Date(fromDate)
+      : new Date(asOf.getFullYear(), asOf.getMonth(), 1);
     periodStartDate.setHours(0, 0, 0, 0);
 
     let periodEndDate = toDate ? new Date(toDate) : new Date(asOf);
     periodEndDate.setHours(23, 59, 59, 999);
 
-    const maxQueryDate = new Date(Math.max(asOf.getTime(), periodEndDate.getTime()));
-
-    const { q, jeMatch } = await financeScope(req);
-    const mongoose = require('mongoose');
-
-    // 1. Fetch Chart of Accounts Bank/Cash Accounts
-    let targetAccountIds = [];
-    let selectedAccountObj = null;
-
-    if (accountId) {
-      selectedAccountObj = await Account.findById(accountId).lean();
-      if (selectedAccountObj) {
-        targetAccountIds = [selectedAccountObj._id];
-      } else {
-        targetAccountIds = [new mongoose.Types.ObjectId(accountId)];
-      }
-    } else {
-      const defaultBankAccounts = await Account.find(
-        q({
-          $or: [
-            { type: 'Asset', category: { $regex: /cash|bank|current/i } },
-            { category: { $regex: /cash|bank/i } },
-            { detailType: { $regex: /cash|bank/i } },
-            { accountCode: 'BANK' },
-            { accountCode: 'CASH' }
-          ]
-        })
-      ).sort({ accountNumber: 1 }).lean();
-      targetAccountIds = defaultBankAccounts.map((a) => a._id);
+    const { q, companyId } = await financeScope(req);
+    const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
+    if (!OBJECT_ID_RE.test(String(accountId))) {
+      return res.status(400).json({ success: false, message: 'Invalid bank account id' });
     }
 
-    // Also fetch all available accounts for the selector dropdown
+    const selectedAccountObj = await Account.findById(accountId).lean();
+    if (!selectedAccountObj) {
+      return res.status(404).json({ success: false, message: 'Bank account not found' });
+    }
+
+    // Dropdown: bank/cash COA for this company (exclude later on client if needed)
     const coaBankAccounts = await Account.find(
       q({
         $or: [
@@ -7866,35 +7862,6 @@ router.get('/reports/bank-reconciliation',
       })
     ).sort({ accountNumber: 1 }).lean();
 
-    // 2. Fetch General Ledger & Journal Entries for selected/all Bank accounts up to maxQueryDate
-    // Apply company scope via q() so only this company's GL entries are fetched
-    const allGlEntriesUpToAsOf = await GeneralLedger.find(q({
-      date: { $lte: maxQueryDate },
-      account: { $in: targetAccountIds }
-    }))
-      .populate('account', 'name accountNumber category detailType')
-      .populate({
-        path: 'journalEntry',
-        select: 'status isReconciled reconciledAt clearanceStatus clearedAt signedDocumentStatus signedDocumentAt signedBySignatory attachments entryNumber reference description lines date'
-      })
-      .sort({ date: 1, entryNumber: 1 })
-      .lean();
-
-    const postedGlEntries = allGlEntriesUpToAsOf.filter((e) => e.status !== 'cancelled' && e.status !== 'reversed');
-
-    // Also query Journal Entries directly with line accounts matching target bank account(s)
-    // Apply company scope via jeMatch so only this company's JEs are fetched
-    const jeMatchFilter = {
-      ...jeMatch,
-      date: { $lte: maxQueryDate },
-      status: { $in: ['posted', 'draft'] },
-      'lines.account': { $in: targetAccountIds }
-    };
-    const journalEntries = await JournalEntry.find(jeMatchFilter)
-      .populate('lines.account', 'name accountNumber category detailType')
-      .sort({ date: 1, entryNumber: 1 })
-      .lean();
-
     const cleanReference = (ref, vrNo) => {
       let r = String(ref || '').trim();
       if (!r || r === '—') return '—';
@@ -7904,180 +7871,208 @@ router.get('/reports/bank-reconciliation',
       return r;
     };
 
-    // Map all unique transactions (prioritize GL, then fill missing JE bank lines)
-    // Track covered fingerprints so clearing Dr of CV-002 does not hide its Cr
-    // when Cr still has no GL row.
-    const coveredBankLineKeys = new Set();
-    const allBankTxns = [];
-    const moneyKey = (n) => String(Math.round((Number(n) || 0) * 100));
-    const bankLineFingerprint = (jeId, accId, debit, credit) =>
-      `${String(jeId)}|${String(accId)}|${moneyKey(debit)}|${moneyKey(credit)}`;
-
-    postedGlEntries.forEach((gle) => {
-      const je = gle.journalEntry || {};
-      const jeId = je._id ? String(je._id) : '';
-      const accId = gle.account?._id ? String(gle.account._id) : String(gle.account || '');
-      const debit = Number(gle.debit) || 0;
-      const credit = Number(gle.credit) || 0;
-      if (jeId && accId) {
-        coveredBankLineKeys.add(bankLineFingerprint(jeId, accId, debit, credit));
-      }
-      const isCredit = credit > 0;
-      const amt = isCredit ? credit : debit;
-      // Per-GL clearance only — never inherit parent JE status (one bank hit can have
-      // multiple book lines; clearing one must not hide/clear siblings).
-      // Historical as-of: only treat as cleared if clearance date is on/before asOf,
-      // otherwise later-month clears rewrite prior month statement balances.
-      // Legacy rows marked cleared/reconciled without clearedAt used to stay in
-      // Unpresented forever — fall back to book date so reconciled leaves the list.
+    const resolveClearance = (gle, asOfTime) => {
       const markedCleared = Boolean(gle.clearanceStatus === 'cleared' || gle.isReconciled);
       const clearDateRaw = gle.clearedAt || gle.reconciledAt || null;
       const clearDate = clearDateRaw || (markedCleared && gle.date ? gle.date : null);
       const clearedAtTime = clearDate ? new Date(clearDate).getTime() : NaN;
-      // As-of clearance: drives Unpresented only. Period Activity uses clearingDate + From/To.
-      const isCleared = Boolean(
+      const isClearedAsOf = Boolean(
         markedCleared &&
         !Number.isNaN(clearedAtTime) &&
-        clearedAtTime <= asOf.getTime()
+        clearedAtTime <= asOfTime
       );
+      return { clearDate, isClearedAsOf };
+    };
 
+    const getClearingSortTime = (t) => {
+      if (t.clearingDate) {
+        const cd = new Date(t.clearingDate).getTime();
+        if (!Number.isNaN(cd)) return cd;
+      }
+      if (t.date) {
+        const d = new Date(t.date).getTime();
+        if (!Number.isNaN(d)) return d;
+      }
+      return 0;
+    };
+
+    // ── Same source as Trial Balance ledger drill-down ──────────────────────
+    // Window = From (periodStart) → As of — identical to TB ledger params
+    // (TrialBalance.js: startDate=fromDate, endDate=asOfDate).
+    const ledgerFrom = new Date(periodStartDate);
+    ledgerFrom.setHours(0, 0, 0, 0);
+    const ledgerAsOf = await GeneralLedger.getAccountLedger(
+      accountId,
+      ledgerFrom,
+      asOf,
+      companyId || null
+    );
+    const ledgerEntries = Array.isArray(ledgerAsOf?.entries) ? ledgerAsOf.entries : [];
+    // Book balance as-of = opening before From + period movement (TB closing)
+    const netGlBalance = Math.round((Number(ledgerAsOf?.closingBalance) || 0) * 100) / 100;
+
+    // Enrich JE extras needed by BR UI (attachments / signed) — not loaded by TB populate
+    const jeIds = [
+      ...new Set(
+        ledgerEntries
+          .map((e) => String(e.journalEntry?._id || e.journalEntry || ''))
+          .filter((id) => OBJECT_ID_RE.test(id))
+      )
+    ];
+    const jeExtraMap = new Map();
+    if (jeIds.length) {
+      const jes = await JournalEntry.find({ _id: { $in: jeIds } })
+        .select('attachments signedDocumentStatus signedDocumentAt signedBySignatory status')
+        .lean();
+      jes.forEach((je) => jeExtraMap.set(String(je._id), je));
+    }
+
+    // Synthetic JE-fallback rows may lack clearance — load real GL clearance by ObjectId
+    const realGlIds = ledgerEntries
+      .map((e) => String(e._id || ''))
+      .filter((id) => OBJECT_ID_RE.test(id));
+    const clearanceById = new Map();
+    if (realGlIds.length) {
+      const clearanceRows = await GeneralLedger.find({ _id: { $in: realGlIds } })
+        .select('_id clearanceStatus clearedAt isReconciled reconciledAt date')
+        .lean();
+      clearanceRows.forEach((r) => clearanceById.set(String(r._id), r));
+    }
+
+    const asOfTime = asOf.getTime();
+    const mapLedgerRowToTxn = (gle) => {
+      const je = gle.journalEntry && typeof gle.journalEntry === 'object' ? gle.journalEntry : {};
+      const jeId = je._id ? String(je._id) : (gle.journalEntry ? String(gle.journalEntry) : '');
+      const jeExtra = jeId ? jeExtraMap.get(jeId) || {} : {};
+      const acc = gle.account && typeof gle.account === 'object' ? gle.account : selectedAccountObj;
+      const debit = Number(gle.debit) || 0;
+      const credit = Number(gle.credit) || 0;
+      const isCredit = credit > 0;
+      const amt = isCredit ? credit : debit;
       const vrNo = gle.entryNumber || je.entryNumber || '—';
+      const glId = String(gle._id || '');
+      const clearanceSrc = clearanceById.get(glId) || gle;
+      const { clearDate, isClearedAsOf } = resolveClearance(clearanceSrc, asOfTime);
 
-      allBankTxns.push({
-        _id: String(gle._id),
-        journalEntryId: jeId || null,
-        accountId: accId,
+      return {
+        _id: glId,
+        journalEntryId: OBJECT_ID_RE.test(jeId) ? jeId : null,
+        accountId: String(acc?._id || accountId),
         date: gle.date,
-        vrNo: vrNo,
+        vrNo,
+        narration: gle.description || je.description || acc?.name || 'Bank Transaction',
+        reference: cleanReference(gle.reference || je.reference, vrNo),
+        debit,
+        credit,
+        amount: amt,
+        type: isCredit ? 'Cr' : 'Dr',
+        isCleared: isClearedAsOf,
+        clearanceStatus: isClearedAsOf ? 'cleared' : (clearanceSrc.clearanceStatus || 'pending'),
+        clearingDate: clearDate,
+        attachments: jeExtra.attachments || [],
+        signedDocumentStatus: jeExtra.signedDocumentStatus || 'not_signed',
+        signedDocumentAt: jeExtra.signedDocumentAt || null,
+        signedBySignatory: jeExtra.signedBySignatory || null,
+        status: jeExtra.status || gle.status || 'posted',
+        accountName: acc?.name || selectedAccountObj.name || 'Bank Account',
+        accountNumber: acc?.accountNumber || selectedAccountObj.accountNumber || ''
+      };
+    };
+
+    const allLedgerTxns = ledgerEntries.map(mapLedgerRowToTxn);
+
+    // Unpresented = TB ledger lines for this bank that are still uncleared as-of
+    const unpresentedTxns = allLedgerTxns.filter((t) => !t.isCleared);
+    unpresentedTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+    const unpresentedTotal = unpresentedTxns.reduce(
+      (s, t) => s + (t.type === 'Cr' ? -t.amount : t.amount),
+      0
+    );
+
+    let reconciledUpTo = new Date(asOf);
+    if (unpresentedTxns.length > 0) {
+      const oldestUnpresentedDate = new Date(
+        Math.min(...unpresentedTxns.map((t) => new Date(t.date).getTime()))
+      );
+      reconciledUpTo = new Date(oldestUnpresentedDate.getTime() - 24 * 60 * 60 * 1000);
+    } else if (allLedgerTxns.length > 0) {
+      const latestTxnDate = new Date(
+        Math.max(...allLedgerTxns.map((t) => new Date(t.date).getTime()))
+      );
+      reconciledUpTo = new Date(Math.min(asOf.getTime(), latestTxnDate.getTime()));
+    }
+
+    const bankStatementBalance = netGlBalance - unpresentedTotal;
+
+    // ── Period Activity: cleared GL rows by clearing date (From/To) ─────────
+    // Load clearance-bearing GL for this account up through period end (TB-aligned posted)
+    const clearedGlQuery = {
+      account: accountId,
+      status: 'posted',
+      $or: [
+        { clearanceStatus: 'cleared' },
+        { isReconciled: true }
+      ]
+    };
+    if (companyId) clearedGlQuery.companyId = companyId;
+
+    const clearedGlRows = await GeneralLedger.find(clearedGlQuery)
+      .populate('account', 'name accountNumber')
+      .populate('journalEntry', 'entryNumber reference description attachments signedDocumentStatus signedDocumentAt signedBySignatory status')
+      .sort({ date: 1, entryNumber: 1 })
+      .lean();
+
+    const clearedTxns = clearedGlRows.map((gle) => {
+      const { clearDate } = resolveClearance(gle, Number.MAX_SAFE_INTEGER);
+      const je = gle.journalEntry || {};
+      const debit = Number(gle.debit) || 0;
+      const credit = Number(gle.credit) || 0;
+      const isCredit = credit > 0;
+      const amt = isCredit ? credit : debit;
+      const vrNo = gle.entryNumber || je.entryNumber || '—';
+      return {
+        _id: String(gle._id),
+        journalEntryId: je._id ? String(je._id) : null,
+        accountId: String(gle.account?._id || accountId),
+        date: gle.date,
+        vrNo,
         narration: gle.description || je.description || gle.account?.name || 'Bank Transaction',
         reference: cleanReference(gle.reference || je.reference, vrNo),
         debit,
         credit,
         amount: amt,
         type: isCredit ? 'Cr' : 'Dr',
-        isCleared,
-        clearanceStatus: isCleared ? 'cleared' : (gle.clearanceStatus || 'pending'),
-        // Always expose clear date when known so Period Activity is not gated by As of
+        isCleared: true,
+        clearanceStatus: 'cleared',
         clearingDate: clearDate,
         attachments: je.attachments || [],
         signedDocumentStatus: je.signedDocumentStatus || 'not_signed',
         signedDocumentAt: je.signedDocumentAt || null,
         signedBySignatory: je.signedBySignatory || null,
         status: je.status || gle.status || 'posted',
-        accountName: gle.account?.name || 'Bank Account',
-        accountNumber: gle.account?.accountNumber || ''
-      });
-    });
+        accountName: gle.account?.name || selectedAccountObj.name || 'Bank Account',
+        accountNumber: gle.account?.accountNumber || selectedAccountObj.accountNumber || ''
+      };
+    }).filter((t) => t.clearingDate);
 
-    const targetAccountIdsStr = new Set(targetAccountIds.map((id) => String(id)));
+    const openingClearedTxns = clearedTxns.filter(
+      (t) => new Date(t.clearingDate) < periodStartDate
+    );
+    const openingBalance = openingClearedTxns.reduce(
+      (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
+      0
+    );
 
-    // Add JE bank lines that still have no matching GL (e.g. CV-002 Cr after only Dr was cleared)
-    journalEntries.forEach((je) => {
-      const jeId = String(je._id);
-      (je.lines || []).forEach((line, lineIndex) => {
-        const accId = String(line.account?._id || line.account || '');
-        if (!targetAccountIdsStr.has(accId)) return;
-
-        const debit = Number(line.debit) || 0;
-        const credit = Number(line.credit) || 0;
-        const fp = bankLineFingerprint(jeId, accId, debit, credit);
-        if (coveredBankLineKeys.has(fp)) return;
-        coveredBankLineKeys.add(fp);
-
-        const isCredit = credit > 0;
-        const amt = isCredit ? credit : debit;
-        const vrNo = je.entryNumber || je.reference || '—';
-        const lineKey = `${jeId}-${accId}-${lineIndex}-${isCredit ? 'Cr' : 'Dr'}-${amt}`;
-
-        allBankTxns.push({
-          _id: lineKey,
-          journalEntryId: jeId,
-          accountId: accId,
-          lineIndex,
-          date: je.date,
-          vrNo: vrNo,
-          narration: line.description || je.description || line.account?.name || 'Bank Transaction',
-          reference: cleanReference(je.reference || je.entryNumber, vrNo),
-          debit,
-          credit,
-          amount: amt,
-          type: isCredit ? 'Cr' : 'Dr',
-          isCleared: false,
-          clearanceStatus: 'pending',
-          clearingDate: null,
-          attachments: je.attachments || [],
-          signedDocumentStatus: je.signedDocumentStatus || 'not_signed',
-          signedDocumentAt: je.signedDocumentAt || null,
-          signedBySignatory: je.signedBySignatory || null,
-          status: je.status || 'posted',
-          accountName: line.account?.name || 'Bank Account',
-          accountNumber: line.account?.accountNumber || ''
-        });
-      });
-    });
-
-    // Filter transactions up to asOf date for Section 1
-    const glTxnsUpToAsOf = allBankTxns.filter((txn) => new Date(txn.date) <= asOf);
-    // Book balance from real GL rows only (do not invent JE-only lines into ledger balance)
-    const netGlBalance = postedGlEntries
-      .filter((gle) => new Date(gle.date) <= asOf)
-      .reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0);
-
-    // 3. Unpresented / Uncleared — cleared rows leave this list immediately (per GL line)
-    const unpresentedTxns = [];
-    let unpresentedTotal = 0;
-
-    glTxnsUpToAsOf.forEach((txn) => {
-      if (txn.isCleared) return;
-
-      const signedAmt = txn.type === 'Cr' ? -txn.amount : txn.amount;
-      unpresentedTotal += signedAmt;
-      unpresentedTxns.push(txn);
-    });
-
-    const getClearingSortTime = (t) => {
-      if (t.clearingDate) {
-        const cd = new Date(t.clearingDate).getTime();
-        if (!isNaN(cd)) return cd;
-      }
-      if (t.date) {
-        const d = new Date(t.date).getTime();
-        if (!isNaN(d)) return d;
-      }
-      return 0;
-    };
-
-    unpresentedTxns.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
-
-    // Calculate Reconciled Up To Date
-    let reconciledUpTo = new Date(asOf);
-    if (unpresentedTxns.length > 0) {
-      const oldestUnpresentedDate = new Date(Math.min(...unpresentedTxns.map(t => new Date(t.date).getTime())));
-      reconciledUpTo = new Date(oldestUnpresentedDate.getTime() - 24 * 60 * 60 * 1000);
-    } else if (glTxnsUpToAsOf.length > 0) {
-      const latestTxnDate = new Date(Math.max(...glTxnsUpToAsOf.map(t => new Date(t.date).getTime())));
-      reconciledUpTo = new Date(Math.min(asOf.getTime(), latestTxnDate.getTime()));
-    }
-
-    // Bank Statement Balance = Balance as per Bank Ledger - Unpresented/Uncleared Difference
-    const bankStatementBalance = netGlBalance - unpresentedTotal;
-
-    // 4. Period Activity / Cleared Bank Transactions (Lower Table with Date.From & Date.To)
-    // Scoped only by clearingDate + From/To — not by As of Date.
-    const openingClearedTxns = allBankTxns.filter((t) => {
-      return t.clearingDate && new Date(t.clearingDate) < periodStartDate;
-    });
-    const openingBalance = openingClearedTxns.reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0);
-
-    const periodTransactions = allBankTxns.filter((t) => {
-      if (!t.clearingDate) return false;
+    const periodTransactions = clearedTxns.filter((t) => {
       const cDate = new Date(t.clearingDate);
       return cDate >= periodStartDate && cDate <= periodEndDate;
     });
-
     periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
 
-    const periodNetChange = periodTransactions.reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0);
+    const periodNetChange = periodTransactions.reduce(
+      (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
+      0
+    );
     const statementTotal = openingBalance + periodNetChange;
 
     res.json({
@@ -8087,23 +8082,25 @@ router.get('/reports/bank-reconciliation',
         fromDate: periodStartDate,
         toDate: periodEndDate,
         reconciledUpTo,
-        // Summary
-        glBalance: Math.round(netGlBalance * 100) / 100,
+        source: 'trial-balance-ledger',
+        selectedAccount: {
+          _id: selectedAccountObj._id,
+          accountName: selectedAccountObj.name,
+          accountNumber: selectedAccountObj.accountNumber
+        },
+        glBalance: netGlBalance,
         glBalanceType: netGlBalance >= 0 ? 'Dr' : 'Cr',
         difference: Math.round(unpresentedTotal * 100) / 100,
         differenceType: unpresentedTotal >= 0 ? 'Dr' : 'Cr',
         bankStatementBalance: Math.round(bankStatementBalance * 100) / 100,
         bankStatementBalanceType: bankStatementBalance >= 0 ? 'Dr' : 'Cr',
-        // Upper table (Unpresented / Pending Payments & Receipts)
         unpresentedTransactions: unpresentedTxns,
         unpresentedTotal: Math.round(unpresentedTotal * 100) / 100,
-        // Lower table (Period Activity & Cleared Bank Transactions)
         openingBalance: Math.round(openingBalance * 100) / 100,
         openingBalanceType: openingBalance >= 0 ? 'Dr' : 'Cr',
         periodTransactions,
         statementTotal: Math.round(statementTotal * 100) / 100,
         statementTotalType: statementTotal >= 0 ? 'Dr' : 'Cr',
-        // Account master list
         bankAccounts: coaBankAccounts.map((a) => ({
           _id: a._id,
           accountName: a.name,
