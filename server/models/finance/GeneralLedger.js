@@ -243,7 +243,7 @@ generalLedgerSchema.statics.buildLedgerRowsFromJournalEntries = async function(a
 // Static methods for ledger operations
 /**
  * Net movement (debit - credit) for an account before a date.
- * Prefers GeneralLedger rows; falls back to JournalEntry lines (same as period ledger).
+ * Always JE-dated — same rule as trial-balance-v2 Opening (do not use GL.date).
  */
 generalLedgerSchema.statics.getAccountOpeningBalance = async function(accountId, beforeDate, companyId = null) {
   if (!beforeDate) return 0;
@@ -251,30 +251,6 @@ generalLedgerSchema.statics.getAccountOpeningBalance = async function(accountId,
     ? new mongoose.Types.ObjectId(String(accountId))
     : accountId;
 
-  const glMatch = {
-    account: accOid,
-    status: 'posted',
-    date: { $lt: beforeDate }
-  };
-  if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
-    glMatch.companyId = new mongoose.Types.ObjectId(String(companyId));
-  }
-
-  const glAgg = await this.aggregate([
-    { $match: glMatch },
-    {
-      $group: {
-        _id: null,
-        net: { $sum: { $subtract: [{ $ifNull: ['$debit', 0] }, { $ifNull: ['$credit', 0] }] } },
-        n: { $sum: 1 }
-      }
-    }
-  ]);
-  if (glAgg[0] && (glAgg[0].n || 0) > 0) {
-    return Math.round((Number(glAgg[0].net) || 0) * 100) / 100;
-  }
-
-  // JE fallback (trial-balance aligned)
   const JournalEntry = require('./JournalEntry');
   const jeMatch = {
     status: 'posted',
@@ -301,85 +277,166 @@ generalLedgerSchema.statics.getAccountOpeningBalance = async function(accountId,
   return Math.round((Number(jeAgg[0]?.net) || 0) * 100) / 100;
 };
 
+const moneyEqGl = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 0.02;
+
+/**
+ * Attach real GL row id(s) + clearance onto JE-sourced ledger rows so BR can clear.
+ * Exact debit/credit match preferred; if several installment GLs sum to the JE line, link all.
+ */
+generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(entries, accountId) {
+  if (!Array.isArray(entries) || !entries.length) return entries || [];
+  const accOid = mongoose.Types.ObjectId.isValid(String(accountId))
+    ? new mongoose.Types.ObjectId(String(accountId))
+    : accountId;
+
+  const jeIds = [
+    ...new Set(
+      entries
+        .map((e) => String(e.journalEntry?._id || e.journalEntry || ''))
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    )
+  ];
+  if (!jeIds.length) return entries;
+
+  const glRows = await this.find({
+    account: accOid,
+    status: 'posted',
+    journalEntry: { $in: jeIds }
+  })
+    .select('_id journalEntry debit credit clearanceStatus clearedAt isReconciled reconciledAt date')
+    .lean();
+
+  const byJe = new Map();
+  for (const g of glRows) {
+    const jid = String(g.journalEntry);
+    if (!byJe.has(jid)) byJe.set(jid, []);
+    byJe.get(jid).push(g);
+  }
+
+  const resolveClearanceAggregate = (linked) => {
+    if (!linked.length) {
+      return {
+        clearanceStatus: 'pending',
+        clearedAt: null,
+        isReconciled: false,
+        reconciledAt: null
+      };
+    }
+    const allCleared = linked.every(
+      (g) => g.clearanceStatus === 'cleared' || g.isReconciled === true
+    );
+    if (!allCleared) {
+      return {
+        clearanceStatus: 'pending',
+        clearedAt: null,
+        isReconciled: false,
+        reconciledAt: null
+      };
+    }
+    const times = linked
+      .map((g) => g.clearedAt || g.reconciledAt)
+      .filter(Boolean)
+      .map((d) => new Date(d).getTime())
+      .filter((t) => !Number.isNaN(t));
+    const latest = times.length ? new Date(Math.max(...times)) : null;
+    return {
+      clearanceStatus: 'cleared',
+      clearedAt: latest,
+      isReconciled: true,
+      reconciledAt: latest
+    };
+  };
+
+  for (const row of entries) {
+    const jid = String(row.journalEntry?._id || row.journalEntry || '');
+    const candidates = byJe.get(jid) || [];
+    const debit = Number(row.debit) || 0;
+    const credit = Number(row.credit) || 0;
+
+    let linked = candidates.filter(
+      (g) => moneyEqGl(g.debit, debit) && moneyEqGl(g.credit, credit)
+    );
+
+    // Installment GLs: same side, amounts sum to JE line (GL.date may differ from JE.date)
+    if (!linked.length && candidates.length > 1) {
+      if (credit > 0) {
+        const credits = candidates.filter((g) => Number(g.credit) > 0 && Number(g.debit) === 0);
+        const sum = credits.reduce((s, g) => s + (Number(g.credit) || 0), 0);
+        if (credits.length > 1 && moneyEqGl(sum, credit)) linked = credits;
+      } else if (debit > 0) {
+        const debits = candidates.filter((g) => Number(g.debit) > 0 && Number(g.credit) === 0);
+        const sum = debits.reduce((s, g) => s + (Number(g.debit) || 0), 0);
+        if (debits.length > 1 && moneyEqGl(sum, debit)) linked = debits;
+      }
+    }
+
+    // Single leftover GL on this JE+account for this side
+    if (!linked.length && candidates.length === 1) {
+      const g = candidates[0];
+      if (
+        (credit > 0 && Number(g.credit) > 0) ||
+        (debit > 0 && Number(g.debit) > 0)
+      ) {
+        // Only if amounts match — otherwise leave synthetic id (reconcile may create)
+        if (moneyEqGl(g.debit, debit) && moneyEqGl(g.credit, credit)) linked = [g];
+      }
+    }
+
+    const clearance = resolveClearanceAggregate(linked);
+    row.linkedGlIds = linked.map((g) => String(g._id));
+    if (linked.length === 1) {
+      row._id = linked[0]._id;
+    } else if (linked.length > 1) {
+      // Prefer a real ObjectId so BR clearance lookup works; clear updates all linkedGlIds
+      row._id = linked[0]._id;
+    }
+    row.clearanceStatus = clearance.clearanceStatus;
+    row.clearedAt = clearance.clearedAt;
+    row.isReconciled = clearance.isReconciled;
+    row.reconciledAt = clearance.reconciledAt;
+    // Keep JE.date for period membership (TB-aligned); do not overwrite with GL.date
+  }
+
+  return entries;
+};
+
+/**
+ * Account ledger for a date window — same period membership as trial-balance-v2:
+ * posted JournalEntry.date in [start, end], not GeneralLedger.date.
+ * Real GL ids / clearance are attached for bank reconciliation.
+ */
 generalLedgerSchema.statics.getAccountLedger = async function(accountId, startDate, endDate, companyId = null) {
   const accOid = mongoose.Types.ObjectId.isValid(String(accountId))
     ? new mongoose.Types.ObjectId(String(accountId))
     : accountId;
 
-  const query = {
-    account: accOid,
-    status: 'posted'
-  };
-  if (companyId && mongoose.Types.ObjectId.isValid(String(companyId))) {
-    query.companyId = new mongoose.Types.ObjectId(String(companyId));
-  }
+  let entries = await this.buildLedgerRowsFromJournalEntries(accOid, startDate, endDate, companyId);
+  entries = await this.attachGlClearanceToJeLedgerRows(entries, accOid);
 
-  if (startDate || endDate) {
-    query.date = {};
-    if (startDate) query.date.$gte = startDate;
-    if (endDate) query.date.$lte = endDate;
-  }
-
-  let entries = await this.find(query)
-    .populate('journalEntry', 'entryNumber reference description project department companyId')
-    .populate('account', 'accountNumber name type')
-    .populate('createdBy', 'firstName lastName')
-    .sort({ date: 1, entryNumber: 1 })
-    .lean();
-
-  // Drop GL rows whose JournalEntry was deleted (legacy incomplete deletes).
-  // Trial Balance is JE-sourced; ledger must not show ghost vouchers.
-  entries = (entries || []).filter(
-    (row) => row.journalEntry && typeof row.journalEntry === 'object' && row.journalEntry._id
-  );
-
-  // If company scoped, keep only rows whose JE belongs to that company
-  if (companyId) {
-    const cid = String(companyId);
-    entries = entries.filter((row) => {
-      const jeCo = row.journalEntry?.companyId;
-      const rowCo = row.companyId;
-      return String(jeCo || rowCo || '') === cid;
-    });
-  }
-
-  if (!entries.length) {
-    entries = await this.buildLedgerRowsFromJournalEntries(accOid, startDate, endDate, companyId);
-  } else {
-    // Carry project from JE when GL row has none; resolve party/dept labels
-    for (const row of entries) {
-      if (!row.project && row.journalEntry?.project) row.project = row.journalEntry.project;
-    }
-    const { enrichPartyFields, enrichDepartmentFields } = require('../../utils/financePartyResolve');
-    await enrichPartyFields(entries);
-    await enrichDepartmentFields(entries, 'department');
-
-    // Populate project names
-    const projectIds = [
-      ...new Set(
-        entries
-          .map((r) => r.project)
-          .filter((p) => p && !(typeof p === 'object' && p.name))
-          .map((p) => String(p._id || p))
-          .filter((id) => mongoose.Types.ObjectId.isValid(id))
-      )
-    ];
-    if (projectIds.length) {
-      try {
-        const Project = mongoose.model('Project');
-        const projects = await Project.find({ _id: { $in: projectIds } }).select('name code').lean();
-        const pmap = new Map(projects.map((p) => [String(p._id), p]));
-        for (const row of entries) {
-          const pid = row.project ? String(row.project._id || row.project) : '';
-          if (pid && pmap.has(pid)) row.project = pmap.get(pid);
-        }
-      } catch (_) {
-        /* Project model optional */
+  // Populate project names when present as ids
+  const projectIds = [
+    ...new Set(
+      entries
+        .map((r) => r.project)
+        .filter((p) => p && !(typeof p === 'object' && p.name))
+        .map((p) => String(p._id || p))
+        .filter((id) => mongoose.Types.ObjectId.isValid(id))
+    )
+  ];
+  if (projectIds.length) {
+    try {
+      const Project = mongoose.model('Project');
+      const projects = await Project.find({ _id: { $in: projectIds } }).select('name code').lean();
+      const pmap = new Map(projects.map((p) => [String(p._id), p]));
+      for (const row of entries) {
+        const pid = row.project ? String(row.project._id || row.project) : '';
+        if (pid && pmap.has(pid)) row.project = pmap.get(pid);
       }
+    } catch (_) {
+      /* Project model optional */
     }
   }
 
-  // Ensure account is populated on every row (JE fallback rows lack it)
   const Account = mongoose.model('Account');
   const accDoc = await Account.findById(accOid).select('accountNumber name type').lean();
   if (accDoc) {
@@ -390,7 +447,6 @@ generalLedgerSchema.statics.getAccountLedger = async function(accountId, startDa
     });
   }
 
-  // Opening = net of all activity before period start (so FY filter balance is correct)
   const openingBalance = startDate
     ? await this.getAccountOpeningBalance(accOid, startDate, companyId)
     : 0;

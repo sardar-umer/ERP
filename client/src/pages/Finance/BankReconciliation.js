@@ -191,6 +191,9 @@ const buildReconcilePayload = (txn, clearanceStatus, clearedAt) => {
   const amount = Number(txn?.amount) || 0;
   const debit = Number(txn?.debit) > 0 ? Number(txn.debit) : (type === 'Dr' ? amount : 0);
   const credit = Number(txn?.credit) > 0 ? Number(txn.credit) : (type === 'Cr' ? amount : 0);
+  const linkedGlIds = Array.isArray(txn?.linkedGlIds)
+    ? txn.linkedGlIds.map(String).filter(Boolean)
+    : undefined;
   return {
     transactionIds: [rowKey(txn)],
     clearanceStatus,
@@ -200,7 +203,8 @@ const buildReconcilePayload = (txn, clearanceStatus, clearedAt) => {
     amount: amount || debit || credit,
     type,
     journalEntryId: txn?.journalEntryId ? String(txn.journalEntryId) : undefined,
-    accountId: txn?.accountId ? String(txn.accountId) : undefined
+    accountId: txn?.accountId ? String(txn.accountId) : undefined,
+    ...(linkedGlIds?.length ? { linkedGlIds } : {})
   };
 };
 

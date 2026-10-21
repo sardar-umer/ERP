@@ -7927,10 +7927,17 @@ router.get('/reports/bank-reconciliation',
       jes.forEach((je) => jeExtraMap.set(String(je._id), je));
     }
 
-    // Synthetic JE-fallback rows may lack clearance — load real GL clearance by ObjectId
-    const realGlIds = ledgerEntries
-      .map((e) => String(e._id || ''))
-      .filter((id) => OBJECT_ID_RE.test(id));
+    // Clearance may already be on JE-ledger rows (incl. installment aggregates); also load by ObjectId
+    const realGlIds = [
+      ...new Set(
+        ledgerEntries.flatMap((e) => {
+          const ids = Array.isArray(e.linkedGlIds) ? e.linkedGlIds.map(String) : [];
+          const self = String(e._id || '');
+          if (OBJECT_ID_RE.test(self)) ids.push(self);
+          return ids.filter((id) => OBJECT_ID_RE.test(id));
+        })
+      )
+    ];
     const clearanceById = new Map();
     if (realGlIds.length) {
       const clearanceRows = await GeneralLedger.find({ _id: { $in: realGlIds } })
@@ -7951,11 +7958,18 @@ router.get('/reports/bank-reconciliation',
       const amt = isCredit ? credit : debit;
       const vrNo = gle.entryNumber || je.entryNumber || '—';
       const glId = String(gle._id || '');
-      const clearanceSrc = clearanceById.get(glId) || gle;
+      const linkedGlIds = Array.isArray(gle.linkedGlIds)
+        ? gle.linkedGlIds.map(String).filter((id) => OBJECT_ID_RE.test(id))
+        : (OBJECT_ID_RE.test(glId) ? [glId] : []);
+      // Prefer pre-aggregated clearance from getAccountLedger; else lookup by primary GL id
+      const clearanceSrc = (gle.clearanceStatus || gle.clearedAt || gle.isReconciled != null)
+        ? gle
+        : (clearanceById.get(glId) || gle);
       const { clearDate, isClearedAsOf } = resolveClearance(clearanceSrc, asOfTime);
 
       return {
         _id: glId,
+        linkedGlIds,
         journalEntryId: OBJECT_ID_RE.test(jeId) ? jeId : null,
         accountId: String(acc?._id || accountId),
         date: gle.date,
@@ -8137,7 +8151,8 @@ router.post('/reports/bank-reconciliation/reconcile',
       amount,
       type,
       journalEntryId,
-      accountId
+      accountId,
+      linkedGlIds: linkedGlIdsBody
     } = req.body;
     const isCleared = clearanceStatus === 'cleared';
     const hasValidDate = clearedAt && !Number.isNaN(new Date(clearedAt).getTime());
@@ -8192,12 +8207,62 @@ router.post('/reports/bank-reconciliation/reconcile',
       return matched.length === 1 ? matched[0] : null;
     };
 
+    /** When one JE line was split into installment GLs, update the whole set. */
+    const pickInstallmentGlSet = (candidates = []) => {
+      if (!candidates.length) return null;
+      if (wantCredit > 0) {
+        const credits = candidates.filter((g) => Number(g.credit) > 0 && !(Number(g.debit) > 0));
+        const sum = credits.reduce((s, g) => s + (Number(g.credit) || 0), 0);
+        if (credits.length > 1 && moneyEq(sum, wantCredit)) return credits;
+      }
+      if (wantDebit > 0) {
+        const debits = candidates.filter((g) => Number(g.debit) > 0 && !(Number(g.credit) > 0));
+        const sum = debits.reduce((s, g) => s + (Number(g.debit) || 0), 0);
+        if (debits.length > 1 && moneyEq(sum, wantDebit)) return debits;
+      }
+      return null;
+    };
+
+    const updateGlSet = async (rows) => {
+      if (!rows?.length) return [];
+      const ids = rows.map((r) => r._id);
+      await GeneralLedger.updateMany({ _id: { $in: ids } }, { $set: glUpdate });
+      return ids.map((id) => String(id));
+    };
+
     const resolveOneId = async (rawId) => {
       const id = String(rawId || '').trim();
       if (!id) return null;
 
+      // 0) Explicit linked installment GL set from client
+      const bodyLinked = Array.isArray(linkedGlIdsBody)
+        ? linkedGlIdsBody.map(String).filter((x) => OBJECT_ID_RE.test(x))
+        : [];
+      if (bodyLinked.length > 1 && (OBJECT_ID_RE.test(id) ? bodyLinked.includes(id) : true)) {
+        const linkedDocs = await GeneralLedger.find({ _id: { $in: bodyLinked } })
+          .select('_id debit credit')
+          .lean();
+        if (linkedDocs.length) {
+          const updated = await updateGlSet(linkedDocs);
+          if (updated.length) return updated[0];
+        }
+      }
+
       // 1) Plain GL ObjectId — update directly (do not require a prior find)
       if (OBJECT_ID_RE.test(id)) {
+        // If this id is one of an installment set for the voucher, clear the whole set
+        const jeIdEarly = journalEntryId && OBJECT_ID_RE.test(String(journalEntryId)) ? String(journalEntryId) : null;
+        if (jeIdEarly) {
+          const q = { journalEntry: jeIdEarly };
+          if (accountId && OBJECT_ID_RE.test(String(accountId))) q.account = String(accountId);
+          const candidates = await GeneralLedger.find(q).select('_id debit credit').lean();
+          const installment = pickInstallmentGlSet(candidates);
+          if (installment && installment.some((g) => String(g._id) === id)) {
+            const updated = await updateGlSet(installment);
+            if (updated.length) return updated[0];
+          }
+        }
+
         const direct = await GeneralLedger.updateOne({ _id: id }, { $set: glUpdate });
         if ((direct.matchedCount || direct.n) > 0) return id;
 
@@ -8209,8 +8274,22 @@ router.post('/reports/bank-reconciliation/reconcile',
           let candidates = await GeneralLedger.find(q).select('_id debit credit').lean();
           let chosen = pickGlAmong(candidates);
           if (!chosen) {
+            const installment = pickInstallmentGlSet(candidates);
+            if (installment) {
+              const updated = await updateGlSet(installment);
+              if (updated.length) return updated[0];
+            }
+          }
+          if (!chosen) {
             candidates = await GeneralLedger.find({ journalEntry: jeId }).select('_id debit credit').lean();
             chosen = pickGlAmong(candidates);
+            if (!chosen) {
+              const installment = pickInstallmentGlSet(candidates);
+              if (installment) {
+                const updated = await updateGlSet(installment);
+                if (updated.length) return updated[0];
+              }
+            }
           }
           if (chosen) {
             await GeneralLedger.updateOne({ _id: chosen._id }, { $set: glUpdate });
@@ -8357,6 +8436,13 @@ router.post('/reports/bank-reconciliation/reconcile',
         await GeneralLedger.updateOne({ _id: chosen._id }, { $set: glUpdate });
         updatedGlIds.push(String(chosen._id));
       } else {
+        const installment = pickInstallmentGlSet(candidates);
+        if (installment) {
+          const updated = await updateGlSet(installment);
+          updatedGlIds.push(...updated);
+        }
+      }
+      if (updatedGlIds.length === 0) {
         // Create missing GL from JE line (common for local imported CVs)
         const je = await JournalEntry.findById(jeId);
         const userId = req.user?.id || req.user?._id;
