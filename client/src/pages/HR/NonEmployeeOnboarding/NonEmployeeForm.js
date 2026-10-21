@@ -25,6 +25,7 @@ import nonEmployeeService from '../../../services/nonEmployeeService';
 import api from '../../../services/api';
 import { useAuth } from '../../../contexts/AuthContext';
 import toast from 'react-hot-toast';
+import ResubmissionHistory from './ResubmissionHistory';
 
 const emptyCandidate = () => ({
   name: '',
@@ -57,7 +58,14 @@ const normalizeFromEdit = (emp = {}) => ({
   remark: emp.remark || emp.justification || ''
 });
 
-const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
+const NonEmployeeForm = ({
+  open,
+  onClose,
+  onSuccess,
+  editData = null,
+  initialResubmitComment = '',
+  initialObservationResponses = {}
+}) => {
   const { user } = useAuth();
   const [users, setUsers] = useState([]);
   const [records, setRecords] = useState([emptyCandidate()]);
@@ -70,6 +78,13 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
   const isResubmit = Boolean(
     editData && ['Returned', 'Rejected by CEO', 'Draft'].includes(editData.workflowStatus)
   );
+  // Returned/rejected records need the initiator's reply on the observations
+  const needsResubmitComment = Boolean(
+    editData && ['Returned', 'Rejected by CEO'].includes(editData.workflowStatus)
+  );
+  const [resubmitComment, setResubmitComment] = useState('');
+  const [observationResponses, setObservationResponses] = useState({});
+  const [submitting, setSubmitting] = useState(false);
   const returnRemarks = String(
     editData?.returnComments || editData?.rejectionComments || ''
   ).trim();
@@ -91,6 +106,18 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
     'Pending Sr Director': 'Sr Director',
     'Forwarded to CEO': 'CEO Secretariat'
   }[inferredResubmitStatus] || 'the authority who returned/rejected it';
+
+  const observationKey = (obs, idx) => (obs?._id ? String(obs._id) : `idx-${idx}`);
+
+  React.useEffect(() => {
+    if (!open) return;
+    setResubmitComment(String(initialResubmitComment || '').trim());
+    setObservationResponses(
+      initialObservationResponses && typeof initialObservationResponses === 'object'
+        ? { ...initialObservationResponses }
+        : {}
+    );
+  }, [editData, open, initialResubmitComment, initialObservationResponses]);
 
   React.useEffect(() => {
     if (editData) {
@@ -165,6 +192,12 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
   const handleSubmit = async (e) => {
     e.preventDefault();
 
+    if (needsResubmitComment && !resubmitComment.trim()) {
+      toast.error('Please add your comment on the observations before resubmitting');
+      return;
+    }
+
+    setSubmitting(true);
     try {
       const requesterSignature = user?.digitalSignature
         || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : user?.email || '');
@@ -191,6 +224,18 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
               resubmitToStatus: inferredResubmitStatus,
               returnedFromStatus: inferredResubmitStatus
             }
+          : {}),
+        ...(needsResubmitComment
+          ? {
+              resubmitComment: resubmitComment.trim(),
+              observationResponses: JSON.stringify(
+                returnObservations.map((obs, idx) => ({
+                  observationId: obs?._id ? String(obs._id) : '',
+                  index: idx,
+                  response: String(observationResponses[observationKey(obs, idx)] || '').trim()
+                }))
+              )
+            }
           : {})
       };
       if (editData) {
@@ -208,6 +253,8 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
     } catch (error) {
       toast.error(error.response?.data?.error || (editData ? 'Failed to update record' : 'Failed to create records'));
       console.error(error);
+    } finally {
+      setSubmitting(false);
     }
   };
 
@@ -239,13 +286,28 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
                   </Typography>
                   <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
                     {returnObservations.map((obs, idx) => (
-                      <Box component="li" key={obs._id || idx} sx={{ mb: 0.75 }}>
+                      <Box component="li" key={obs._id || idx} sx={{ mb: 1.25 }}>
                         <Typography variant="body2" component="span">
                           <strong style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
                             [{obs.severity || 'medium'}]
                           </strong>{' '}
                           {obs.observation}
                         </Typography>
+                        {needsResubmitComment && (
+                          <TextField
+                            size="small"
+                            fullWidth
+                            multiline
+                            minRows={1}
+                            placeholder="Your response to this observation (optional)"
+                            value={observationResponses[observationKey(obs, idx)] || ''}
+                            onChange={(e) => {
+                              const key = observationKey(obs, idx);
+                              setObservationResponses((prev) => ({ ...prev, [key]: e.target.value }));
+                            }}
+                            sx={{ mt: 0.75, bgcolor: 'background.paper' }}
+                          />
+                        )}
                       </Box>
                     ))}
                   </Box>
@@ -253,6 +315,26 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
               ) : null}
             </Alert>
           )}
+          {needsResubmitComment && (
+            <TextField
+              label="Your comment on the observations (required to resubmit)"
+              placeholder="Explain what you changed or clarify the observations raised"
+              fullWidth
+              required
+              multiline
+              minRows={3}
+              value={resubmitComment}
+              onChange={(e) => setResubmitComment(e.target.value)}
+              error={!resubmitComment.trim()}
+              helperText={
+                resubmitComment.trim()
+                  ? `This comment will be shown to ${resubmitTargetLabel} with the resubmitted record.`
+                  : 'A comment is required before you can resubmit.'
+              }
+              sx={{ mb: 3 }}
+            />
+          )}
+          {editData && <ResubmissionHistory record={editData} sx={{ mb: 3 }} />}
           <Box mb={1} display="flex" justifyContent="space-between" alignItems="center">
             <Typography variant="subtitle1" fontWeight={700}>
               Candidates recommended for hiring
@@ -456,8 +538,15 @@ const NonEmployeeForm = ({ open, onClose, onSuccess, editData = null }) => {
         </DialogContent>
         <DialogActions>
           <Button onClick={onClose}>Cancel</Button>
-          <Button type="submit" variant="contained" color="primary">
-            {isResubmit ? 'Save & Resubmit' : editData ? 'Save Changes' : 'Submit'}
+          <Button
+            type="submit"
+            variant="contained"
+            color="primary"
+            disabled={submitting || (needsResubmitComment && !resubmitComment.trim())}
+          >
+            {submitting
+              ? 'Saving...'
+              : isResubmit ? 'Save & Resubmit' : editData ? 'Save Changes' : 'Submit'}
           </Button>
         </DialogActions>
       </form>

@@ -60,6 +60,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import paymentSettlementService from '../../services/paymentSettlementService';
 import api from '../../services/api';
 import nonEmployeeService from '../../services/nonEmployeeService';
+import ResubmissionHistory from '../../pages/HR/NonEmployeeOnboarding/ResubmissionHistory';
 import manualSalaryService from '../../services/manualSalaryService';
 import executiveApprovalsService from '../../services/executiveApprovalsService';
 import indentService from '../../services/indentService';
@@ -2802,6 +2803,8 @@ const ExecutiveCeoPaymentsSection = () => {
                       variant="outlined"
                     />
                   </Box>
+
+                  <ResubmissionHistory record={viewDialog.settlement} sx={{ mb: 3 }} />
 
                   <Box mb={3}>
                     <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1, display: 'block', mb: 1.5 }}>

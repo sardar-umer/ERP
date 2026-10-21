@@ -29,6 +29,7 @@ import { formatDateTime } from '../../../utils/dateUtils';
 import { alpha, useTheme } from '@mui/material/styles';
 import nonEmployeeService from '../../../services/nonEmployeeService';
 import NonEmployeeForm from './NonEmployeeForm';
+import ResubmissionHistory from './ResubmissionHistory';
 import { useAuth } from '../../../contexts/AuthContext';
 import toast from 'react-hot-toast';
 import { printNewHiringApproval } from '../../../utils/newHiringApprovalPrint';
@@ -51,9 +52,92 @@ const NonEmployeeOnboarding = () => {
   const [deleteDialog, setDeleteDialog] = useState({ open: false, record: null });
   const [viewDialog, setViewDialog] = useState({ open: false, record: null });
   const [editData, setEditData] = useState(null);
+  const [formInitialComment, setFormInitialComment] = useState('');
+  const [formInitialObsResponses, setFormInitialObsResponses] = useState({});
+  const [detailsResubmitComment, setDetailsResubmitComment] = useState('');
+  const [detailsObsResponses, setDetailsObsResponses] = useState({});
+  const [detailsResubmitting, setDetailsResubmitting] = useState(false);
   const [actionLoading, setActionLoading] = useState(false);
   const { user } = useAuth();
   const theme = useTheme();
+
+  const observationKey = (obs, idx) => (obs?._id ? String(obs._id) : `idx-${idx}`);
+
+  const openViewDetails = (record) => {
+    setDetailsResubmitComment('');
+    setDetailsObsResponses({});
+    setViewDialog({ open: true, record });
+  };
+
+  const openEditResubmit = (record, { comment = '', obsResponses = {} } = {}) => {
+    setFormInitialComment(comment);
+    setFormInitialObsResponses(obsResponses);
+    setEditData(record);
+    setOpenForm(true);
+  };
+
+  const handleDetailsResubmit = async () => {
+    const record = viewDialog.record;
+    if (!record?._id) return;
+    if (!detailsResubmitComment.trim()) {
+      toast.error('Please add your comment on the observations before resubmitting');
+      return;
+    }
+    const returnObservations = Array.isArray(record.returnObservations)
+      ? record.returnObservations.filter((o) => String(o?.observation || '').trim())
+      : [];
+    const employees = getNewHiringEmployees(record).map((e) => ({
+      name: String(e.name || [e.firstName, e.lastName].filter(Boolean).join(' ').trim() || '').trim(),
+      cnic: String(e.cnic || '').trim(),
+      designation: String(e.designation || e.role || '').trim(),
+      departmentSubject: String(e.departmentSubject || e.department || '').trim(),
+      project: String(e.project || '').trim(),
+      location: String(e.location || '').trim(),
+      currentPackageMonthly: String(e.currentPackageMonthly ?? e.expectedWages ?? '').trim(),
+      tentativeDoj: e.tentativeDoj || null,
+      remark: String(e.remark || e.justification || '').trim()
+    }));
+    const inferredResubmitStatus =
+      record.returnedFromStatus
+      || (record.workflowStatus === 'Rejected by CEO' ? 'Forwarded to CEO' : '')
+      || (record.srDirectorApprovedBy ? 'Forwarded to CEO' : '')
+      || (record.chairmanApprovedBy ? 'Pending Sr Director' : '')
+      || (record.avpApprovedBy ? 'Pending Chairman' : '')
+      || (record.hodApprovedBy ? 'Pending AVP' : '')
+      || '';
+
+    setDetailsResubmitting(true);
+    try {
+      await nonEmployeeService.updateRecord(record._id, {
+        employees,
+        assignedHod: record.assignedHod?._id || record.assignedHod || '',
+        assignedSrDirector: record.assignedSrDirector?._id || record.assignedSrDirector || '',
+        assignedAvp: record.assignedAvp?._id || record.assignedAvp || '',
+        assignedChairman: record.assignedChairman?._id || record.assignedChairman || '',
+        requesterSignature:
+          user?.digitalSignature
+          || (user?.firstName ? `${user.firstName} ${user.lastName || ''}`.trim() : user?.email || ''),
+        ...(inferredResubmitStatus
+          ? { resubmitToStatus: inferredResubmitStatus, returnedFromStatus: inferredResubmitStatus }
+          : {}),
+        resubmitComment: detailsResubmitComment.trim(),
+        observationResponses: JSON.stringify(
+          returnObservations.map((obs, idx) => ({
+            observationId: obs?._id ? String(obs._id) : '',
+            index: idx,
+            response: String(detailsObsResponses[observationKey(obs, idx)] || '').trim()
+          }))
+        )
+      });
+      toast.success('Resubmitted with your comments on the observations');
+      setViewDialog({ open: false, record: null });
+      fetchRecords();
+    } catch (error) {
+      toast.error(error.response?.data?.error || 'Failed to resubmit');
+    } finally {
+      setDetailsResubmitting(false);
+    }
+  };
 
   const fetchRecords = async () => {
     setLoading(true);
@@ -278,6 +362,9 @@ const NonEmployeeOnboarding = () => {
                 ...feedbackObservations.map((o) => `[${o.severity || 'medium'}] ${o.observation}`)
               ].filter(Boolean).join('\n');
 
+              const history = Array.isArray(record.resubmissionHistory) ? record.resubmissionHistory : [];
+              const latestResubmission = history.length ? history[history.length - 1] : null;
+
               const employees = getNewHiringEmployees(record);
               const numEmployees = employees.length;
               const empName = (e) =>
@@ -339,7 +426,7 @@ const NonEmployeeOnboarding = () => {
                       color="info" 
                       size="small" 
                       title="View Details"
-                      onClick={() => setViewDialog({ open: true, record })}
+                      onClick={() => openViewDetails(record)}
                     >
                       <ViewIcon fontSize="small" />
                     </IconButton>
@@ -391,10 +478,7 @@ const NonEmployeeOnboarding = () => {
                               color="primary"
                               size="small"
                               startIcon={<EditIcon fontSize="small" />}
-                              onClick={() => {
-                                setEditData(record);
-                                setOpenForm(true);
-                              }}
+                              onClick={() => openEditResubmit(record)}
                             >
                               {needsResubmit ? 'Edit & Resubmit' : 'Edit'}
                             </Button>
@@ -410,6 +494,23 @@ const NonEmployeeOnboarding = () => {
                           </IconButton>
                         )}
                       </React.Fragment>
+                    )}
+                    {!needsResubmit && latestResubmission?.initiatorComment && (
+                      <Tooltip
+                        title={
+                          <Box sx={{ whiteSpace: 'pre-wrap', maxWidth: 360 }}>
+                            <strong>Initiator comment:</strong> {latestResubmission.initiatorComment}
+                          </Box>
+                        }
+                      >
+                        <Chip
+                          size="small"
+                          color="info"
+                          variant="outlined"
+                          label={history.length > 1 ? `Resubmitted (${history.length}x)` : 'Resubmitted'}
+                          onClick={() => openViewDetails(record)}
+                        />
+                      </Tooltip>
                     )}
                     {needsResubmit && feedbackSummary && (
                       <Tooltip
@@ -450,9 +551,18 @@ const NonEmployeeOnboarding = () => {
       <NonEmployeeForm 
         open={openForm} 
         editData={editData}
-        onClose={() => setOpenForm(false)} 
+        initialResubmitComment={formInitialComment}
+        initialObservationResponses={formInitialObsResponses}
+        onClose={() => {
+          setOpenForm(false);
+          setFormInitialComment('');
+          setFormInitialObsResponses({});
+        }} 
         onSuccess={() => {
           setOpenForm(false);
+          setFormInitialComment('');
+          setFormInitialObsResponses({});
+          setViewDialog({ open: false, record: null });
           fetchRecords();
         }} 
       />
@@ -559,47 +669,95 @@ const NonEmployeeOnboarding = () => {
           New-Hiring Approval Details - {viewDialog.record?.recordNumber}
         </DialogTitle>
         <DialogContent sx={{ p: { xs: 2, md: 3 } }}>
-          {(viewDialog.record?.workflowStatus === 'Returned'
-            || viewDialog.record?.workflowStatus === 'Rejected by CEO') && (
+          {(() => {
+            const record = viewDialog.record;
+            if (!record) return null;
+            const userId = String(user?.id || user?._id || '');
+            const initiatorId = String(record.initiator?._id || record.initiator || '');
+            const isInitiator = Boolean(userId && initiatorId && userId === initiatorId);
+            const isDeveloper = user?.email === 'developer@tovus.net';
+            const needsResubmit = ['Returned', 'Rejected by CEO'].includes(record.workflowStatus)
+              && (isInitiator || isDeveloper);
+            const returnObservations = Array.isArray(record.returnObservations)
+              ? record.returnObservations.filter((o) => String(o?.observation || '').trim())
+              : [];
+            if (!(record.workflowStatus === 'Returned' || record.workflowStatus === 'Rejected by CEO')) {
+              return null;
+            }
+            return (
             <Alert severity="warning" sx={{ mb: 2 }}>
               <Typography variant="body2" fontWeight={700} sx={{ mb: 0.5 }}>
                 Returned to initiator for revision
-                {viewDialog.record?.returnedFromStatus
-                  ? ` → will go back to ${viewDialog.record.returnedFromStatus}`
+                {record.returnedFromStatus
+                  ? ` → will go back to ${record.returnedFromStatus}`
                   : ''}
               </Typography>
-              {(viewDialog.record?.returnComments || viewDialog.record?.rejectionComments) && (
+              {(record.returnComments || record.rejectionComments) && (
                 <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 1 }}>
-                  <strong>Comments:</strong> {viewDialog.record.returnComments || viewDialog.record.rejectionComments}
+                  <strong>Comments:</strong> {record.returnComments || record.rejectionComments}
                 </Typography>
               )}
-              {Array.isArray(viewDialog.record?.returnObservations)
-                && viewDialog.record.returnObservations.filter((o) => o?.observation).length > 0 && (
+              {returnObservations.length > 0 && (
                 <Box>
                   <Typography variant="body2" fontWeight={700} sx={{ mb: 0.5 }}>
-                    Observations
+                    Observations ({returnObservations.length})
                   </Typography>
                   <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-                    {viewDialog.record.returnObservations
-                      .filter((o) => o?.observation)
-                      .map((obs, idx) => (
-                        <Box component="li" key={obs._id || idx} sx={{ mb: 0.5 }}>
-                          <Typography variant="body2">
-                            <strong style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
-                              [{obs.severity || 'medium'}]
-                            </strong>{' '}
-                            {obs.observation}
-                          </Typography>
-                        </Box>
-                      ))}
+                    {returnObservations.map((obs, idx) => (
+                      <Box component="li" key={obs._id || idx} sx={{ mb: 1.25 }}>
+                        <Typography variant="body2">
+                          <strong style={{ textTransform: 'uppercase', fontSize: '0.7rem' }}>
+                            [{obs.severity || 'medium'}]
+                          </strong>{' '}
+                          {obs.observation}
+                        </Typography>
+                        {needsResubmit && (
+                          <TextField
+                            size="small"
+                            fullWidth
+                            multiline
+                            minRows={1}
+                            placeholder="Your response to this observation (optional)"
+                            value={detailsObsResponses[observationKey(obs, idx)] || ''}
+                            onChange={(e) => {
+                              const key = observationKey(obs, idx);
+                              setDetailsObsResponses((prev) => ({ ...prev, [key]: e.target.value }));
+                            }}
+                            sx={{ mt: 0.75, bgcolor: 'background.paper' }}
+                          />
+                        )}
+                      </Box>
+                    ))}
                   </Box>
                 </Box>
               )}
-              <Typography variant="caption" display="block" sx={{ mt: 1 }}>
-                Use Edit & Resubmit to update and send again to the authority who returned/rejected it.
-              </Typography>
+              {needsResubmit && (
+                <TextField
+                  label="Your comment on the observations (required to resubmit)"
+                  placeholder="Explain what you changed or clarify the observations raised"
+                  fullWidth
+                  required
+                  multiline
+                  minRows={3}
+                  value={detailsResubmitComment}
+                  onChange={(e) => setDetailsResubmitComment(e.target.value)}
+                  error={!detailsResubmitComment.trim()}
+                  helperText={
+                    detailsResubmitComment.trim()
+                      ? 'This comment will be sent with the resubmitted record.'
+                      : 'A comment is required before you can resubmit.'
+                  }
+                  sx={{ mt: 2, bgcolor: 'background.paper' }}
+                />
+              )}
+              {!needsResubmit && (
+                <Typography variant="caption" display="block" sx={{ mt: 1 }}>
+                  Waiting for the initiator to comment on observations and resubmit.
+                </Typography>
+              )}
             </Alert>
-          )}
+            );
+          })()}
           <Box mb={4}>
             <Typography variant="overline" color="text.secondary" sx={{ fontWeight: 600, letterSpacing: 1, display: 'block', mb: 1.5 }}>
               Candidates recommended for hiring ({getNewHiringEmployees(viewDialog.record).length})
@@ -654,6 +812,7 @@ const NonEmployeeOnboarding = () => {
             </TableContainer>
           </Box>
 
+          <ResubmissionHistory record={viewDialog.record} sx={{ mb: 4 }} />
 
           <Box>
             <Paper variant="outlined" sx={{ p: 2.5, borderRadius: 2 }}>
@@ -691,7 +850,7 @@ const NonEmployeeOnboarding = () => {
             </Paper>
           </Box>
         </DialogContent>
-        <DialogActions sx={{ p: 2, bgcolor: 'background.default', borderTop: '1px solid', borderColor: 'divider', gap: 1 }}>
+        <DialogActions sx={{ p: 2, bgcolor: 'background.default', borderTop: '1px solid', borderColor: 'divider', gap: 1, flexWrap: 'wrap' }}>
           <Button
             variant="outlined"
             startIcon={<PrintIcon />}
@@ -702,6 +861,48 @@ const NonEmployeeOnboarding = () => {
           >
             Print
           </Button>
+          {(() => {
+            const record = viewDialog.record;
+            if (!record) return null;
+            const userId = String(user?.id || user?._id || '');
+            const initiatorId = String(record.initiator?._id || record.initiator || '');
+            const isInitiator = Boolean(userId && initiatorId && userId === initiatorId);
+            const isDeveloper = user?.email === 'developer@tovus.net';
+            const canEdit = isDeveloper || (
+              isInitiator
+              && ['Pending HOD HR', 'Draft', 'Returned', 'Rejected by CEO'].includes(record.workflowStatus)
+            );
+            const needsResubmit = ['Returned', 'Rejected by CEO'].includes(record.workflowStatus)
+              && (isInitiator || isDeveloper);
+            if (!canEdit) return null;
+            return (
+              <>
+                <Button
+                  variant="outlined"
+                  color="primary"
+                  startIcon={<EditIcon />}
+                  onClick={() => {
+                    openEditResubmit(record, {
+                      comment: detailsResubmitComment,
+                      obsResponses: detailsObsResponses
+                    });
+                  }}
+                >
+                  {needsResubmit ? 'Edit Candidates & Resubmit' : 'Edit'}
+                </Button>
+                {needsResubmit && (
+                  <Button
+                    variant="contained"
+                    color="primary"
+                    disabled={detailsResubmitting || !detailsResubmitComment.trim()}
+                    onClick={handleDetailsResubmit}
+                  >
+                    {detailsResubmitting ? 'Resubmitting...' : 'Resubmit with Comments'}
+                  </Button>
+                )}
+              </>
+            );
+          })()}
           <Button variant="contained" color="inherit" onClick={() => setViewDialog({ open: false, record: null })}>Close window</Button>
         </DialogActions>
       </Dialog>

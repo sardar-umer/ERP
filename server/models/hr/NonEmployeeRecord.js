@@ -100,6 +100,30 @@ const nonEmployeeRecordSchema = new mongoose.Schema({
     addedAt: { type: Date, default: Date.now },
     resolved: { type: Boolean, default: false }
   }],
+  /** Who returned/rejected the record most recently (cleared on resubmit). */
+  returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  returnedAt: { type: Date },
+  /**
+   * One entry per return → resubmit cycle: what the authority said and how the
+   * initiator responded (overall comment + per-observation response).
+   */
+  resubmissionHistory: [{
+    returnedFromStatus: { type: String, trim: true },
+    returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    returnedByName: { type: String, trim: true },
+    returnedAt: { type: Date },
+    returnComments: { type: String, trim: true },
+    observations: [{
+      observation: { type: String, trim: true },
+      severity: { type: String, trim: true },
+      response: { type: String, trim: true, default: '' }
+    }],
+    initiatorComment: { type: String, trim: true },
+    resubmittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    resubmittedByName: { type: String, trim: true },
+    resubmittedAt: { type: Date, default: Date.now },
+    resubmittedTo: { type: String, trim: true }
+  }],
   /**
    * Stage that rejected/returned the record so resubmit goes back there
    * (e.g. 'Pending AVP'), not a fresh HOD cycle.

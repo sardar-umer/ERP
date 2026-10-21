@@ -139,12 +139,75 @@ const normalizeReturnObservations = (observations, userId) => {
     .filter(Boolean);
 };
 
+const userDisplayName = async (userId) => {
+  if (!userId || !mongoose.Types.ObjectId.isValid(String(userId))) return '';
+  try {
+    const u = await mongoose.model('User').findById(userId).select('firstName lastName email').lean();
+    if (!u) return '';
+    return `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email || '';
+  } catch (e) {
+    return '';
+  }
+};
+
+/** Parse per-observation responses sent by the form (JSON string or array). */
+const parseObservationResponses = (raw) => {
+  let list = raw;
+  if (typeof raw === 'string') {
+    try { list = JSON.parse(raw); } catch (e) { list = []; }
+  }
+  return Array.isArray(list) ? list : [];
+};
+
+/**
+ * Snapshot the current return feedback + initiator's reply into resubmissionHistory.
+ * Must run before return fields are cleared.
+ */
+const appendResubmissionHistory = async (record, { initiatorComment, responses, actorId, targetStatus }) => {
+  const responseFor = (obs, idx) => {
+    const id = obs?._id ? String(obs._id) : '';
+    const hit = responses.find((r) => (id && String(r?.observationId || '') === id))
+      || responses.find((r) => Number(r?.index) === idx);
+    return String(hit?.response || '').trim();
+  };
+  const observations = (record.returnObservations || [])
+    .filter((o) => String(o?.observation || '').trim())
+    .map((o, idx) => ({
+      observation: o.observation,
+      severity: o.severity || 'medium',
+      response: responseFor(o, idx)
+    }));
+
+  const returnedById = record.returnedBy?._id || record.returnedBy || null;
+  const [returnedByName, resubmittedByName] = await Promise.all([
+    userDisplayName(returnedById),
+    userDisplayName(actorId)
+  ]);
+
+  if (!Array.isArray(record.resubmissionHistory)) record.resubmissionHistory = [];
+  record.resubmissionHistory.push({
+    returnedFromStatus: record.returnedFromStatus || targetStatus || '',
+    returnedBy: returnedById || undefined,
+    returnedByName,
+    returnedAt: record.returnedAt || record.updatedAt || undefined,
+    returnComments: record.returnComments || record.rejectionComments || '',
+    observations,
+    initiatorComment,
+    resubmittedBy: actorId || undefined,
+    resubmittedByName,
+    resubmittedAt: new Date(),
+    resubmittedTo: targetStatus
+  });
+};
+
 const markReturnedToInitiator = (record, comments, fromStatus, { observations, userId } = {}) => {
   const target = RESUBMIT_TARGET_STATUSES.has(fromStatus) ? fromStatus : 'Pending HOD HR';
   record.workflowStatus = 'Returned';
   record.returnedFromStatus = target;
   record.returnComments = comments || '';
   record.rejectionComments = comments || record.rejectionComments || '';
+  record.returnedBy = userId || undefined;
+  record.returnedAt = new Date();
   const normalizedObs = normalizeReturnObservations(observations, userId);
   if (normalizedObs.length) {
     record.returnObservations = normalizedObs;
@@ -188,7 +251,8 @@ const populateApprovalAuthorities = (query) =>
     .populate('avpApprovedBy', 'firstName lastName email')
     .populate('chairmanApprovedBy', 'firstName lastName email')
     .populate('ceoApprovedBy', 'firstName lastName email')
-    .populate('returnObservations.addedBy', 'firstName lastName email');
+    .populate('returnObservations.addedBy', 'firstName lastName email')
+    .populate('returnedBy', 'firstName lastName email');
 
 /** Older approved docs stored flat candidate fields; expose them as employees[] for all clients. */
 const withEmployeesShape = (record) => {
@@ -325,6 +389,24 @@ exports.updateRecord = async (req, res) => {
     if (status === 'Returned' || status === 'Rejected by CEO' || status === 'Draft') {
       const bodyHint = req.body.resubmitToStatus || req.body.returnedFromStatus;
       const targetStatus = resolveResubmitTarget(record, status, bodyHint);
+
+      // After a return/reject the initiator must reply to the observations before resubmitting
+      if (status === 'Returned' || status === 'Rejected by CEO') {
+        const initiatorComment = String(req.body.resubmitComment || '').trim();
+        if (!initiatorComment) {
+          return res.status(400).json({
+            success: false,
+            error: 'Please add your comment on the observations before resubmitting.'
+          });
+        }
+        await appendResubmissionHistory(record, {
+          initiatorComment,
+          responses: parseObservationResponses(req.body.observationResponses),
+          actorId,
+          targetStatus
+        });
+      }
+
       clearApprovalsFromStage(record, targetStatus);
       record.workflowStatus = targetStatus;
       record.set('returnedFromStatus', undefined);
@@ -332,6 +414,8 @@ exports.updateRecord = async (req, res) => {
       record.returnComments = '';
       record.rejectionComments = '';
       record.returnObservations = [];
+      record.set('returnedBy', undefined);
+      record.set('returnedAt', undefined);
       if (req.body.requesterSignature) {
         record.requesterSignature = req.body.requesterSignature;
       }
@@ -700,6 +784,8 @@ exports.rejectByCEO = async (req, res) => {
     record.rejectionComments = req.body.comments || '';
     record.returnComments = req.body.comments || '';
     record.ceoComments = req.body.comments || '';
+    record.returnedBy = req.user.id || undefined;
+    record.returnedAt = new Date();
     const ceoRejectObs = normalizeReturnObservations(req.body.observations, req.user.id);
     if (ceoRejectObs.length) {
       record.returnObservations = ceoRejectObs;
