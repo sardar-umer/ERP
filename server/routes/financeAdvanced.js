@@ -7876,8 +7876,10 @@ router.get('/reports/bank-reconciliation',
       let r = String(ref || '').trim();
       if (!r || r === '—') return '—';
       const u = r.toUpperCase();
-      if (u === 'EXCEL IMPORT' || u === String(vrNo || '').toUpperCase()) return '—';
-      if (/^(CV|BPV|BRV|CPV|CRV|PV|JV)-/i.test(r)) return '—';
+      // Hide import placeholders only — keep cheque / date / custom refs visible in BR
+      if (u === 'EXCEL IMPORT') return '—';
+      // If reference is only a duplicate of VrNo, still show it (accountants expect a value)
+      if (u === String(vrNo || '').toUpperCase()) return r;
       return r;
     };
 

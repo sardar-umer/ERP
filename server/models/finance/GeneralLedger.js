@@ -303,7 +303,7 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     status: 'posted',
     journalEntry: { $in: jeIds }
   })
-    .select('_id journalEntry debit credit clearanceStatus clearedAt isReconciled reconciledAt date')
+    .select('_id journalEntry debit credit reference clearanceStatus clearedAt isReconciled reconciledAt date')
     .lean();
 
   const byJe = new Map();
@@ -394,6 +394,26 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     row.clearedAt = clearance.clearedAt;
     row.isReconciled = clearance.isReconciled;
     row.reconciledAt = clearance.reconciledAt;
+
+    // JE.reference is often blank after Excel import; cheque/ref text lives on GL rows
+    const jeRef = String(row.reference || row.journalEntry?.reference || '').trim();
+    if (!jeRef) {
+      let refSources = linked;
+      if (!refSources.length) {
+        if (credit > 0) refSources = candidates.filter((g) => Number(g.credit) > 0);
+        else if (debit > 0) refSources = candidates.filter((g) => Number(g.debit) > 0);
+        else refSources = candidates;
+      }
+      const refs = [
+        ...new Set(
+          refSources
+            .map((g) => String(g.reference || '').trim())
+            .filter((r) => r && r !== '—')
+        )
+      ];
+      if (refs.length === 1) row.reference = refs[0];
+      else if (refs.length > 1) row.reference = refs.join(', ');
+    }
     // Keep JE.date for period membership (TB-aligned); do not overwrite with GL.date
   }
 
