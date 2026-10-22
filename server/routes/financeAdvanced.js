@@ -8138,6 +8138,8 @@ router.get('/reports/bank-reconciliation',
     let periodTransactions = [];
     let periodTotalCount = 0;
     let statementTotal = 0;
+    // Top summary: cleared activity with clearing date ≤ As of (independent of Period From/To filters)
+    let bankStatementBalance = 0;
     let periodDeferred = false;
 
     if (!includePeriodRows) {
@@ -8148,12 +8150,16 @@ router.get('/reports/bank-reconciliation',
 
       let openingNet = 0;
       let periodNet = 0;
+      let asOfClearedNet = 0;
       let inPeriodCount = 0;
       for (const gle of clearedLean) {
         const { clearDate } = resolveClearance(gle, Number.MAX_SAFE_INTEGER);
         if (!clearDate) continue;
         const cDate = new Date(clearDate);
         const net = (Number(gle.debit) || 0) - (Number(gle.credit) || 0);
+        if (cDate <= asOf) {
+          asOfClearedNet += net;
+        }
         if (cDate < periodStartDate) {
           openingNet += net;
         } else if (cDate <= periodEndDate) {
@@ -8164,6 +8170,7 @@ router.get('/reports/bank-reconciliation',
       openingBalance = openingNet;
       periodTotalCount = inPeriodCount;
       statementTotal = Math.round((openingBalance + periodNet) * 100) / 100;
+      bankStatementBalance = Math.round(asOfClearedNet * 100) / 100;
       periodTransactions = [];
       periodDeferred = true;
     } else {
@@ -8224,12 +8231,17 @@ router.get('/reports/bank-reconciliation',
         (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
         0
       );
+      // Period section footer only (Date.From → Date.To)
       statementTotal = Math.round((openingBalance + periodNetChange) * 100) / 100;
       periodTotalCount = periodTransactions.length;
-    }
 
-    // Top "Balance as Per Bank Statement" = Period Activity Total (same figure)
-    const bankStatementBalance = statementTotal;
+      // Top Bank Statement: all cleared through As of Date (ignores Period From/To filters)
+      bankStatementBalance = Math.round(
+        clearedTxns
+          .filter((t) => new Date(t.clearingDate) <= asOf)
+          .reduce((s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0), 0) * 100
+      ) / 100;
+    }
     const unpresentedTotalCount = unpresentedTxns.length;
 
     res.json({

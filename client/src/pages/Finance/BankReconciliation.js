@@ -686,6 +686,7 @@ export default function BankReconciliation() {
     setLoading(true);
     setError('');
 
+    // Period From/To are independent UI filters — never overwrite them from As of
     const periodFrom = isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING;
     const periodTo = isValidYmd(toDate) ? toDate : (isValidYmd(asOfDate) ? asOfDate : filters.toDate);
     const baseParams = {
@@ -696,12 +697,6 @@ export default function BankReconciliation() {
       toDate: periodTo
     };
 
-    const applyStatementFields = (reportData) => {
-      reportData.bankStatementBalance = reportData.statementTotal;
-      reportData.bankStatementBalanceType = reportData.statementTotalType;
-      return reportData;
-    };
-
     try {
       if (scope === 'period') {
         const res = await api.get('/finance/reports/bank-reconciliation', {
@@ -710,7 +705,7 @@ export default function BankReconciliation() {
         });
         const reportData = res.data?.data;
         if (!reportData) return;
-        applyStatementFields(reportData);
+        // Period filter only updates the lower section — top Bank Statement stays As-of
         startTransition(() => {
           setData((prev) => {
             if (!prev) return reportData;
@@ -724,9 +719,7 @@ export default function BankReconciliation() {
               periodTotalCount: reportData.periodTotalCount,
               periodDeferred: false,
               statementTotal: reportData.statementTotal,
-              statementTotalType: reportData.statementTotalType,
-              bankStatementBalance: reportData.statementTotal,
-              bankStatementBalanceType: reportData.statementTotalType
+              statementTotalType: reportData.statementTotalType
             };
           });
         });
@@ -736,7 +729,7 @@ export default function BankReconciliation() {
         return;
       }
 
-      // ── Phase 1: summary + full Unpresented (skip period row payload) ──
+      // ── Phase 1: summary (As-of Bank Statement) + full Unpresented ──
       const res1 = await api.get('/finance/reports/bank-reconciliation', {
         params: { ...baseParams, includePeriodRows: 0, _t: Date.now() },
         signal: controller?.signal
@@ -746,14 +739,13 @@ export default function BankReconciliation() {
         setData(null);
         return;
       }
-      applyStatementFields(phase1);
       startTransition(() => {
         setData(phase1);
       });
       setBlockingLoad(false);
       setLoading(false);
 
-      // ── Phase 2: fill Period Activity in background ──
+      // ── Phase 2: Period Activity rows for current From/To (does not replace top As-of statement) ──
       if (controller?.signal?.aborted) return;
       setPeriodLoading(true);
       const res2 = await api.get('/finance/reports/bank-reconciliation', {
@@ -762,7 +754,6 @@ export default function BankReconciliation() {
       });
       const phase2 = res2.data?.data;
       if (!phase2) return;
-      applyStatementFields(phase2);
       startTransition(() => {
         setData((prev) => {
           if (!prev) return phase2;
@@ -776,9 +767,8 @@ export default function BankReconciliation() {
             periodTotalCount: phase2.periodTotalCount,
             periodDeferred: false,
             statementTotal: phase2.statementTotal,
-            statementTotalType: phase2.statementTotalType,
-            bankStatementBalance: phase2.statementTotal,
-            bankStatementBalanceType: phase2.statementTotalType
+            statementTotalType: phase2.statementTotalType
+            // keep prev.bankStatementBalance / glBalance / difference / unpresented from phase 1
           };
         });
       });
