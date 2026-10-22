@@ -766,6 +766,7 @@ const NonEmployeeOnboarding = () => {
               <Table size="small" sx={{ minWidth: 1000 }}>
                 <TableHead>
                   <TableRow sx={{ bgcolor: 'grey.100' }}>
+                    <TableCell align="center" sx={{ width: 56 }}><b>Sr No</b></TableCell>
                     <TableCell><b>Name</b></TableCell>
                     <TableCell><b>CNIC/Passport No.</b></TableCell>
                     <TableCell><b>Designation</b></TableCell>
@@ -788,6 +789,7 @@ const NonEmployeeOnboarding = () => {
                     const pkgLabel = formatNewHiringPackage(pkg);
                     return (
                       <TableRow key={index}>
+                        <TableCell align="center">{index + 1}</TableCell>
                         <TableCell>{name}</TableCell>
                         <TableCell>{emp.cnic || '—'}</TableCell>
                         <TableCell>{designation}</TableCell>
@@ -804,7 +806,7 @@ const NonEmployeeOnboarding = () => {
                   })}
                   {getNewHiringEmployees(viewDialog.record).length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={9} align="center">No candidates</TableCell>
+                      <TableCell colSpan={10} align="center">No candidates</TableCell>
                     </TableRow>
                   )}
                 </TableBody>
@@ -854,8 +856,8 @@ const NonEmployeeOnboarding = () => {
           <Button
             variant="outlined"
             startIcon={<PrintIcon />}
-            onClick={() => {
-              const result = printNewHiringApproval(viewDialog.record);
+            onClick={async () => {
+              const result = await printNewHiringApproval(viewDialog.record);
               if (!result?.ok) toast.error(result?.message || 'Unable to print');
             }}
           >

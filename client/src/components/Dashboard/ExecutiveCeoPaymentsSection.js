@@ -2218,8 +2218,8 @@ const ExecutiveCeoPaymentsSection = () => {
                 <Button
                   variant="outlined"
                   startIcon={<PrintIcon />}
-                  onClick={() => {
-                    const result = printNewHiringApproval(viewDialog.settlement);
+                  onClick={async () => {
+                    const result = await printNewHiringApproval(viewDialog.settlement);
                     if (!result?.ok) toast.error(result?.message || 'Unable to print');
                   }}
                   size="small"
@@ -2814,6 +2814,7 @@ const ExecutiveCeoPaymentsSection = () => {
                       <Table size="small" sx={{ minWidth: 1000 }}>
                         <TableHead>
                           <TableRow sx={{ bgcolor: 'grey.100' }}>
+                            <TableCell align="center" sx={{ width: 56 }}><b>Sr No</b></TableCell>
                             <TableCell><b>Name</b></TableCell>
                             <TableCell><b>CNIC/Passport No.</b></TableCell>
                             <TableCell><b>Designation</b></TableCell>
@@ -2839,6 +2840,7 @@ const ExecutiveCeoPaymentsSection = () => {
                               : (/^-?\d+(\.\d+)?$/.test(String(pkg || '').trim()) ? `${formatted} PKR` : formatted);
                             return (
                               <TableRow key={emp._id || index}>
+                                <TableCell align="center">{index + 1}</TableCell>
                                 <TableCell>{name}</TableCell>
                                 <TableCell>{emp.cnic || '—'}</TableCell>
                                 <TableCell>{designation}</TableCell>
@@ -2853,7 +2855,7 @@ const ExecutiveCeoPaymentsSection = () => {
                           })}
                           {getNewHiringEmployees(viewDialog.settlement).length === 0 && (
                             <TableRow>
-                              <TableCell colSpan={9} align="center">No candidates</TableCell>
+                              <TableCell colSpan={10} align="center">No candidates</TableCell>
                             </TableRow>
                           )}
                         </TableBody>
