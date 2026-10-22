@@ -7820,16 +7820,16 @@ router.get('/reports/bank-reconciliation',
       fromDate,
       toDate,
       ledgerFromDate,
-      unpresentedPage: unpresentedPageRaw,
-      unpresentedLimit: unpresentedLimitRaw,
-      unpresentedAll,
-      periodPage: periodPageRaw,
-      periodLimit: periodLimitRaw,
-      periodAll
+      includePeriodRows: includePeriodRowsRaw
     } = req.query;
     if (!accountId) {
       return res.status(400).json({ success: false, message: 'Bank account is required' });
     }
+    // Default true — phase-1 As-of Generate uses includePeriodRows=0 for a faster Unpresented response
+    const includePeriodRows = !(
+      String(includePeriodRowsRaw || '') === '0'
+      || String(includePeriodRowsRaw || '').toLowerCase() === 'false'
+    );
 
     let asOf = new Date();
     if (asOfDate) {
@@ -8038,7 +8038,6 @@ router.get('/reports/bank-reconciliation',
     }
 
     // ── Period Activity: cleared GL rows by clearing date (From/To) ─────────
-    // Load clearance-bearing GL for this account up through period end (TB-aligned posted)
     const clearedGlQuery = {
       account: accountId,
       status: 'posted',
@@ -8049,95 +8048,103 @@ router.get('/reports/bank-reconciliation',
     };
     if (companyId) clearedGlQuery.companyId = companyId;
 
-    const clearedGlRows = await GeneralLedger.find(clearedGlQuery)
-      .populate('account', 'name accountNumber')
-      .populate('journalEntry', 'entryNumber reference description attachments signedDocumentStatus signedDocumentAt signedBySignatory status')
-      .sort({ date: 1, entryNumber: 1 })
-      .lean();
+    let openingBalance = 0;
+    let periodTransactions = [];
+    let periodTotalCount = 0;
+    let statementTotal = 0;
+    let periodDeferred = false;
 
-    const clearedTxns = clearedGlRows.map((gle) => {
-      const { clearDate } = resolveClearance(gle, Number.MAX_SAFE_INTEGER);
-      const je = gle.journalEntry || {};
-      const debit = Number(gle.debit) || 0;
-      const credit = Number(gle.credit) || 0;
-      const isCredit = credit > 0;
-      const amt = isCredit ? credit : debit;
-      const vrNo = gle.entryNumber || je.entryNumber || '—';
-      return {
-        _id: String(gle._id),
-        journalEntryId: je._id ? String(je._id) : null,
-        accountId: String(gle.account?._id || accountId),
-        date: gle.date,
-        vrNo,
-        narration: gle.description || je.description || gle.account?.name || 'Bank Transaction',
-        reference: cleanReference(gle.reference || je.reference, vrNo),
-        debit,
-        credit,
-        amount: amt,
-        type: isCredit ? 'Cr' : 'Dr',
-        isCleared: true,
-        clearanceStatus: 'cleared',
-        clearingDate: clearDate,
-        attachments: je.attachments || [],
-        signedDocumentStatus: je.signedDocumentStatus || 'not_signed',
-        signedDocumentAt: je.signedDocumentAt || null,
-        signedBySignatory: je.signedBySignatory || null,
-        status: je.status || gle.status || 'posted',
-        accountName: gle.account?.name || selectedAccountObj.name || 'Bank Account',
-        accountNumber: gle.account?.accountNumber || selectedAccountObj.accountNumber || ''
-      };
-    }).filter((t) => t.clearingDate);
+    if (!includePeriodRows) {
+      // Fast path: lean totals only (no populate / no period row payload)
+      const clearedLean = await GeneralLedger.find(clearedGlQuery)
+        .select('debit credit clearedAt reconciledAt clearanceStatus isReconciled date')
+        .lean();
 
-    const openingClearedTxns = clearedTxns.filter(
-      (t) => new Date(t.clearingDate) < periodStartDate
-    );
-    const openingBalance = openingClearedTxns.reduce(
-      (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
-      0
-    );
+      let openingNet = 0;
+      let periodNet = 0;
+      let inPeriodCount = 0;
+      for (const gle of clearedLean) {
+        const { clearDate } = resolveClearance(gle, Number.MAX_SAFE_INTEGER);
+        if (!clearDate) continue;
+        const cDate = new Date(clearDate);
+        const net = (Number(gle.debit) || 0) - (Number(gle.credit) || 0);
+        if (cDate < periodStartDate) {
+          openingNet += net;
+        } else if (cDate <= periodEndDate) {
+          periodNet += net;
+          inPeriodCount += 1;
+        }
+      }
+      openingBalance = openingNet;
+      periodTotalCount = inPeriodCount;
+      statementTotal = Math.round((openingBalance + periodNet) * 100) / 100;
+      periodTransactions = [];
+      periodDeferred = true;
+    } else {
+      const clearedGlRows = await GeneralLedger.find(clearedGlQuery)
+        .populate('account', 'name accountNumber')
+        .populate('journalEntry', 'entryNumber reference description attachments signedDocumentStatus signedDocumentAt signedBySignatory status')
+        .sort({ date: 1, entryNumber: 1 })
+        .lean();
 
-    const periodTransactions = clearedTxns.filter((t) => {
-      const cDate = new Date(t.clearingDate);
-      return cDate >= periodStartDate && cDate <= periodEndDate;
-    });
-    periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
+      const clearedTxns = clearedGlRows.map((gle) => {
+        const { clearDate } = resolveClearance(gle, Number.MAX_SAFE_INTEGER);
+        const je = gle.journalEntry || {};
+        const debit = Number(gle.debit) || 0;
+        const credit = Number(gle.credit) || 0;
+        const isCredit = credit > 0;
+        const amt = isCredit ? credit : debit;
+        const vrNo = gle.entryNumber || je.entryNumber || '—';
+        return {
+          _id: String(gle._id),
+          journalEntryId: je._id ? String(je._id) : null,
+          accountId: String(gle.account?._id || accountId),
+          date: gle.date,
+          vrNo,
+          narration: gle.description || je.description || gle.account?.name || 'Bank Transaction',
+          reference: cleanReference(gle.reference || je.reference, vrNo),
+          debit,
+          credit,
+          amount: amt,
+          type: isCredit ? 'Cr' : 'Dr',
+          isCleared: true,
+          clearanceStatus: 'cleared',
+          clearingDate: clearDate,
+          attachments: je.attachments || [],
+          signedDocumentStatus: je.signedDocumentStatus || 'not_signed',
+          signedDocumentAt: je.signedDocumentAt || null,
+          signedBySignatory: je.signedBySignatory || null,
+          status: je.status || gle.status || 'posted',
+          accountName: gle.account?.name || selectedAccountObj.name || 'Bank Account',
+          accountNumber: gle.account?.accountNumber || selectedAccountObj.accountNumber || ''
+        };
+      }).filter((t) => t.clearingDate);
 
-    const periodNetChange = periodTransactions.reduce(
-      (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
-      0
-    );
-    const statementTotal = Math.round((openingBalance + periodNetChange) * 100) / 100;
+      const openingClearedTxns = clearedTxns.filter(
+        (t) => new Date(t.clearingDate) < periodStartDate
+      );
+      openingBalance = openingClearedTxns.reduce(
+        (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
+        0
+      );
+
+      periodTransactions = clearedTxns.filter((t) => {
+        const cDate = new Date(t.clearingDate);
+        return cDate >= periodStartDate && cDate <= periodEndDate;
+      });
+      periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
+
+      const periodNetChange = periodTransactions.reduce(
+        (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
+        0
+      );
+      statementTotal = Math.round((openingBalance + periodNetChange) * 100) / 100;
+      periodTotalCount = periodTransactions.length;
+    }
+
     // Top "Balance as Per Bank Statement" = Period Activity Total (same figure)
     const bankStatementBalance = statementTotal;
-
-    // Paginate heavy tables — totals always from full sets
-    const wantAllUnpresented = String(unpresentedAll || '') === '1' || String(unpresentedAll || '') === 'true';
-    const unpresentedLimit = wantAllUnpresented
-      ? unpresentedTxns.length
-      : Math.min(200, Math.max(1, parseInt(String(unpresentedLimitRaw || '75'), 10) || 75));
-    const unpresentedPage = Math.max(1, parseInt(String(unpresentedPageRaw || '1'), 10) || 1);
     const unpresentedTotalCount = unpresentedTxns.length;
-    const unpresentedPageCount = unpresentedLimit > 0
-      ? Math.max(1, Math.ceil(unpresentedTotalCount / unpresentedLimit) || 1)
-      : 1;
-    const unpresentedSkip = wantAllUnpresented ? 0 : (unpresentedPage - 1) * unpresentedLimit;
-    const unpresentedPageRows = wantAllUnpresented
-      ? unpresentedTxns
-      : unpresentedTxns.slice(unpresentedSkip, unpresentedSkip + unpresentedLimit);
-
-    const wantAllPeriod = String(periodAll || '') === '1' || String(periodAll || '') === 'true';
-    const periodLimit = wantAllPeriod
-      ? periodTransactions.length
-      : Math.min(200, Math.max(1, parseInt(String(periodLimitRaw || '75'), 10) || 75));
-    const periodPage = Math.max(1, parseInt(String(periodPageRaw || '1'), 10) || 1);
-    const periodTotalCount = periodTransactions.length;
-    const periodPageCount = periodLimit > 0
-      ? Math.max(1, Math.ceil(periodTotalCount / periodLimit) || 1)
-      : 1;
-    const periodSkip = wantAllPeriod ? 0 : (periodPage - 1) * periodLimit;
-    const periodPageRows = wantAllPeriod
-      ? periodTransactions
-      : periodTransactions.slice(periodSkip, periodSkip + periodLimit);
 
     res.json({
       success: true,
@@ -8160,21 +8167,14 @@ router.get('/reports/bank-reconciliation',
         differenceType: unpresentedTotal >= 0 ? 'Dr' : 'Cr',
         bankStatementBalance,
         bankStatementBalanceType: bankStatementBalance >= 0 ? 'Dr' : 'Cr',
-        unpresentedTransactions: unpresentedPageRows,
+        unpresentedTransactions: unpresentedTxns,
         unpresentedTotal: Math.round(unpresentedTotal * 100) / 100,
         unpresentedTotalCount,
-        unpresentedPage,
-        unpresentedLimit,
-        unpresentedPageCount,
-        unpresentedHasMore: unpresentedSkip + unpresentedPageRows.length < unpresentedTotalCount,
         openingBalance: Math.round(openingBalance * 100) / 100,
         openingBalanceType: openingBalance >= 0 ? 'Dr' : 'Cr',
-        periodTransactions: periodPageRows,
+        periodTransactions,
         periodTotalCount,
-        periodPage,
-        periodLimit,
-        periodPageCount,
-        periodHasMore: periodSkip + periodPageRows.length < periodTotalCount,
+        periodDeferred,
         statementTotal: Math.round(statementTotal * 100) / 100,
         statementTotalType: statementTotal >= 0 ? 'Dr' : 'Cr',
         bankAccounts: coaBankAccounts.map((a) => ({

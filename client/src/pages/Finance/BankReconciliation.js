@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useCallback, useMemo, useRef, startTransition, memo } from 'react';
+import { FixedSizeList as VirtualList } from 'react-window';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, Button, Chip, CircularProgress, Alert, Skeleton,
@@ -104,7 +105,7 @@ const buildDuplicateRowKeySet = (rows) => {
 const RECON_TABLE_MAX_H = 480;
 /** Locked row height — must match rendered rows or scroll math drifts. */
 const RECON_ROW_H = 56;
-const RECON_OVERSCAN = 12;
+const RECON_OVERSCAN = 16;
 const RECON_DATA_ROW_SX = {
   height: RECON_ROW_H,
   maxHeight: RECON_ROW_H,
@@ -136,20 +137,30 @@ const RECON_CELL_CLIP = {
   whiteSpace: 'nowrap'
 };
 
-/** Unpresented column widths (sum ≈ 100%) — keeps columns from shrinking unevenly. */
-const UP_COL = {
-  check: { width: '3%' },
-  date: { width: '7%' },
-  vrNo: { width: '10%' },
-  narration: { width: '16%' },
-  reference: { width: '8%' },
-  amount: { width: '9%' },
-  attach: { width: '5%' },
-  signedDoc: { width: '10%' },
-  signedBy: { width: '11%' },
-  signedDate: { width: '7%' },
-  clearDate: { width: '8%' },
-  action: { width: '6%' }
+/** Unpresented column template for header + react-window rows (sum = 100%). */
+const UP_GRID = '3% 7% 10% 16% 8% 9% 5% 10% 11% 7% 8% 6%';
+const UP_HEADER_SX = {
+  display: 'grid',
+  gridTemplateColumns: UP_GRID,
+  alignItems: 'center',
+  px: 1,
+  height: 44,
+  bgcolor: 'grey.50',
+  borderBottom: '1px solid',
+  borderColor: 'divider',
+  fontWeight: 700,
+  fontSize: '0.75rem'
+};
+const UP_ROW_SX = {
+  display: 'grid',
+  gridTemplateColumns: UP_GRID,
+  alignItems: 'center',
+  px: 1,
+  height: RECON_ROW_H,
+  borderBottom: '1px solid',
+  borderColor: 'divider',
+  boxSizing: 'border-box',
+  '&:hover': { bgcolor: 'action.hover' }
 };
 
 /** Period activity column widths. */
@@ -194,26 +205,38 @@ const ScrollPadRow = ({ height, colSpan }) => {
   );
 };
 
-const UNP_PAGE_SIZE = 75;
-const PERIOD_PAGE_SIZE = 75;
 
-/** Full-page BR skeleton — shown until Generate finishes (no partial results). */
-const BankReconSkeleton = () => (
-  <Box sx={{ mb: 3 }}>
-    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-      <Skeleton variant="text" width="40%" height={28} />
-      <Skeleton variant="text" width="70%" height={22} sx={{ mt: 1 }} />
-      <Skeleton variant="text" width="55%" height={22} />
-    </Paper>
-    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
-      <Skeleton variant="text" width={280} height={32} sx={{ mb: 1.5 }} />
-      <Skeleton variant="rectangular" height={RECON_TABLE_MAX_H} sx={{ borderRadius: 1 }} />
-      <Stack direction="row" justifyContent="center" sx={{ mt: 1.5 }}>
-        <Skeleton variant="rounded" width={160} height={36} />
-      </Stack>
-    </Paper>
+/** Summary cards skeleton while phase-1 As-of load runs. */
+const SummarySkeleton = () => (
+  <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+    <Skeleton variant="text" width="40%" height={28} />
+    <Skeleton variant="text" width="70%" height={22} sx={{ mt: 1 }} />
+    <Skeleton variant="text" width="55%" height={22} />
+  </Paper>
+);
+
+/** Unpresented section skeleton — no rows until phase 1 completes. */
+const UnpresentedSkeleton = () => (
+  <Box sx={{ mb: 5 }}>
+    <Skeleton variant="text" width={360} height={32} sx={{ mb: 1.5 }} />
     <Paper variant="outlined" sx={{ p: 2 }}>
-      <Skeleton variant="text" width={260} height={32} sx={{ mb: 1.5 }} />
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Loading unpresented / uncleared cheques…
+      </Typography>
+      <Skeleton variant="rectangular" height={RECON_TABLE_MAX_H} sx={{ borderRadius: 1 }} />
+    </Paper>
+  </Box>
+);
+
+/** Period section skeleton while phase 2 fills Period Activity. */
+const PeriodSkeleton = () => (
+  <Box sx={{ mb: 3 }}>
+    <Divider sx={{ my: 3 }} />
+    <Skeleton variant="text" width={280} height={32} sx={{ mb: 1.5 }} />
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+        Loading period activity…
+      </Typography>
       <Skeleton variant="rectangular" height={320} sx={{ borderRadius: 1 }} />
     </Paper>
   </Box>
@@ -241,25 +264,185 @@ const buildReconcilePayload = (txn, clearanceStatus, clearedAt) => {
   };
 };
 
+/** One Unpresented row inside react-window FixedSizeList. */
+const UnpresentedVirtualRow = memo(({ index, style, data: itemData }) => {
+  const {
+    rows,
+    selectedUnpresented,
+    rowClearDates,
+    clearingLoading,
+    bulkClearing,
+    getHandlers
+  } = itemData;
+  const {
+    toggleUnpresentedSelect,
+    setRowClearDates,
+    handleDirectClear,
+    openClearanceDialog,
+    openRefDlg,
+    openAttachDlg,
+    saveSignedDocumentStatus
+  } = getHandlers();
+  const t = rows[index];
+  if (!t) return null;
+  const key = rowKey(t) || `row-${index}`;
+  const isSigned = t.signedDocumentStatus === 'signed';
+  const isSelected = selectedUnpresented.has(key);
+  const defaultClearDate = rowClearDates[key] ?? '';
+  const hasClearDate = isValidYmd(defaultClearDate);
+
+  return (
+    <Box
+      style={style}
+      sx={{
+        ...UP_ROW_SX,
+        bgcolor: isSelected ? 'action.selected' : 'background.paper'
+      }}
+    >
+      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+        <Checkbox
+          size="small"
+          checked={isSelected}
+          onChange={() => toggleUnpresentedSelect(key)}
+          disabled={bulkClearing}
+          inputProps={{ 'aria-label': `Select ${t.vrNo || key}` }}
+        />
+      </Box>
+      <Typography variant="body2" noWrap sx={RECON_CELL_CLIP}>{formatDate(t.date)}</Typography>
+      <Typography variant="body2" fontWeight={600} noWrap>{t.vrNo}</Typography>
+      <Tooltip title={t.narration || ''} enterDelay={500}>
+        <Typography variant="body2" noWrap sx={RECON_CELL_CLIP}>{t.narration}</Typography>
+      </Tooltip>
+      <Stack direction="row" alignItems="center" gap={0.25} sx={{ minWidth: 0 }}>
+        <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>{t.reference || '—'}</Typography>
+        <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, flexShrink: 0, '&:hover': { opacity: 1 } }}>
+          <EditIcon fontSize="small" />
+        </IconButton>
+      </Stack>
+      <Typography variant="body2" fontWeight={600} noWrap textAlign="right" sx={RECON_CELL_CLIP}>
+        {t.type === 'Cr' ? `-${fmt(t.amount)}` : fmt(t.amount)}{' '}
+        <Typography component="span" fontWeight={700} color={t.type === 'Cr' ? 'error.main' : 'success.main'}>
+          {t.type}.
+        </Typography>
+      </Typography>
+      <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+        <Tooltip title={`Attachments (${(t.attachments || []).length}) — click to add or view`}>
+          <span>
+            <IconButton
+              size="small"
+              color={(t.attachments || []).length > 0 ? 'primary' : 'default'}
+              onClick={() => openAttachDlg(t)}
+            >
+              <AttachIcon fontSize="small" />
+              {(t.attachments || []).length > 0 && (
+                <Typography component="span" variant="caption" sx={{ fontSize: 10, fontWeight: 700, ml: 0.25 }}>
+                  {t.attachments.length}
+                </Typography>
+              )}
+            </IconButton>
+          </span>
+        </Tooltip>
+      </Box>
+      <Box sx={{ overflow: 'hidden' }}>
+        <Tooltip title="Click to toggle signed status">
+          <Chip
+            size="small"
+            label={isSigned ? 'Signed' : 'Not Signed'}
+            color={isSigned ? 'success' : 'default'}
+            variant="outlined"
+            onClick={() => saveSignedDocumentStatus(
+              t,
+              isSigned ? 'not_signed' : 'signed',
+              isSigned ? '' : (t.signedBySignatory || SIGNATORY_OPTIONS[0]?.value || '')
+            )}
+            sx={{ height: 22, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}
+          />
+        </Tooltip>
+      </Box>
+      <Tooltip title={isSigned ? 'Click to cycle signatory' : 'Mark as Signed first'}>
+        <Typography
+          variant="caption"
+          noWrap
+          sx={{ cursor: isSigned ? 'pointer' : 'default', display: 'block' }}
+          onClick={() => {
+            if (!isSigned) return;
+            const cur = t.signedBySignatory || '';
+            const idx = SIGNATORY_OPTIONS.findIndex((o) => o.value === cur);
+            const next = SIGNATORY_OPTIONS[(idx + 1) % SIGNATORY_OPTIONS.length];
+            saveSignedDocumentStatus(t, 'signed', next.value);
+          }}
+        >
+          {t.signedBySignatory || '—'}
+        </Typography>
+      </Tooltip>
+      <Typography variant="body2" noWrap sx={RECON_CELL_CLIP}>
+        {t.signedDocumentAt ? formatDate(t.signedDocumentAt) : '—'}
+      </Typography>
+      <Box sx={{ px: 0.25, overflow: 'hidden' }}>
+        <TextField
+          type="date"
+          size="small"
+          fullWidth
+          value={defaultClearDate}
+          onChange={(e) => {
+            const val = e.target.value;
+            setRowClearDates((prev) => ({ ...prev, [key]: val }));
+          }}
+          InputLabelProps={{ shrink: true }}
+          inputProps={{ style: { fontSize: '0.75rem', padding: '4px 2px', height: 28, boxSizing: 'border-box' } }}
+        />
+      </Box>
+      <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
+        <Tooltip title={hasClearDate ? 'Clear cheque — moves to Period Activity' : 'Select a Clearing Date first'}>
+          <span>
+            <IconButton
+              size="small"
+              color="success"
+              disabled={Boolean(clearingLoading[key]) || !hasClearDate}
+              onClick={() => handleDirectClear(t)}
+              sx={{
+                bgcolor: 'rgba(46, 125, 50, 0.1)',
+                border: '1px solid rgba(46, 125, 50, 0.3)',
+                '&:hover': { bgcolor: 'success.main', color: '#fff' }
+              }}
+            >
+              {clearingLoading[key] ? (
+                <CircularProgress size={16} color="inherit" />
+              ) : (
+                <ReconcileIcon fontSize="small" />
+              )}
+            </IconButton>
+          </span>
+        </Tooltip>
+        <Tooltip title="Clearance dialog / custom options">
+          <IconButton size="small" color="primary" onClick={() => openClearanceDialog(t)}>
+            <EditDateIcon fontSize="small" />
+          </IconButton>
+        </Tooltip>
+      </Stack>
+    </Box>
+  );
+});
+
 export default function BankReconciliation() {
   const { selectedCompanyId, companies } = useFinanceCompany();
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(false);
-  const [loadingMoreUnp, setLoadingMoreUnp] = useState(false);
-  const [loadingMorePeriod, setLoadingMorePeriod] = useState(false);
+  /** True while phase-1 As-of runs — Unpresented skeleton only */
+  const [blockingLoad, setBlockingLoad] = useState(false);
+  /** True while phase-2 period rows are loading */
+  const [periodLoading, setPeriodLoading] = useState(false);
   const [exportingPdf, setExportingPdf] = useState(false);
   const [error, setError]     = useState('');
   const [success, setSuccess] = useState('');
   const [bankAccounts, setBankAccounts] = useState([]);
   const [rowClearDates, setRowClearDates] = useState({});
   const [clearingLoading, setClearingLoading] = useState({});
-  const [unpresentedScrollTop, setUnpresentedScrollTop] = useState(0);
   const [periodScrollTop, setPeriodScrollTop] = useState(0);
-  const unpresentedScrollRef = useRef(null);
   const periodScrollRef = useRef(null);
-  const unpresentedRafRef = useRef(0);
   const periodBucketRef = useRef(0);
   const loadAbortRef = useRef(null);
+  const unpresentedListRef = useRef(null);
   const [selectedUnpresented, setSelectedUnpresented] = useState(() => new Set());
   const [bulkClearing, setBulkClearing] = useState(false);
 
@@ -448,15 +631,13 @@ export default function BankReconciliation() {
     }
   }, [selectedCompanyId]);
 
-  // scope: 'all' | 'unpresented' | 'period' — date controls only refresh their section
+  // scope: 'all' | 'unpresented' | 'period' — As-of uses two-phase load (Unpresented first)
   const load = useCallback(async (scope = 'all') => {
     if (!filters.bankAccountId) return;
 
     const asOfDate = String(filters.asOfDate || '').trim();
     const fromDate = String(filters.fromDate || '').trim();
     const toDate = String(filters.toDate || '').trim();
-
-    // Hard-coded top ledger window: 01/01/2000 → As of Date
     const LEDGER_FROM_BEGINNING = '2000-01-01';
 
     if (scope === 'unpresented') {
@@ -474,7 +655,6 @@ export default function BankReconciliation() {
         return;
       }
     } else {
-      // scope === 'all' (account change / full refresh)
       if (!isValidYmd(asOfDate)) {
         setError('Please enter a valid As of Date.');
         return;
@@ -491,204 +671,135 @@ export default function BankReconciliation() {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     loadAbortRef.current = controller;
 
-    // Never show stale/partial results while regenerating
-    if (scope === 'all' || scope === 'unpresented') {
+    const isBlocking = scope === 'all' || scope === 'unpresented';
+    if (isBlocking) {
       setData(null);
+      setBlockingLoad(true);
+      setPeriodLoading(true);
+      setPeriodScrollTop(0);
+      periodBucketRef.current = 0;
+      setSelectedUnpresented(new Set());
+      if (unpresentedListRef.current) unpresentedListRef.current.scrollTo(0);
+    } else {
+      setPeriodLoading(true);
     }
     setLoading(true);
     setError('');
-    try {
-      const periodFrom = isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING;
-      const periodTo = isValidYmd(toDate) ? toDate : (isValidYmd(asOfDate) ? asOfDate : filters.toDate);
-      const params = {
-        accountId: filters.bankAccountId,
-        asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
-        ledgerFromDate: LEDGER_FROM_BEGINNING,
-        fromDate: periodFrom,
-        toDate: periodTo,
-        unpresentedPage: 1,
-        unpresentedLimit: UNP_PAGE_SIZE,
-        periodPage: 1,
-        periodLimit: PERIOD_PAGE_SIZE,
-        _t: new Date().getTime()
-      };
-      const res = await api.get('/finance/reports/bank-reconciliation', {
-        params,
-        signal: controller?.signal
-      });
-      const reportData = res.data?.data;
-      if (!reportData) {
-        setData(null);
-        return;
-      }
-      const getClearingSortTime = (t) => {
-        if (t.clearingDate) {
-          const cd = new Date(t.clearingDate).getTime();
-          if (!isNaN(cd)) return cd;
-        }
-        if (t.date) {
-          const d = new Date(t.date).getTime();
-          if (!isNaN(d)) return d;
-        }
-        return 0;
-      };
-      if (Array.isArray(reportData.unpresentedTransactions)) {
-        reportData.unpresentedTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
-      }
-      if (Array.isArray(reportData.periodTransactions)) {
-        reportData.periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
-      }
-      // Prefer server statement total for top Bank Statement
+
+    const periodFrom = isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING;
+    const periodTo = isValidYmd(toDate) ? toDate : (isValidYmd(asOfDate) ? asOfDate : filters.toDate);
+    const baseParams = {
+      accountId: filters.bankAccountId,
+      asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
+      ledgerFromDate: LEDGER_FROM_BEGINNING,
+      fromDate: periodFrom,
+      toDate: periodTo
+    };
+
+    const applyStatementFields = (reportData) => {
       reportData.bankStatementBalance = reportData.statementTotal;
       reportData.bankStatementBalanceType = reportData.statementTotalType;
+      return reportData;
+    };
 
-      setData((prev) => {
-        if (scope === 'period' && prev) {
-          return {
-            ...prev,
-            fromDate: reportData.fromDate,
-            toDate: reportData.toDate,
-            openingBalance: reportData.openingBalance,
-            openingBalanceType: reportData.openingBalanceType,
-            periodTransactions: reportData.periodTransactions,
-            periodTotalCount: reportData.periodTotalCount,
-            periodPage: reportData.periodPage,
-            periodHasMore: reportData.periodHasMore,
-            statementTotal: reportData.statementTotal,
-            statementTotalType: reportData.statementTotalType,
-            bankStatementBalance: reportData.statementTotal,
-            bankStatementBalanceType: reportData.statementTotalType
-          };
-        }
-        return reportData;
-      });
-      if (scope === 'all' || scope === 'unpresented') {
-        setSelectedUnpresented(new Set());
-        setUnpresentedScrollTop(0);
-        if (unpresentedScrollRef.current) unpresentedScrollRef.current.scrollTop = 0;
-      }
-      if (scope === 'all' || scope === 'period' || scope === 'unpresented') {
+    try {
+      if (scope === 'period') {
+        const res = await api.get('/finance/reports/bank-reconciliation', {
+          params: { ...baseParams, includePeriodRows: 1, _t: Date.now() },
+          signal: controller?.signal
+        });
+        const reportData = res.data?.data;
+        if (!reportData) return;
+        applyStatementFields(reportData);
+        startTransition(() => {
+          setData((prev) => {
+            if (!prev) return reportData;
+            return {
+              ...prev,
+              fromDate: reportData.fromDate,
+              toDate: reportData.toDate,
+              openingBalance: reportData.openingBalance,
+              openingBalanceType: reportData.openingBalanceType,
+              periodTransactions: reportData.periodTransactions || [],
+              periodTotalCount: reportData.periodTotalCount,
+              periodDeferred: false,
+              statementTotal: reportData.statementTotal,
+              statementTotalType: reportData.statementTotalType,
+              bankStatementBalance: reportData.statementTotal,
+              bankStatementBalanceType: reportData.statementTotalType
+            };
+          });
+        });
         setPeriodScrollTop(0);
         periodBucketRef.current = 0;
         if (periodScrollRef.current) periodScrollRef.current.scrollTop = 0;
+        return;
       }
+
+      // ── Phase 1: summary + full Unpresented (skip period row payload) ──
+      const res1 = await api.get('/finance/reports/bank-reconciliation', {
+        params: { ...baseParams, includePeriodRows: 0, _t: Date.now() },
+        signal: controller?.signal
+      });
+      const phase1 = res1.data?.data;
+      if (!phase1) {
+        setData(null);
+        return;
+      }
+      applyStatementFields(phase1);
+      startTransition(() => {
+        setData(phase1);
+      });
+      setBlockingLoad(false);
+      setLoading(false);
+
+      // ── Phase 2: fill Period Activity in background ──
+      if (controller?.signal?.aborted) return;
+      setPeriodLoading(true);
+      const res2 = await api.get('/finance/reports/bank-reconciliation', {
+        params: { ...baseParams, includePeriodRows: 1, _t: Date.now() },
+        signal: controller?.signal
+      });
+      const phase2 = res2.data?.data;
+      if (!phase2) return;
+      applyStatementFields(phase2);
+      startTransition(() => {
+        setData((prev) => {
+          if (!prev) return phase2;
+          return {
+            ...prev,
+            fromDate: phase2.fromDate,
+            toDate: phase2.toDate,
+            openingBalance: phase2.openingBalance,
+            openingBalanceType: phase2.openingBalanceType,
+            periodTransactions: phase2.periodTransactions || [],
+            periodTotalCount: phase2.periodTotalCount,
+            periodDeferred: false,
+            statementTotal: phase2.statementTotal,
+            statementTotalType: phase2.statementTotalType,
+            bankStatementBalance: phase2.statementTotal,
+            bankStatementBalanceType: phase2.statementTotalType
+          };
+        });
+      });
+      setPeriodScrollTop(0);
+      periodBucketRef.current = 0;
+      if (periodScrollRef.current) periodScrollRef.current.scrollTop = 0;
     } catch (e) {
       if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED' || e?.name === 'AbortError') {
         return;
       }
       setError(e.response?.data?.message || 'Failed to load reconciliation data');
-      if (scope === 'all' || scope === 'unpresented') setData(null);
+      if (isBlocking) setData(null);
     } finally {
       if (loadAbortRef.current === controller) {
         loadAbortRef.current = null;
         setLoading(false);
+        setBlockingLoad(false);
+        setPeriodLoading(false);
       }
     }
   }, [filters]);
-
-  const loadMoreUnpresented = useCallback(async () => {
-    if (!filters.bankAccountId || !data?.unpresentedHasMore || loadingMoreUnp || loading) return;
-    const nextPage = (Number(data.unpresentedPage) || 1) + 1;
-    setLoadingMoreUnp(true);
-    setError('');
-    try {
-      const LEDGER_FROM_BEGINNING = '2000-01-01';
-      const asOfDate = String(filters.asOfDate || '').trim();
-      const fromDate = String(filters.fromDate || '').trim();
-      const toDate = String(filters.toDate || '').trim();
-      const res = await api.get('/finance/reports/bank-reconciliation', {
-        params: {
-          accountId: filters.bankAccountId,
-          asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
-          ledgerFromDate: LEDGER_FROM_BEGINNING,
-          fromDate: isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING,
-          toDate: isValidYmd(toDate) ? toDate : filters.toDate,
-          unpresentedPage: nextPage,
-          unpresentedLimit: UNP_PAGE_SIZE,
-          periodPage: 1,
-          periodLimit: 1,
-          _t: Date.now()
-        }
-      });
-      const pageData = res.data?.data;
-      const rows = Array.isArray(pageData?.unpresentedTransactions) ? pageData.unpresentedTransactions : [];
-      setData((prev) => {
-        if (!prev) return prev;
-        const seen = new Set((prev.unpresentedTransactions || []).map((t) => rowKey(t)));
-        const merged = [...(prev.unpresentedTransactions || [])];
-        rows.forEach((t) => {
-          const k = rowKey(t);
-          if (k && !seen.has(k)) {
-            seen.add(k);
-            merged.push(t);
-          }
-        });
-        return {
-          ...prev,
-          unpresentedTransactions: merged,
-          unpresentedPage: pageData.unpresentedPage ?? nextPage,
-          unpresentedHasMore: Boolean(pageData.unpresentedHasMore),
-          unpresentedTotalCount: pageData.unpresentedTotalCount ?? prev.unpresentedTotalCount
-        };
-      });
-    } catch (e) {
-      setError(e.response?.data?.message || 'Failed to load more unpresented rows');
-    } finally {
-      setLoadingMoreUnp(false);
-    }
-  }, [filters, data, loadingMoreUnp, loading]);
-
-  const loadMorePeriod = useCallback(async () => {
-    if (!filters.bankAccountId || !data?.periodHasMore || loadingMorePeriod || loading) return;
-    const nextPage = (Number(data.periodPage) || 1) + 1;
-    setLoadingMorePeriod(true);
-    setError('');
-    try {
-      const LEDGER_FROM_BEGINNING = '2000-01-01';
-      const asOfDate = String(filters.asOfDate || '').trim();
-      const fromDate = String(filters.fromDate || '').trim();
-      const toDate = String(filters.toDate || '').trim();
-      const res = await api.get('/finance/reports/bank-reconciliation', {
-        params: {
-          accountId: filters.bankAccountId,
-          asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
-          ledgerFromDate: LEDGER_FROM_BEGINNING,
-          fromDate: isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING,
-          toDate: isValidYmd(toDate) ? toDate : filters.toDate,
-          unpresentedPage: 1,
-          unpresentedLimit: 1,
-          periodPage: nextPage,
-          periodLimit: PERIOD_PAGE_SIZE,
-          _t: Date.now()
-        }
-      });
-      const pageData = res.data?.data;
-      const rows = Array.isArray(pageData?.periodTransactions) ? pageData.periodTransactions : [];
-      setData((prev) => {
-        if (!prev) return prev;
-        const seen = new Set((prev.periodTransactions || []).map((t) => String(t._id || '')));
-        const merged = [...(prev.periodTransactions || [])];
-        rows.forEach((t) => {
-          const k = String(t._id || '');
-          if (k && !seen.has(k)) {
-            seen.add(k);
-            merged.push(t);
-          }
-        });
-        return {
-          ...prev,
-          periodTransactions: merged,
-          periodPage: pageData.periodPage ?? nextPage,
-          periodHasMore: Boolean(pageData.periodHasMore),
-          periodTotalCount: pageData.periodTotalCount ?? prev.periodTotalCount
-        };
-      });
-    } catch (e) {
-      setError(e.response?.data?.message || 'Failed to load more period rows');
-    } finally {
-      setLoadingMorePeriod(false);
-    }
-  }, [filters, data, loadingMorePeriod, loading]);
 
   const unpresentedRows = useMemo(
     () => data?.unpresentedTransactions || [],
@@ -699,23 +810,11 @@ export default function BankReconciliation() {
     [unpresentedRows]
   );
   const periodRows = data?.periodTransactions || [];
-  const unpresentedWindow = useMemo(
-    () => getWindowRange(unpresentedRows.length, unpresentedScrollTop),
-    [unpresentedRows.length, unpresentedScrollTop]
-  );
   // Opening-balance row sits above the virtualized list — offset scroll by one row.
   const periodWindow = useMemo(
     () => getWindowRange(periodRows.length, Math.max(0, periodScrollTop - RECON_ROW_H)),
     [periodRows.length, periodScrollTop]
   );
-
-  const handleUnpresentedScroll = (e) => {
-    const top = e.currentTarget.scrollTop;
-    if (unpresentedRafRef.current) cancelAnimationFrame(unpresentedRafRef.current);
-    unpresentedRafRef.current = requestAnimationFrame(() => {
-      setUnpresentedScrollTop(top);
-    });
-  };
 
   const handlePeriodScroll = (e) => {
     const top = e.currentTarget.scrollTop;
@@ -736,14 +835,11 @@ export default function BankReconciliation() {
       setData(null);
       return undefined;
     }
-    // Drop previous table immediately so we never paint thousands of stale rows.
     setData(null);
     setSelectedUnpresented(new Set());
-    setUnpresentedScrollTop(0);
     load();
     return () => {
       if (loadAbortRef.current) loadAbortRef.current.abort();
-      if (unpresentedRafRef.current) cancelAnimationFrame(unpresentedRafRef.current);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.bankAccountId]);
@@ -959,6 +1055,32 @@ export default function BankReconciliation() {
     }
   };
 
+  // Stable handler bag so FixedSizeList itemData identity only changes with row state
+  const unpresentedHandlersRef = useRef({});
+  unpresentedHandlersRef.current = {
+    toggleUnpresentedSelect,
+    setRowClearDates,
+    handleDirectClear,
+    openClearanceDialog,
+    openRefDlg,
+    openAttachDlg,
+    saveSignedDocumentStatus
+  };
+  const unpresentedItemData = useMemo(() => ({
+    rows: unpresentedRows,
+    selectedUnpresented,
+    rowClearDates,
+    clearingLoading,
+    bulkClearing,
+    getHandlers: () => unpresentedHandlersRef.current
+  }), [
+    unpresentedRows,
+    selectedUnpresented,
+    rowClearDates,
+    clearingLoading,
+    bulkClearing
+  ]);
+
   const selectedAccount = bankAccounts.find(a => a._id === filters.bankAccountId);
 
   return (
@@ -1047,10 +1169,16 @@ export default function BankReconciliation() {
         </Grid>
       </Paper>
 
-      {loading && !data && <BankReconSkeleton />}
+      {blockingLoad && (
+        <>
+          <SummarySkeleton />
+          <UnpresentedSkeleton />
+          <PeriodSkeleton />
+        </>
+      )}
 
-      {/* Results only after a successful load (hidden while regenerating) */}
-      {data && (
+      {/* Summary after phase 1 — Unpresented paint; Period may still be loading */}
+      {data && !blockingLoad && (
         <Paper variant="outlined" sx={{ mb: 4, overflow: 'hidden' }}>
           <TableContainer>
             <Table size="small">
@@ -1095,41 +1223,38 @@ export default function BankReconciliation() {
       )}
 
       {/* Upper Table: Unpresented / Uncleared Cheques & Payments */}
-      {data && (
+      {data && !blockingLoad && (
         <Box sx={{ mb: 5 }}>
           <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5} flexWrap="wrap" gap={1}>
             <Typography variant="h6" fontWeight={700}>
-              Unpresented / Uncleared Cheques &amp; Payments
-              {' '}
-              ({unpresentedRows.length}
-              {typeof data.unpresentedTotalCount === 'number' && data.unpresentedTotalCount !== unpresentedRows.length
-                ? ` of ${data.unpresentedTotalCount}`
-                : ''})
+              Unpresented / Uncleared Cheques &amp; Payments ({unpresentedRows.length})
             </Typography>
             <Stack direction="row" spacing={2} alignItems="center">
-              <Button 
-                variant="outlined" 
-                color="error" 
+              <Button
+                variant="outlined"
+                color="error"
                 size="small"
                 startIcon={<PdfIcon />}
-                disabled={exportingPdf}
+                disabled={exportingPdf || periodLoading}
                 onClick={async () => {
                   try {
                     setExportingPdf(true);
-                    const LEDGER_FROM_BEGINNING = '2000-01-01';
-                    const res = await api.get('/finance/reports/bank-reconciliation', {
-                      params: {
-                        accountId: filters.bankAccountId,
-                        asOfDate: filters.asOfDate,
-                        ledgerFromDate: LEDGER_FROM_BEGINNING,
-                        fromDate: filters.fromDate || LEDGER_FROM_BEGINNING,
-                        toDate: filters.toDate,
-                        unpresentedAll: 1,
-                        periodAll: 1,
-                        _t: Date.now()
-                      }
-                    });
-                    const full = res.data?.data || data;
+                    let full = data;
+                    if (data?.periodDeferred || periodLoading) {
+                      const LEDGER_FROM_BEGINNING = '2000-01-01';
+                      const res = await api.get('/finance/reports/bank-reconciliation', {
+                        params: {
+                          accountId: filters.bankAccountId,
+                          asOfDate: filters.asOfDate,
+                          ledgerFromDate: LEDGER_FROM_BEGINNING,
+                          fromDate: filters.fromDate || LEDGER_FROM_BEGINNING,
+                          toDate: filters.toDate,
+                          includePeriodRows: 1,
+                          _t: Date.now()
+                        }
+                      });
+                      full = res.data?.data || data;
+                    }
                     const bankName = bankAccounts.find(b => String(b._id) === String(filters.bankAccountId))?.accountName || 'Bank';
                     const companyName = companies?.find(c => String(c._id) === String(selectedCompanyId))?.name || '';
                     exportBankReconciliationPDF(full, filters, bankName, companyName);
@@ -1195,257 +1320,94 @@ export default function BankReconciliation() {
             </Paper>
           )}
 
-          <TableContainer
-            ref={unpresentedScrollRef}
-            component={Paper}
-            variant="outlined"
-            sx={RECON_TABLE_CONTAINER_SX}
-            onScroll={handleUnpresentedScroll}
-          >
-            <Table size="small" stickyHeader sx={RECON_TABLE_SX}>
-              <TableHead>
-                <TableRow>
-                  <TableCell padding="checkbox" sx={{ bgcolor: 'grey.50', ...UP_COL.check }}>
-                    <Checkbox
-                      size="small"
-                      indeterminate={
-                        selectedUnpresented.size > 0
-                        && selectedUnpresented.size < clearableUnpresentedRows.length
-                      }
-                      checked={
-                        clearableUnpresentedRows.length > 0
-                        && selectedUnpresented.size === clearableUnpresentedRows.length
-                      }
-                      onChange={toggleSelectAllUnpresented}
-                      disabled={!clearableUnpresentedRows.length || bulkClearing}
-                      inputProps={{ 'aria-label': 'Select all uncleared' }}
-                    />
-                  </TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.date }}>Date</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.vrNo }}>VrNo</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.narration }}>Narration</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.reference }}>Reference</TableCell>
-                  <TableCell align="right" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.amount }}>Amount</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.attach }}>Attachment</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedDoc }}>Signed Document</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedBy }}>Signed By</TableCell>
-                  <TableCell sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.signedDate }}>Signed Date</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.clearDate }}>Clearing.Date</TableCell>
-                  <TableCell align="center" sx={{ fontWeight: 700, bgcolor: 'grey.50', ...UP_COL.action }}>Action</TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {unpresentedRows.length === 0 ? (
-                  <TableRow>
-                    <TableCell colSpan={12} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                      {loading
-                        ? 'Loading…'
-                        : `No unpresented / uncleared cheques up to ${formatDate(filters.asOfDate)}.`}
-                    </TableCell>
-                  </TableRow>
-                ) : (
-                  <>
-                    <ScrollPadRow height={unpresentedWindow.topPad} colSpan={12} />
-                    {unpresentedRows.slice(unpresentedWindow.start, unpresentedWindow.end).map((t, idx) => {
-                      const absIdx = unpresentedWindow.start + idx;
-                      const key = rowKey(t) || `row-${absIdx}`;
-                      const isSigned = t.signedDocumentStatus === 'signed';
-                      const isSelected = selectedUnpresented.has(key);
-                      // Blank until user picks a date (do not prefill today / As of)
-                      const defaultClearDate = rowClearDates[key] ?? '';
-                      const hasClearDate = isValidYmd(defaultClearDate);
-                      return (
-                        <TableRow key={key} hover selected={isSelected} sx={RECON_DATA_ROW_SX}>
-                          <TableCell padding="checkbox">
-                            <Checkbox
-                              size="small"
-                              checked={isSelected}
-                              onChange={() => toggleUnpresentedSelect(key)}
-                              disabled={bulkClearing}
-                              inputProps={{ 'aria-label': `Select ${t.vrNo || key}` }}
-                            />
-                          </TableCell>
-                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.date }}>{formatDate(t.date)}</TableCell>
-                          <TableCell sx={{ fontWeight: 600, ...UP_COL.vrNo, overflow: 'hidden' }}>
-                            <Typography variant="body2" fontWeight={600} noWrap>
-                              {t.vrNo}
-                            </Typography>
-                          </TableCell>
-                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.narration }}>
-                            <Tooltip title={t.narration || ''} enterDelay={500}>
-                              <span>{t.narration}</span>
-                            </Tooltip>
-                          </TableCell>
-                          <TableCell sx={{ ...UP_COL.reference, overflow: 'hidden' }}>
-                            <Stack direction="row" alignItems="center" gap={0.25} sx={{ minWidth: 0 }}>
-                              <Typography variant="body2" noWrap sx={{ minWidth: 0, flex: 1 }}>{t.reference || '—'}</Typography>
-                              <IconButton size="small" onClick={() => openRefDlg(t)} sx={{ opacity: 0.3, flexShrink: 0, '&:hover': { opacity: 1 } }}>
-                                <EditIcon fontSize="small" />
-                              </IconButton>
-                            </Stack>
-                          </TableCell>
-                          <TableCell align="right" sx={{ fontWeight: 600, ...RECON_CELL_CLIP, ...UP_COL.amount }}>
-                            {t.type === 'Cr' ? `-${fmt(t.amount)}` : fmt(t.amount)}{' '}
-                            <Typography component="span" fontWeight={700} color={t.type === 'Cr' ? 'error.main' : 'success.main'}>
-                              {t.type}.
-                            </Typography>
-                          </TableCell>
-                          <TableCell align="center" sx={UP_COL.attach}>
-                            <Tooltip title={`Attachments (${(t.attachments || []).length}) — click to add or view`}>
-                              <span>
-                                <IconButton
-                                  size="small"
-                                  color={(t.attachments || []).length > 0 ? 'primary' : 'default'}
-                                  onClick={() => openAttachDlg(t)}
-                                >
-                                  <AttachIcon fontSize="small" />
-                                  {(t.attachments || []).length > 0 && (
-                                    <Typography component="span" variant="caption" sx={{ fontSize: 10, fontWeight: 700, ml: 0.25 }}>
-                                      {t.attachments.length}
-                                    </Typography>
-                                  )}
-                                </IconButton>
-                              </span>
-                            </Tooltip>
-                          </TableCell>
-                          <TableCell sx={{ ...UP_COL.signedDoc, overflow: 'hidden' }}>
-                            <Tooltip title="Click to toggle signed status">
-                              <Chip
-                                size="small"
-                                label={isSigned ? 'Signed' : 'Not Signed'}
-                                color={isSigned ? 'success' : 'default'}
-                                variant="outlined"
-                                onClick={() => saveSignedDocumentStatus(
-                                  t,
-                                  isSigned ? 'not_signed' : 'signed',
-                                  isSigned ? '' : (t.signedBySignatory || SIGNATORY_OPTIONS[0]?.value || '')
-                                )}
-                                sx={{ height: 22, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}
-                              />
-                            </Tooltip>
-                          </TableCell>
-                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.signedBy }}>
-                            <Tooltip title={isSigned ? 'Click to cycle signatory' : 'Mark as Signed first'}>
-                              <Typography
-                                variant="caption"
-                                noWrap
-                                sx={{ cursor: isSigned ? 'pointer' : 'default', display: 'block' }}
-                                onClick={() => {
-                                  if (!isSigned) return;
-                                  const cur = t.signedBySignatory || '';
-                                  const idx = SIGNATORY_OPTIONS.findIndex((o) => o.value === cur);
-                                  const next = SIGNATORY_OPTIONS[(idx + 1) % SIGNATORY_OPTIONS.length];
-                                  saveSignedDocumentStatus(t, 'signed', next.value);
-                                }}
-                              >
-                                {t.signedBySignatory || '—'}
-                              </Typography>
-                            </Tooltip>
-                          </TableCell>
-                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.signedDate }}>
-                            {t.signedDocumentAt ? formatDate(t.signedDocumentAt) : '—'}
-                          </TableCell>
-                          <TableCell align="center" sx={{ ...UP_COL.clearDate, overflow: 'hidden' }}>
-                            <TextField
-                              type="date"
-                              size="small"
-                              fullWidth
-                              value={defaultClearDate}
-                              onChange={(e) => {
-                                const val = e.target.value;
-                                setRowClearDates((prev) => ({ ...prev, [key]: val }));
-                              }}
-                              InputLabelProps={{ shrink: true }}
-                              inputProps={{ style: { fontSize: '0.75rem', padding: '4px 2px', height: 28, boxSizing: 'border-box' } }}
-                            />
-                          </TableCell>
-                          <TableCell align="center" sx={UP_COL.action}>
-                            <Stack direction="row" spacing={0.5} justifyContent="center" alignItems="center">
-                              <Tooltip title={hasClearDate ? 'Clear cheque — moves to Period Activity' : 'Select a Clearing Date first'}>
-                                <span>
-                                  <IconButton
-                                    size="small"
-                                    color="success"
-                                    disabled={Boolean(clearingLoading[key]) || !hasClearDate}
-                                    onClick={() => handleDirectClear(t)}
-                                    sx={{
-                                      bgcolor: 'rgba(46, 125, 50, 0.1)',
-                                      border: '1px solid rgba(46, 125, 50, 0.3)',
-                                      '&:hover': { bgcolor: 'success.main', color: '#fff' }
-                                    }}
-                                  >
-                                    {clearingLoading[key] ? (
-                                      <CircularProgress size={16} color="inherit" />
-                                    ) : (
-                                      <ReconcileIcon fontSize="small" />
-                                    )}
-                                  </IconButton>
-                                </span>
-                              </Tooltip>
-                              <Tooltip title="Clearance dialog / custom options">
-                                <IconButton size="small" color="primary" onClick={() => openClearanceDialog(t)}>
-                                  <EditDateIcon fontSize="small" />
-                                </IconButton>
-                              </Tooltip>
-                            </Stack>
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                    <ScrollPadRow height={unpresentedWindow.bottomPad} colSpan={12} />
-                    {/* Total Row */}
-                    <TableRow
-                      sx={{
-                        bgcolor: 'grey.100',
-                        position: 'sticky',
-                        bottom: 0,
-                        zIndex: 1,
-                        '& td': { bgcolor: 'grey.100' }
-                      }}
-                    >
-                      <TableCell colSpan={5} sx={{ fontWeight: 800, fontSize: '0.95rem' }}>
-                        Total
-                      </TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 800, fontSize: '0.95rem', color: data.differenceType === 'Cr' ? 'error.main' : 'success.main' }}>
-                        {data.difference < 0 ? `-${fmt(data.difference)}` : fmt(data.difference)} {data.differenceType}.
-                      </TableCell>
-                      <TableCell colSpan={6} />
-                    </TableRow>
-                  </>
-                )}
-              </TableBody>
-            </Table>
-          </TableContainer>
-          {data.unpresentedHasMore && (
-            <Stack alignItems="center" sx={{ mt: 1.5 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={loadingMoreUnp}
-                startIcon={loadingMoreUnp ? <CircularProgress size={16} color="inherit" /> : null}
-                onClick={loadMoreUnpresented}
+          <Paper variant="outlined" sx={{ overflow: 'hidden', width: '100%' }}>
+            <Box sx={UP_HEADER_SX}>
+              <Box sx={{ display: 'flex', justifyContent: 'center' }}>
+                <Checkbox
+                  size="small"
+                  indeterminate={
+                    selectedUnpresented.size > 0
+                    && selectedUnpresented.size < clearableUnpresentedRows.length
+                  }
+                  checked={
+                    clearableUnpresentedRows.length > 0
+                    && selectedUnpresented.size === clearableUnpresentedRows.length
+                  }
+                  onChange={toggleSelectAllUnpresented}
+                  disabled={!clearableUnpresentedRows.length || bulkClearing}
+                  inputProps={{ 'aria-label': 'Select all uncleared' }}
+                />
+              </Box>
+              <Box>Date</Box>
+              <Box>VrNo</Box>
+              <Box>Narration</Box>
+              <Box>Reference</Box>
+              <Box sx={{ textAlign: 'right' }}>Amount</Box>
+              <Box sx={{ textAlign: 'center' }}>Attachment</Box>
+              <Box>Signed Document</Box>
+              <Box>Signed By</Box>
+              <Box>Signed Date</Box>
+              <Box sx={{ textAlign: 'center' }}>Clearing.Date</Box>
+              <Box sx={{ textAlign: 'center' }}>Action</Box>
+            </Box>
+            {unpresentedRows.length === 0 ? (
+              <Box sx={{ py: 3, textAlign: 'center', color: 'text.secondary' }}>
+                No unpresented / uncleared cheques up to {formatDate(filters.asOfDate)}.
+              </Box>
+            ) : (
+              <VirtualList
+                ref={unpresentedListRef}
+                height={RECON_TABLE_MAX_H}
+                width="100%"
+                itemCount={unpresentedRows.length}
+                itemSize={RECON_ROW_H}
+                itemData={unpresentedItemData}
+                overscanCount={8}
               >
-                {loadingMoreUnp
-                  ? 'Loading…'
-                  : `Load more (${unpresentedRows.length} of ${data.unpresentedTotalCount || '…'})`}
-              </Button>
-            </Stack>
+                {UnpresentedVirtualRow}
+              </VirtualList>
+            )}
+          </Paper>
+          {unpresentedRows.length > 0 && (
+            <Paper variant="outlined" sx={{ mt: 0, borderTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
+              <Box
+                sx={{
+                  display: 'grid',
+                  gridTemplateColumns: UP_GRID,
+                  alignItems: 'center',
+                  px: 1,
+                  py: 1.25,
+                  bgcolor: 'grey.100'
+                }}
+              >
+                <Box sx={{ gridColumn: '1 / 6', fontWeight: 800, fontSize: '0.95rem' }}>Total</Box>
+                <Box
+                  sx={{
+                    gridColumn: '6 / 7',
+                    textAlign: 'right',
+                    fontWeight: 800,
+                    fontSize: '0.95rem',
+                    color: data.differenceType === 'Cr' ? 'error.main' : 'success.main'
+                  }}
+                >
+                  {data.difference < 0 ? `-${fmt(data.difference)}` : fmt(data.difference)} {data.differenceType}.
+                </Box>
+              </Box>
+            </Paper>
           )}
         </Box>
       )}
 
-      {/* Lower Table: Period Activity & Cleared Bank Transactions */}
-      {data && (
+      {/* Lower Table: Period Activity — skeleton until phase 2 completes */}
+      {data && !blockingLoad && periodLoading && <PeriodSkeleton />}
+      {data && !blockingLoad && !periodLoading && (
         <Box sx={{ mb: 3 }}>
           <Divider sx={{ my: 3 }} />
-          
+
           <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems="center" mb={2} gap={2}>
             <Box>
               <Typography variant="h6" fontWeight={700}>
-                Bank Statement &amp; Period Activity
-                {typeof data.periodTotalCount === 'number'
-                  ? ` (${periodRows.length}${data.periodTotalCount !== periodRows.length ? ` of ${data.periodTotalCount}` : ''})`
-                  : ''}
+                Bank Statement &amp; Period Activity ({periodRows.length})
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Cleared bank transactions between selected dates
@@ -1610,17 +1572,13 @@ export default function BankReconciliation() {
                   </TableRow>
                 ))}
                 <ScrollPadRow height={periodWindow.bottomPad} colSpan={7} />
-
-                {/* Total Closing Statement Balance Row */}
-                <TableRow
-                  sx={{
-                    bgcolor: 'grey.100',
-                    position: 'sticky',
-                    bottom: 0,
-                    zIndex: 1,
-                    '& td': { bgcolor: 'grey.100' }
-                  }}
-                >
+              </TableBody>
+            </Table>
+          </TableContainer>
+          <Paper variant="outlined" sx={{ mt: 0, borderTop: 0, borderTopLeftRadius: 0, borderTopRightRadius: 0 }}>
+            <Table size="small" sx={RECON_TABLE_SX}>
+              <TableBody>
+                <TableRow sx={{ bgcolor: 'grey.100' }}>
                   <TableCell colSpan={4} sx={{ fontWeight: 800, fontSize: '0.95rem' }}>
                     Total
                   </TableCell>
@@ -1634,22 +1592,7 @@ export default function BankReconciliation() {
                 </TableRow>
               </TableBody>
             </Table>
-          </TableContainer>
-          {data.periodHasMore && (
-            <Stack alignItems="center" sx={{ mt: 1.5 }}>
-              <Button
-                variant="outlined"
-                size="small"
-                disabled={loadingMorePeriod}
-                startIcon={loadingMorePeriod ? <CircularProgress size={16} color="inherit" /> : null}
-                onClick={loadMorePeriod}
-              >
-                {loadingMorePeriod
-                  ? 'Loading…'
-                  : `Load more (${periodRows.length} of ${data.periodTotalCount || '…'})`}
-              </Button>
-            </Stack>
-          )}
+          </Paper>
         </Box>
       )}
 
