@@ -59,7 +59,9 @@ import {
   KeyboardArrowUp as KeyboardArrowUpIcon,
   Delete as DeleteIcon,
   Search as SearchIcon,
-  Clear as ClearIcon
+  Clear as ClearIcon,
+  Undo as UndoIcon,
+  Send as SendIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
@@ -201,6 +203,27 @@ const AccountsPayable = () => {
     return true;
   };
 
+  /** Finance may return an approved unpaid bill to initiator (approval chain stays intact). */
+  const canFinanceReturnBill = (bill) => {
+    if (!bill) return false;
+    if (!['approved', 'received', 'overdue'].includes(bill.status)) return false;
+    if (getSettledAmount(bill) > 0) return false;
+    if (getSettlementPending(bill) > 0) return false;
+    return true;
+  };
+
+  const isBillInitiator = (bill) => {
+    const creatorId = String(bill?.createdBy?._id || bill?.createdBy || '');
+    return Boolean(preparerUserId && creatorId && preparerUserId === creatorId);
+  };
+
+  const canResubmitToFinance = (bill) => {
+    if (!bill || bill.status !== 'Returned from Finance') return false;
+    return isBillInitiator(bill) || ['super_admin', 'admin', 'finance_manager', 'general_manager'].includes(
+      String(currentUser?.role || '')
+    );
+  };
+
   const handleResubmitToAudit = async (bill) => {
     if (!bill?._id) return;
     try {
@@ -214,6 +237,42 @@ const AccountsPayable = () => {
       fetchAccountsPayable();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to resubmit to Pre-Audit');
+    }
+  };
+
+  const handleFinanceReturnBill = async (bill) => {
+    const target = bill || selectedBill;
+    if (!target?._id) return;
+    const reason = window.prompt('Reason for returning this bill to the initiator');
+    if (!reason || !String(reason).trim()) return;
+    try {
+      const res = await api.post(`/finance/accounts-payable/${target._id}/finance-return`, {
+        rejectionReason: String(reason).trim()
+      });
+      toast.success(res.data?.message || 'Bill returned to initiator');
+      if (selectedBill?._id === target._id && res.data?.data) {
+        setSelectedBill(res.data.data);
+      }
+      fetchAccountsPayable();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to return bill');
+    }
+  };
+
+  const handleResubmitToFinance = async (bill) => {
+    const target = bill || selectedBill;
+    if (!target?._id) return;
+    try {
+      const res = await api.post(`/finance/accounts-payable/${target._id}/resubmit-to-finance`, {
+        comments: 'Resubmitted to Finance after corrections'
+      });
+      toast.success(res.data?.message || 'Bill resubmitted to Finance');
+      if (selectedBill?._id === target._id && res.data?.data) {
+        setSelectedBill(res.data.data);
+      }
+      fetchAccountsPayable();
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Failed to resubmit to Finance');
     }
   };
 
@@ -1467,6 +1526,7 @@ const AccountsPayable = () => {
       'DEPT REJECTED': 'error',
       'PENDING AUDIT': 'info',
       'RETURNED FROM AUDIT': 'error',
+      'RETURNED FROM FINANCE': 'warning',
       'FORWARDED TO AUDIT DIRECTOR': 'primary'
     };
     return colorMap[status] || 'default';
@@ -2134,7 +2194,7 @@ const AccountsPayable = () => {
                             {bill.status !== 'paid'
                               && outstanding > 0
                               && bill.status !== 'draft'
-                              && !['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit'].includes(bill.status)
+                              && !['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'Returned from Finance'].includes(bill.status)
                               && bill.approvalStatus !== 'Submitted'
                               && bill.approvalStatus !== 'Rejected' && (
                               <Tooltip title="Make Payment">
@@ -2143,10 +2203,24 @@ const AccountsPayable = () => {
                                 </IconButton>
                               </Tooltip>
                             )}
+                            {canFinanceReturnBill(bill) && (
+                              <Tooltip title="Reject / return to initiator (approval authorities stay intact)">
+                                <IconButton size="small" color="error" onClick={() => handleFinanceReturnBill(bill)}>
+                                  <UndoIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
                             {bill.status === 'Returned from Audit' && (
                               <Tooltip title="Resubmit to Pre-Audit">
                                 <IconButton size="small" color="warning" onClick={() => handleResubmitToAudit(bill)}>
                                   <RefreshIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            )}
+                            {canResubmitToFinance(bill) && (
+                              <Tooltip title="Resubmit to Finance (no re-approval needed)">
+                                <IconButton size="small" color="primary" onClick={() => handleResubmitToFinance(bill)}>
+                                  <SendIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
                             )}
@@ -2431,6 +2505,43 @@ const AccountsPayable = () => {
                         {getPendingCoaDeptStep(selectedBill)?.roleLabel
                           ? ` (${getPendingCoaDeptStep(selectedBill).roleLabel})`
                           : ''} for this Chart of Accounts bill.
+                      </Alert>
+                    )}
+
+                    {canFinanceReturnBill(selectedBill) && (
+                      <Alert severity="warning" sx={{ mb: 2 }}
+                        action={
+                          <Button color="error" size="small" variant="contained" onClick={() => handleFinanceReturnBill(selectedBill)}>
+                            Reject to Initiator
+                          </Button>
+                        }
+                      >
+                        Return this bill to the initiator for correction. Department approval authorities stay intact — after edit &amp; resubmit it comes straight back to Finance.
+                      </Alert>
+                    )}
+
+                    {selectedBill?.status === 'Returned from Finance' && (
+                      <Alert severity="info" sx={{ mb: 2 }}
+                        action={
+                          canResubmitToFinance(selectedBill) ? (
+                            <Stack direction="row" spacing={1}>
+                              {canEditVendorBill(selectedBill) && (
+                                <Button size="small" variant="outlined" onClick={() => handleOpenEdit(selectedBill)}>
+                                  Edit
+                                </Button>
+                              )}
+                              <Button color="primary" size="small" variant="contained" onClick={() => handleResubmitToFinance(selectedBill)}>
+                                Resubmit to Finance
+                              </Button>
+                            </Stack>
+                          ) : null
+                        }
+                      >
+                        Returned from Finance for correction
+                        {Array.isArray(selectedBill.observations) && selectedBill.observations.filter((o) => !o.resolved).length
+                          ? `: ${(selectedBill.observations.filter((o) => !o.resolved).map((o) => o.observation).filter(Boolean).slice(-1)[0]) || ''}`
+                          : '.'}
+                        {' '}Approval authorities remain unchanged.
                       </Alert>
                     )}
 

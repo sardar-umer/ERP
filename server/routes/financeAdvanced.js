@@ -2763,7 +2763,7 @@ router.put('/accounts-receivable/:id/installments',
 // @desc    Update bill
 // @access  Private (Finance and Admin)
 router.put('/accounts-payable/:id',
-  authorize('super_admin', 'admin', 'finance_manager'),
+  authorize('super_admin', 'admin', 'finance_manager', 'general_manager', 'procurement_manager'),
   asyncHandler(async (req, res) => {
     const bill = await AccountsPayable.findById(req.params.id);
     if (!bill) {
@@ -2773,18 +2773,45 @@ router.put('/accounts-payable/:id',
       });
     }
 
+    const userId = req.user.id || req.user._id;
+    const role = String(req.user.role || '');
+    const isFinanceRole = ['super_admin', 'admin', 'finance_manager', 'general_manager'].includes(role);
+    const isInitiator = String(bill.createdBy || '') === String(userId);
+
+    // Returned from Finance: initiator (or finance) may edit; approval chain untouched
+    if (bill.status === 'Returned from Finance') {
+      if (!isInitiator && !isFinanceRole) {
+        return res.status(403).json({
+          success: false,
+          message: 'Only the bill initiator can edit a bill returned from Finance'
+        });
+      }
+    } else if (!isFinanceRole) {
+      return res.status(403).json({
+        success: false,
+        message: 'Not authorized to edit this bill'
+      });
+    }
+
     const paid = Number(bill.amountPaid ?? bill.paidAmount ?? 0) || 0;
     const advanceApplied = Number(bill.advanceApplied || 0) || 0;
     const settlementPending = Number(
       bill.settlementPending ?? ((bill.advancePending || 0) + (bill.paymentPending || 0))
     ) || 0;
-    const nonEditableStatus = ['paid', 'partial', 'cancelled'].includes(bill.status);
+    const nonEditableStatus = ['paid', 'partial', 'cancelled', 'Pending Audit', 'Forwarded to Audit Director'].includes(bill.status);
     const hasSettlement = paid + advanceApplied > 0 || settlementPending > 0;
     if (nonEditableStatus || hasSettlement) {
       return res.status(400).json({
         success: false,
         message: 'Cannot edit vendor bill after payment has been recorded or is pending approval'
       });
+    }
+
+    // Never allow client to wipe department approval when correcting a returned bill
+    if (bill.status === 'Returned from Finance' && req.body) {
+      delete req.body.approvalStatus;
+      delete req.body.approvalChain;
+      delete req.body.status;
     }
 
     Object.assign(bill, req.body);
@@ -5072,6 +5099,168 @@ router.post('/accounts-payable/:id/resubmit-to-audit',
     res.json({
       success: true,
       message: 'Bill resubmitted to Pre-Audit successfully',
+      data: populated
+    });
+  })
+);
+
+// @route   POST /api/finance/accounts-payable/:id/finance-return
+// @desc    Finance rejects bill back to initiator for edit/resubmit.
+//          Department approvalChain / approvalStatus stay intact — no re-approval.
+// @access  Private (Finance and Admin)
+router.post('/accounts-payable/:id/finance-return',
+  authorize('super_admin', 'admin', 'finance_manager', 'general_manager'),
+  asyncHandler(async (req, res) => {
+    const bill = await AccountsPayable.findById(req.params.id);
+    if (!bill) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+
+    const allowedFrom = ['approved', 'received', 'overdue'];
+    if (!allowedFrom.includes(bill.status)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Only approved vendor bills (awaiting payment) can be returned to the initiator'
+      });
+    }
+
+    const paid = Number(bill.amountPaid ?? bill.paidAmount ?? 0) || 0;
+    const advanceApplied = Number(bill.advanceApplied || 0) || 0;
+    const settlementPending = Number(
+      bill.settlementPending ?? ((bill.advancePending || 0) + (bill.paymentPending || 0))
+    ) || 0;
+    if (paid + advanceApplied > 0 || settlementPending > 0) {
+      return res.status(400).json({
+        success: false,
+        message: 'Cannot return a bill that already has payment / advance settlement recorded or pending'
+      });
+    }
+
+    const reason = String(req.body?.rejectionReason || req.body?.reason || req.body?.comments || '').trim();
+    if (!reason) {
+      return res.status(400).json({ success: false, message: 'Return / rejection reason is required' });
+    }
+
+    const userId = req.user.id || req.user._id;
+    const fromStatus = bill.status;
+    // Do NOT touch approvalStatus or approvalChain — authorities remain intact
+    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+    bill.workflowHistory.push({
+      fromStatus,
+      toStatus: 'Returned from Finance',
+      changedBy: userId,
+      changedAt: new Date(),
+      comments: `Returned to initiator: ${reason}`,
+      module: 'Finance'
+    });
+    bill.observations = Array.isArray(bill.observations) ? bill.observations : [];
+    bill.observations.push({
+      observation: reason,
+      severity: 'medium',
+      addedBy: userId,
+      addedAt: new Date(),
+      resolved: false
+    });
+    bill.status = 'Returned from Finance';
+    bill.lastModifiedBy = userId;
+    await bill.save();
+
+    // Notify initiator (createdBy)
+    try {
+      const initiatorId = bill.createdBy ? String(bill.createdBy) : null;
+      if (initiatorId) {
+        const { createAndEmitNotification } = require('../services/realtimeNotificationService');
+        await createAndEmitNotification({
+          recipientIds: [initiatorId],
+          title: 'Vendor bill returned by Finance',
+          message: `Bill ${bill.billNumber || bill._id} was returned for correction: ${reason}`,
+          type: 'warning',
+          category: 'approval',
+          priority: 'high',
+          actionUrl: '/finance/accounts-payable',
+          createdBy: userId,
+          excludeUserId: userId,
+          metadata: {
+            module: 'finance',
+            entityId: bill._id,
+            entityType: 'AccountsPayable',
+            queueStage: 'returned_from_finance'
+          }
+        });
+      }
+    } catch (notifyErr) {
+      console.warn('finance-return notify warning:', notifyErr.message);
+    }
+
+    const populated = await AccountsPayable.findById(bill._id)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature')
+      .populate('observations.addedBy', 'firstName lastName email');
+
+    res.json({
+      success: true,
+      message: 'Bill returned to initiator. Department approval remains intact.',
+      data: populated
+    });
+  })
+);
+
+// @route   POST /api/finance/accounts-payable/:id/resubmit-to-finance
+// @desc    Initiator resubmits bill after Finance return → back to Finance (approved), no dept re-approval
+// @access  Private (initiator or Finance)
+router.post('/accounts-payable/:id/resubmit-to-finance',
+  authorize('super_admin', 'admin', 'finance_manager', 'general_manager', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const bill = await AccountsPayable.findById(req.params.id);
+    if (!bill) {
+      return res.status(404).json({ success: false, message: 'Bill not found' });
+    }
+    if (bill.status !== 'Returned from Finance') {
+      return res.status(400).json({
+        success: false,
+        message: 'Only bills returned from Finance can be resubmitted'
+      });
+    }
+
+    const userId = req.user.id || req.user._id;
+    const role = String(req.user.role || '');
+    const isFinanceRole = ['super_admin', 'admin', 'finance_manager', 'general_manager'].includes(role);
+    const isInitiator = String(bill.createdBy || '') === String(userId);
+    if (!isInitiator && !isFinanceRole) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the bill initiator (or Finance) can resubmit this bill'
+      });
+    }
+
+    const comments = String(req.body?.comments || '').trim() || 'Resubmitted to Finance after corrections';
+    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+    bill.workflowHistory.push({
+      fromStatus: 'Returned from Finance',
+      toStatus: 'approved',
+      changedBy: userId,
+      changedAt: new Date(),
+      comments,
+      module: 'Finance'
+    });
+    // Mark open finance-return observations resolved
+    if (Array.isArray(bill.observations)) {
+      bill.observations.forEach((obs) => {
+        if (obs && !obs.resolved) obs.resolved = true;
+      });
+    }
+    bill.status = 'approved';
+    bill.lastModifiedBy = userId;
+    await bill.save();
+
+    const populated = await AccountsPayable.findById(bill._id)
+      .populate('createdBy', 'firstName lastName email')
+      .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature')
+      .populate('observations.addedBy', 'firstName lastName email');
+
+    res.json({
+      success: true,
+      message: 'Bill resubmitted to Finance successfully (approval authorities unchanged)',
       data: populated
     });
   })

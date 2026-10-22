@@ -210,7 +210,20 @@ const accountsPayableSchema = new mongoose.Schema({
   // Status tracking
   status: {
     type: String,
-    enum: ['draft', 'received', 'approved', 'partial', 'paid', 'overdue', 'cancelled', 'Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit'],
+    enum: [
+      'draft',
+      'received',
+      'approved',
+      'partial',
+      'paid',
+      'overdue',
+      'cancelled',
+      'Pending Audit',
+      'Forwarded to Audit Director',
+      'Returned from Audit',
+      // Finance returned to initiator for correction — dept approvalChain stays intact
+      'Returned from Finance'
+    ],
     default: 'draft'
   },
   // Department integration
