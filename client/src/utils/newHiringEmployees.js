@@ -110,7 +110,7 @@ export function getNewHiringAuthorityCards(record) {
     }
   ];
 
-  return stages
+  const cards = stages
     .map((stage) => {
       if (stage.user) {
         return {
@@ -137,4 +137,18 @@ export function getNewHiringAuthorityCards(record) {
       };
     })
     .filter(Boolean);
+
+  // Hardcoded display-only authority (after CEO) — not part of workflow
+  cards.push({
+    key: 'president',
+    label: 'President',
+    statusLabel: 'Sardar Tanveer Ilyas',
+    statusKind: 'display',
+    user: null,
+    at: null,
+    sig: null,
+    assigned: true
+  });
+
+  return cards;
 }
