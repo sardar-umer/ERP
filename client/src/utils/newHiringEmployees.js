@@ -141,8 +141,8 @@ export function getNewHiringAuthorityCards(record) {
   // Hardcoded display-only authority (after CEO) — not part of workflow
   cards.push({
     key: 'president',
-    label: 'President',
-    statusLabel: 'Sardar Tanveer Ilyas',
+    label: 'President SGC',
+    statusLabel: 'Sardar Tanveer Ilyas khan',
     statusKind: 'display',
     user: null,
     at: null,
