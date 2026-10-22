@@ -102,12 +102,20 @@ const buildDuplicateRowKeySet = (rows) => {
 
 /** Virtual window inside scrollable recon tables — only mount visible rows. */
 const RECON_TABLE_MAX_H = 480;
-/** Keep in sync with data-row minHeight so scroll math stays accurate. */
-const RECON_ROW_H = 64;
-const RECON_OVERSCAN = 16;
+/** Locked row height — must match rendered rows or scroll math drifts. */
+const RECON_ROW_H = 56;
+const RECON_OVERSCAN = 12;
 const RECON_DATA_ROW_SX = {
   height: RECON_ROW_H,
-  '& > td': { py: 0.75, verticalAlign: 'middle' }
+  maxHeight: RECON_ROW_H,
+  '& > td': {
+    py: 0.5,
+    verticalAlign: 'middle',
+    height: RECON_ROW_H,
+    maxHeight: RECON_ROW_H,
+    boxSizing: 'border-box',
+    overflow: 'hidden'
+  }
 };
 
 /** Fit tables to page width — vertical scroll only, fixed column sizes. */
@@ -221,8 +229,9 @@ export default function BankReconciliation() {
   const [periodScrollTop, setPeriodScrollTop] = useState(0);
   const unpresentedScrollRef = useRef(null);
   const periodScrollRef = useRef(null);
-  const unpresentedBucketRef = useRef(0);
+  const unpresentedRafRef = useRef(0);
   const periodBucketRef = useRef(0);
+  const loadAbortRef = useRef(null);
   const [selectedUnpresented, setSelectedUnpresented] = useState(() => new Set());
   const [bulkClearing, setBulkClearing] = useState(false);
 
@@ -448,6 +457,12 @@ export default function BankReconciliation() {
       return;
     }
 
+    if (loadAbortRef.current) {
+      loadAbortRef.current.abort();
+    }
+    const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+    loadAbortRef.current = controller;
+
     setLoading(true);
     setError('');
     try {
@@ -458,7 +473,10 @@ export default function BankReconciliation() {
         toDate: isValidYmd(toDate) ? toDate : filters.toDate,
         _t: new Date().getTime() // Cache buster
       };
-      const res = await api.get('/finance/reports/bank-reconciliation', { params });
+      const res = await api.get('/finance/reports/bank-reconciliation', {
+        params,
+        signal: controller?.signal
+      });
       const reportData = res.data?.data;
       if (reportData) {
         const getClearingSortTime = (t) => {
@@ -512,9 +530,8 @@ export default function BankReconciliation() {
         return reportData;
       });
       if (scope === 'all' || scope === 'unpresented') {
-        setUnpresentedScrollTop(0);
         setSelectedUnpresented(new Set());
-        unpresentedBucketRef.current = 0;
+        setUnpresentedScrollTop(0);
         if (unpresentedScrollRef.current) unpresentedScrollRef.current.scrollTop = 0;
       }
       if (scope === 'all' || scope === 'period') {
@@ -523,13 +540,22 @@ export default function BankReconciliation() {
         if (periodScrollRef.current) periodScrollRef.current.scrollTop = 0;
       }
     } catch (e) {
+      if (e?.name === 'CanceledError' || e?.code === 'ERR_CANCELED' || e?.name === 'AbortError') {
+        return;
+      }
       setError(e.response?.data?.message || 'Failed to load reconciliation data');
     } finally {
-      setLoading(false);
+      if (loadAbortRef.current === controller) {
+        loadAbortRef.current = null;
+        setLoading(false);
+      }
     }
   }, [filters]);
 
-  const unpresentedRows = data?.unpresentedTransactions || [];
+  const unpresentedRows = useMemo(
+    () => data?.unpresentedTransactions || [],
+    [data?.unpresentedTransactions]
+  );
   const clearableUnpresentedRows = useMemo(
     () => unpresentedRows.filter((t) => !t.isCleared),
     [unpresentedRows]
@@ -547,10 +573,10 @@ export default function BankReconciliation() {
 
   const handleUnpresentedScroll = (e) => {
     const top = e.currentTarget.scrollTop;
-    const bucket = scrollBucket(top);
-    if (bucket === unpresentedBucketRef.current) return;
-    unpresentedBucketRef.current = bucket;
-    setUnpresentedScrollTop(top);
+    if (unpresentedRafRef.current) cancelAnimationFrame(unpresentedRafRef.current);
+    unpresentedRafRef.current = requestAnimationFrame(() => {
+      setUnpresentedScrollTop(top);
+    });
   };
 
   const handlePeriodScroll = (e) => {
@@ -568,9 +594,19 @@ export default function BankReconciliation() {
   // Only auto-load when the bank account changes. Date fields apply via
   // Generate / Filter so typing or picking dates does not wipe the screen.
   useEffect(() => {
-    if (filters.bankAccountId) {
-      load();
+    if (!filters.bankAccountId) {
+      setData(null);
+      return undefined;
     }
+    // Drop previous table immediately so we never paint thousands of stale rows.
+    setData(null);
+    setSelectedUnpresented(new Set());
+    setUnpresentedScrollTop(0);
+    load();
+    return () => {
+      if (loadAbortRef.current) loadAbortRef.current.abort();
+      if (unpresentedRafRef.current) cancelAnimationFrame(unpresentedRafRef.current);
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filters.bankAccountId]);
 
@@ -816,7 +852,7 @@ export default function BankReconciliation() {
       {/* Main Filter & Parameters Bar */}
       <Paper variant="outlined" sx={{ p: 2.5, mb: 3 }}>
         <Grid container spacing={2} alignItems="center">
-          <Grid item xs={12} md={4}>
+          <Grid item xs={12} md={5}>
             <FormControl fullWidth size="small">
               <InputLabel>Account Code / Bank Account</InputLabel>
               <Select
@@ -836,31 +872,7 @@ export default function BankReconciliation() {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} sm={6} md={2}>
-            <TextField
-              fullWidth
-              label="From Date"
-              type="date"
-              size="small"
-              value={filters.fromDate}
-              onChange={(e) => {
-                const fromDate = e.target.value;
-                setFilters((prev) => ({
-                  ...prev,
-                  fromDate,
-                  toDate: prev.toDate && fromDate && prev.toDate < fromDate ? fromDate : prev.toDate
-                }));
-              }}
-              onKeyDown={(e) => {
-                if (e.key === 'Enter') {
-                  e.preventDefault();
-                  load('unpresented');
-                }
-              }}
-              InputLabelProps={{ shrink: true }}
-            />
-          </Grid>
-          <Grid item xs={12} sm={6} md={2}>
+          <Grid item xs={12} sm={6} md={3}>
             <TextField
               fullWidth
               label="As of Date"
@@ -1059,7 +1071,9 @@ export default function BankReconciliation() {
                 {unpresentedRows.length === 0 ? (
                   <TableRow>
                     <TableCell colSpan={12} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                      No unpresented / uncleared cheques up to {formatDate(filters.asOfDate)}.
+                      {loading
+                        ? 'Loading…'
+                        : `No unpresented / uncleared cheques up to ${formatDate(filters.asOfDate)}.`}
                     </TableCell>
                   </TableRow>
                 ) : (
@@ -1180,7 +1194,7 @@ export default function BankReconciliation() {
                                 setRowClearDates((prev) => ({ ...prev, [key]: val }));
                               }}
                               InputLabelProps={{ shrink: true }}
-                              inputProps={{ style: { fontSize: '0.8rem', padding: '6px 4px' } }}
+                              inputProps={{ style: { fontSize: '0.75rem', padding: '4px 2px', height: 28, boxSizing: 'border-box' } }}
                             />
                           </TableCell>
                           <TableCell align="center" sx={UP_COL.action}>
