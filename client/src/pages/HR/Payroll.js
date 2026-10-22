@@ -51,6 +51,7 @@ import {
   Download as DownloadIcon,
   CompareArrows as CompareArrowsIcon,
   LocalGasStation as FuelIcon,
+  Percent as PercentIcon,
   PictureAsPdf as PictureAsPdfIcon,
   AccountBalanceWallet as EobiIcon
 } from '@mui/icons-material';
@@ -61,6 +62,7 @@ import api from '../../services/authService';
 import MonthlyPayrollApprovalSection from '../../components/HR/MonthlyPayrollApprovalSection';
 import PayrollMonthlyComparisonDialog from '../../components/HR/PayrollMonthlyComparisonDialog';
 import ImportFuelAllowanceDialog from '../../components/HR/ImportFuelAllowanceDialog';
+import ImportSalaryPercentageCutDialog from '../../components/HR/ImportSalaryPercentageCutDialog';
 import { getPayrollStatusColor, getPayrollStatusLabel } from '../../utils/payrollStatusHelpers';
 import PayrollProrationBadge from '../../components/HR/PayrollProrationBadge';
 import SalaryAdvanceManagement from '../../components/HR/SalaryAdvanceManagement';
@@ -115,6 +117,7 @@ const Payroll = () => {
   });
   const [bulkCreateDialogOpen, setBulkCreateDialogOpen] = useState(false);
   const [fuelDialogOpen, setFuelDialogOpen] = useState(false);
+  const [salaryCutDialogOpen, setSalaryCutDialogOpen] = useState(false);
   const [bulkCreateLoading, setBulkCreateLoading] = useState(false);
   const [bulkCreateForm, setBulkCreateForm] = useState({
     month: (new Date().getMonth() + 1).toString().padStart(2, '0'),
@@ -1664,6 +1667,14 @@ Do you want to:
           </Button>
           <Button
             variant="outlined"
+            startIcon={<PercentIcon />}
+            onClick={() => setSalaryCutDialogOpen(true)}
+            color="warning"
+          >
+            Import Salary % Cut
+          </Button>
+          <Button
+            variant="outlined"
             startIcon={<GroupWorkIcon />}
             onClick={() => {
               fetchCurrentOverview();
@@ -3082,6 +3093,14 @@ Do you want to:
             onClose={() => setFuelDialogOpen(false)}
             onImportSuccess={() => {
               fetchMonthlyPayrolls();
+            }}
+          />
+          <ImportSalaryPercentageCutDialog
+            open={salaryCutDialogOpen}
+            onClose={() => setSalaryCutDialogOpen(false)}
+            onImportSuccess={() => {
+              fetchMonthlyPayrolls();
+              fetchPayrolls();
             }}
           />
         </>

@@ -1769,6 +1769,20 @@ router.post('/', [
 
     const taxSettings = await loadPayrollTaxSettings();
 
+    // One-month salary % cuts (imported) — EOBI stays full when applied
+    const PayrollMonthSalaryCut = require('../models/hr/PayrollMonthSalaryCut');
+    const { applySalaryPercentageCutToPayrollData } = require('../utils/payrollSalaryPercentageCut');
+    const monthCuts = await PayrollMonthSalaryCut.find({
+      month: Number(month),
+      year: Number(year)
+    }).select('employee percentage').lean();
+    const salaryCutByEmployee = new Map(
+      monthCuts.map((c) => [String(c.employee), Number(c.percentage)])
+    );
+    if (salaryCutByEmployee.size > 0) {
+      console.log(`📉 Applying one-month salary % cut for ${salaryCutByEmployee.size} employee(s) in ${month}/${year} (EOBI full)`);
+    }
+
     // Process each batch in parallel
     for (let batchIndex = 0; batchIndex < batches.length; batchIndex++) {
       const batch = batches[batchIndex];
@@ -1991,6 +2005,11 @@ router.post('/', [
             status: 'Draft'
           };
 
+          const cutPct = salaryCutByEmployee.get(String(employee._id));
+          if (cutPct > 0) {
+            applySalaryPercentageCutToPayrollData(payrollData, cutPct);
+          }
+
           // Validate each record before batching so one bad row never breaks the whole bulk run.
           const validationError = new Payroll(payrollData).validateSync();
           if (validationError) {
@@ -2016,9 +2035,9 @@ router.post('/', [
               position: employee.position
             },
             totals: {
-              totalEarnings,
-              netSalary,
-              monthlyTax
+              totalEarnings: payrollData.totalEarnings,
+              netSalary: payrollData.netSalary,
+              monthlyTax: payrollData.incomeTax
             }
           };
         } catch (error) {
@@ -3812,4 +3831,183 @@ router.post('/:id/generate-payslip',
   })
 );
 
-module.exports = router; 
+// @route   POST /api/payroll/import-salary-percentage-cut
+// @desc    Import employee IDs and apply a one-month salary % cut (EOBI stays full)
+// @access  Private (hr_manager, hr_admin, super_admin, finance_manager)
+const multer = require('multer');
+const salaryCutUpload = multer({ storage: multer.memoryStorage() });
+
+router.post(
+  '/import-salary-percentage-cut',
+  authorize('hr_manager', 'hr_admin', 'super_admin', 'finance_manager'),
+  salaryCutUpload.single('file'),
+  asyncHandler(async (req, res) => {
+    if (!req.file) {
+      return res.status(400).json({
+        success: false,
+        message: 'No file uploaded. Please select an Excel file (.xlsx, .xls).'
+      });
+    }
+
+    const month = Number(req.body.month);
+    const year = Number(req.body.year);
+    const percentage = Number(req.body.percentage);
+
+    if (!Number.isInteger(month) || month < 1 || month > 12) {
+      return res.status(400).json({ success: false, message: 'Valid month (1–12) is required.' });
+    }
+    if (!Number.isInteger(year) || year < 2020) {
+      return res.status(400).json({ success: false, message: 'Valid year is required.' });
+    }
+    if (!Number.isFinite(percentage) || percentage <= 0 || percentage >= 100) {
+      return res.status(400).json({
+        success: false,
+        message: 'Percentage must be greater than 0 and less than 100.'
+      });
+    }
+
+    const xlsx = require('xlsx');
+    const workbook = xlsx.read(req.file.buffer, { type: 'buffer' });
+    const sheet = workbook.Sheets[workbook.SheetNames[0]];
+    const rawData = xlsx.utils.sheet_to_json(sheet, { defval: null });
+
+    if (!rawData?.length) {
+      return res.status(400).json({ success: false, message: 'Excel file appears to be empty.' });
+    }
+
+    const findValue = (rowObj, candidates) => {
+      const keys = Object.keys(rowObj);
+      for (const cand of candidates) {
+        const matchKey = keys.find((k) => k.trim().toLowerCase() === cand.trim().toLowerCase());
+        if (matchKey && rowObj[matchKey] != null) return rowObj[matchKey];
+      }
+      for (const cand of candidates) {
+        const matchKey = keys.find((k) => k.trim().toLowerCase().includes(cand.trim().toLowerCase()));
+        if (matchKey && rowObj[matchKey] != null) return rowObj[matchKey];
+      }
+      return null;
+    };
+
+    const idCandidates = [
+      'EMP ID Tovus',
+      'Employee ID',
+      'EMP ID',
+      'Emp ID',
+      'EmployeeNo',
+      'Code',
+      'EmpCode',
+      'ID'
+    ];
+
+    const PayrollMonthSalaryCut = require('../models/hr/PayrollMonthSalaryCut');
+    const { applySalaryPercentageCutToPayrollData } = require('../utils/payrollSalaryPercentageCut');
+    const { isPayrollRecordLocked } = require('../utils/payrollLock');
+
+    let savedCount = 0;
+    let payrollUpdatedCount = 0;
+    let payrollSkippedLocked = 0;
+    let payrollSkippedAlreadyCut = 0;
+    let notFoundCount = 0;
+    const unmatchedList = [];
+    const updatedDetails = [];
+    const seenEmployeeIds = new Set();
+
+    for (const row of rawData) {
+      const rawId = findValue(row, idCandidates);
+      if (rawId == null) continue;
+
+      const strId = String(rawId).trim();
+      if (!strId || seenEmployeeIds.has(strId)) continue;
+      seenEmployeeIds.add(strId);
+
+      const emp = await Employee.findOne({
+        $or: [
+          { employeeId: strId },
+          { employeeId: strId.padStart(5, '0') },
+          { employeeId: String(parseInt(strId, 10)) }
+        ]
+      }).select('_id employeeId firstName lastName');
+
+      if (!emp) {
+        notFoundCount += 1;
+        unmatchedList.push(strId);
+        continue;
+      }
+
+      await PayrollMonthSalaryCut.findOneAndUpdate(
+        { employee: emp._id, month, year },
+        {
+          $set: {
+            percentage,
+            updatedBy: req.user.id
+          },
+          $setOnInsert: {
+            createdBy: req.user.id
+          }
+        },
+        { upsert: true, new: true }
+      );
+      savedCount += 1;
+
+      const draftPayroll = await Payroll.findOne({
+        employee: emp._id,
+        month,
+        year
+      });
+
+      let payrollNote = 'No payroll yet — cut will apply on generate';
+      if (draftPayroll) {
+        if (isPayrollRecordLocked(draftPayroll)) {
+          payrollSkippedLocked += 1;
+          payrollNote = `Skipped (payroll locked: ${draftPayroll.status})`;
+        } else if (
+          draftPayroll.salaryPercentageCut &&
+          Number(draftPayroll.salaryPercentageCut.percentage) === percentage
+        ) {
+          payrollSkippedAlreadyCut += 1;
+          payrollNote = 'Draft already has this cut';
+        } else if (draftPayroll.salaryPercentageCut?.percentage) {
+          payrollSkippedAlreadyCut += 1;
+          payrollNote =
+            'Draft already cut at a different % — regenerate payroll to apply the new cut';
+        } else {
+          applySalaryPercentageCutToPayrollData(draftPayroll, percentage);
+          draftPayroll.updatedBy = req.user.id;
+          await draftPayroll.save();
+          payrollUpdatedCount += 1;
+          payrollNote = 'Draft payroll updated';
+        }
+      }
+
+      updatedDetails.push({
+        employeeId: emp.employeeId,
+        name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
+        percentage,
+        payrollNote
+      });
+    }
+
+    res.json({
+      success: true,
+      message:
+        `Salary cut ${percentage}% saved for ${savedCount} employee(s) for ${month}/${year}. ` +
+        `Draft payrolls updated: ${payrollUpdatedCount}. EOBI remains full.`,
+      data: {
+        month,
+        year,
+        percentage,
+        savedCount,
+        payrollUpdatedCount,
+        payrollSkippedLocked,
+        payrollSkippedAlreadyCut,
+        notFoundCount,
+        unmatchedList,
+        updatedDetails,
+        totalProcessed: rawData.length
+      }
+    });
+  })
+);
+
+module.exports = router;
+

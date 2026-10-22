@@ -526,6 +526,12 @@ const payrollSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.Mixed,
     default: undefined
   },
+  // One-month % salary cut (imported) — EOBI kept full when applied
+  salaryPercentageCut: {
+    percentage: { type: Number, min: 0, max: 100 },
+    factor: { type: Number, min: 0, max: 1 },
+    appliedAt: { type: Date }
+  },
   // Audit fields
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
