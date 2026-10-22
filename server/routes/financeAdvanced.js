@@ -8024,7 +8024,83 @@ router.get('/reports/bank-reconciliation',
       };
     };
 
-    const allLedgerTxns = ledgerEntries.map(mapLedgerRowToTxn);
+    /**
+     * Installment BPVs (e.g. BPV-2-20260701): one JE bank line, many GL rows each with its own
+     * cheque. Pre-9AM Unpresented listed each GL cheque separately. JE-ledger collapsed them into
+     * one row with joined refs — expand back to one Unpresented row per installment GL.
+     */
+    const moneyEqBr = (a, b) => Math.abs(Number(a || 0) - Number(b || 0)) < 0.02;
+    const expandInstallmentLedgerEntries = async (entries) => {
+      const multiIds = [
+        ...new Set(
+          entries.flatMap((e) =>
+            (Array.isArray(e.linkedGlIds) ? e.linkedGlIds : [])
+              .map(String)
+              .filter((id) => OBJECT_ID_RE.test(id))
+          )
+        )
+      ];
+      // Only fetch when a row claims multiple linked GLs
+      const needsExpand = entries.some(
+        (e) => Array.isArray(e.linkedGlIds) && e.linkedGlIds.length > 1
+      );
+      if (!needsExpand) return entries;
+
+      const glById = new Map();
+      if (multiIds.length) {
+        const docs = await GeneralLedger.find({ _id: { $in: multiIds } })
+          .select('_id debit credit reference clearanceStatus clearedAt isReconciled reconciledAt date description')
+          .lean();
+        docs.forEach((d) => glById.set(String(d._id), d));
+      }
+
+      const out = [];
+      for (const e of entries) {
+        const ids = (Array.isArray(e.linkedGlIds) ? e.linkedGlIds : [])
+          .map(String)
+          .filter((id) => OBJECT_ID_RE.test(id));
+        if (ids.length <= 1) {
+          out.push(e);
+          continue;
+        }
+        const gls = ids.map((id) => glById.get(id)).filter(Boolean);
+        const lineDebit = Number(e.debit) || 0;
+        const lineCredit = Number(e.credit) || 0;
+        let installmentSet = null;
+        if (lineCredit > 0) {
+          const credits = gls.filter((g) => Number(g.credit) > 0 && !(Number(g.debit) > 0));
+          const sum = credits.reduce((s, g) => s + (Number(g.credit) || 0), 0);
+          if (credits.length > 1 && moneyEqBr(sum, lineCredit)) installmentSet = credits;
+        } else if (lineDebit > 0) {
+          const debits = gls.filter((g) => Number(g.debit) > 0 && !(Number(g.credit) > 0));
+          const sum = debits.reduce((s, g) => s + (Number(g.debit) || 0), 0);
+          if (debits.length > 1 && moneyEqBr(sum, lineDebit)) installmentSet = debits;
+        }
+        if (!installmentSet) {
+          out.push(e);
+          continue;
+        }
+        for (const g of installmentSet) {
+          out.push({
+            ...e,
+            _id: g._id,
+            linkedGlIds: [String(g._id)],
+            debit: Number(g.debit) || 0,
+            credit: Number(g.credit) || 0,
+            reference: g.reference || '',
+            description: g.description || e.description,
+            clearanceStatus: g.clearanceStatus,
+            clearedAt: g.clearedAt,
+            isReconciled: g.isReconciled,
+            reconciledAt: g.reconciledAt
+          });
+        }
+      }
+      return out;
+    };
+
+    const ledgerEntriesForBr = await expandInstallmentLedgerEntries(ledgerEntries);
+    const allLedgerTxns = ledgerEntriesForBr.map(mapLedgerRowToTxn);
     allLedgerTxns.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
 
     // Unpresented = uncleared only (JE-dated ledger, same source as TB). Cleared move to Period Activity.
