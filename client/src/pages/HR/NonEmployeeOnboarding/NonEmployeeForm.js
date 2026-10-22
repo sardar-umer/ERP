@@ -348,6 +348,7 @@ const NonEmployeeForm = ({
             <Table size="small" sx={{ minWidth: 1100 }}>
               <TableHead>
                 <TableRow sx={{ bgcolor: 'grey.100' }}>
+                  <TableCell sx={{ ...cellSx, width: 56 }} align="center"><b>Sr No</b></TableCell>
                   <TableCell sx={cellSx}><b>Name</b></TableCell>
                   <TableCell sx={cellSx}><b>CNIC/Passport No.</b></TableCell>
                   <TableCell sx={cellSx}><b>Designation</b></TableCell>
@@ -363,6 +364,9 @@ const NonEmployeeForm = ({
               <TableBody>
                 {records.map((record, index) => (
                   <TableRow key={index}>
+                    <TableCell sx={cellSx} align="center">
+                      {index + 1}
+                    </TableCell>
                     <TableCell sx={cellSx}>
                       <TextField
                         size="small"

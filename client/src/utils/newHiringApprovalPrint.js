@@ -55,22 +55,101 @@ const formatPackage = (pkg) => {
   return escapeHtml(String(pkg));
 };
 
-/** Embed original signature as data URL so print iframe loads it reliably (no black rewrite). */
-const toEmbeddedSignatureSrc = async (path) => {
+const loadImageElement = async (url) => {
+  try {
+    const res = await fetch(url, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const objectUrl = URL.createObjectURL(blob);
+    try {
+      return await new Promise((resolve, reject) => {
+        const el = new Image();
+        el.onload = () => resolve(el);
+        el.onerror = reject;
+        el.src = objectUrl;
+      });
+    } finally {
+      URL.revokeObjectURL(objectUrl);
+    }
+  } catch {
+    return new Promise((resolve, reject) => {
+      const el = new Image();
+      el.crossOrigin = 'anonymous';
+      el.onload = () => resolve(el);
+      el.onerror = reject;
+      el.src = url;
+    });
+  }
+};
+
+const sampleCornerLuminance = (data, width, height) => {
+  const at = (x, y) => {
+    const i = ((y * width) + x) * 4;
+    return (0.299 * data[i]) + (0.587 * data[i + 1]) + (0.114 * data[i + 2]);
+  };
+  const xs = [0, 1, 2, Math.max(0, width - 1), Math.max(0, width - 2), Math.max(0, width - 3)];
+  const ys = [0, 1, 2, Math.max(0, height - 1), Math.max(0, height - 2), Math.max(0, height - 3)];
+  const samples = [];
+  xs.forEach((x) => ys.forEach((y) => samples.push(at(x, y))));
+  samples.sort((a, b) => a - b);
+  return samples[Math.floor(samples.length / 2)] ?? 255;
+};
+
+/**
+ * Make signature ink more prominent for print without turning the whole image black.
+ * Light paper/background stays transparent; only darker strokes are strengthened.
+ */
+const toProminentSignatureSrc = async (path) => {
   const src = getImageUrl(path);
   if (!src) return null;
   if (String(src).startsWith('data:')) return src;
   try {
-    const res = await fetch(src, { credentials: 'include' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = () => resolve(reader.result);
-      reader.onerror = reject;
-      reader.readAsDataURL(blob);
-    });
-    return typeof dataUrl === 'string' ? dataUrl : src;
+    const img = await loadImageElement(src);
+    const nw = img.naturalWidth || img.width || 1;
+    const nh = img.naturalHeight || img.height || 1;
+    const scale = Math.min(2, 480 / nw, 180 / nh);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.max(1, Math.round(nw * scale));
+    canvas.height = Math.max(1, Math.round(nh * scale));
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+    const d = imageData.data;
+    const bgLum = sampleCornerLuminance(d, canvas.width, canvas.height);
+    // Only treat near-background as paper; keep real ink (including soft gray strokes)
+    const paperCut = Math.max(205, bgLum - 18);
+
+    for (let i = 0; i < d.length; i += 4) {
+      const a = d[i + 3];
+      if (a < 8) {
+        d[i] = 0;
+        d[i + 1] = 0;
+        d[i + 2] = 0;
+        d[i + 3] = 0;
+        continue;
+      }
+      const lum = (0.299 * d[i]) + (0.587 * d[i + 1]) + (0.114 * d[i + 2]);
+      if (lum >= paperCut) {
+        // Paper / white background → transparent (no black block)
+        d[i] = 0;
+        d[i + 1] = 0;
+        d[i + 2] = 0;
+        d[i + 3] = 0;
+        continue;
+      }
+      // How far below paper: soft edges keep lower alpha, dark strokes go near-opaque black
+      const depth = (paperCut - lum) / Math.max(1, paperCut);
+      const boosted = Math.min(1, depth * 1.55);
+      d[i] = 0;
+      d[i + 1] = 0;
+      d[i + 2] = 0;
+      d[i + 3] = Math.min(255, Math.round(boosted * Math.max(a, 180)));
+    }
+
+    ctx.putImageData(imageData, 0, 0);
+    return canvas.toDataURL('image/png');
   } catch {
     return src;
   }
@@ -108,8 +187,8 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
     .join('');
 
   const authorities = getNewHiringAuthorityCards(record);
-  const embeddedSources = await Promise.all(
-    authorities.map((a) => (a.sig ? toEmbeddedSignatureSrc(a.sig) : Promise.resolve(null)))
+  const signatureSources = await Promise.all(
+    authorities.map((a) => (a.sig ? toProminentSignatureSrc(a.sig) : Promise.resolve(null)))
   );
 
   const authorityCards = authorities
@@ -118,7 +197,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
         <div class="auth-label">${escapeHtml(a.label)}</div>
         <div class="auth-name">${escapeHtml(a.statusLabel || formatPerson(a.user))}</div>
         ${a.at ? `<div class="muted">${formatDateTime(a.at)}</div>` : ''}
-        ${signatureBlock(embeddedSources[idx], `${a.label} Signature`)}
+        ${signatureBlock(signatureSources[idx], `${a.label} Signature`)}
       </div>`
     )
     .join('');
@@ -147,8 +226,8 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
     .muted { color: #777; font-size: 11px; }
     .sig-line { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 6px; min-height: 40px; }
     .sig-line img {
-      max-height: 72px;
-      max-width: 190px;
+      max-height: 78px;
+      max-width: 200px;
       object-fit: contain;
       display: block;
       -webkit-print-color-adjust: exact;
