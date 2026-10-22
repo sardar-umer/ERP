@@ -237,7 +237,8 @@ export default function BankReconciliation() {
 
   const [filters, setFilters] = useState({
     asOfDate: new Date().toISOString().split('T')[0],
-    fromDate: new Date(new Date().getFullYear(), new Date().getMonth(), 1).toISOString().split('T')[0],
+    // Period Activity default From — aligns with hard-coded ledger start
+    fromDate: '2000-01-01',
     toDate: new Date().toISOString().split('T')[0],
     bankAccountId: ''
   });
@@ -427,17 +428,12 @@ export default function BankReconciliation() {
     const fromDate = String(filters.fromDate || '').trim();
     const toDate = String(filters.toDate || '').trim();
 
+    // Hard-coded top ledger window: 01/01/2000 → As of Date
+    const LEDGER_FROM_BEGINNING = '2000-01-01';
+
     if (scope === 'unpresented') {
       if (!isValidYmd(asOfDate)) {
         setError('Please enter a valid As of Date.');
-        return;
-      }
-      if (!isValidYmd(fromDate)) {
-        setError('Please enter a valid Date From (same window as Trial Balance).');
-        return;
-      }
-      if (fromDate > asOfDate) {
-        setError('Date From cannot be after As of Date.');
         return;
       }
     } else if (scope === 'period') {
@@ -449,12 +445,16 @@ export default function BankReconciliation() {
         setError('Date From cannot be after Date To.');
         return;
       }
-    } else if (!isValidYmd(asOfDate) || !isValidYmd(fromDate) || !isValidYmd(toDate)) {
-      setError('Please enter valid As of / From / To dates.');
-      return;
-    } else if (fromDate > toDate) {
-      setError('Date From cannot be after Date To.');
-      return;
+    } else {
+      // scope === 'all' (account change / full refresh)
+      if (!isValidYmd(asOfDate)) {
+        setError('Please enter a valid As of Date.');
+        return;
+      }
+      if (isValidYmd(fromDate) && isValidYmd(toDate) && fromDate > toDate) {
+        setError('Date From cannot be after Date To.');
+        return;
+      }
     }
 
     if (loadAbortRef.current) {
@@ -466,11 +466,15 @@ export default function BankReconciliation() {
     setLoading(true);
     setError('');
     try {
+      const periodFrom = isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING;
+      const periodTo = isValidYmd(toDate) ? toDate : (isValidYmd(asOfDate) ? asOfDate : filters.toDate);
       const params = {
         accountId: filters.bankAccountId,
         asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
-        fromDate: isValidYmd(fromDate) ? fromDate : filters.fromDate,
-        toDate: isValidYmd(toDate) ? toDate : filters.toDate,
+        ledgerFromDate: LEDGER_FROM_BEGINNING,
+        // Period Activity + top "Bank Statement" use these dates
+        fromDate: periodFrom,
+        toDate: periodTo,
         _t: new Date().getTime() // Cache buster
       };
       const res = await api.get('/finance/reports/bank-reconciliation', {
@@ -509,10 +513,19 @@ export default function BankReconciliation() {
             glBalanceType: reportData.glBalanceType,
             difference: reportData.difference,
             differenceType: reportData.differenceType,
-            bankStatementBalance: reportData.bankStatementBalance,
-            bankStatementBalanceType: reportData.bankStatementBalanceType,
+            // Same figure as Period Activity Total
+            bankStatementBalance: reportData.statementTotal,
+            bankStatementBalanceType: reportData.statementTotalType,
             unpresentedTransactions: reportData.unpresentedTransactions,
-            unpresentedTotal: reportData.unpresentedTotal
+            unpresentedTotal: reportData.unpresentedTotal,
+            // Keep Period Activity in sync with current Date.From / Date.To
+            fromDate: reportData.fromDate,
+            toDate: reportData.toDate,
+            openingBalance: reportData.openingBalance,
+            openingBalanceType: reportData.openingBalanceType,
+            periodTransactions: reportData.periodTransactions,
+            statementTotal: reportData.statementTotal,
+            statementTotalType: reportData.statementTotalType
           };
         }
         if (scope === 'period') {
@@ -524,7 +537,10 @@ export default function BankReconciliation() {
             openingBalanceType: reportData.openingBalanceType,
             periodTransactions: reportData.periodTransactions,
             statementTotal: reportData.statementTotal,
-            statementTotalType: reportData.statementTotalType
+            statementTotalType: reportData.statementTotalType,
+            // Top Bank Statement always follows Period Activity Total
+            bankStatementBalance: reportData.statementTotal,
+            bankStatementBalanceType: reportData.statementTotalType
           };
         }
         return reportData;

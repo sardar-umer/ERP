@@ -7814,7 +7814,7 @@ router.get('/reports/bank-reconciliation',
      * GET /general-ledger/account/:id) minus rows cleared as-of the As of Date.
      * Period Activity still uses clearance dates within From/To.
      */
-    const { accountId, asOfDate, fromDate, toDate } = req.query;
+    const { accountId, asOfDate, fromDate, toDate, ledgerFromDate } = req.query;
     if (!accountId) {
       return res.status(400).json({ success: false, message: 'Bank account is required' });
     }
@@ -7830,6 +7830,7 @@ router.get('/reports/bank-reconciliation',
       asOf.setHours(23, 59, 59, 999);
     }
 
+    // Period Activity window (Date.From / Date.To)
     let periodStartDate = fromDate
       ? new Date(fromDate)
       : new Date(asOf.getFullYear(), asOf.getMonth(), 1);
@@ -7837,6 +7838,15 @@ router.get('/reports/bank-reconciliation',
 
     let periodEndDate = toDate ? new Date(toDate) : new Date(asOf);
     periodEndDate.setHours(23, 59, 59, 999);
+
+    // Unpresented / Bank Ledger window (hard default: 2000-01-01 → As of)
+    let ledgerFrom = ledgerFromDate
+      ? new Date(ledgerFromDate)
+      : (fromDate ? new Date(fromDate) : new Date('2000-01-01T00:00:00.000Z'));
+    if (Number.isNaN(ledgerFrom.getTime())) {
+      ledgerFrom = new Date('2000-01-01T00:00:00.000Z');
+    }
+    ledgerFrom.setHours(0, 0, 0, 0);
 
     const { q, companyId } = await financeScope(req);
     const OBJECT_ID_RE = /^[0-9a-fA-F]{24}$/;
@@ -7897,10 +7907,7 @@ router.get('/reports/bank-reconciliation',
     };
 
     // ── Same source as Trial Balance ledger drill-down ──────────────────────
-    // Window = From (periodStart) → As of — identical to TB ledger params
-    // (TrialBalance.js: startDate=fromDate, endDate=asOfDate).
-    const ledgerFrom = new Date(periodStartDate);
-    ledgerFrom.setHours(0, 0, 0, 0);
+    // Window = ledgerFrom (default 01/01/2000) → As of
     const ledgerAsOf = await GeneralLedger.getAccountLedger(
       accountId,
       ledgerFrom,
@@ -8016,8 +8023,6 @@ router.get('/reports/bank-reconciliation',
       reconciledUpTo = new Date(Math.min(asOf.getTime(), latestTxnDate.getTime()));
     }
 
-    const bankStatementBalance = netGlBalance - unpresentedTotal;
-
     // ── Period Activity: cleared GL rows by clearing date (From/To) ─────────
     // Load clearance-bearing GL for this account up through period end (TB-aligned posted)
     const clearedGlQuery = {
@@ -8087,7 +8092,9 @@ router.get('/reports/bank-reconciliation',
       (s, r) => s + (Number(r.debit) || 0) - (Number(r.credit) || 0),
       0
     );
-    const statementTotal = openingBalance + periodNetChange;
+    const statementTotal = Math.round((openingBalance + periodNetChange) * 100) / 100;
+    // Top "Balance as Per Bank Statement" = Period Activity Total (same figure)
+    const bankStatementBalance = statementTotal;
 
     res.json({
       success: true,
@@ -8095,6 +8102,7 @@ router.get('/reports/bank-reconciliation',
         asOfDate: asOf,
         fromDate: periodStartDate,
         toDate: periodEndDate,
+        ledgerFromDate: ledgerFrom,
         reconciledUpTo,
         source: 'trial-balance-ledger',
         selectedAccount: {
@@ -8107,7 +8115,7 @@ router.get('/reports/bank-reconciliation',
         // Uncleared cheques / payments only (not TB period Debit−Credit)
         difference: Math.round(unpresentedTotal * 100) / 100,
         differenceType: unpresentedTotal >= 0 ? 'Dr' : 'Cr',
-        bankStatementBalance: Math.round(bankStatementBalance * 100) / 100,
+        bankStatementBalance,
         bankStatementBalanceType: bankStatementBalance >= 0 ? 'Dr' : 'Cr',
         unpresentedTransactions: unpresentedTxns,
         unpresentedTotal: Math.round(unpresentedTotal * 100) / 100,
