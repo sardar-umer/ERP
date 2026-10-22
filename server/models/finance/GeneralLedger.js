@@ -212,7 +212,22 @@ generalLedgerSchema.statics.buildLedgerRowsFromJournalEntries = async function(a
         },
         date: 1,
         entryNumber: 1,
-        reference: 1,
+        // Prefer line-level cheque/ref when present; header is often "EXCEL IMPORT"
+        reference: {
+          $let: {
+            vars: {
+              lineRef: { $trim: { input: { $toString: { $ifNull: ['$lines.reference', ''] } } } },
+              headerRef: { $trim: { input: { $toString: { $ifNull: ['$reference', ''] } } } }
+            },
+            in: {
+              $cond: [
+                { $gt: [{ $strLenCP: '$$lineRef' }, 0] },
+                '$$lineRef',
+                '$$headerRef'
+              ]
+            }
+          }
+        },
         description: { $ifNull: ['$lines.description', '$description'] },
         debit: '$lines.debit',
         credit: '$lines.credit',
@@ -395,24 +410,33 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     row.isReconciled = clearance.isReconciled;
     row.reconciledAt = clearance.reconciledAt;
 
-    // JE.reference is often blank after Excel import; cheque/ref text lives on GL rows
-    const jeRef = String(row.reference || row.journalEntry?.reference || '').trim();
-    if (!jeRef) {
-      let refSources = linked;
-      if (!refSources.length) {
-        if (credit > 0) refSources = candidates.filter((g) => Number(g.credit) > 0);
-        else if (debit > 0) refSources = candidates.filter((g) => Number(g.debit) > 0);
-        else refSources = candidates;
-      }
-      const refs = [
-        ...new Set(
-          refSources
-            .map((g) => String(g.reference || '').trim())
-            .filter((r) => r && r !== '—')
-        )
-      ];
-      if (refs.length === 1) row.reference = refs[0];
-      else if (refs.length > 1) row.reference = refs.join(', ');
+    // Cheque / ref text usually lives on GL rows. JE.reference is often blank OR a
+    // placeholder like "EXCEL IMPORT" (truthy) which previously blocked GL copy → "—" in BR.
+    const isUselessRef = (raw) => {
+      const u = String(raw || '').trim().toUpperCase();
+      if (!u || u === '—' || u === '-' || u === 'N/A' || u === 'NA' || u === 'NULL') return true;
+      if (u === 'EXCEL IMPORT' || u === 'EXCEL' || u === 'IMPORT') return true;
+      return false;
+    };
+    let refSources = linked;
+    if (!refSources.length) {
+      if (credit > 0) refSources = candidates.filter((g) => Number(g.credit) > 0);
+      else if (debit > 0) refSources = candidates.filter((g) => Number(g.debit) > 0);
+      else refSources = candidates;
+    }
+    const glRefs = [
+      ...new Set(
+        refSources
+          .map((g) => String(g.reference || '').trim())
+          .filter((r) => !isUselessRef(r))
+      )
+    ];
+    if (glRefs.length === 1) {
+      row.reference = glRefs[0];
+    } else if (glRefs.length > 1) {
+      row.reference = glRefs.join(', ');
+    } else if (isUselessRef(row.reference || row.journalEntry?.reference)) {
+      row.reference = '';
     }
     // Keep JE.date for period membership (TB-aligned); do not overwrite with GL.date
   }

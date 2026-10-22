@@ -7884,12 +7884,17 @@ router.get('/reports/bank-reconciliation',
       })
     ).sort({ accountNumber: 1 }).lean();
 
+    const isUselessReference = (ref) => {
+      const u = String(ref || '').trim().toUpperCase();
+      if (!u || u === '—' || u === '-' || u === 'N/A' || u === 'NA' || u === 'NULL') return true;
+      if (u === 'EXCEL IMPORT' || u === 'EXCEL' || u === 'IMPORT') return true;
+      return false;
+    };
+
     const cleanReference = (ref, vrNo) => {
       let r = String(ref || '').trim();
-      if (!r || r === '—') return '—';
+      if (isUselessReference(r)) return '—';
       const u = r.toUpperCase();
-      // Hide import placeholders only — keep cheque / date / custom refs visible in BR
-      if (u === 'EXCEL IMPORT') return '—';
       // If reference is only a duplicate of VrNo, still show it (accountants expect a value)
       if (u === String(vrNo || '').toUpperCase()) return r;
       return r;
@@ -7988,6 +7993,11 @@ router.get('/reports/bank-reconciliation',
         : (clearanceById.get(glId) || gle);
       const { clearDate, isClearedAsOf } = resolveClearance(clearanceSrc, asOfTime);
 
+      // Prefer ledger row ref (may already be GL cheque from attachGlClearance); skip JE placeholders
+      const rawRef = !isUselessReference(gle.reference)
+        ? gle.reference
+        : (!isUselessReference(je.reference) ? je.reference : '');
+
       return {
         _id: glId,
         linkedGlIds,
@@ -7996,7 +8006,7 @@ router.get('/reports/bank-reconciliation',
         date: gle.date,
         vrNo,
         narration: gle.description || je.description || acc?.name || 'Bank Transaction',
-        reference: cleanReference(gle.reference || je.reference, vrNo),
+        reference: cleanReference(rawRef, vrNo),
         debit,
         credit,
         amount: amt,
