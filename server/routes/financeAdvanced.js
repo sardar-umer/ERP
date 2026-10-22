@@ -7814,7 +7814,19 @@ router.get('/reports/bank-reconciliation',
      * GET /general-ledger/account/:id) minus rows cleared as-of the As of Date.
      * Period Activity still uses clearance dates within From/To.
      */
-    const { accountId, asOfDate, fromDate, toDate, ledgerFromDate } = req.query;
+    const {
+      accountId,
+      asOfDate,
+      fromDate,
+      toDate,
+      ledgerFromDate,
+      unpresentedPage: unpresentedPageRaw,
+      unpresentedLimit: unpresentedLimitRaw,
+      unpresentedAll,
+      periodPage: periodPageRaw,
+      periodLimit: periodLimitRaw,
+      periodAll
+    } = req.query;
     if (!accountId) {
       return res.status(400).json({ success: false, message: 'Bank account is required' });
     }
@@ -8098,6 +8110,35 @@ router.get('/reports/bank-reconciliation',
     // Top "Balance as Per Bank Statement" = Period Activity Total (same figure)
     const bankStatementBalance = statementTotal;
 
+    // Paginate heavy tables — totals always from full sets
+    const wantAllUnpresented = String(unpresentedAll || '') === '1' || String(unpresentedAll || '') === 'true';
+    const unpresentedLimit = wantAllUnpresented
+      ? unpresentedTxns.length
+      : Math.min(200, Math.max(1, parseInt(String(unpresentedLimitRaw || '75'), 10) || 75));
+    const unpresentedPage = Math.max(1, parseInt(String(unpresentedPageRaw || '1'), 10) || 1);
+    const unpresentedTotalCount = unpresentedTxns.length;
+    const unpresentedPageCount = unpresentedLimit > 0
+      ? Math.max(1, Math.ceil(unpresentedTotalCount / unpresentedLimit) || 1)
+      : 1;
+    const unpresentedSkip = wantAllUnpresented ? 0 : (unpresentedPage - 1) * unpresentedLimit;
+    const unpresentedPageRows = wantAllUnpresented
+      ? unpresentedTxns
+      : unpresentedTxns.slice(unpresentedSkip, unpresentedSkip + unpresentedLimit);
+
+    const wantAllPeriod = String(periodAll || '') === '1' || String(periodAll || '') === 'true';
+    const periodLimit = wantAllPeriod
+      ? periodTransactions.length
+      : Math.min(200, Math.max(1, parseInt(String(periodLimitRaw || '75'), 10) || 75));
+    const periodPage = Math.max(1, parseInt(String(periodPageRaw || '1'), 10) || 1);
+    const periodTotalCount = periodTransactions.length;
+    const periodPageCount = periodLimit > 0
+      ? Math.max(1, Math.ceil(periodTotalCount / periodLimit) || 1)
+      : 1;
+    const periodSkip = wantAllPeriod ? 0 : (periodPage - 1) * periodLimit;
+    const periodPageRows = wantAllPeriod
+      ? periodTransactions
+      : periodTransactions.slice(periodSkip, periodSkip + periodLimit);
+
     res.json({
       success: true,
       data: {
@@ -8119,11 +8160,21 @@ router.get('/reports/bank-reconciliation',
         differenceType: unpresentedTotal >= 0 ? 'Dr' : 'Cr',
         bankStatementBalance,
         bankStatementBalanceType: bankStatementBalance >= 0 ? 'Dr' : 'Cr',
-        unpresentedTransactions: unpresentedTxns,
+        unpresentedTransactions: unpresentedPageRows,
         unpresentedTotal: Math.round(unpresentedTotal * 100) / 100,
+        unpresentedTotalCount,
+        unpresentedPage,
+        unpresentedLimit,
+        unpresentedPageCount,
+        unpresentedHasMore: unpresentedSkip + unpresentedPageRows.length < unpresentedTotalCount,
         openingBalance: Math.round(openingBalance * 100) / 100,
         openingBalanceType: openingBalance >= 0 ? 'Dr' : 'Cr',
-        periodTransactions,
+        periodTransactions: periodPageRows,
+        periodTotalCount,
+        periodPage,
+        periodLimit,
+        periodPageCount,
+        periodHasMore: periodSkip + periodPageRows.length < periodTotalCount,
         statementTotal: Math.round(statementTotal * 100) / 100,
         statementTotalType: statementTotal >= 0 ? 'Dr' : 'Cr',
         bankAccounts: coaBankAccounts.map((a) => ({

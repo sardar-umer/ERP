@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react';
 import {
   Box, Typography, Paper, Table, TableBody, TableCell, TableContainer,
-  TableHead, TableRow, Button, Chip, CircularProgress, Alert,
+  TableHead, TableRow, Button, Chip, CircularProgress, Alert, Skeleton,
   Tooltip, Stack, Card, CardContent, Grid, TextField, FormControl, InputLabel, Select, MenuItem,
   Dialog, DialogTitle, DialogContent, DialogActions, Divider, IconButton, Checkbox
 } from '@mui/material';
@@ -194,6 +194,31 @@ const ScrollPadRow = ({ height, colSpan }) => {
   );
 };
 
+const UNP_PAGE_SIZE = 75;
+const PERIOD_PAGE_SIZE = 75;
+
+/** Full-page BR skeleton — shown until Generate finishes (no partial results). */
+const BankReconSkeleton = () => (
+  <Box sx={{ mb: 3 }}>
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Skeleton variant="text" width="40%" height={28} />
+      <Skeleton variant="text" width="70%" height={22} sx={{ mt: 1 }} />
+      <Skeleton variant="text" width="55%" height={22} />
+    </Paper>
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Skeleton variant="text" width={280} height={32} sx={{ mb: 1.5 }} />
+      <Skeleton variant="rectangular" height={RECON_TABLE_MAX_H} sx={{ borderRadius: 1 }} />
+      <Stack direction="row" justifyContent="center" sx={{ mt: 1.5 }}>
+        <Skeleton variant="rounded" width={160} height={36} />
+      </Stack>
+    </Paper>
+    <Paper variant="outlined" sx={{ p: 2 }}>
+      <Skeleton variant="text" width={260} height={32} sx={{ mb: 1.5 }} />
+      <Skeleton variant="rectangular" height={320} sx={{ borderRadius: 1 }} />
+    </Paper>
+  </Box>
+);
+
 const buildReconcilePayload = (txn, clearanceStatus, clearedAt) => {
   const type = txn?.type || (Number(txn?.credit) > 0 ? 'Cr' : 'Dr');
   const amount = Number(txn?.amount) || 0;
@@ -220,6 +245,9 @@ export default function BankReconciliation() {
   const { selectedCompanyId, companies } = useFinanceCompany();
   const [data, setData]       = useState(null);
   const [loading, setLoading] = useState(false);
+  const [loadingMoreUnp, setLoadingMoreUnp] = useState(false);
+  const [loadingMorePeriod, setLoadingMorePeriod] = useState(false);
+  const [exportingPdf, setExportingPdf] = useState(false);
   const [error, setError]     = useState('');
   const [success, setSuccess] = useState('');
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -463,6 +491,10 @@ export default function BankReconciliation() {
     const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
     loadAbortRef.current = controller;
 
+    // Never show stale/partial results while regenerating
+    if (scope === 'all' || scope === 'unpresented') {
+      setData(null);
+    }
     setLoading(true);
     setError('');
     try {
@@ -472,63 +504,46 @@ export default function BankReconciliation() {
         accountId: filters.bankAccountId,
         asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
         ledgerFromDate: LEDGER_FROM_BEGINNING,
-        // Period Activity + top "Bank Statement" use these dates
         fromDate: periodFrom,
         toDate: periodTo,
-        _t: new Date().getTime() // Cache buster
+        unpresentedPage: 1,
+        unpresentedLimit: UNP_PAGE_SIZE,
+        periodPage: 1,
+        periodLimit: PERIOD_PAGE_SIZE,
+        _t: new Date().getTime()
       };
       const res = await api.get('/finance/reports/bank-reconciliation', {
         params,
         signal: controller?.signal
       });
       const reportData = res.data?.data;
-      if (reportData) {
-        const getClearingSortTime = (t) => {
-          if (t.clearingDate) {
-            const cd = new Date(t.clearingDate).getTime();
-            if (!isNaN(cd)) return cd;
-          }
-          if (t.date) {
-            const d = new Date(t.date).getTime();
-            if (!isNaN(d)) return d;
-          }
-          return 0;
-        };
-        if (Array.isArray(reportData.unpresentedTransactions)) {
-          reportData.unpresentedTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
-        }
-        if (Array.isArray(reportData.periodTransactions)) {
-          reportData.periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
-        }
+      if (!reportData) {
+        setData(null);
+        return;
       }
-      setData((prev) => {
-        if (!reportData) return prev;
-        if (!prev || scope === 'all') return reportData;
-        if (scope === 'unpresented') {
-          return {
-            ...prev,
-            asOfDate: reportData.asOfDate,
-            reconciledUpTo: reportData.reconciledUpTo,
-            glBalance: reportData.glBalance,
-            glBalanceType: reportData.glBalanceType,
-            difference: reportData.difference,
-            differenceType: reportData.differenceType,
-            // Same figure as Period Activity Total
-            bankStatementBalance: reportData.statementTotal,
-            bankStatementBalanceType: reportData.statementTotalType,
-            unpresentedTransactions: reportData.unpresentedTransactions,
-            unpresentedTotal: reportData.unpresentedTotal,
-            // Keep Period Activity in sync with current Date.From / Date.To
-            fromDate: reportData.fromDate,
-            toDate: reportData.toDate,
-            openingBalance: reportData.openingBalance,
-            openingBalanceType: reportData.openingBalanceType,
-            periodTransactions: reportData.periodTransactions,
-            statementTotal: reportData.statementTotal,
-            statementTotalType: reportData.statementTotalType
-          };
+      const getClearingSortTime = (t) => {
+        if (t.clearingDate) {
+          const cd = new Date(t.clearingDate).getTime();
+          if (!isNaN(cd)) return cd;
         }
-        if (scope === 'period') {
+        if (t.date) {
+          const d = new Date(t.date).getTime();
+          if (!isNaN(d)) return d;
+        }
+        return 0;
+      };
+      if (Array.isArray(reportData.unpresentedTransactions)) {
+        reportData.unpresentedTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
+      }
+      if (Array.isArray(reportData.periodTransactions)) {
+        reportData.periodTransactions.sort((a, b) => getClearingSortTime(a) - getClearingSortTime(b));
+      }
+      // Prefer server statement total for top Bank Statement
+      reportData.bankStatementBalance = reportData.statementTotal;
+      reportData.bankStatementBalanceType = reportData.statementTotalType;
+
+      setData((prev) => {
+        if (scope === 'period' && prev) {
           return {
             ...prev,
             fromDate: reportData.fromDate,
@@ -536,9 +551,11 @@ export default function BankReconciliation() {
             openingBalance: reportData.openingBalance,
             openingBalanceType: reportData.openingBalanceType,
             periodTransactions: reportData.periodTransactions,
+            periodTotalCount: reportData.periodTotalCount,
+            periodPage: reportData.periodPage,
+            periodHasMore: reportData.periodHasMore,
             statementTotal: reportData.statementTotal,
             statementTotalType: reportData.statementTotalType,
-            // Top Bank Statement always follows Period Activity Total
             bankStatementBalance: reportData.statementTotal,
             bankStatementBalanceType: reportData.statementTotalType
           };
@@ -550,7 +567,7 @@ export default function BankReconciliation() {
         setUnpresentedScrollTop(0);
         if (unpresentedScrollRef.current) unpresentedScrollRef.current.scrollTop = 0;
       }
-      if (scope === 'all' || scope === 'period') {
+      if (scope === 'all' || scope === 'period' || scope === 'unpresented') {
         setPeriodScrollTop(0);
         periodBucketRef.current = 0;
         if (periodScrollRef.current) periodScrollRef.current.scrollTop = 0;
@@ -560,6 +577,7 @@ export default function BankReconciliation() {
         return;
       }
       setError(e.response?.data?.message || 'Failed to load reconciliation data');
+      if (scope === 'all' || scope === 'unpresented') setData(null);
     } finally {
       if (loadAbortRef.current === controller) {
         loadAbortRef.current = null;
@@ -567,6 +585,110 @@ export default function BankReconciliation() {
       }
     }
   }, [filters]);
+
+  const loadMoreUnpresented = useCallback(async () => {
+    if (!filters.bankAccountId || !data?.unpresentedHasMore || loadingMoreUnp || loading) return;
+    const nextPage = (Number(data.unpresentedPage) || 1) + 1;
+    setLoadingMoreUnp(true);
+    setError('');
+    try {
+      const LEDGER_FROM_BEGINNING = '2000-01-01';
+      const asOfDate = String(filters.asOfDate || '').trim();
+      const fromDate = String(filters.fromDate || '').trim();
+      const toDate = String(filters.toDate || '').trim();
+      const res = await api.get('/finance/reports/bank-reconciliation', {
+        params: {
+          accountId: filters.bankAccountId,
+          asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
+          ledgerFromDate: LEDGER_FROM_BEGINNING,
+          fromDate: isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING,
+          toDate: isValidYmd(toDate) ? toDate : filters.toDate,
+          unpresentedPage: nextPage,
+          unpresentedLimit: UNP_PAGE_SIZE,
+          periodPage: 1,
+          periodLimit: 1,
+          _t: Date.now()
+        }
+      });
+      const pageData = res.data?.data;
+      const rows = Array.isArray(pageData?.unpresentedTransactions) ? pageData.unpresentedTransactions : [];
+      setData((prev) => {
+        if (!prev) return prev;
+        const seen = new Set((prev.unpresentedTransactions || []).map((t) => rowKey(t)));
+        const merged = [...(prev.unpresentedTransactions || [])];
+        rows.forEach((t) => {
+          const k = rowKey(t);
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            merged.push(t);
+          }
+        });
+        return {
+          ...prev,
+          unpresentedTransactions: merged,
+          unpresentedPage: pageData.unpresentedPage ?? nextPage,
+          unpresentedHasMore: Boolean(pageData.unpresentedHasMore),
+          unpresentedTotalCount: pageData.unpresentedTotalCount ?? prev.unpresentedTotalCount
+        };
+      });
+    } catch (e) {
+      setError(e.response?.data?.message || 'Failed to load more unpresented rows');
+    } finally {
+      setLoadingMoreUnp(false);
+    }
+  }, [filters, data, loadingMoreUnp, loading]);
+
+  const loadMorePeriod = useCallback(async () => {
+    if (!filters.bankAccountId || !data?.periodHasMore || loadingMorePeriod || loading) return;
+    const nextPage = (Number(data.periodPage) || 1) + 1;
+    setLoadingMorePeriod(true);
+    setError('');
+    try {
+      const LEDGER_FROM_BEGINNING = '2000-01-01';
+      const asOfDate = String(filters.asOfDate || '').trim();
+      const fromDate = String(filters.fromDate || '').trim();
+      const toDate = String(filters.toDate || '').trim();
+      const res = await api.get('/finance/reports/bank-reconciliation', {
+        params: {
+          accountId: filters.bankAccountId,
+          asOfDate: isValidYmd(asOfDate) ? asOfDate : filters.asOfDate,
+          ledgerFromDate: LEDGER_FROM_BEGINNING,
+          fromDate: isValidYmd(fromDate) ? fromDate : LEDGER_FROM_BEGINNING,
+          toDate: isValidYmd(toDate) ? toDate : filters.toDate,
+          unpresentedPage: 1,
+          unpresentedLimit: 1,
+          periodPage: nextPage,
+          periodLimit: PERIOD_PAGE_SIZE,
+          _t: Date.now()
+        }
+      });
+      const pageData = res.data?.data;
+      const rows = Array.isArray(pageData?.periodTransactions) ? pageData.periodTransactions : [];
+      setData((prev) => {
+        if (!prev) return prev;
+        const seen = new Set((prev.periodTransactions || []).map((t) => String(t._id || '')));
+        const merged = [...(prev.periodTransactions || [])];
+        rows.forEach((t) => {
+          const k = String(t._id || '');
+          if (k && !seen.has(k)) {
+            seen.add(k);
+            merged.push(t);
+          }
+        });
+        return {
+          ...prev,
+          periodTransactions: merged,
+          periodPage: pageData.periodPage ?? nextPage,
+          periodHasMore: Boolean(pageData.periodHasMore),
+          periodTotalCount: pageData.periodTotalCount ?? prev.periodTotalCount
+        };
+      });
+    } catch (e) {
+      setError(e.response?.data?.message || 'Failed to load more period rows');
+    } finally {
+      setLoadingMorePeriod(false);
+    }
+  }, [filters, data, loadingMorePeriod, loading]);
 
   const unpresentedRows = useMemo(
     () => data?.unpresentedTransactions || [],
@@ -925,7 +1047,9 @@ export default function BankReconciliation() {
         </Grid>
       </Paper>
 
-      {/* Summary Table */}
+      {loading && !data && <BankReconSkeleton />}
+
+      {/* Results only after a successful load (hidden while regenerating) */}
       {data && (
         <Paper variant="outlined" sx={{ mb: 4, overflow: 'hidden' }}>
           <TableContainer>
@@ -973,9 +1097,14 @@ export default function BankReconciliation() {
       {/* Upper Table: Unpresented / Uncleared Cheques & Payments */}
       {data && (
         <Box sx={{ mb: 5 }}>
-          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5}>
+          <Box display="flex" justifyContent="space-between" alignItems="center" mb={1.5} flexWrap="wrap" gap={1}>
             <Typography variant="h6" fontWeight={700}>
-              Unpresented / Uncleared Cheques &amp; Payments ({unpresentedRows.length})
+              Unpresented / Uncleared Cheques &amp; Payments
+              {' '}
+              ({unpresentedRows.length}
+              {typeof data.unpresentedTotalCount === 'number' && data.unpresentedTotalCount !== unpresentedRows.length
+                ? ` of ${data.unpresentedTotalCount}`
+                : ''})
             </Typography>
             <Stack direction="row" spacing={2} alignItems="center">
               <Button 
@@ -983,13 +1112,35 @@ export default function BankReconciliation() {
                 color="error" 
                 size="small"
                 startIcon={<PdfIcon />}
-                onClick={() => {
-                  const bankName = bankAccounts.find(b => String(b._id) === String(filters.bankAccountId))?.accountName || 'Bank';
-                  const companyName = companies?.find(c => String(c._id) === String(selectedCompanyId))?.name || '';
-                  exportBankReconciliationPDF(data, filters, bankName, companyName);
+                disabled={exportingPdf}
+                onClick={async () => {
+                  try {
+                    setExportingPdf(true);
+                    const LEDGER_FROM_BEGINNING = '2000-01-01';
+                    const res = await api.get('/finance/reports/bank-reconciliation', {
+                      params: {
+                        accountId: filters.bankAccountId,
+                        asOfDate: filters.asOfDate,
+                        ledgerFromDate: LEDGER_FROM_BEGINNING,
+                        fromDate: filters.fromDate || LEDGER_FROM_BEGINNING,
+                        toDate: filters.toDate,
+                        unpresentedAll: 1,
+                        periodAll: 1,
+                        _t: Date.now()
+                      }
+                    });
+                    const full = res.data?.data || data;
+                    const bankName = bankAccounts.find(b => String(b._id) === String(filters.bankAccountId))?.accountName || 'Bank';
+                    const companyName = companies?.find(c => String(c._id) === String(selectedCompanyId))?.name || '';
+                    exportBankReconciliationPDF(full, filters, bankName, companyName);
+                  } catch (e) {
+                    setError(e.response?.data?.message || 'Failed to export PDF');
+                  } finally {
+                    setExportingPdf(false);
+                  }
                 }}
               >
-                PDF
+                {exportingPdf ? 'Preparing…' : 'PDF'}
               </Button>
               {data.reconciledUpTo && (
                 <Chip
@@ -1158,43 +1309,38 @@ export default function BankReconciliation() {
                             </Tooltip>
                           </TableCell>
                           <TableCell sx={{ ...UP_COL.signedDoc, overflow: 'hidden' }}>
-                            <TextField
-                              select
-                              fullWidth
-                              size="small"
-                              value={isSigned ? 'signed' : 'not_signed'}
-                              onChange={(e) => saveSignedDocumentStatus(t, e.target.value, t.signedBySignatory)}
-                              SelectProps={{
-                                displayEmpty: true,
-                                MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
-                              }}
-                            >
-                              <MenuItem value="signed">Signed</MenuItem>
-                              <MenuItem value="not_signed">Not Signed</MenuItem>
-                            </TextField>
+                            <Tooltip title="Click to toggle signed status">
+                              <Chip
+                                size="small"
+                                label={isSigned ? 'Signed' : 'Not Signed'}
+                                color={isSigned ? 'success' : 'default'}
+                                variant="outlined"
+                                onClick={() => saveSignedDocumentStatus(
+                                  t,
+                                  isSigned ? 'not_signed' : 'signed',
+                                  isSigned ? '' : (t.signedBySignatory || SIGNATORY_OPTIONS[0]?.value || '')
+                                )}
+                                sx={{ height: 22, fontSize: '0.68rem', fontWeight: 600, cursor: 'pointer' }}
+                              />
+                            </Tooltip>
                           </TableCell>
-                          <TableCell sx={{ ...UP_COL.signedBy, overflow: 'hidden' }}>
-                            <TextField
-                              select
-                              fullWidth
-                              size="small"
-                              disabled={!isSigned}
-                              value={t.signedBySignatory || ''}
-                              onChange={(e) => saveSignedDocumentStatus(t, 'signed', e.target.value)}
-                              SelectProps={{
-                                displayEmpty: true,
-                                MenuProps: { PaperProps: { sx: { maxHeight: 250 } } }
-                              }}
-                            >
-                              <MenuItem value="">
-                                <em>Select Signatory</em>
-                              </MenuItem>
-                              {SIGNATORY_OPTIONS.map((opt) => (
-                                <MenuItem key={opt.value} value={opt.value}>
-                                  {opt.label}
-                                </MenuItem>
-                              ))}
-                            </TextField>
+                          <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.signedBy }}>
+                            <Tooltip title={isSigned ? 'Click to cycle signatory' : 'Mark as Signed first'}>
+                              <Typography
+                                variant="caption"
+                                noWrap
+                                sx={{ cursor: isSigned ? 'pointer' : 'default', display: 'block' }}
+                                onClick={() => {
+                                  if (!isSigned) return;
+                                  const cur = t.signedBySignatory || '';
+                                  const idx = SIGNATORY_OPTIONS.findIndex((o) => o.value === cur);
+                                  const next = SIGNATORY_OPTIONS[(idx + 1) % SIGNATORY_OPTIONS.length];
+                                  saveSignedDocumentStatus(t, 'signed', next.value);
+                                }}
+                              >
+                                {t.signedBySignatory || '—'}
+                              </Typography>
+                            </Tooltip>
                           </TableCell>
                           <TableCell sx={{ ...RECON_CELL_CLIP, ...UP_COL.signedDate }}>
                             {t.signedDocumentAt ? formatDate(t.signedDocumentAt) : '—'}
@@ -1270,6 +1416,21 @@ export default function BankReconciliation() {
               </TableBody>
             </Table>
           </TableContainer>
+          {data.unpresentedHasMore && (
+            <Stack alignItems="center" sx={{ mt: 1.5 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={loadingMoreUnp}
+                startIcon={loadingMoreUnp ? <CircularProgress size={16} color="inherit" /> : null}
+                onClick={loadMoreUnpresented}
+              >
+                {loadingMoreUnp
+                  ? 'Loading…'
+                  : `Load more (${unpresentedRows.length} of ${data.unpresentedTotalCount || '…'})`}
+              </Button>
+            </Stack>
+          )}
         </Box>
       )}
 
@@ -1282,6 +1443,9 @@ export default function BankReconciliation() {
             <Box>
               <Typography variant="h6" fontWeight={700}>
                 Bank Statement &amp; Period Activity
+                {typeof data.periodTotalCount === 'number'
+                  ? ` (${periodRows.length}${data.periodTotalCount !== periodRows.length ? ` of ${data.periodTotalCount}` : ''})`
+                  : ''}
               </Typography>
               <Typography variant="caption" color="text.secondary">
                 Cleared bank transactions between selected dates
@@ -1471,6 +1635,21 @@ export default function BankReconciliation() {
               </TableBody>
             </Table>
           </TableContainer>
+          {data.periodHasMore && (
+            <Stack alignItems="center" sx={{ mt: 1.5 }}>
+              <Button
+                variant="outlined"
+                size="small"
+                disabled={loadingMorePeriod}
+                startIcon={loadingMorePeriod ? <CircularProgress size={16} color="inherit" /> : null}
+                onClick={loadMorePeriod}
+              >
+                {loadingMorePeriod
+                  ? 'Loading…'
+                  : `Load more (${periodRows.length} of ${data.periodTotalCount || '…'})`}
+              </Button>
+            </Stack>
+          )}
         </Box>
       )}
 
