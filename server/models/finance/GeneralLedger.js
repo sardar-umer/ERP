@@ -362,24 +362,61 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     };
   };
 
+  // GLs already claimed by a prior JE line on this pass (same-amount multi-cheque BPVs)
+  const usedGlIds = new Set();
+
+  const isUselessRef = (raw) => {
+    const u = String(raw || '').trim().toUpperCase();
+    if (!u || u === '—' || u === '-' || u === 'N/A' || u === 'NA' || u === 'NULL') return true;
+    if (u === 'EXCEL IMPORT' || u === 'EXCEL' || u === 'IMPORT') return true;
+    return false;
+  };
+
   for (const row of entries) {
     const jid = String(row.journalEntry?._id || row.journalEntry || '');
     const candidates = byJe.get(jid) || [];
     const debit = Number(row.debit) || 0;
     const credit = Number(row.credit) || 0;
 
-    let linked = candidates.filter(
-      (g) => moneyEqGl(g.debit, debit) && moneyEqGl(g.credit, credit)
+    // Exact amount match — but NEVER attach every same-amount GL to every JE line
+    // (BPV-2-20260701: 17×10M JE lines + 17×10M GLs with distinct cheques).
+    let amountMatches = candidates.filter(
+      (g) =>
+        !usedGlIds.has(String(g._id))
+        && moneyEqGl(g.debit, debit)
+        && moneyEqGl(g.credit, credit)
     );
 
-    // Installment GLs: same side, amounts sum to JE line (GL.date may differ from JE.date)
+    let linked = [];
+    if (amountMatches.length === 1) {
+      linked = amountMatches;
+    } else if (amountMatches.length > 1) {
+      // One JE line ↔ one unused GL (prefer matching cheque/ref when JE/line has one)
+      const wantRef = String(row.reference || row.journalEntry?.reference || '').trim();
+      const byRef = !isUselessRef(wantRef)
+        ? amountMatches.find((g) => String(g.reference || '').trim() === wantRef)
+        : null;
+      linked = [byRef || amountMatches[0]];
+    }
+
+    // True installment split: ONE JE line amount = SUM of several smaller unused GLs
     if (!linked.length && candidates.length > 1) {
       if (credit > 0) {
-        const credits = candidates.filter((g) => Number(g.credit) > 0 && Number(g.debit) === 0);
+        const credits = candidates.filter(
+          (g) =>
+            !usedGlIds.has(String(g._id))
+            && Number(g.credit) > 0
+            && Number(g.debit) === 0
+        );
         const sum = credits.reduce((s, g) => s + (Number(g.credit) || 0), 0);
         if (credits.length > 1 && moneyEqGl(sum, credit)) linked = credits;
       } else if (debit > 0) {
-        const debits = candidates.filter((g) => Number(g.debit) > 0 && Number(g.credit) === 0);
+        const debits = candidates.filter(
+          (g) =>
+            !usedGlIds.has(String(g._id))
+            && Number(g.debit) > 0
+            && Number(g.credit) === 0
+        );
         const sum = debits.reduce((s, g) => s + (Number(g.debit) || 0), 0);
         if (debits.length > 1 && moneyEqGl(sum, debit)) linked = debits;
       }
@@ -389,20 +426,24 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     if (!linked.length && candidates.length === 1) {
       const g = candidates[0];
       if (
-        (credit > 0 && Number(g.credit) > 0) ||
-        (debit > 0 && Number(g.debit) > 0)
+        !usedGlIds.has(String(g._id))
+        && (
+          (credit > 0 && Number(g.credit) > 0)
+          || (debit > 0 && Number(g.debit) > 0)
+        )
       ) {
-        // Only if amounts match — otherwise leave synthetic id (reconcile may create)
         if (moneyEqGl(g.debit, debit) && moneyEqGl(g.credit, credit)) linked = [g];
       }
     }
+
+    linked.forEach((g) => usedGlIds.add(String(g._id)));
 
     const clearance = resolveClearanceAggregate(linked);
     row.linkedGlIds = linked.map((g) => String(g._id));
     if (linked.length === 1) {
       row._id = linked[0]._id;
     } else if (linked.length > 1) {
-      // Prefer a real ObjectId so BR clearance lookup works; clear updates all linkedGlIds
+      // True installment aggregate — BR expands to one row per GL
       row._id = linked[0]._id;
     }
     row.clearanceStatus = clearance.clearanceStatus;
@@ -410,31 +451,19 @@ generalLedgerSchema.statics.attachGlClearanceToJeLedgerRows = async function(ent
     row.isReconciled = clearance.isReconciled;
     row.reconciledAt = clearance.reconciledAt;
 
-    // Cheque / ref text usually lives on GL rows. JE.reference is often blank OR a
-    // placeholder like "EXCEL IMPORT" (truthy) which previously blocked GL copy → "—" in BR.
-    const isUselessRef = (raw) => {
-      const u = String(raw || '').trim().toUpperCase();
-      if (!u || u === '—' || u === '-' || u === 'N/A' || u === 'NA' || u === 'NULL') return true;
-      if (u === 'EXCEL IMPORT' || u === 'EXCEL' || u === 'IMPORT') return true;
-      return false;
-    };
-    let refSources = linked;
-    if (!refSources.length) {
-      if (credit > 0) refSources = candidates.filter((g) => Number(g.credit) > 0);
-      else if (debit > 0) refSources = candidates.filter((g) => Number(g.debit) > 0);
-      else refSources = candidates;
-    }
-    const glRefs = [
-      ...new Set(
-        refSources
-          .map((g) => String(g.reference || '').trim())
-          .filter((r) => !isUselessRef(r))
-      )
-    ];
-    if (glRefs.length === 1) {
-      row.reference = glRefs[0];
-    } else if (glRefs.length > 1) {
-      row.reference = glRefs.join(', ');
+    // Cheque / ref from the linked GL only (never join all same-amount cheques onto one line)
+    if (linked.length === 1 && !isUselessRef(linked[0].reference)) {
+      row.reference = String(linked[0].reference).trim();
+    } else if (linked.length > 1) {
+      // Installment aggregate — leave blank here; BR expand sets per-cheque refs
+      const glRefs = [
+        ...new Set(
+          linked
+            .map((g) => String(g.reference || '').trim())
+            .filter((r) => !isUselessRef(r))
+        )
+      ];
+      row.reference = glRefs.length === 1 ? glRefs[0] : '';
     } else if (isUselessRef(row.reference || row.journalEntry?.reference)) {
       row.reference = '';
     }
