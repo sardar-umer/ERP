@@ -55,113 +55,23 @@ const formatPackage = (pkg) => {
   return escapeHtml(String(pkg));
 };
 
-const loadImageFromUrl = async (url) => {
-  try {
-    const res = await fetch(url, { credentials: 'include' });
-    if (!res.ok) throw new Error(`HTTP ${res.status}`);
-    const blob = await res.blob();
-    const objectUrl = URL.createObjectURL(blob);
-    try {
-      const img = await new Promise((resolve, reject) => {
-        const el = new Image();
-        el.onload = () => resolve(el);
-        el.onerror = reject;
-        el.src = objectUrl;
-      });
-      return img;
-    } finally {
-      URL.revokeObjectURL(objectUrl);
-    }
-  } catch {
-    return new Promise((resolve, reject) => {
-      const el = new Image();
-      el.crossOrigin = 'anonymous';
-      el.onload = () => resolve(el);
-      el.onerror = reject;
-      el.src = url;
-    });
-  }
-};
-
-/** Thicken ink strokes so signatures print bold. */
-const dilateAlpha = (imageData, radius = 1) => {
-  const { width, height, data } = imageData;
-  const src = new Uint8ClampedArray(data);
-  for (let y = 0; y < height; y += 1) {
-    for (let x = 0; x < width; x += 1) {
-      let maxA = 0;
-      for (let dy = -radius; dy <= radius; dy += 1) {
-        for (let dx = -radius; dx <= radius; dx += 1) {
-          const nx = x + dx;
-          const ny = y + dy;
-          if (nx < 0 || ny < 0 || nx >= width || ny >= height) continue;
-          maxA = Math.max(maxA, src[((ny * width) + nx) * 4 + 3]);
-        }
-      }
-      const i = ((y * width) + x) * 4;
-      if (maxA > data[i + 3]) {
-        data[i] = 0;
-        data[i + 1] = 0;
-        data[i + 2] = 0;
-        data[i + 3] = maxA;
-      }
-    }
-  }
-};
-
-/**
- * Convert a faint/gray signature image into solid black ink as a data URL.
- * Print engines often strip CSS filters — baking black into pixels is reliable.
- */
-const toBlackInkDataUrl = async (path) => {
+/** Embed original signature as data URL so print iframe loads it reliably (no black rewrite). */
+const toEmbeddedSignatureSrc = async (path) => {
   const src = getImageUrl(path);
   if (!src) return null;
+  if (String(src).startsWith('data:')) return src;
   try {
-    const img = await loadImageFromUrl(src);
-    const maxW = 520;
-    const maxH = 200;
-    const nw = img.naturalWidth || img.width || 1;
-    const nh = img.naturalHeight || img.height || 1;
-    const scale = Math.min(2.5, maxW / nw, maxH / nh);
-    const canvas = document.createElement('canvas');
-    canvas.width = Math.max(1, Math.round(nw * scale));
-    canvas.height = Math.max(1, Math.round(nh * scale));
-    const ctx = canvas.getContext('2d');
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
-
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const d = imageData.data;
-    for (let i = 0; i < d.length; i += 4) {
-      const a = d[i + 3];
-      if (a < 12) {
-        d[i] = 0;
-        d[i + 1] = 0;
-        d[i + 2] = 0;
-        d[i + 3] = 0;
-        continue;
-      }
-      const lum = (0.299 * d[i]) + (0.587 * d[i + 1]) + (0.114 * d[i + 2]);
-      // Near-white / light gray → transparent; everything else → pure black
-      if (lum > 200) {
-        d[i] = 0;
-        d[i + 1] = 0;
-        d[i + 2] = 0;
-        d[i + 3] = 0;
-      } else {
-        const strength = Math.min(255, Math.round(((200 - lum) / 200) * 255) + 90);
-        d[i] = 0;
-        d[i + 1] = 0;
-        d[i + 2] = 0;
-        d[i + 3] = Math.min(255, Math.max(a, strength));
-      }
-    }
-    dilateAlpha(imageData, 1);
-    dilateAlpha(imageData, 1);
-    ctx.putImageData(imageData, 0, 0);
-    return canvas.toDataURL('image/png');
+    const res = await fetch(src, { credentials: 'include' });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const blob = await res.blob();
+    const dataUrl = await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload = () => resolve(reader.result);
+      reader.onerror = reject;
+      reader.readAsDataURL(blob);
+    });
+    return typeof dataUrl === 'string' ? dataUrl : src;
   } catch {
-    // Fall back to original URL if canvas conversion fails
     return src;
   }
 };
@@ -198,8 +108,8 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
     .join('');
 
   const authorities = getNewHiringAuthorityCards(record);
-  const inkedSources = await Promise.all(
-    authorities.map((a) => (a.sig ? toBlackInkDataUrl(a.sig) : Promise.resolve(null)))
+  const embeddedSources = await Promise.all(
+    authorities.map((a) => (a.sig ? toEmbeddedSignatureSrc(a.sig) : Promise.resolve(null)))
   );
 
   const authorityCards = authorities
@@ -208,7 +118,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
         <div class="auth-label">${escapeHtml(a.label)}</div>
         <div class="auth-name">${escapeHtml(a.statusLabel || formatPerson(a.user))}</div>
         ${a.at ? `<div class="muted">${formatDateTime(a.at)}</div>` : ''}
-        ${signatureBlock(inkedSources[idx], `${a.label} Signature`)}
+        ${signatureBlock(embeddedSources[idx], `${a.label} Signature`)}
       </div>`
     )
     .join('');
