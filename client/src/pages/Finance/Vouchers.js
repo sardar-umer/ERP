@@ -51,6 +51,7 @@ import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelector';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
 import QuotationDetailView from '../../components/Procurement/QuotationDetailView';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import {
@@ -1741,6 +1742,7 @@ const Vouchers = () => {
                       </Box>
 
                       {/* Approval Authorities Table — compact like vendor bill print */}
+                      <StoreVettingNotice indent={viewDialog.po?.indent} sx={{ mb: 0.75 }} />
                       <Typography variant="subtitle2" fontWeight={800} sx={{ textAlign: 'left', mb: 0.35, fontSize: '0.72rem', color: '#1e293b', '@media print': { fontSize: '10px', mb: 0.25 } }}>
                         Finance Document Approval Authority
                       </Typography>

@@ -19,6 +19,7 @@ import {
 } from '@mui/material';
 import { Print as PrintIcon, CheckCircle as CheckCircleIcon, Save as SaveIcon, CallSplit as SplitIcon } from '@mui/icons-material';
 import { DigitalSignatureImage } from '../common/DigitalSignatureImage';
+import StoreVettingNotice from './StoreVettingNotice';
 import { comparativeAuthoritySelectionLocked } from '../../utils/comparativeStatementAuthority';
 import {
   getQuoteItemForIndentItem as matchQuoteItemForIndentItem,
@@ -538,6 +539,7 @@ const ComparativeStatementView = ({
 
       {/* Approval authorities moved below Note */}
       <Box sx={{ mb: 3, '@media print': { pageBreakInside: 'avoid' } }}>
+        <StoreVettingNotice indent={selectedRequisition} />
         {!readOnly ? (
           <Box sx={{ '@media print': { display: 'none' } }}>
             <Typography variant="h6" fontWeight={600} sx={{ mb: 1.5 }}>

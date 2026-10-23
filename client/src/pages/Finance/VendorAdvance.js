@@ -64,6 +64,7 @@ import { WorkflowAuditFeedbackPanel } from '../../components/Admin/workflowAudit
 import { formatDateTime } from '../../utils/dateUtils';
 import { numberToWords } from '../../utils/numberToWords';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import toast from 'react-hot-toast';
 
 const emptyCategoryLine = () => ({
@@ -2122,6 +2123,7 @@ const VendorAdvance = () => {
                       </Box>
                     </Box>
 
+                    <StoreVettingNotice indent={viewDialog.po?.indent} sx={{ mb: 0.75 }} />
                     <Typography fontWeight={800} sx={{ mb: 0.3, fontSize: '0.7rem', color: '#1e293b', '@media print': { fontSize: '10px', mb: 0.2 } }}>
                       Finance Document Approval Authority
                     </Typography>

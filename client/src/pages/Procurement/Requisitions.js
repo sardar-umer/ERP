@@ -50,6 +50,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
 import { formatDate } from '../../utils/dateUtils';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import {
   getQuoteItemForIndentItem,
   getQuoteLineAmount,
@@ -966,6 +967,8 @@ const Requisitions = () => {
                     {viewDialog.data.justification || '___________'}
                   </Box>
                 </Box>
+
+                <StoreVettingNotice indent={viewDialog.data} sx={{ mb: 2 }} />
 
                 {/* Signatures — fixed-height boxes; image uses all space between label and name/date */}
                 <Box sx={{ mb: 3 }}>

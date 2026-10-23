@@ -38,7 +38,8 @@ import {
   DeleteOutline as DeactivateIcon,
   Restore as RestoreIcon,
   Inventory2 as InventoryIcon,
-  Search as SearchIcon
+  Search as SearchIcon,
+  FileDownload as FileDownloadIcon
 } from '@mui/icons-material';
 import {
   fetchItemMasterManageList,
@@ -85,6 +86,7 @@ const StoreItemCatalog = () => {
     accountId: null
   });
   const [saving, setSaving] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [search, setSearch] = useState('');
   const [searchDebounced, setSearchDebounced] = useState('');
 
@@ -171,14 +173,34 @@ const StoreItemCatalog = () => {
     setItemDialogOpen(true);
   };
 
+  const sameId = (a, b) => String(a?._id || a || '') === String(b?._id || b || '');
+
+  const resolveAccountOption = (accountRef) => {
+    if (!accountRef) return null;
+    const id = accountRef._id || accountRef;
+    const fromList = accounts.find((a) => sameId(a._id, id));
+    if (fromList) return fromList;
+    if (typeof accountRef === 'object' && accountRef._id) return accountRef;
+    return null;
+  };
+
+  const accountAutocompleteProps = {
+    options: accounts,
+    getOptionLabel: (o) => {
+      if (!o || typeof o !== 'object') return '';
+      return o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : (o.name || '');
+    },
+    isOptionEqualToValue: (o, v) => sameId(o, v),
+  };
+
   const openEdit = (row) => {
     setEditingId(row._id);
     setItemForm({
       category: row.category || '',
       categoryPath: row.categoryPath || row.category || '',
       name: row.isCategoryRoot ? '' : row.name || '',
-      srNo: row.srNo != null ? String(row.srNo) : '',
-      accountId: accounts.find(a => a._id === (row.accountId?._id || row.accountId)) || null
+      srNo: row.srNo != null && row.srNo !== '' ? String(row.srNo) : '',
+      accountId: resolveAccountOption(row.accountId)
     });
     setItemDialogOpen(true);
   };
@@ -192,7 +214,10 @@ const StoreItemCatalog = () => {
       return;
     }
     if (editingId) {
-      const row = rows.find((r) => r._id === editingId);
+      const row = rows.find((r) => sameId(r._id, editingId));
+      const accountIdPayload = itemForm.accountId
+        ? (itemForm.accountId._id || itemForm.accountId)
+        : null;
       if (row?.isCategoryRoot) {
         try {
           setSaving(true);
@@ -201,10 +226,12 @@ const StoreItemCatalog = () => {
             categoryPath,
             name: category,
             isActive: true,
-            accountId: itemForm.accountId ? itemForm.accountId._id : null
+            accountId: accountIdPayload,
+            srNo: Number.isFinite(Number(row.srNo)) ? Number(row.srNo) : 0
           });
           setSnackbar({ open: true, message: 'Category updated', severity: 'success' });
           setItemDialogOpen(false);
+          setEditingId(null);
           await load();
         } catch (err) {
           setSnackbar({
@@ -221,18 +248,22 @@ const StoreItemCatalog = () => {
         setSnackbar({ open: true, message: 'Item name is required', severity: 'warning' });
         return;
       }
-      const sr = itemForm.srNo?.trim() ? parseInt(itemForm.srNo, 10) : undefined;
+      const parsedSr = itemForm.srNo?.trim() ? parseInt(itemForm.srNo, 10) : NaN;
+      const srNo = Number.isFinite(parsedSr)
+        ? parsedSr
+        : (Number.isFinite(Number(row?.srNo)) ? Number(row.srNo) : 1);
       try {
         setSaving(true);
         await updateItemMaster(editingId, {
           category,
           categoryPath,
           name,
-          accountId: itemForm.accountId ? itemForm.accountId._id : null,
-          ...(Number.isFinite(sr) ? { srNo: sr } : {})
+          accountId: accountIdPayload,
+          srNo
         });
         setSnackbar({ open: true, message: 'Item updated', severity: 'success' });
         setItemDialogOpen(false);
+        setEditingId(null);
         await load();
       } catch (err) {
         setSnackbar({
@@ -375,7 +406,40 @@ const StoreItemCatalog = () => {
     return filteredRows.slice(start, start + pagination.rowsPerPage);
   }, [filteredRows, pagination.page, pagination.rowsPerPage]);
 
-  const editingRow = editingId ? rows.find((x) => x._id === editingId) : null;
+  const handleExportExcel = async () => {
+    if (!filteredRows.length) {
+      setSnackbar({ open: true, message: 'Nothing to export', severity: 'warning' });
+      return;
+    }
+    try {
+      setExporting(true);
+      const XLSX = await import('xlsx');
+      const exportData = filteredRows.map((r) => ({
+        'Sr #': r.isCategoryRoot ? '' : (r.srNo ?? ''),
+        Type: r.isCategoryRoot ? 'Category' : 'Item',
+        Category: r.category || '',
+        'Category path': r.categoryPath || '',
+        'Item name': r.isCategoryRoot ? '' : (r.name || ''),
+        Status: r.isActive === false ? 'Inactive' : 'Active'
+      }));
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Item Catalog');
+      XLSX.writeFile(wb, `item-catalog-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      setSnackbar({
+        open: true,
+        message: `Exported ${exportData.length} row(s) (all pages${searchDebounced.trim() ? ', current search' : ''})`,
+        severity: 'success'
+      });
+    } catch (err) {
+      console.error(err);
+      setSnackbar({ open: true, message: 'Export failed', severity: 'error' });
+    } finally {
+      setExporting(false);
+    }
+  };
+
+  const editingRow = editingId ? rows.find((x) => sameId(x._id, editingId)) : null;
 
   return (
     <Box sx={{ p: 3 }}>
@@ -398,6 +462,15 @@ const StoreItemCatalog = () => {
           </Button>
           <Button variant="outlined" startIcon={<AddIcon />} onClick={openAddItem} disabled={loading || categoryOptions.length === 0}>
             Add item
+          </Button>
+          <Button
+            variant="outlined"
+            color="success"
+            startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <FileDownloadIcon />}
+            onClick={handleExportExcel}
+            disabled={loading || exporting || filteredRows.length === 0}
+          >
+            {exporting ? 'Exporting…' : 'Export Excel'}
           </Button>
           <TextField
             size="small"
@@ -480,7 +553,14 @@ const StoreItemCatalog = () => {
                           />
                         </TableCell>
                         <TableCell align="right">
-                          <IconButton size="small" title="Edit" onClick={() => openEdit(r)}>
+                          <IconButton
+                            size="small"
+                            title="Edit"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openEdit(r);
+                            }}
+                          >
                             <EditIcon fontSize="small" />
                           </IconButton>
                           {r.isActive !== false ? (
@@ -526,12 +606,10 @@ const StoreItemCatalog = () => {
             placeholder="e.g. Bricks, Cement, Electrical"
           />
           <Autocomplete
-            options={accounts}
-            getOptionLabel={(o) => o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : o.name || ''}
+            {...accountAutocompleteProps}
             value={categoryForm.accountId}
             onChange={(e, v) => setCategoryForm({ ...categoryForm, accountId: v })}
             renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
-            isOptionEqualToValue={(o, v) => o._id === v._id}
           />
         </DialogContent>
         <DialogActions>
@@ -544,9 +622,18 @@ const StoreItemCatalog = () => {
         </DialogActions>
       </Dialog>
 
-      <Dialog open={itemDialogOpen} onClose={() => !saving && setItemDialogOpen(false)} maxWidth="sm" fullWidth>
+      <Dialog
+        open={itemDialogOpen}
+        onClose={() => {
+          if (saving) return;
+          setItemDialogOpen(false);
+          setEditingId(null);
+        }}
+        maxWidth="sm"
+        fullWidth
+      >
         <DialogTitle>
-          {editingId ? (rows.find((x) => x._id === editingId)?.isCategoryRoot ? 'Edit category' : 'Edit item') : 'Add item'}
+          {editingId ? (editingRow?.isCategoryRoot ? 'Edit category' : 'Edit item') : 'Add item'}
         </DialogTitle>
         <DialogContent>
           {editingRow?.isCategoryRoot ? (
@@ -569,12 +656,10 @@ const StoreItemCatalog = () => {
                 onChange={(e) => setItemForm((f) => ({ ...f, categoryPath: e.target.value }))}
               />
               <Autocomplete
-                options={accounts}
-                getOptionLabel={(o) => o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : o.name || ''}
+                {...accountAutocompleteProps}
                 value={itemForm.accountId}
                 onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
                 renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
-                isOptionEqualToValue={(o, v) => o._id === v._id}
               />
             </>
           ) : editingId ? (
@@ -613,12 +698,10 @@ const StoreItemCatalog = () => {
                 onChange={(e) => setItemForm((f) => ({ ...f, srNo: e.target.value }))}
               />
               <Autocomplete
-                options={accounts}
-                getOptionLabel={(o) => o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : o.name || ''}
+                {...accountAutocompleteProps}
                 value={itemForm.accountId}
                 onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
                 renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
-                isOptionEqualToValue={(o, v) => o._id === v._id}
               />
             </>
           ) : (
@@ -668,18 +751,22 @@ const StoreItemCatalog = () => {
                 placeholder="Auto if empty"
               />
               <Autocomplete
-                options={accounts}
-                getOptionLabel={(o) => o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : o.name || ''}
+                {...accountAutocompleteProps}
                 value={itemForm.accountId}
                 onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
                 renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
-                isOptionEqualToValue={(o, v) => o._id === v._id}
               />
             </>
           )}
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => setItemDialogOpen(false)} disabled={saving}>
+          <Button
+            onClick={() => {
+              setItemDialogOpen(false);
+              setEditingId(null);
+            }}
+            disabled={saving}
+          >
             Cancel
           </Button>
           <Button variant="contained" onClick={handleSaveItem} disabled={saving}>

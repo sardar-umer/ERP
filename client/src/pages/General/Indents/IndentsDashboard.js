@@ -64,6 +64,7 @@ import CashApprovalGeneralDetailShell from '../../../components/CashApprovals/Ca
 import { isGeneralModuleCashApproval } from '../../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import ComparativeStatementView from '../../../components/Procurement/ComparativeStatementView';
 import QuotationDetailView from '../../../components/Procurement/QuotationDetailView';
+import StoreVettingNotice from '../../../components/Procurement/StoreVettingNotice';
 import { formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
 
 // Stat Card Component
@@ -437,7 +438,8 @@ const IndentsDashboard = () => {
       );
       return (
         <Box sx={{ mt: 4 }}>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+          <StoreVettingNotice indent={po?.indent} sx={{ mb: 0.75, '@media print': { mb: 0.3 } }} />
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5, '@media print': { mb: 0.5, fontSize: '11px' } }}>
             Approval Progress
           </Typography>
           <TableContainer component={Box} sx={{ border: '1px solid', borderColor: 'divider' }}>

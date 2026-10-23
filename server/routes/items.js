@@ -203,7 +203,7 @@ router.put(
     const nextCategory = req.body.category !== undefined ? trimStr(req.body.category) : doc.category;
     const nextName = req.body.name !== undefined ? trimStr(req.body.name) : doc.name;
     const nextPath = req.body.categoryPath !== undefined ? trimStr(req.body.categoryPath) : doc.categoryPath;
-    const nextSr = req.body.srNo !== undefined ? parseInt(req.body.srNo, 10) : doc.srNo;
+    let nextSr = req.body.srNo !== undefined ? parseInt(req.body.srNo, 10) : doc.srNo;
     const nextActive = req.body.isActive !== undefined ? !!req.body.isActive : doc.isActive;
     const nextAccountId = req.body.accountId !== undefined ? (req.body.accountId || null) : doc.accountId;
 
@@ -213,7 +213,8 @@ router.put(
       return res.status(400).json({ success: false, message: 'Name is required' });
     }
     if (!Number.isFinite(nextSr) || nextSr < 0) {
-      return res.status(400).json({ success: false, message: 'Invalid serial number' });
+      // Keep existing serial when client sends blank/invalid instead of blocking edit
+      nextSr = Number.isFinite(Number(doc.srNo)) ? Number(doc.srNo) : (doc.isCategoryRoot ? 0 : 1);
     }
 
     const effectiveName = doc.isCategoryRoot ? CATEGORY_ROOT_ITEM_NAME : nextName;

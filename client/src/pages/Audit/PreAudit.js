@@ -106,6 +106,8 @@ import {
 } from '../../utils/centralizedStoreBillDisplay';
 import { canPerformInitialPreAuditActions } from '../../utils/auditAccess';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
+import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 
 /** Comment from the most recent workflow step that moved the document to Pre-Audit (Send to Audit), e.g. resubmit notes. */
 function getLatestSendToAuditWorkflowComment(workflowHistory) {
@@ -1792,6 +1794,7 @@ const PreAudit = () => {
     
     return (
       <Paper
+        className="po-print-page"
         sx={{
           p: { xs: 3, sm: 3.5, md: 4 },
           maxWidth: '210mm',
@@ -1802,12 +1805,11 @@ const PreAudit = () => {
           fontFamily: 'Arial, sans-serif',
           '@media print': {
             boxShadow: 'none',
-            p: 2.5,
+            p: '7mm 9mm',
             maxWidth: '100%',
             backgroundColor: '#fff',
             mx: 0,
-            width: '100%',
-            pageBreakInside: 'avoid'
+            width: '100%'
           }
         }}
       >
@@ -1820,7 +1822,8 @@ const PreAudit = () => {
             textTransform: 'uppercase',
             mb: 3,
             fontSize: { xs: '1.8rem', print: '1.6rem' },
-            letterSpacing: 1
+            letterSpacing: 1,
+            '@media print': { mb: 1, fontSize: '22px' }
           }}
         >
           Purchase Order
@@ -2184,13 +2187,29 @@ const PreAudit = () => {
           </Box>
         </Box>
 
-        <Divider sx={{ my: 3 }} />
+        <Divider sx={{ my: 3, '@media print': { my: 0.6 } }} />
 
-        <Typography variant="subtitle1" fontWeight={700} mb={1.5} sx={{ textAlign: 'center' }}>
+        <Box
+          className="po-approval-block"
+          sx={{ '@media print': { mb: 0 } }}
+        >
+        <StoreVettingNotice indent={indent} sx={{ mb: 0.75, '@media print': { mb: 0.25 } }} />
+        <Typography variant="subtitle1" fontWeight={700} mb={1.5} sx={{ textAlign: 'center', '@media print': { mb: 0.35, fontSize: '9px' } }}>
           APPROVAL AUTHORITIES
         </Typography>
-        <TableContainer component={Box} sx={{ border: '1px solid #ccc', mb: 4 }}>
-          <Table size="small">
+        <TableContainer component={Box} sx={{ border: '1px solid #ccc', mb: 4, '@media print': { mb: 0.5 } }}>
+          <Table
+            size="small"
+            className="po-authority-table"
+            sx={{
+              '& th, & td': {
+                '@media print': { py: '1px !important', px: '3px !important', fontSize: '8.5px !important', lineHeight: 1.15 }
+              },
+              '& img': {
+                '@media print': { maxHeight: '14px !important', maxWidth: '70px !important' }
+              }
+            }}
+          >
             <TableHead>
               <TableRow sx={{ bgcolor: '#f5f5f5' }}>
                 <TableCell sx={{ border: '1px solid #ccc', fontWeight: 700 }}>Authority</TableCell>
@@ -2262,8 +2281,8 @@ const PreAudit = () => {
             </TableBody>
           </Table>
         </TableContainer>
+        </Box>
 
-        
       </Paper>
     );
   };
@@ -3159,7 +3178,7 @@ const PreAudit = () => {
                 <Button
                   variant="contained"
                   startIcon={<PrintIcon />}
-                  onClick={() => window.print()}
+                  onClick={() => printPoFitToOneA4()}
                   size="small"
                   sx={{ '@media print': { display: 'none' } }}
                 >
@@ -4961,10 +4980,6 @@ const PreAudit = () => {
           dangerouslySetInnerHTML={{
             __html: `
               @media print {
-                @page {
-                  size: A4;
-                  margin: 15mm;
-                }
                 body * {
                   visibility: hidden;
                 }
@@ -5021,6 +5036,7 @@ const PreAudit = () => {
                   -webkit-print-color-adjust: exact !important;
                   print-color-adjust: exact !important;
                 }
+                ${PO_A4_ONE_PAGE_PRINT_CSS}
               }
             `
           }}

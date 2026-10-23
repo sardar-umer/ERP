@@ -46,7 +46,8 @@ import {
   Search as SearchIcon,
   Refresh as RefreshIcon,
   TrendingUp as AddStockIcon,
-  TrendingDown as RemoveStockIcon
+  TrendingDown as RemoveStockIcon,
+  FileDownload as FileDownloadIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { formatPKR } from '../../utils/currency';
@@ -74,6 +75,7 @@ const Inventory = () => {
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [exporting, setExporting] = useState(false);
   
   // Dialog states
   const [formDialog, setFormDialog] = useState({ open: false, mode: 'create', data: null });
@@ -209,6 +211,77 @@ const Inventory = () => {
       }
     } catch (err) {
       console.error('Error loading vendors:', err);
+    }
+  };
+
+  /** Fetch every page matching current filters, then download Excel. */
+  const handleExportExcel = async () => {
+    try {
+      setExporting(true);
+      setError('');
+      const pageSize = 500;
+      let currentPage = 1;
+      let totalPages = 1;
+      const allItems = [];
+
+      while (currentPage <= totalPages) {
+        const response = await api.get('/procurement/inventory', {
+          params: {
+            page: currentPage,
+            limit: pageSize,
+            search,
+            category: categoryFilter,
+            status: statusFilter
+          }
+        });
+        if (!response.data?.success) {
+          throw new Error(response.data?.message || 'Failed to load inventory for export');
+        }
+        const batch = response.data.data?.items || [];
+        allItems.push(...batch);
+        const pagination = response.data.data?.pagination || {};
+        totalPages = Math.max(1, Number(pagination.totalPages) || 1);
+        const total = Number(pagination.totalItems);
+        if (Number.isFinite(total) && allItems.length >= total) break;
+        if (batch.length < pageSize) break;
+        currentPage += 1;
+        if (currentPage > 500) break; // safety
+      }
+
+      if (!allItems.length) {
+        setError('Nothing to export');
+        return;
+      }
+
+      const XLSX = await import('xlsx');
+      const exportData = allItems.map((item) => ({
+        'Item Code': item.itemCode || '',
+        Name: item.name || '',
+        Category: item.category || '',
+        'Finance Category': item.inventoryCategory?.name || '',
+        Store: item.storeSnapshot || '',
+        'Sub-Store': item.subStoreSnapshot || '',
+        Rack: item.location?.rack || '',
+        Shelf: item.location?.shelf || '',
+        Bin: item.location?.bin || '',
+        Qty: item.quantity ?? '',
+        Unit: item.unit || '',
+        'WAC (Avg Cost)': item.averageCost ?? '',
+        'List Price': item.unitPrice ?? '',
+        'Stock Value': item.totalValue ?? '',
+        Status: item.status || '',
+        Description: item.description || ''
+      }));
+      const ws = XLSX.utils.json_to_sheet(exportData);
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Inventory');
+      XLSX.writeFile(wb, `inventory-${new Date().toISOString().slice(0, 10)}.xlsx`);
+      setSuccess(`Exported ${exportData.length} item(s) from all pages`);
+    } catch (err) {
+      console.error('Inventory export failed:', err);
+      setError(err.response?.data?.message || err.message || 'Export failed');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -406,7 +479,7 @@ const Inventory = () => {
               </Typography>
             </Box>
           </Box>
-          <Box sx={{ display: 'flex', gap: 2 }}>
+          <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap' }}>
             <Button
               variant="outlined"
               startIcon={<RefreshIcon />}
@@ -416,6 +489,15 @@ const Inventory = () => {
               }}
             >
               Refresh
+            </Button>
+            <Button
+              variant="outlined"
+              color="success"
+              startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <FileDownloadIcon />}
+              onClick={handleExportExcel}
+              disabled={exporting || loading}
+            >
+              {exporting ? 'Exporting…' : 'Export Excel'}
             </Button>
             <Button
               variant="contained"

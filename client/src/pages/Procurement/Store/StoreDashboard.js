@@ -52,6 +52,7 @@ import indentService from '../../../services/indentService';
 import dayjs from 'dayjs';
 import PODocumentView from './PODocumentView';
 import WorkflowHistoryDialog from '../../../components/WorkflowHistoryDialog';
+import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../../utils/poA4PrintStyles';
 
 const StoreDashboard = () => {
   const theme = useTheme();
@@ -686,7 +687,7 @@ const StoreDashboard = () => {
               >
                 See Workflow History
               </Button>
-              <Button size="small" variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>
+              <Button size="small" variant="outlined" startIcon={<PrintIcon />} onClick={() => printPoFitToOneA4()}>
                 Print
               </Button>
               {viewDialog.data && (
@@ -959,10 +960,6 @@ const StoreDashboard = () => {
         dangerouslySetInnerHTML={{
           __html: `
             @media print {
-              @page {
-                size: A4;
-                margin: 15mm;
-              }
               body * {
                 visibility: hidden;
               }
@@ -1015,6 +1012,7 @@ const StoreDashboard = () => {
               .MuiPaper-root {
                 box-shadow: none !important;
               }
+              ${PO_A4_ONE_PAGE_PRINT_CSS}
             }
           `
         }}

@@ -1,6 +1,7 @@
 import React from 'react';
 import { Box, Typography, Paper, Divider, Chip, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, alpha, useTheme } from '@mui/material';
 import { DigitalSignatureImage, ProcurementDigitalSignaturesRow } from '../../../components/common/DigitalSignatureImage';
+import StoreVettingNotice from '../../../components/Procurement/StoreVettingNotice';
 import { sanitizeApprovalAuthorities, formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
 
 const formatDateForPrint = (date) => {
@@ -156,6 +157,7 @@ const PODocumentView = ({ data }) => {
 
   return (
     <Paper
+      className="po-print-page"
       sx={{
         p: { xs: 3, sm: 3.5, md: 4 },
         maxWidth: '210mm',
@@ -166,16 +168,26 @@ const PODocumentView = ({ data }) => {
         fontFamily: 'Arial, sans-serif',
         '@media print': {
           boxShadow: 'none',
-          p: 2.5,
+          p: '7mm 9mm',
           maxWidth: '100%',
           backgroundColor: '#fff',
           mx: 0,
-          width: '100%',
-          pageBreakInside: 'avoid'
+          width: '100%'
         }
       }}
     >
-      <Typography variant="h4" fontWeight={700} align="center" sx={{ textTransform: 'uppercase', mb: 3, fontSize: { xs: '1.8rem', print: '1.6rem' }, letterSpacing: 1 }}>
+      <Typography
+        variant="h4"
+        fontWeight={700}
+        align="center"
+        sx={{
+          textTransform: 'uppercase',
+          mb: 3,
+          fontSize: { xs: '1.8rem', print: '1.1rem' },
+          letterSpacing: 1,
+          '@media print': { mb: 1, fontSize: '22px', letterSpacing: 0.4 }
+        }}
+      >
         Purchase Order
       </Typography>
 
@@ -251,15 +263,15 @@ const PODocumentView = ({ data }) => {
         </Box>
       )}
 
-      <Box sx={{ mb: 2.5 }}>
-        <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1.1rem' }}>
+      <Box sx={{ mb: 2.5, '@media print': { mb: 1 } }}>
+        <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1.1rem', '@media print': { mb: 0.45, fontSize: '14px' } }}>
           {data.companyId?.name || data.indent?.companyId?.name || '—'}
         </Typography>
-        <Typography sx={{ fontSize: '0.9rem' }}>Link Road I-14, adjacent to CDA Sectors I-14 and I-15</Typography>
+        <Typography sx={{ fontSize: '0.9rem', '@media print': { fontSize: '12.5px' } }}>Link Road I-14, adjacent to CDA Sectors I-14 and I-15</Typography>
       </Box>
 
 
-      <Box sx={{ mb: 3, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', gap: { xs: 2, md: 3 } }}>
+      <Box sx={{ mb: 3, display: 'flex', flexDirection: { xs: 'column', md: 'row' }, justifyContent: 'space-between', gap: { xs: 2, md: 3 }, '@media print': { mb: 1, gap: 2 } }}>
         <Box sx={{ width: { xs: '100%', md: '45%' }, fontSize: '0.9rem' }}>
           <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: { xs: '1rem', sm: '1.1rem' } }}>{data.vendor?.name || 'Vendor Name'}</Typography>
           <Typography sx={{ fontSize: '0.9rem', lineHeight: 1.6, mb: 1 }}>{data.vendor?.address || 'Vendor Address'}</Typography>
@@ -309,7 +321,7 @@ const PODocumentView = ({ data }) => {
         </Box>
       </Box>
 
-      <Box sx={{ mb: 3, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
+      <Box sx={{ mb: 3, overflowX: 'auto', WebkitOverflowScrolling: 'touch', '@media print': { mb: 1, overflow: 'visible' } }}>
         <table style={{ width: '100%', minWidth: 700, borderCollapse: 'collapse', border: '1px solid #000', fontSize: '0.85rem', fontFamily: 'Arial, sans-serif' }}>
           <thead>
             <tr style={{ backgroundColor: '#f5f5f5', border: '1px solid #000' }}>
@@ -348,8 +360,8 @@ const PODocumentView = ({ data }) => {
         </table>
       </Box>
 
-      <Box sx={{ mb: 3, display: 'flex', justifyContent: { xs: 'stretch', sm: 'flex-end' } }}>
-        <Box sx={{ width: { xs: '100%', sm: 300 }, fontSize: '0.9rem' }}>
+      <Box sx={{ mb: 3, display: 'flex', justifyContent: { xs: 'stretch', sm: 'flex-end' }, '@media print': { mb: 1 } }}>
+        <Box sx={{ width: { xs: '100%', sm: 300 }, fontSize: '0.9rem', '@media print': { fontSize: '12.5px', width: 300 } }}>
           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
             <Typography component="span" fontWeight={600}>Total (Rupees):</Typography>
             <Typography component="span">{formatNumber(data.totalAmount || 0)}</Typography>
@@ -366,40 +378,48 @@ const PODocumentView = ({ data }) => {
         </Box>
       </Box>
 
-      <Box sx={{ mb: 3, border: '1px solid #ccc', p: 2, fontSize: '0.9rem' }}>
-        <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5, textDecoration: 'underline' }}>TERMS & CONDITIONS</Typography>
-        <Box sx={{ lineHeight: 1.8 }}>
-          <Typography sx={{ mb: 1, fontWeight: 600 }}>Main Terms & Conditions</Typography>
-          <Box sx={{ mb: 1 }}>
+        <Box className="po-terms-block" sx={{ mb: 3, border: '1px solid #ccc', p: 2, fontSize: '0.9rem', '@media print': { mb: 0.5, p: 0.5, fontSize: '9px' } }}>
+        <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5, textDecoration: 'underline', '@media print': { mb: 0.15, fontSize: '10px' } }}>TERMS & CONDITIONS</Typography>
+        <Box sx={{ lineHeight: 1.8, '@media print': { lineHeight: 1.12 } }}>
+          <Typography sx={{ mb: 1, fontWeight: 600, '@media print': { mb: 0 } }}>Main Terms & Conditions</Typography>
+          <Box sx={{ mb: 1, '@media print': { mb: 0 } }}>
             <Typography component="span" fontWeight={600}>Payment Terms:</Typography>
             <Typography component="span" sx={{ ml: 1 }}>{data.paymentTerms || '100% Advance Payment'}</Typography>
           </Box>
-          <Box sx={{ mb: 1 }}>
+          <Box sx={{ mb: 1, '@media print': { mb: 0 } }}>
             <Typography component="span" fontWeight={600}>Delivery Terms:</Typography>
             <Typography component="span" sx={{ ml: 1 }}>At-Site Delivery</Typography>
           </Box>
-          <Box sx={{ mb: 1 }}>
+          <Box sx={{ mb: 1, '@media print': { mb: 0 } }}>
             <Typography component="span" fontWeight={600}>Delivery Time.</Typography>
             <Typography component="span" sx={{ ml: 1 }}>Delivery within: {data.quotation?.deliveryTime || '03 days'} of confirmed PO & Payment</Typography>
           </Box>
-          <Typography sx={{ mb: 1 }}>Rates Are Exclusive Of all The Taxes</Typography>
-          {data.vendor?.cnic && <Typography sx={{ mb: 1 }}>CNIC {data.vendor.cnic}</Typography>}
+          <Typography sx={{ mb: 1, '@media print': { mb: 0 } }}>Rates Are Exclusive Of all The Taxes</Typography>
+          {data.vendor?.cnic && <Typography sx={{ mb: 1, '@media print': { mb: 0 } }}>CNIC {data.vendor.cnic}</Typography>}
           {data.vendor?.payeeName && <Typography>Payee Name: {data.vendor.payeeName}</Typography>}
         </Box>
       </Box>
 
-      {/* Approval authorities with digital signatures */}
-      <Box sx={{ mt: 4, '@media print': { mt: 2 } }}>
+      {/* Approval authorities with digital signatures — keep on same A4 page */}
+      <Box
+        className="po-approval-block"
+        sx={{
+          mt: 4,
+          '@media print': { mt: 1 }
+        }}
+      >
+        <StoreVettingNotice indent={data.indent} sx={{ mb: 0.4, '@media print': { mb: 0.35 } }} />
         <Typography
           variant="subtitle2"
           fontWeight={800}
-          sx={{ mb: 0.5, fontSize: '0.75rem', color: '#1e293b', '@media print': { fontSize: '10px', mb: 0.35 } }}
+          sx={{ mb: 0.5, fontSize: '0.75rem', color: '#1e293b', '@media print': { fontSize: '13px', mb: 0.4 } }}
         >
           Finance Document Approval Authority
         </Typography>
         <TableContainer component={Box} sx={{ border: '1.5px solid #334155' }}>
           <Table
             size="small"
+            className="po-authority-table"
             sx={{
               '& th': {
                 bgcolor: '#f1f5f9',
@@ -408,7 +428,7 @@ const PODocumentView = ({ data }) => {
                 border: '1px solid #cbd5e1',
                 py: 0.45,
                 px: 0.8,
-                '@media print': { py: 0.25, px: 0.5, fontSize: '9.5px' }
+                '@media print': { py: '5px', px: '7px', fontSize: '12px', lineHeight: 1.3 }
               },
               '& td': {
                 fontSize: 12,
@@ -416,7 +436,7 @@ const PODocumentView = ({ data }) => {
                 py: 0.4,
                 px: 0.8,
                 verticalAlign: 'middle',
-                '@media print': { py: 0.2, px: 0.5, fontSize: '9.5px' }
+                '@media print': { py: '5px', px: '7px', fontSize: '12px', lineHeight: 1.3 }
               }
             }}
           >
@@ -451,21 +471,21 @@ const PODocumentView = ({ data }) => {
                               display: 'flex',
                               justifyContent: 'center',
                               '& img': { maxHeight: 28, width: 'auto', objectFit: 'contain' },
-                              '@media print': { maxHeight: 22, '& img': { maxHeight: 22 } }
+                              '@media print': { maxHeight: 28, '& img': { maxHeight: 28 } }
                             }}
                           >
                             <DigitalSignatureImage
                               userOrPath={signatureUser}
                               alt={`Signature ${row.label}`}
-                              sx={{ maxHeight: 28, maxWidth: 100, '@media print': { maxHeight: 22, maxWidth: 85 } }}
+                              sx={{ maxHeight: 28, maxWidth: 100, '@media print': { maxHeight: 28, maxWidth: 110 } }}
                             />
                           </Box>
                         ) : isApprovedRow ? (
-                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '8px' } }}>
                             Approved
                           </Typography>
                         ) : (
-                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem' }}>
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '8px' } }}>
                             —
                           </Typography>
                         )}
@@ -480,7 +500,9 @@ const PODocumentView = ({ data }) => {
         </TableContainer>
       </Box>
 
-      <ProcurementDigitalSignaturesRow purchaseOrder={data} />
+      <Box sx={{ '@media print': { display: 'none' } }}>
+        <ProcurementDigitalSignaturesRow purchaseOrder={data} />
+      </Box>
     </Paper>
   );
 };

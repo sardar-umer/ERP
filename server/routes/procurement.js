@@ -743,11 +743,12 @@ const canViewQuotationsByIndentRead = (user, indent) => {
 const purchaseOrderIndentPopulate = {
   path: 'indent',
   select:
-    'indentNumber title erpRef requestedDate requiredDate department requestedBy items notes companyId comparativeStatementApprovals comparativeApproval comparativeApprovals splitPOAssignments approvalChain justification signatures attachments',
+    'indentNumber title erpRef requestedDate requiredDate department requestedBy items notes companyId comparativeStatementApprovals comparativeApproval comparativeApprovals splitPOAssignments approvalChain justification signatures attachments storeRoutingStatus movedToProcurementReason movedToProcurementAt movedToProcurementBy',
   populate: [
     { path: 'department', select: 'name code' },
     { path: 'companyId', select: 'name code symbol' },
     { path: 'requestedBy', select: 'firstName lastName email digitalSignature' },
+    { path: 'movedToProcurementBy', select: 'firstName lastName email' },
     { path: 'approvalChain.approver', select: 'firstName lastName email digitalSignature' },
     { path: 'comparativeApproval.approvers.approver', select: 'firstName lastName email employeeId digitalSignature' },
     { path: 'comparativeApproval.submittedBy', select: 'firstName lastName email' },
@@ -956,6 +957,74 @@ function purchaseOrderOpenForDeliveryChallan(poDoc) {
         : `PO status "${poDoc.status}" does not allow new delivery challans.`
   };
 }
+
+// Multer for GRN attachments
+const grnAttachmentsDir = path.join(__dirname, '../uploads/grn-attachments');
+const grnAttachmentStorage = multer.diskStorage({
+  destination: (req, file, cb) => {
+    if (!fs.existsSync(grnAttachmentsDir)) {
+      fs.mkdirSync(grnAttachmentsDir, { recursive: true });
+    }
+    cb(null, grnAttachmentsDir);
+  },
+  filename: (req, file, cb) => {
+    const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+    cb(null, 'grn-' + unique + path.extname(file.originalname));
+  }
+});
+const uploadGrnAttachment = multer({
+  storage: grnAttachmentStorage,
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    const allowed = /\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif|webp)$/i.test(file.originalname) ||
+      file.mimetype.startsWith('image/') ||
+      file.mimetype === 'application/pdf' ||
+      file.mimetype === 'application/msword' ||
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.wordprocessingml.document' ||
+      file.mimetype === 'application/vnd.ms-excel' ||
+      file.mimetype === 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet';
+    if (allowed) cb(null, true);
+    else cb(new Error('Invalid file type. Use PDF, image, or Office document.'), false);
+  }
+});
+const handleGrnUpload = (req, res, next) => {
+  uploadGrnAttachment.array('attachments', 10)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') {
+      return res.status(400).json({ success: false, message: 'Each attachment must be 10 MB or less' });
+    }
+    if (err.code === 'LIMIT_FILE_COUNT') {
+      return res.status(400).json({ success: false, message: 'Maximum 10 attachments allowed' });
+    }
+    return res.status(400).json({ success: false, message: err.message || 'File upload error' });
+  });
+};
+const parseGrnRequestBody = (req, res, next) => {
+  if (req.body?.data) {
+    try {
+      const parsed = typeof req.body.data === 'string' ? JSON.parse(req.body.data) : req.body.data;
+      // Parsed JSON wins over raw multipart string fields
+      req.body = { ...req.body, ...parsed };
+      delete req.body.data;
+    } catch {
+      return res.status(400).json({ success: false, message: 'Invalid GRN data JSON format' });
+    }
+  }
+  // Multipart often sends nested JSON fields as strings
+  if (typeof req.body.items === 'string') {
+    try {
+      req.body.items = JSON.parse(req.body.items);
+    } catch {
+      return res.status(400).json({ success: false, message: 'Invalid items JSON format' });
+    }
+  }
+  next();
+};
+const mapUploadedGrnAttachments = (files = []) => (files || []).map((file) => ({
+  filename: file.originalname,
+  path: `/uploads/grn-attachments/${file.filename}`,
+  uploadedAt: new Date()
+}));
 
 // Multer for quotation attachments
 const quotationAttachmentsDir = path.join(__dirname, '../uploads/quotation-attachments');
@@ -4644,6 +4713,8 @@ router.put('/goods-receive/:id/sync-inventory',
 // @access  Private
 router.post('/goods-receive',
   authorize('super_admin', 'admin', 'procurement_manager'),
+  handleGrnUpload,
+  parseGrnRequestBody,
   [
     body('receiveDate').optional().isISO8601(),
     body('project').isMongoId().withMessage('Valid project ID is required'),
@@ -4835,6 +4906,8 @@ router.post('/goods-receive',
       resolvedGatePassNo = dcGp.gatePassNo || resolvedGatePassNo;
     }
 
+    const uploadedAttachments = mapUploadedGrnAttachments(req.files || []);
+
     const receive = new GoodsReceive({
       receiveDate: receiveDate || new Date(),
       supplier,
@@ -4856,13 +4929,28 @@ router.post('/goods-receive',
       preparedByName,
       items: itemsWithDetails,
       notes,
+      attachments: uploadedAttachments,
       receivedBy: req.user.id,
       status: grnStatus,
       billingStatus: 'waiting_bills',
       billedAmount: 0
     });
 
-    await receive.save();
+    // Retry on rare duplicate receiveNumber race (unique index)
+    for (let attempt = 0; attempt < 5; attempt += 1) {
+      try {
+        if (attempt > 0) {
+          receive.receiveNumber = await GoodsReceive.allocateNextReceiveNumber();
+        }
+        await receive.save();
+        break;
+      } catch (saveErr) {
+        const isDup =
+          saveErr?.code === 11000 ||
+          /duplicate key|E11000/i.test(String(saveErr?.message || ''));
+        if (!isDup || attempt === 4) throw saveErr;
+      }
+    }
     await receive.populate([
       { path: 'project', select: 'name projectId' },
       { path: 'supplier', select: 'name contactPerson supplierId address' },
@@ -5954,6 +6042,7 @@ router.get('/requisitions',
       .populate('department', 'name code')
       .populate('requestedBy', 'firstName lastName email employeeId digitalSignature')
       .populate('approvedBy', 'firstName lastName email digitalSignature')
+      .populate('movedToProcurementBy', 'firstName lastName email')
       .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature')
       .populate('procurementAssignment.assignedTo', 'firstName lastName email department position role')
       .populate('procurementAssignment.assignedBy', 'firstName lastName email')

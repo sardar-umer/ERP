@@ -76,6 +76,7 @@ import {
 import toast from 'react-hot-toast';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
 import QuotationDetailView from '../../components/Procurement/QuotationDetailView';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import { getApprovalRoleLabel } from '../../utils/utilityBillApprovalSlots';
@@ -3001,6 +3002,7 @@ const AccountsPayable = () => {
                         </Box>
                         {/* Approval Authorities for PO — compact like vendor bill */}
                         <Box sx={{ mt: 1, '@media print': { mt: 0.5, pageBreakInside: 'avoid', breakInside: 'avoid' } }}>
+                          <StoreVettingNotice indent={selectedBill.poDetail.po?.indent} sx={{ mb: 1 }} />
                           <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 0.35, fontSize: '0.72rem', color: '#1e293b', '@media print': { fontSize: '10px', mb: 0.25 } }}>
                             Finance Document Approval Authority
                           </Typography>

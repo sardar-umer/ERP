@@ -56,6 +56,7 @@ import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import { DigitalSignatureImage, ProcurementDigitalSignaturesRow } from '../../components/common/DigitalSignatureImage';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
 import QuotationDetailView from '../../components/Procurement/QuotationDetailView';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 import dayjs from 'dayjs';
@@ -66,6 +67,7 @@ import {
   sanitizeApprovalAuthorities,
   formatPurchaseOrderCostCenter
 } from '../../utils/purchaseOrderAuthority';
+import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 import {
   isBlankQuoteItem,
   isQuoteLineStillOrderable
@@ -1953,7 +1955,7 @@ const PurchaseOrders = () => {
               <Button
                 variant="contained"
                 startIcon={<PrintIcon />}
-                onClick={() => window.print()}
+                onClick={() => printPoFitToOneA4()}
                 size="small"
               >
                 Print
@@ -1991,12 +1993,11 @@ const PurchaseOrders = () => {
                   fontFamily: 'Arial, sans-serif',
                   '@media print': {
                     boxShadow: 'none',
-                    p: '5mm 7mm',
+                    p: '7mm 9mm',
                     maxWidth: '100%',
                     backgroundColor: '#fff',
                     mx: 0,
-                    width: '100%',
-                    pageBreakInside: 'avoid'
+                    width: '100%'
                   }
                 }}
               >
@@ -2010,7 +2011,7 @@ const PurchaseOrders = () => {
                     mb: 1.25,
                     fontSize: { xs: '1.35rem', print: '1.1rem' },
                     letterSpacing: 0.5,
-                    '@media print': { mb: 0.6 }
+                    '@media print': { mb: 1, fontSize: '22px' }
                   }}
                 >
                   Purchase Order
@@ -2063,20 +2064,20 @@ const PurchaseOrders = () => {
                 )}
 
                 {/* Buyer Information - First Row */}
-                <Box sx={{ mb: 2.5 }}>
-                  <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1.1rem' }}>
+                <Box sx={{ mb: 2.5, '@media print': { mb: 1 } }}>
+                  <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1.1rem', '@media print': { mb: 0.45, fontSize: '14px' } }}>
                     {viewDialog.data.companyId?.name || viewDialog.data.indent?.companyId?.name || '—'}
                   </Typography>
-                  <Typography sx={{ fontSize: '0.9rem' }}>
+                  <Typography sx={{ fontSize: '0.9rem', '@media print': { fontSize: '12.5px' } }}>
                     Link Road I-14, adjacent to CDA Sectors I-14 and I-15
                   </Typography>
                 </Box>
 
                 {/* Divider */}
-                <Divider sx={{ my: 2.5, borderWidth: 1, borderColor: '#ccc' }} />
+                <Divider sx={{ my: 2.5, borderWidth: 1, borderColor: '#ccc', '@media print': { my: 0.75 } }} />
 
                 {/* Vendor and PO Details - Second Row in Columns */}
-                <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', gap: 3 }}>
+                <Box sx={{ mb: 3, display: 'flex', justifyContent: 'space-between', gap: 3, '@media print': { mb: 1, gap: 2 } }}>
                   {/* Left Column - Vendor Info */}
                   <Box sx={{ flex: 1 }}>
                     <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1.1rem' }}>
@@ -2174,13 +2175,15 @@ const PurchaseOrders = () => {
                   sx={{ 
                     mb: 3, 
                     border: '1px solid #000',
+                    '@media print': { mb: 1 },
                     '& .MuiTable-root': {
                       borderCollapse: 'collapse'
                     },
                     '& .MuiTableCell-root': {
                       border: '1px solid #000',
                       padding: '8px 12px',
-                      fontSize: '0.85rem'
+                      fontSize: '0.85rem',
+                      '@media print': { padding: '5px 7px', fontSize: '12px' }
                     },
                     '& .MuiTableHead-root .MuiTableCell-root': {
                       backgroundColor: '#f5f5f5',
@@ -2218,17 +2221,19 @@ const PurchaseOrders = () => {
                 </TableContainer>
 
                 {/* Financial Summary - Right Aligned with Borders */}
-                <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end' }}>
+                <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end', '@media print': { mb: 0.4 } }}>
                   <Box 
                     sx={{ 
                       width: '320px',
                       border: '1px solid #000',
+                      '@media print': { width: '280px' },
                       '& > div': {
                         display: 'flex',
                         justifyContent: 'space-between',
                         p: 1,
                         borderBottom: '1px solid #ccc',
                         fontSize: '0.85rem',
+                        '@media print': { p: '5px 7px', fontSize: '12px' },
                         '&:last-child': {
                           borderBottom: 'none',
                           borderTop: '2px solid #000',
@@ -2274,35 +2279,35 @@ const PurchaseOrders = () => {
                 </Box>
 
                 {/* Amount in Words */}
-                <Box sx={{ mb: 3, p: 1.5, border: '1px solid #000', backgroundColor: '#fafafa' }}>
-                  <Typography sx={{ fontSize: '0.85rem', fontWeight: 600, mb: 0.5 }}>
+                <Box sx={{ mb: 3, p: 1.5, border: '1px solid #000', backgroundColor: '#fafafa', '@media print': { mb: 1, p: 1 } }}>
+                  <Typography sx={{ fontSize: '0.85rem', fontWeight: 600, mb: 0.5, '@media print': { fontSize: '12.5px', mb: 0.35 } }}>
                     Amount in Words:
                   </Typography>
-                  <Typography sx={{ fontSize: '0.85rem', textTransform: 'capitalize', fontStyle: 'italic' }}>
+                  <Typography sx={{ fontSize: '0.85rem', textTransform: 'capitalize', fontStyle: 'italic', '@media print': { fontSize: '12.5px' } }}>
                     {numberToWords(viewDialog.data.totalAmount)}
                   </Typography>
                 </Box>
 
-                {/* Terms and Conditions */}
-                <Box sx={{ mb: 3 }}>
-                  <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem' }}>
+                {/* Terms and Conditions — compact on print so rest of PO can stay larger */}
+                <Box className="po-terms-block" sx={{ mb: 3, '@media print': { mb: 0.5 } }}>
+                  <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem', '@media print': { mb: 0.15, fontSize: '10px' } }}>
                     Terms & Conditions:
                   </Typography>
-                  <Box sx={{ fontSize: '0.8rem', color: 'text.secondary', pl: 2 }}>
-                    <Typography sx={{ fontSize: '0.8rem', mb: 0.5 }}>• Payment Terms: {viewDialog.data.paymentTerms || 'Standard Terms Apply'}</Typography>
-                    <Typography sx={{ fontSize: '0.8rem', mb: 0.5 }}>• Delivery: As per schedule mentioned above</Typography>
-                    <Typography sx={{ fontSize: '0.8rem', mb: 0.5 }}>• Inspection: Goods subject to inspection upon delivery</Typography>
-                    <Typography sx={{ fontSize: '0.8rem' }}>• Warranty: Standard manufacturer warranty applies</Typography>
+                  <Box sx={{ fontSize: '0.8rem', color: 'text.secondary', pl: 2, '@media print': { fontSize: '9px', pl: 1, lineHeight: 1.12 } }}>
+                    <Typography sx={{ fontSize: 'inherit', mb: 0.5, '@media print': { mb: 0 } }}>• Payment Terms: {viewDialog.data.paymentTerms || 'Standard Terms Apply'}</Typography>
+                    <Typography sx={{ fontSize: 'inherit', mb: 0.5, '@media print': { mb: 0 } }}>• Delivery: As per schedule mentioned above</Typography>
+                    <Typography sx={{ fontSize: 'inherit', mb: 0.5, '@media print': { mb: 0 } }}>• Inspection: Goods subject to inspection upon delivery</Typography>
+                    <Typography sx={{ fontSize: 'inherit' }}>• Warranty: Standard manufacturer warranty applies</Typography>
                   </Box>
                 </Box>
 
                 {/* Delivery Address */}
                 {viewDialog.data.deliveryAddress && (
-                  <Box sx={{ mb: 3 }}>
-                    <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem' }}>
+                  <Box sx={{ mb: 3, '@media print': { mb: 0.45 } }}>
+                    <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem', '@media print': { mb: 0.2, fontSize: '10px' } }}>
                       Delivery Address:
                     </Typography>
-                    <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary' }}>
+                    <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary', '@media print': { fontSize: '8.5px' } }}>
                       {viewDialog.data.deliveryAddress}
                     </Typography>
                   </Box>
@@ -2310,18 +2315,25 @@ const PurchaseOrders = () => {
 
                 {/* Notes */}
                 {viewDialog.data.notes && (
-                  <Box sx={{ mb: 3 }}>
-                    <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem' }}>
+                  <Box sx={{ mb: 3, '@media print': { mb: 0.45 } }}>
+                    <Typography variant="h6" fontWeight={600} sx={{ mb: 1, fontSize: '1rem', '@media print': { mb: 0.2, fontSize: '10px' } }}>
                       Notes:
                     </Typography>
-                    <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary' }}>
+                    <Typography sx={{ fontSize: '0.85rem', color: 'text.secondary', '@media print': { fontSize: '8.5px' } }}>
                       {viewDialog.data.notes}
                     </Typography>
                   </Box>
                 )}
 
-                {/* Signatures Section */}
-                <Box sx={{ mt: 1.5, pt: 0.5, '@media print': { mt: 0.75 } }}>
+                {/* Signatures Section — keep with Store Vetting + authorities on same A4 page */}
+                <Box
+                  className="po-approval-block"
+                  sx={{
+                    mt: 1.5,
+                    pt: 0.5,
+                    '@media print': { mt: 1, pt: 0.5 }
+                  }}
+                >
                   {(() => {
                     const approvals = viewDialog.data.indent?.comparativeStatementApprovals || {};
                     const rows = [
@@ -2396,12 +2408,17 @@ const PurchaseOrders = () => {
                     let legacyAuthorityApplied = false;
                     return (
                       <>
-                      <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 0.35, fontSize: '0.72rem', color: '#1e293b', '@media print': { fontSize: '10px', mb: 0.25 } }}>
+                      <StoreVettingNotice
+                        indent={viewDialog.data.indent}
+                        sx={{ mb: 0.5, '@media print': { mb: 0.25 } }}
+                      />
+                      <Typography variant="subtitle2" fontWeight={800} sx={{ mb: 0.35, fontSize: '0.72rem', color: '#1e293b', '@media print': { fontSize: '13px', mb: 0.45 } }}>
                         Finance Document Approval Authority
                       </Typography>
                       <TableContainer component={Box} sx={{ border: '1.5px solid #334155' }}>
                         <Table
                           size="small"
+                          className="po-authority-table"
                           sx={{
                             '& th': {
                               bgcolor: '#f1f5f9',
@@ -2410,7 +2427,7 @@ const PurchaseOrders = () => {
                               border: '1px solid #cbd5e1',
                               py: 0.4,
                               px: 0.8,
-                              '@media print': { py: 0.25, px: 0.5, fontSize: '9.5px' }
+                              '@media print': { py: '5px', px: '7px', fontSize: '12px', lineHeight: 1.3 }
                             },
                             '& td': {
                               fontSize: 12,
@@ -2418,7 +2435,7 @@ const PurchaseOrders = () => {
                               py: 0.35,
                               px: 0.8,
                               verticalAlign: 'middle',
-                              '@media print': { py: 0.2, px: 0.5, fontSize: '9.5px' }
+                              '@media print': { py: '5px', px: '7px', fontSize: '12px', lineHeight: 1.3 }
                             }
                           }}
                         >
@@ -2447,13 +2464,13 @@ const PurchaseOrders = () => {
                                   <TableCell>{row.fallback || (authorityUser ? approverLabel(authorityUser) : '—')}</TableCell>
                                   <TableCell align="center">
                                     {isApprovedRow && signatureUser?.digitalSignature ? (
-                                      <Box sx={{ maxHeight: 24, display: 'flex', justifyContent: 'center', '& img': { maxHeight: 24, width: 'auto', objectFit: 'contain' }, '@media print': { maxHeight: 20, '& img': { maxHeight: 20 } } }}>
-                                        <DigitalSignatureImage userOrPath={signatureUser} alt={`Signature ${row.label}`} sx={{ maxHeight: 24, maxWidth: 90, '@media print': { maxHeight: 20, maxWidth: 80 } }} />
+                                      <Box sx={{ maxHeight: 24, display: 'flex', justifyContent: 'center', '& img': { maxHeight: 24, width: 'auto', objectFit: 'contain' }, '@media print': { maxHeight: 28, '& img': { maxHeight: 28 } } }}>
+                                        <DigitalSignatureImage userOrPath={signatureUser} alt={`Signature ${row.label}`} sx={{ maxHeight: 24, maxWidth: 90, '@media print': { maxHeight: 28, maxWidth: 110 } }} />
                                       </Box>
                                     ) : isApprovedRow ? (
-                                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '9px' } }}>Approved</Typography>
+                                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '8px' } }}>Approved</Typography>
                                     ) : (
-                                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '9px' } }}>—</Typography>
+                                      <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', '@media print': { fontSize: '8px' } }}>—</Typography>
                                     )}
                                   </TableCell>
                                   <TableCell>{actedAt ? formatDateTime(actedAt) : '—'}</TableCell>
@@ -2466,7 +2483,9 @@ const PurchaseOrders = () => {
                       </>
                     );
                   })()}
-                  <ProcurementDigitalSignaturesRow purchaseOrder={viewDialog.data} />
+                  <Box sx={{ '@media print': { display: 'none' } }}>
+                    <ProcurementDigitalSignaturesRow purchaseOrder={viewDialog.data} />
+                  </Box>
                 </Box>
               </Paper>
             </Box>
@@ -2739,8 +2758,8 @@ const PurchaseOrders = () => {
           __html: `
             @media print {
               @page {
-                size: A4;
-                margin: 8mm;
+                size: A4 portrait;
+                margin: 5mm;
               }
               body * {
                 visibility: hidden;
@@ -2794,16 +2813,7 @@ const PurchaseOrders = () => {
               .MuiPaper-root {
                 box-shadow: none !important;
               }
-              .po-print-page {
-                page-break-inside: avoid !important;
-              }
-              .po-print-page table th,
-              .po-print-page table td {
-                padding-top: 2px !important;
-                padding-bottom: 2px !important;
-                font-size: 9.5px !important;
-                line-height: 1.2 !important;
-              }
+              ${PO_A4_ONE_PAGE_PRINT_CSS}
               .finance-po-print-page,
               .finance-po-print-page * {
                 font-size: inherit;

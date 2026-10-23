@@ -76,9 +76,11 @@ import CashApprovalDetailTabsView from '../../components/Procurement/CashApprova
 import CashApprovalGeneralDetailShell from '../../components/CashApprovals/CashApprovalGeneralDetailShell';
 import { isGeneralModuleCashApproval } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
+import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { WorkflowAuditFeedbackPanel } from '../../components/Admin/workflowAuditReturn';
 import { formatDateTime } from '../../utils/dateUtils';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
+import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -924,6 +926,7 @@ const Payments = () => {
 
     return (
       <Paper
+        className="po-print-page"
         sx={{
           p: { xs: 3, sm: 3.5, md: 4 },
           maxWidth: '210mm',
@@ -934,12 +937,11 @@ const Payments = () => {
           fontFamily: 'Arial, sans-serif',
           '@media print': {
             boxShadow: 'none',
-            p: 2.5,
+            p: '7mm 9mm',
             maxWidth: '100%',
             backgroundColor: '#fff',
             mx: 0,
-            width: '100%',
-            pageBreakInside: 'avoid'
+            width: '100%'
           }
         }}
       >
@@ -952,7 +954,8 @@ const Payments = () => {
             textTransform: 'uppercase',
             mb: 3,
             fontSize: { xs: '1.8rem', print: '1.6rem' },
-            letterSpacing: 1
+            letterSpacing: 1,
+            '@media print': { mb: 1, fontSize: '22px' }
           }}
         >
           Purchase Order
@@ -1260,7 +1263,8 @@ const Payments = () => {
 
         {/* Approval/Signature Section - Procurement style approval progress */}
         <Box sx={{ mt: 4 }}>
-          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5 }}>
+          <StoreVettingNotice indent={poData?.indent} sx={{ mb: 0.75, '@media print': { mb: 0.3 } }} />
+          <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 1.5, '@media print': { mb: 0.5, fontSize: '11px' } }}>
             Approval Progress
           </Typography>
           {(() => {
@@ -1950,7 +1954,7 @@ const Payments = () => {
                 <Button
                   variant="contained"
                   startIcon={<PrintIcon />}
-                  onClick={() => window.print()}
+                  onClick={() => printPoFitToOneA4()}
                   size="small"
                   sx={{ '@media print': { display: 'none' } }}
                 >
@@ -2821,10 +2825,6 @@ const Payments = () => {
           dangerouslySetInnerHTML={{
             __html: `
               @media print {
-                @page {
-                  size: A4;
-                  margin: 15mm;
-                }
                 body * {
                   visibility: hidden;
                 }
@@ -2877,6 +2877,7 @@ const Payments = () => {
                 .MuiPaper-root {
                   box-shadow: none !important;
                 }
+                ${PO_A4_ONE_PAGE_PRINT_CSS}
               }
             `
           }}

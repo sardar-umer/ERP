@@ -10,7 +10,8 @@ import {
 import {
   LocalShipping as ReceiveIcon, Add as AddIcon, Visibility as ViewIcon,
   Search as SearchIcon, Refresh as RefreshIcon, Close as CloseIcon, Print as PrintIcon,
-  Inventory as InventoryIcon, QrCode as QrCodeIcon
+  Inventory as InventoryIcon, QrCode as QrCodeIcon, AttachFile as AttachFileIcon,
+  Delete as DeleteIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import storeService from '../../services/storeService';
@@ -19,6 +20,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
 import BarcodePrintLabel from '../../components/Procurement/Store/BarcodePrintLabel';
 import LocationSelector from '../../components/Procurement/Store/LocationSelector';
+import { resolveUploadFileHref } from '../../utils/uploadPaths';
 
 const makeEmptyItem = () => ({
   inventoryItem: '', productCode: '', itemCode: '', itemName: '', unit: '',
@@ -152,6 +154,8 @@ const GoodsReceive = () => {
   const [deliveryChallanOptions, setDeliveryChallanOptions] = useState([]);
   /** Latest PO lines (quantity / receivedQuantity) while Create GRN dialog is open — for PO Qty / Left on PO columns. */
   const [grnPoDetail, setGrnPoDetail] = useState(null);
+  const [attachmentFiles, setAttachmentFiles] = useState([]);
+  const attachmentInputRef = useRef(null);
   const [formData, setFormData] = useState({
     receiveDate: new Date().toISOString().split('T')[0],
     supplier: '',
@@ -448,6 +452,7 @@ const GoodsReceive = () => {
       notes: '',
       deliveryChallan: ''
     });
+    setAttachmentFiles([]);
     setFormDialog({ open: true });
   };
 
@@ -504,9 +509,19 @@ const GoodsReceive = () => {
     }
     try {
       setLoading(true);
-      const res = await api.post('/procurement/goods-receive', payload);
+      let res;
+      if (attachmentFiles.length > 0) {
+        const fd = new FormData();
+        fd.append('data', JSON.stringify(payload));
+        attachmentFiles.forEach((file) => fd.append('attachments', file));
+        // Let the browser set multipart boundary (do not force Content-Type)
+        res = await api.post('/procurement/goods-receive', fd);
+      } else {
+        res = await api.post('/procurement/goods-receive', payload);
+      }
       const savedGrn = res.data?.data;
       setSuccess('GRN created successfully and inventory updated');
+      setAttachmentFiles([]);
       setFormDialog({ open: false });
       loadReceives();
       loadInventory();
@@ -1140,10 +1155,80 @@ const GoodsReceive = () => {
             <Grid item xs={12}>
               <TextField fullWidth label="Notes (internal)" value={formData.notes} onChange={(e) => setFormData({ ...formData, notes: e.target.value })} multiline rows={1} />
             </Grid>
+            <Grid item xs={12}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Attachments</Typography>
+              <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" useFlexGap>
+                <Button
+                  variant="outlined"
+                  size="small"
+                  startIcon={<AttachFileIcon />}
+                  onClick={() => attachmentInputRef.current?.click()}
+                  disabled={loading || attachmentFiles.length >= 10}
+                >
+                  Add files
+                </Button>
+                <Typography variant="caption" color="text.secondary">
+                  PDF, images, or Office docs · max 10 files · 10 MB each
+                </Typography>
+                <input
+                  ref={attachmentInputRef}
+                  type="file"
+                  hidden
+                  multiple
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,image/*"
+                  onChange={(e) => {
+                    const picked = Array.from(e.target.files || []);
+                    if (!picked.length) return;
+                    setAttachmentFiles((prev) => {
+                      const next = [...prev, ...picked].slice(0, 10);
+                      if (prev.length + picked.length > 10) {
+                        setError('Maximum 10 attachments allowed');
+                      }
+                      return next;
+                    });
+                    e.target.value = '';
+                  }}
+                />
+              </Stack>
+              {attachmentFiles.length > 0 && (
+                <Stack spacing={0.5} sx={{ mt: 1 }}>
+                  {attachmentFiles.map((file, idx) => (
+                    <Box
+                      key={`${file.name}-${idx}`}
+                      sx={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        justifyContent: 'space-between',
+                        gap: 1,
+                        px: 1,
+                        py: 0.5,
+                        border: '1px solid',
+                        borderColor: 'divider',
+                        borderRadius: 1
+                      }}
+                    >
+                      <Typography variant="body2" noWrap sx={{ flex: 1 }}>
+                        {file.name}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary">
+                        {(file.size / 1024).toFixed(0)} KB
+                      </Typography>
+                      <IconButton
+                        size="small"
+                        aria-label="Remove attachment"
+                        onClick={() => setAttachmentFiles((prev) => prev.filter((_, i) => i !== idx))}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                  ))}
+                </Stack>
+              )}
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setFormDialog({ open: false }); setGrnRequiresDeliveryChallan(false); setGrnDcStatusNote(''); setDeliveryChallanOptions([]); }}>Cancel</Button>
+          <Button onClick={() => { setFormDialog({ open: false }); setAttachmentFiles([]); setGrnRequiresDeliveryChallan(false); setGrnDcStatusNote(''); setDeliveryChallanOptions([]); }}>Cancel</Button>
           <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.items.some((i) => (i.selected !== false) && (Number(i.quantity) || 0) > 0)}>
             Create GRN
           </Button>
@@ -1259,6 +1344,24 @@ const GoodsReceive = () => {
                 </Box>
                 <Box sx={{ width: 120, height: 40, border: '1px dashed', borderColor: 'divider' }} />
               </Box>
+              {Array.isArray(viewDialog.data.attachments) && viewDialog.data.attachments.length > 0 && (
+                <Box sx={{ mt: 2, '@media print': { display: 'none' } }}>
+                  <Divider sx={{ mb: 1 }} />
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>
+                    Attachments ({viewDialog.data.attachments.length})
+                  </Typography>
+                  <Stack spacing={0.5}>
+                    {viewDialog.data.attachments.map((att, idx) => {
+                      const href = resolveUploadFileHref(att.path || att.url || '');
+                      return (
+                        <Typography key={att._id || idx} variant="body2" component="a" href={href || undefined} target="_blank" rel="noopener noreferrer" sx={{ color: 'primary.main' }}>
+                          {att.filename || `Attachment ${idx + 1}`}
+                        </Typography>
+                      );
+                    })}
+                  </Stack>
+                </Box>
+              )}
             </Box>
           )}
         </DialogContent>
