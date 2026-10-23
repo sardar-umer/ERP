@@ -6,6 +6,59 @@ const {
   isDevNewEmployeeSrDirectorApprover
 } = require('../../utils/executiveAccess');
 
+/** Store a web-friendly relative path under /uploads/... */
+const toPublicUploadUrl = (file) => {
+  if (!file) return '';
+  if (file.filename) return `/uploads/non-employee-attachments/${file.filename}`;
+  const abs = String(file.path || '').replace(/\\/g, '/');
+  const marker = '/uploads/';
+  const idx = abs.toLowerCase().lastIndexOf(marker);
+  if (idx >= 0) return abs.slice(idx);
+  return file.path || '';
+};
+
+const mapMulterFile = (f) => ({
+  filename: f.filename,
+  originalName: f.originalname,
+  url: toPublicUploadUrl(f),
+  uploadedAt: new Date()
+});
+
+/**
+ * Split uploaded files into:
+ * - record-level: fieldname `attachments`
+ * - per employee row: `employeeAttachments_0`, `employeeAttachments_1`, …
+ */
+const splitUploadedFiles = (files = []) => {
+  const recordAttachments = [];
+  const byEmployeeIndex = {};
+  (Array.isArray(files) ? files : []).forEach((f) => {
+    if (!f) return;
+    const field = String(f.fieldname || '');
+    const rowMatch = /^employeeAttachments_(\d+)$/.exec(field);
+    if (rowMatch) {
+      const idx = Number(rowMatch[1]);
+      if (!byEmployeeIndex[idx]) byEmployeeIndex[idx] = [];
+      byEmployeeIndex[idx].push(mapMulterFile(f));
+      return;
+    }
+    if (field === 'attachments' || field === 'attachment') {
+      recordAttachments.push(mapMulterFile(f));
+    }
+  });
+  return { recordAttachments, byEmployeeIndex };
+};
+
+const applyEmployeeRowAttachments = (employees, byEmployeeIndex) =>
+  (Array.isArray(employees) ? employees : []).map((emp, idx) => {
+    const incoming = byEmployeeIndex[idx] || [];
+    if (!incoming.length) return emp;
+    return {
+      ...emp,
+      attachments: [...(Array.isArray(emp.attachments) ? emp.attachments : []), ...incoming]
+    };
+  });
+
 const optionalUserId = (value) => {
   if (value === undefined || value === null || value === '' || value === 'null' || value === 'undefined') {
     return undefined;
@@ -282,8 +335,10 @@ exports.createRecord = async (req, res) => {
 
     const autoSignature = req.body.requesterSignature || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
-    const normalizedEmployees = (Array.isArray(parsedEmployees) ? parsedEmployees : [])
+    const { recordAttachments, byEmployeeIndex } = splitUploadedFiles(req.files);
+    let normalizedEmployees = (Array.isArray(parsedEmployees) ? parsedEmployees : [])
       .map((e) => NonEmployeeRecord.normalizeEmployeeLine(e));
+    normalizedEmployees = applyEmployeeRowAttachments(normalizedEmployees, byEmployeeIndex);
 
     if (normalizedEmployees.length === 0) {
       return res.status(400).json({
@@ -301,15 +356,8 @@ exports.createRecord = async (req, res) => {
       assignedChairman: optionalUserId(assignedChairman),
       workflowStatus: 'Pending HOD HR',
       initiator: req.user.id,
+      attachments: recordAttachments
     });
-
-    if (req.files && req.files.length > 0) {
-      record.attachments = req.files.map(f => ({
-        filename: f.filename,
-        originalName: f.originalname,
-        url: f.path,
-      }));
-    }
 
     await record.save();
 
@@ -369,8 +417,10 @@ exports.updateRecord = async (req, res) => {
       }
     }
 
+    const { recordAttachments, byEmployeeIndex } = splitUploadedFiles(req.files);
+
     if (parsedEmployees) {
-      const normalizedEmployees = (Array.isArray(parsedEmployees) ? parsedEmployees : [])
+      let normalizedEmployees = (Array.isArray(parsedEmployees) ? parsedEmployees : [])
         .map((e) => NonEmployeeRecord.normalizeEmployeeLine(e));
       if (normalizedEmployees.length === 0) {
         return res.status(400).json({
@@ -378,7 +428,18 @@ exports.updateRecord = async (req, res) => {
           error: 'Add at least one candidate row.'
         });
       }
+      normalizedEmployees = applyEmployeeRowAttachments(normalizedEmployees, byEmployeeIndex);
       record.employees = normalizedEmployees;
+    } else if (Object.keys(byEmployeeIndex).length) {
+      // Files only (no employee JSON rewrite) — append onto existing rows by index
+      const current = (record.employees || []).map((e) =>
+        NonEmployeeRecord.normalizeEmployeeLine(typeof e.toObject === 'function' ? e.toObject() : e)
+      );
+      record.employees = applyEmployeeRowAttachments(current, byEmployeeIndex);
+    }
+
+    if (recordAttachments.length) {
+      record.attachments = [...(record.attachments || []), ...recordAttachments];
     }
     if (assignedHod !== undefined) record.assignedHod = optionalUserId(assignedHod) || null;
     if (assignedSrDirector !== undefined) record.assignedSrDirector = optionalUserId(assignedSrDirector) || null;

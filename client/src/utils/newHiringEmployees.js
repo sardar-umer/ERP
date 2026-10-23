@@ -52,6 +52,19 @@ export function formatNewHiringPackage(value) {
   return String(value);
 }
 
+/** Tentative DOJ is free text; format ISO dates nicely, otherwise show as typed. */
+export function formatNewHiringDoj(value) {
+  if (value == null || String(value).trim() === '') return '—';
+  const raw = String(value).trim();
+  if (/^\d{4}-\d{2}-\d{2}(T|$)/.test(raw)) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) {
+      return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' });
+    }
+  }
+  return raw;
+}
+
 const authorityPersonLabel = (user) => {
   if (!user) return '';
   if (typeof user === 'string') return 'Approved';

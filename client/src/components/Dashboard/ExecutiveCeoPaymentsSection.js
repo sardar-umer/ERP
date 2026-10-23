@@ -83,6 +83,7 @@ import { getCentralizedStoreDocumentTypeLabel } from '../../utils/centralizedSto
 import PODocumentView from '../../pages/Procurement/Store/PODocumentView';
 import { printNewHiringApproval } from '../../utils/newHiringApprovalPrint';
 import {
+  formatNewHiringDoj,
   formatNewHiringPackage,
   getNewHiringAuthorityCards,
   getNewHiringEmployees
@@ -2831,9 +2832,7 @@ const ExecutiveCeoPaymentsSection = () => {
                             const name = emp.name || [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim() || '—';
                             const designation = emp.designation || emp.role || '—';
                             const pkg = emp.currentPackageMonthly ?? emp.expectedWages;
-                            const doj = emp.tentativeDoj
-                              ? new Date(emp.tentativeDoj).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-                              : '—';
+                            const doj = formatNewHiringDoj(emp.tentativeDoj);
                             const formatted = formatNewHiringPackage(pkg);
                             const pkgLabel = formatted === '—'
                               ? '—'

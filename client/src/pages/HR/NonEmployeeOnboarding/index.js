@@ -32,12 +32,16 @@ import NonEmployeeForm from './NonEmployeeForm';
 import ResubmissionHistory from './ResubmissionHistory';
 import { useAuth } from '../../../contexts/AuthContext';
 import toast from 'react-hot-toast';
+import { getImageUrl } from '../../../utils/imageService';
 import { printNewHiringApproval } from '../../../utils/newHiringApprovalPrint';
 import {
+  formatNewHiringDoj,
   formatNewHiringPackage,
   getNewHiringAuthorityCards,
   getNewHiringEmployees
 } from '../../../utils/newHiringEmployees';
+
+const hiringAttachmentHref = (att) => getImageUrl(att?.url || att?.filename || '') || '#';
 
 const NonEmployeeOnboarding = () => {
   const [records, setRecords] = useState([]);
@@ -94,7 +98,7 @@ const NonEmployeeOnboarding = () => {
       project: String(e.project || '').trim(),
       location: String(e.location || '').trim(),
       currentPackageMonthly: String(e.currentPackageMonthly ?? e.expectedWages ?? '').trim(),
-      tentativeDoj: e.tentativeDoj || null,
+      tentativeDoj: String(e.tentativeDoj ?? '').trim(),
       remark: String(e.remark || e.justification || '').trim()
     }));
     const inferredResubmitStatus =
@@ -776,6 +780,7 @@ const NonEmployeeOnboarding = () => {
                     <TableCell align="right"><b>Current Package Monthly</b></TableCell>
                     <TableCell><b>Tentative DOJ</b></TableCell>
                     <TableCell><b>Remark</b></TableCell>
+                    <TableCell><b>Attachment</b></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -783,10 +788,9 @@ const NonEmployeeOnboarding = () => {
                     const name = emp.name || [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim() || '—';
                     const designation = emp.designation || emp.role || '—';
                     const pkg = emp.currentPackageMonthly ?? emp.expectedWages;
-                    const doj = emp.tentativeDoj
-                      ? new Date(emp.tentativeDoj).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-                      : '—';
+                    const doj = formatNewHiringDoj(emp.tentativeDoj);
                     const pkgLabel = formatNewHiringPackage(pkg);
+                    const attachments = Array.isArray(emp.attachments) ? emp.attachments : [];
                     return (
                       <TableRow key={index}>
                         <TableCell align="center">{index + 1}</TableCell>
@@ -801,12 +805,33 @@ const NonEmployeeOnboarding = () => {
                         </TableCell>
                         <TableCell>{doj}</TableCell>
                         <TableCell>{emp.remark || emp.justification || '—'}</TableCell>
+                        <TableCell>
+                          {attachments.length === 0 ? (
+                            '—'
+                          ) : (
+                            <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
+                              {attachments.map((att, attIdx) => (
+                                <Chip
+                                  key={`${att.filename || att.originalName}-${attIdx}`}
+                                  size="small"
+                                  label={att.originalName || att.filename || `File ${attIdx + 1}`}
+                                  component="a"
+                                  href={hiringAttachmentHref(att)}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  clickable
+                                  sx={{ maxWidth: 200, justifyContent: 'flex-start' }}
+                                />
+                              ))}
+                            </Box>
+                          )}
+                        </TableCell>
                       </TableRow>
                     );
                   })}
                   {getNewHiringEmployees(viewDialog.record).length === 0 && (
                     <TableRow>
-                      <TableCell colSpan={10} align="center">No candidates</TableCell>
+                      <TableCell colSpan={11} align="center">No candidates</TableCell>
                     </TableRow>
                   )}
                 </TableBody>

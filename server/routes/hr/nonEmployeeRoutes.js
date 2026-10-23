@@ -20,14 +20,17 @@ const storage = multer.diskStorage({
   }
 });
 
-const upload = multer({ storage: storage });
+const upload = multer({
+  storage,
+  limits: { files: 40, fileSize: 15 * 1024 * 1024 }
+});
 
 // Ensure user is authenticated
 router.use(authMiddleware);
 
-// Routes
+// Routes — supports record-level `attachments` and per-row `employeeAttachments_0`, …
 router.route('/')
-  .post(upload.array('attachments', 5), nonEmployeeController.createRecord)
+  .post(upload.any(), nonEmployeeController.createRecord)
   .get(nonEmployeeController.getRecords);
 
 // CEO Dashboard specific routes
@@ -54,7 +57,7 @@ router.put('/:id/reject-chairman', nonEmployeeController.rejectByChairman);
 
 router.route('/:id')
   .get(nonEmployeeController.getRecordById)
-  .put(upload.array('attachments', 5), nonEmployeeController.updateRecord)
+  .put(upload.any(), nonEmployeeController.updateRecord)
   .delete(nonEmployeeController.deleteRecord);
 
 module.exports = router;

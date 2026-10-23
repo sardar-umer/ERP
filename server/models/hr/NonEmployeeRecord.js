@@ -12,9 +12,16 @@ const employeeLineSchema = new mongoose.Schema({
   location: { type: String, trim: true, default: '' },
   /** Current Package Monthly — free text (numbers and/or words, e.g. "80,000" or "As per negotiation") */
   currentPackageMonthly: { type: String, trim: true, default: '' },
-  /** Tentative Date of Joining */
-  tentativeDoj: { type: Date, default: null },
+  /** Tentative Date of Joining — free text (date and/or words, e.g. "15 Mar 2026" or "Immediate") */
+  tentativeDoj: { type: String, trim: true, default: '' },
   remark: { type: String, trim: true, default: '' },
+  /** Per-candidate files (CNIC, CV, photo, etc.) — travel with the approval batch */
+  attachments: [{
+    filename: String,
+    originalName: String,
+    url: String,
+    uploadedAt: { type: Date, default: Date.now }
+  }],
 
   // Legacy fields kept optional so old documents still load without a new collection
   firstName: { type: String, trim: true },
@@ -158,11 +165,33 @@ nonEmployeeRecordSchema.statics.normalizeEmployeeLine = (raw = {}) => {
     : (raw.expectedWages != null && String(raw.expectedWages).trim() !== ''
       ? String(raw.expectedWages).trim()
       : '');
-  let tentativeDoj = raw.tentativeDoj || null;
-  if (tentativeDoj && !(tentativeDoj instanceof Date)) {
-    const d = new Date(tentativeDoj);
-    tentativeDoj = Number.isNaN(d.getTime()) ? null : d;
+  let tentativeDoj = '';
+  if (raw.tentativeDoj != null && String(raw.tentativeDoj).trim() !== '') {
+    if (raw.tentativeDoj instanceof Date && !Number.isNaN(raw.tentativeDoj.getTime())) {
+      // Legacy Date docs → keep a readable calendar value
+      tentativeDoj = raw.tentativeDoj.toISOString().slice(0, 10);
+    } else {
+      tentativeDoj = String(raw.tentativeDoj).trim();
+    }
   }
+
+  const attachments = Array.isArray(raw.attachments)
+    ? raw.attachments
+      .map((a) => {
+        if (!a || typeof a !== 'object') return null;
+        const filename = String(a.filename || '').trim();
+        const originalName = String(a.originalName || a.originalname || filename).trim();
+        const url = String(a.url || a.path || '').trim();
+        if (!filename && !url) return null;
+        return {
+          filename: filename || url.split(/[/\\]/).pop() || '',
+          originalName: originalName || filename || 'attachment',
+          url,
+          uploadedAt: a.uploadedAt ? new Date(a.uploadedAt) : new Date()
+        };
+      })
+      .filter(Boolean)
+    : [];
 
   return {
     name,
@@ -173,7 +202,8 @@ nonEmployeeRecordSchema.statics.normalizeEmployeeLine = (raw = {}) => {
     location: String(raw.location || '').trim(),
     currentPackageMonthly: packageRaw,
     tentativeDoj,
-    remark: String(raw.remark || raw.justification || '').trim()
+    remark: String(raw.remark || raw.justification || '').trim(),
+    attachments
   };
 };
 

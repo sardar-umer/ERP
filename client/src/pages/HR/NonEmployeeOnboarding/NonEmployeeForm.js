@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import {
   Alert,
   Dialog,
@@ -18,12 +18,20 @@ import {
   TableContainer,
   TableHead,
   TableRow,
-  Paper
+  Paper,
+  Stack,
+  Chip
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon,
+  Delete as DeleteIcon,
+  AttachFile as AttachFileIcon,
+  Close as CloseIcon
+} from '@mui/icons-material';
 import nonEmployeeService from '../../../services/nonEmployeeService';
 import api from '../../../services/api';
 import { useAuth } from '../../../contexts/AuthContext';
+import { getImageUrl } from '../../../utils/imageService';
 import toast from 'react-hot-toast';
 import ResubmissionHistory from './ResubmissionHistory';
 
@@ -36,14 +44,25 @@ const emptyCandidate = () => ({
   location: '',
   currentPackageMonthly: '',
   tentativeDoj: '',
-  remark: ''
+  remark: '',
+  attachments: [],
+  newFiles: []
 });
 
-const toDateInput = (value) => {
-  if (!value) return '';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '';
-  return d.toISOString().slice(0, 10);
+/** Keep free-text DOJ; only ISO/Date values get a short calendar form for editing. */
+const toDojInput = (value) => {
+  if (value == null || value === '') return '';
+  if (value instanceof Date && !Number.isNaN(value.getTime())) {
+    return value.toISOString().slice(0, 10);
+  }
+  const raw = String(value).trim();
+  if (!raw) return '';
+  // Pure ISO date from legacy Date fields → show YYYY-MM-DD; otherwise keep as typed
+  if (/^\d{4}-\d{2}-\d{2}(T|$)/.test(raw)) {
+    const d = new Date(raw);
+    if (!Number.isNaN(d.getTime())) return raw.slice(0, 10);
+  }
+  return raw;
 };
 
 const normalizeFromEdit = (emp = {}) => ({
@@ -54,9 +73,13 @@ const normalizeFromEdit = (emp = {}) => ({
   project: emp.project || '',
   location: emp.location || '',
   currentPackageMonthly: emp.currentPackageMonthly ?? emp.expectedWages ?? '',
-  tentativeDoj: toDateInput(emp.tentativeDoj),
-  remark: emp.remark || emp.justification || ''
+  tentativeDoj: toDojInput(emp.tentativeDoj),
+  remark: emp.remark || emp.justification || '',
+  attachments: Array.isArray(emp.attachments) ? emp.attachments : [],
+  newFiles: []
 });
+
+const attachmentHref = (att) => getImageUrl(att?.url || att?.filename || '') || '#';
 
 const NonEmployeeForm = ({
   open,
@@ -175,6 +198,8 @@ const NonEmployeeForm = ({
     if (open) fetchUsers();
   }, [open, editData]);
 
+  const fileInputRefs = useRef({});
+
   const handleRecordChange = (index, field, value) => {
     const next = [...records];
     next[index] = { ...next[index], [field]: value };
@@ -187,6 +212,37 @@ const NonEmployeeForm = ({
     if (records.length > 1) {
       setRecords(records.filter((_, i) => i !== index));
     }
+  };
+
+  const handleRowFilesSelected = (index, fileList) => {
+    const picked = Array.from(fileList || []);
+    if (!picked.length) return;
+    setRecords((prev) => {
+      const next = [...prev];
+      const existing = Array.isArray(next[index]?.newFiles) ? next[index].newFiles : [];
+      next[index] = { ...next[index], newFiles: [...existing, ...picked] };
+      return next;
+    });
+  };
+
+  const removeNewFile = (rowIndex, fileIndex) => {
+    setRecords((prev) => {
+      const next = [...prev];
+      const files = [...(next[rowIndex]?.newFiles || [])];
+      files.splice(fileIndex, 1);
+      next[rowIndex] = { ...next[rowIndex], newFiles: files };
+      return next;
+    });
+  };
+
+  const removeExistingAttachment = (rowIndex, attIndex) => {
+    setRecords((prev) => {
+      const next = [...prev];
+      const attachments = [...(next[rowIndex]?.attachments || [])];
+      attachments.splice(attIndex, 1);
+      next[rowIndex] = { ...next[rowIndex], attachments };
+      return next;
+    });
   };
 
   const handleSubmit = async (e) => {
@@ -210,8 +266,10 @@ const NonEmployeeForm = ({
         project: String(r.project || '').trim(),
         location: String(r.location || '').trim(),
         currentPackageMonthly: String(r.currentPackageMonthly ?? '').trim(),
-        tentativeDoj: r.tentativeDoj || null,
-        remark: String(r.remark || '').trim()
+        tentativeDoj: String(r.tentativeDoj ?? '').trim(),
+        remark: String(r.remark || '').trim(),
+        attachments: Array.isArray(r.attachments) ? r.attachments : [],
+        newFiles: Array.isArray(r.newFiles) ? r.newFiles : []
       }));
 
       const payload = {
@@ -345,7 +403,7 @@ const NonEmployeeForm = ({
           </Box>
 
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 3, overflowX: 'auto' }}>
-            <Table size="small" sx={{ minWidth: 1100 }}>
+            <Table size="small" sx={{ minWidth: 1280 }}>
               <TableHead>
                 <TableRow sx={{ bgcolor: 'grey.100' }}>
                   <TableCell sx={{ ...cellSx, width: 56 }} align="center"><b>Sr No</b></TableCell>
@@ -358,6 +416,7 @@ const NonEmployeeForm = ({
                   <TableCell sx={cellSx} align="right"><b>Current Package Monthly</b></TableCell>
                   <TableCell sx={cellSx}><b>Tentative DOJ</b></TableCell>
                   <TableCell sx={cellSx}><b>Remark</b></TableCell>
+                  <TableCell sx={{ ...cellSx, minWidth: 180 }}><b>Attachment</b></TableCell>
                   <TableCell sx={cellSx} width={48} />
                 </TableRow>
               </TableHead>
@@ -434,8 +493,7 @@ const NonEmployeeForm = ({
                       <TextField
                         size="small"
                         fullWidth
-                        type="date"
-                        InputLabelProps={{ shrink: true }}
+                        placeholder="e.g. 15 Mar 2026 or Immediate"
                         value={record.tentativeDoj}
                         onChange={(e) => handleRecordChange(index, 'tentativeDoj', e.target.value)}
                       />
@@ -448,6 +506,55 @@ const NonEmployeeForm = ({
                         value={record.remark}
                         onChange={(e) => handleRecordChange(index, 'remark', e.target.value)}
                       />
+                    </TableCell>
+                    <TableCell sx={cellSx}>
+                      <Stack spacing={0.5} alignItems="flex-start">
+                        <input
+                          ref={(el) => { fileInputRefs.current[index] = el; }}
+                          type="file"
+                          multiple
+                          hidden
+                          onChange={(e) => {
+                            handleRowFilesSelected(index, e.target.files);
+                            e.target.value = '';
+                          }}
+                        />
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          startIcon={<AttachFileIcon />}
+                          onClick={() => fileInputRefs.current[index]?.click()}
+                          sx={{ textTransform: 'none', whiteSpace: 'nowrap' }}
+                        >
+                          Attach
+                        </Button>
+                        {(record.attachments || []).map((att, attIdx) => (
+                          <Chip
+                            key={`saved-${attIdx}-${att.filename || att.originalName}`}
+                            size="small"
+                            label={att.originalName || att.filename || 'File'}
+                            component="a"
+                            href={attachmentHref(att)}
+                            target="_blank"
+                            rel="noopener noreferrer"
+                            clickable
+                            onDelete={() => removeExistingAttachment(index, attIdx)}
+                            deleteIcon={<CloseIcon />}
+                            sx={{ maxWidth: 160 }}
+                          />
+                        ))}
+                        {(record.newFiles || []).map((file, fileIdx) => (
+                          <Chip
+                            key={`new-${fileIdx}-${file.name}`}
+                            size="small"
+                            color="primary"
+                            variant="outlined"
+                            label={file.name}
+                            onDelete={() => removeNewFile(index, fileIdx)}
+                            sx={{ maxWidth: 160 }}
+                          />
+                        ))}
+                      </Stack>
                     </TableCell>
                     <TableCell sx={cellSx}>
                       {records.length > 1 && (

@@ -1,6 +1,6 @@
 import { getImageUrl } from './imageService';
 import { openPrintHtml } from './employeeFormPrint';
-import { getNewHiringAuthorityCards, getNewHiringEmployees } from './newHiringEmployees';
+import { formatNewHiringDoj, getNewHiringAuthorityCards, getNewHiringEmployees } from './newHiringEmployees';
 
 const escapeHtml = (value) => {
   if (value == null || value === '') return '';
@@ -37,14 +37,7 @@ const formatDateTime = (value) => {
   );
 };
 
-const formatDoj = (value) => {
-  if (!value) return '—';
-  const d = new Date(value);
-  if (Number.isNaN(d.getTime())) return '—';
-  return escapeHtml(
-    d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
-  );
-};
+const formatDoj = (value) => escapeHtml(formatNewHiringDoj(value));
 
 const formatPackage = (pkg) => {
   if (pkg == null || String(pkg).trim() === '' || String(pkg) === '0') return '—';
@@ -171,6 +164,10 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
       const name = emp.name || [emp.firstName, emp.lastName].filter(Boolean).join(' ').trim() || '—';
       const designation = emp.designation || emp.role || '—';
       const pkg = emp.currentPackageMonthly ?? emp.expectedWages;
+      const attNames = (Array.isArray(emp.attachments) ? emp.attachments : [])
+        .map((a) => a?.originalName || a?.filename)
+        .filter(Boolean)
+        .join(', ');
       return `<tr>
         <td class="center">${index + 1}</td>
         <td>${display(name)}</td>
@@ -182,6 +179,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
         <td class="right">${formatPackage(pkg)}</td>
         <td>${formatDoj(emp.tentativeDoj)}</td>
         <td>${display(emp.remark || emp.justification)}</td>
+        <td>${display(attNames || '')}</td>
       </tr>`;
     })
     .join('');
@@ -262,6 +260,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
         <th>Current Package Monthly</th>
         <th>Tentative DOJ</th>
         <th>Remark</th>
+        <th>Attachment</th>
       </tr>
     </thead>
     <tbody>
