@@ -71,6 +71,58 @@ const recalcTotals = (data) => {
   return data;
 };
 
+const stripSalaryCutRemark = (remarks) =>
+  String(remarks || '')
+    .split('|')
+    .map((p) => p.trim())
+    .filter((p) => p && !/^Salary cut\b/i.test(p))
+    .join(' | ');
+
+/**
+ * Undo a previously applied % cut (scale back by 1/factor). EOBI was never cut.
+ */
+const removeSalaryPercentageCutFromPayrollData = (payrollData) => {
+  if (!payrollData?.salaryPercentageCut?.percentage) return payrollData;
+
+  const oldPct = Number(payrollData.salaryPercentageCut.percentage);
+  let oldFactor = Number(payrollData.salaryPercentageCut.factor);
+  if (!Number.isFinite(oldFactor) || oldFactor <= 0) {
+    oldFactor = Number.isFinite(oldPct) && oldPct > 0 ? (100 - oldPct) / 100 : 0;
+  }
+  if (!Number.isFinite(oldFactor) || oldFactor <= 0) {
+    payrollData.salaryPercentageCut = undefined;
+    payrollData.remarks = stripSalaryCutRemark(payrollData.remarks);
+    return payrollData;
+  }
+
+  const reverse = 1 / oldFactor;
+  const eobiKeep = roundPKR(payrollData.eobi);
+
+  for (const field of SCALE_FIELDS) {
+    if (payrollData[field] != null) {
+      payrollData[field] = scale(payrollData[field], reverse);
+    }
+  }
+
+  if (payrollData.allowances) {
+    payrollData.allowances = scaleAllowances(payrollData.allowances, reverse);
+  }
+
+  if (payrollData.taxCalculation && typeof payrollData.taxCalculation === 'object') {
+    const tax = { ...payrollData.taxCalculation };
+    for (const field of TAX_CALC_SCALE_FIELDS) {
+      if (tax[field] != null) tax[field] = scale(tax[field], reverse);
+    }
+    payrollData.taxCalculation = tax;
+  }
+
+  payrollData.eobi = eobiKeep;
+  recalcTotals(payrollData);
+  payrollData.salaryPercentageCut = undefined;
+  payrollData.remarks = stripSalaryCutRemark(payrollData.remarks);
+  return payrollData;
+};
+
 /**
  * @param {object} payrollData - plain payroll payload or lean doc
  * @param {number} percentage - e.g. 10 means pay 90%, cut 10%
@@ -84,12 +136,17 @@ const applySalaryPercentageCutToPayrollData = (payrollData, percentage) => {
     throw new Error('Salary cut percentage must be less than 100');
   }
 
-  // Avoid double-applying if already cut at same %
+  // Same % already applied — no-op
   if (
     payrollData.salaryPercentageCut &&
     Number(payrollData.salaryPercentageCut.percentage) === pct
   ) {
     return payrollData;
+  }
+
+  // Different % already applied — reverse first so we never compound cuts
+  if (payrollData.salaryPercentageCut?.percentage) {
+    removeSalaryPercentageCutFromPayrollData(payrollData);
   }
 
   const factor = (100 - pct) / 100;
@@ -123,15 +180,14 @@ const applySalaryPercentageCutToPayrollData = (payrollData, percentage) => {
   };
 
   const note = `Salary cut ${pct}% this month only (EOBI full)`;
-  const remarks = String(payrollData.remarks || '');
-  if (!remarks.includes('Salary cut')) {
-    payrollData.remarks = remarks ? `${remarks} | ${note}` : note;
-  }
+  const remarks = stripSalaryCutRemark(payrollData.remarks);
+  payrollData.remarks = remarks ? `${remarks} | ${note}` : note;
 
   return payrollData;
 };
 
 module.exports = {
   applySalaryPercentageCutToPayrollData,
+  removeSalaryPercentageCutFromPayrollData,
   roundPKR
 };

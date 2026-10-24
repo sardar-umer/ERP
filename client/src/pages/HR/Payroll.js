@@ -3098,6 +3098,8 @@ Do you want to:
           <ImportSalaryPercentageCutDialog
             open={salaryCutDialogOpen}
             onClose={() => setSalaryCutDialogOpen(false)}
+            currentMonth={Number(exportMonth) || Number(bulkCreateForm.month) || (new Date().getMonth() + 1)}
+            currentYear={Number(exportYear) || Number(bulkCreateForm.year) || new Date().getFullYear()}
             onImportSuccess={() => {
               fetchMonthlyPayrolls();
               fetchPayrolls();

@@ -3903,6 +3903,55 @@ router.post(
     const { applySalaryPercentageCutToPayrollData } = require('../utils/payrollSalaryPercentageCut');
     const { isPayrollRecordLocked } = require('../utils/payrollLock');
 
+    const normalizeEmpIdVariants = (raw) => {
+      const strId = String(raw ?? '').trim().replace(/\.0+$/, '');
+      if (!strId) return [];
+      const variants = new Set([strId]);
+      const digitsOnly = strId.replace(/\D/g, '');
+      if (digitsOnly) {
+        variants.add(digitsOnly);
+        variants.add(digitsOnly.padStart(5, '0'));
+        const asInt = String(parseInt(digitsOnly, 10));
+        if (asInt !== 'NaN') variants.add(asInt);
+      }
+      // Excel sometimes yields "1234.0"
+      if (/^\d+\.0+$/.test(strId)) {
+        const n = String(parseInt(strId, 10));
+        if (n !== 'NaN') {
+          variants.add(n);
+          variants.add(n.padStart(5, '0'));
+        }
+      }
+      return [...variants];
+    };
+
+    const findEmployeeForCut = async (strId) => {
+      const variants = normalizeEmpIdVariants(strId);
+      if (!variants.length) return null;
+      const baseQuery = {
+        $or: variants.map((id) => ({ employeeId: id }))
+      };
+      // Prefer active (non-deleted) employees when IDs were reused after soft-delete
+      const active = await Employee.findOne({
+        ...baseQuery,
+        isDeleted: { $ne: true }
+      }).select('_id employeeId firstName lastName');
+      if (active) return active;
+      return Employee.findOne(baseQuery).select('_id employeeId firstName lastName');
+    };
+
+    const persistCutOnPayrollDoc = async (doc) => {
+      applySalaryPercentageCutToPayrollData(doc, percentage);
+      doc.updatedBy = req.user.id;
+      if (typeof doc.markModified === 'function') {
+        doc.markModified('allowances');
+        doc.markModified('taxCalculation');
+        doc.markModified('salaryPercentageCut');
+        doc.markModified('remarks');
+      }
+      await doc.save();
+    };
+
     let savedCount = 0;
     let payrollUpdatedCount = 0;
     let payrollSkippedLocked = 0;
@@ -3920,13 +3969,7 @@ router.post(
       if (!strId || seenEmployeeIds.has(strId)) continue;
       seenEmployeeIds.add(strId);
 
-      const emp = await Employee.findOne({
-        $or: [
-          { employeeId: strId },
-          { employeeId: strId.padStart(5, '0') },
-          { employeeId: String(parseInt(strId, 10)) }
-        ]
-      }).select('_id employeeId firstName lastName');
+      const emp = await findEmployeeForCut(strId);
 
       if (!emp) {
         notFoundCount += 1;
@@ -3949,34 +3992,36 @@ router.post(
       );
       savedCount += 1;
 
-      const draftPayroll = await Payroll.findOne({
+      // Unique index is (employee, month, year, isManual) — update every Draft for the period
+      const periodPayrolls = await Payroll.find({
         employee: emp._id,
         month,
         year
       });
 
-      let payrollNote = 'No payroll yet — cut will apply on generate';
-      if (draftPayroll) {
-        if (isPayrollRecordLocked(draftPayroll)) {
-          payrollSkippedLocked += 1;
-          payrollNote = `Skipped (payroll locked: ${draftPayroll.status})`;
-        } else if (
-          draftPayroll.salaryPercentageCut &&
-          Number(draftPayroll.salaryPercentageCut.percentage) === percentage
-        ) {
-          payrollSkippedAlreadyCut += 1;
-          payrollNote = 'Draft already has this cut';
-        } else if (draftPayroll.salaryPercentageCut?.percentage) {
-          payrollSkippedAlreadyCut += 1;
-          payrollNote =
-            'Draft already cut at a different % — regenerate payroll to apply the new cut';
-        } else {
-          applySalaryPercentageCutToPayrollData(draftPayroll, percentage);
-          draftPayroll.updatedBy = req.user.id;
-          await draftPayroll.save();
+      let payrollNote = 'No payroll yet — cut will apply on Bulk Create / regenerate';
+      if (periodPayrolls.length) {
+        const notes = [];
+        for (const draftPayroll of periodPayrolls) {
+          if (isPayrollRecordLocked(draftPayroll)) {
+            payrollSkippedLocked += 1;
+            notes.push(`Locked (${draftPayroll.status})`);
+            continue;
+          }
+          if (
+            draftPayroll.salaryPercentageCut &&
+            Number(draftPayroll.salaryPercentageCut.percentage) === percentage
+          ) {
+            payrollSkippedAlreadyCut += 1;
+            notes.push('Already has this cut');
+            continue;
+          }
+          const replaced = Boolean(draftPayroll.salaryPercentageCut?.percentage);
+          await persistCutOnPayrollDoc(draftPayroll);
           payrollUpdatedCount += 1;
-          payrollNote = 'Draft payroll updated';
+          notes.push(replaced ? `Draft updated (replaced prior cut → ${percentage}%)` : 'Draft payroll updated');
         }
+        payrollNote = notes.join('; ') || payrollNote;
       }
 
       updatedDetails.push({

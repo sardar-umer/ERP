@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
   Dialog,
   DialogTitle,
@@ -64,6 +64,19 @@ export default function ImportSalaryPercentageCutDialog({
   const [uploading, setUploading] = useState(false);
   const [error, setError] = useState('');
   const [result, setResult] = useState(null);
+
+  // Keep dialog period in sync with the payroll page when opened
+  useEffect(() => {
+    if (!open) return;
+    const m = Number(currentMonth);
+    const y = Number(currentYear);
+    if (Number.isInteger(m) && m >= 1 && m <= 12) setMonth(m);
+    if (Number.isInteger(y) && y >= 2020) setYear(y);
+    setFile(null);
+    setPercentage('');
+    setError('');
+    setResult(null);
+  }, [open, currentMonth, currentYear]);
 
   const handleFileChange = (e) => {
     if (e.target.files && e.target.files[0]) {
@@ -234,14 +247,18 @@ export default function ImportSalaryPercentageCutDialog({
             </Paper>
 
             <Alert severity="info" sx={{ py: 0.5, fontSize: '0.82rem' }}>
-              If Draft payrolls already exist for the selected month, they are updated now. Otherwise the cut
-              applies when you Bulk Create / regenerate that month. Loan &amp; advance amounts are not scaled;
-              EOBI remains full.
+              Select the <strong>same month/year</strong> as the payroll you want to affect. Existing{' '}
+              <strong>Draft</strong> payrolls for that month are updated immediately. Locked (non-Draft)
+              payrolls are skipped. If no payroll exists yet, the cut applies on Bulk Create / regenerate.
+              Loan &amp; advance are not scaled; EOBI stays full.
             </Alert>
           </Stack>
         ) : (
           <Stack spacing={2}>
-            <Alert severity="success" icon={<SuccessIcon fontSize="inherit" />}>
+            <Alert
+              severity={result.payrollUpdatedCount > 0 ? 'success' : 'warning'}
+              icon={<SuccessIcon fontSize="inherit" />}
+            >
               <Typography variant="subtitle2" fontWeight={700}>
                 Import Complete!
               </Typography>
@@ -249,6 +266,12 @@ export default function ImportSalaryPercentageCutDialog({
               <strong>{result.savedCount}</strong> employees (
               {MONTHS.find((m) => m.value === result.month)?.label} {result.year}). Draft payrolls updated:{' '}
               <strong>{result.payrollUpdatedCount}</strong>.
+              {result.payrollUpdatedCount === 0 && result.savedCount > 0 ? (
+                <Typography variant="body2" sx={{ mt: 0.75 }}>
+                  No Draft payroll was changed for this period. Either payrolls are locked, none exist yet
+                  (run Bulk Create / regenerate for this month), or they already had this cut.
+                </Typography>
+              ) : null}
             </Alert>
 
             {result.notFoundCount > 0 && (
