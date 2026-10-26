@@ -2481,7 +2481,7 @@ const AccountsPayable = () => {
                               itemCode: code || line.accountNumber || '—',
                               amount: line.amount || (line.quantity * line.unitPrice),
                               duePaymentAmount: getLineDuePaymentAmount(selectedBill, line, idx),
-                              attachments: idx === 0 && selectedBill.attachments?.length ? selectedBill.attachments.map(a => ({ url: a.path || a.filename, originalName: a.originalName })) : undefined
+                              attachments: idx === 0 && selectedBill.attachments?.length ? selectedBill.attachments.map(a => ({ url: a.path || a.filename, originalName: a.originalName, mimeType: a.mimeType })) : undefined
                             };
                           })
                           : (selectedBill.billLines || [])

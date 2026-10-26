@@ -531,6 +531,9 @@ const accountsPayableSchema = new mongoose.Schema({
     filename: String,
     originalName: String,
     path: String,
+    mimeType: String,
+    size: Number,
+    uploadedAt: Date,
     uploadedBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'

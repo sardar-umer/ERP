@@ -563,6 +563,22 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
       const primaryProject = allLines.find((l) => l.project)?.project || '';
       const generatedNarration = allLines.map((l) => l.description).filter(Boolean).join('; ');
 
+      let uploadedAttachments = [];
+      const filesToUpload = attachments.map((a) => a.file).filter(Boolean);
+      if (filesToUpload.length > 0) {
+        setUploadingFiles(true);
+        try {
+          const formData = new FormData();
+          filesToUpload.forEach((f) => formData.append('files', f));
+          const uploadRes = await api.post('/finance/accounts-payable/attachments', formData, {
+            headers: { 'Content-Type': 'multipart/form-data' }
+          });
+          uploadedAttachments = uploadRes.data?.data || [];
+        } finally {
+          setUploadingFiles(false);
+        }
+      }
+
       const payload = {
         companyId: selectedCompany?._id || undefined,
         company: compName,
@@ -580,6 +596,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
           company: l.company || compName,
           project: l.project || primaryProject
         })),
+        attachments: uploadedAttachments,
         // Department approval (like Centralized Store Manager/HOD) — NOT finance voucher authorities
         departmentApproverIds: [srId, gmId],
         departmentApprovalAuthorities: {
@@ -1264,7 +1281,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
             onClick={handleSubmitBill}
             sx={{ px: 4, fontWeight: 700 }}
           >
-            {submitting ? 'Submitting...' : 'Submit for Department Approval'}
+            {uploadingFiles ? 'Uploading attachments...' : submitting ? 'Submitting...' : 'Submit for Department Approval'}
           </Button>
         </Stack>
       </Paper>

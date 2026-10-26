@@ -3527,7 +3527,10 @@ const PreAudit = () => {
                             ...line,
                             itemName: line.description,
                             itemCode: line.itemCode || 'N/A',
-                            amount: line.amount || (line.quantity * line.unitPrice)
+                            amount: line.amount || (line.quantity * line.unitPrice),
+                            attachments: idx === 0 && viewDialog.fullDocument.attachments?.length
+                              ? viewDialog.fullDocument.attachments.map((a) => ({ url: a.path || a.filename, originalName: a.originalName, mimeType: a.mimeType }))
+                              : line.attachments
                           }))
                         }}
                         showChargesSummary={true}

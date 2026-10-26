@@ -4774,6 +4774,47 @@ const notifyCoaBillAuditQueue = async ({ actorId, bill }) => {
   });
 };
 
+// @route   POST /api/finance/accounts-payable/attachments
+// @desc    Upload supporting files for a new vendor bill (returns metadata to send with the bill)
+// @access  Private (Finance and Admin)
+router.post('/accounts-payable/attachments',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  upload.array('files', 10),
+  asyncHandler(async (req, res) => {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) {
+      return res.status(400).json({ success: false, message: 'No files uploaded' });
+    }
+    const data = files.map((f) => ({
+      filename: f.filename,
+      originalName: f.originalname,
+      path: `/uploads/finance/${f.filename}`,
+      mimeType: f.mimetype,
+      size: f.size,
+      uploadedAt: new Date(),
+      uploadedBy: req.user._id
+    }));
+    res.status(201).json({ success: true, data });
+  })
+);
+
+/** Keep only attachments that point at files uploaded via /accounts-payable/attachments. */
+const sanitizeVendorBillAttachments = (list, userId) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((a) => a && typeof a.path === 'string' && /^\/uploads\/finance\/[^/\\]+$/.test(a.path))
+    .slice(0, 10)
+    .map((a) => ({
+      filename: String(a.filename || path.basename(a.path)),
+      originalName: String(a.originalName || a.filename || path.basename(a.path)),
+      path: a.path,
+      mimeType: a.mimeType ? String(a.mimeType) : undefined,
+      size: Number(a.size) || undefined,
+      uploadedAt: a.uploadedAt ? new Date(a.uploadedAt) : new Date(),
+      uploadedBy: userId
+    }));
+};
+
 // @route   POST /api/finance/accounts-payable
 // @desc    Create Chart of Accounts vendor bill (department approval → audit → finance)
 // @access  Private (Finance and Admin)
@@ -4859,6 +4900,7 @@ router.post('/accounts-payable',
       referenceId: null,
       referenceType: 'manual',
       lineItems: lineItems.length > 0 ? lineItems : undefined,
+      attachments: sanitizeVendorBillAttachments(req.body.attachments, req.user._id),
       skipJournal: true,
       status: 'draft',
       approvalStatus: 'Submitted',
@@ -4873,11 +4915,6 @@ router.post('/accounts-payable',
       }],
       createdBy: req.user._id
     });
-
-    if (Array.isArray(req.body.attachments) && req.body.attachments.length > 0 && apEntry) {
-      apEntry.attachments = req.body.attachments;
-      await apEntry.save();
-    }
 
     notifyChatApprovers(approverIds, {
       docType: 'Chart of Accounts Bill',
