@@ -8,21 +8,23 @@ import {
   TableRow, TextField, Tooltip, Typography
 } from '@mui/material';
 import {
-  Add as AddIcon, Cancel as CancelIcon, CheckCircle as CheckIcon,
+  Add as AddIcon, Cancel as CancelIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon,
   Edit as EditIcon, Refresh as RefreshIcon, AccountTree as StructureIcon,
   TrendingUp as TrendingIcon, Visibility as ViewIcon,
-  Publish as SubmitIcon, Undo as ResetIcon,
   FolderSpecial as FolderIcon, PlayCircleFilled as ActiveIcon,
-  AssignmentTurnedIn as CompleteIcon, AttachMoney as MoneyIcon
+  AssignmentTurnedIn as CompleteIcon, AttachMoney as MoneyIcon,
+  DeleteForever as DeleteForeverIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
 import {
-  getProjects, getProjectStats, createProject, updateProject, cancelProject, updateBudgetStatus
+  getProjects, getProjectStats, createProject, updateProject, cancelProject
 } from '../../services/projectManagementService';
 import MasterExecutiveControlTower from '../../components/ProjectManagement/MasterExecutiveControlTower';
+import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
+import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
@@ -67,6 +69,8 @@ const defaultForm = {
   description: '',
   society: DEFAULT_SOCIETY,
   sector: '',
+  street: '',
+  side: '',
   address: '',
   isMasterProject: true,
   parentProject: '',
@@ -147,6 +151,8 @@ const ProjectFormDialog = ({
         description: editing.description || '',
         society: editing.society || DEFAULT_SOCIETY,
         sector: editing.sector || '',
+        street: editing.street || '',
+        side: editing.side || '',
         address: editing.address || '',
         startDate: editing.startDate ? dayjs(editing.startDate).format('YYYY-MM-DD') : '',
         expectedEndDate: editing.expectedEndDate ? dayjs(editing.expectedEndDate).format('YYYY-MM-DD') : '',
@@ -221,9 +227,11 @@ const ProjectFormDialog = ({
         isMasterProject: isMain,
         parentProject: isMain ? null : form.parentProject
       };
-      // Project type belongs to Sub Projects only (Main is a simple portfolio container)
+      // Project type and street / side belong to Sub Projects only (Main is a simple portfolio container)
       if (!isMain) {
         payload.projectType = form.projectType || 'INFRASTRUCTURE DEVELOPMENT';
+        payload.street = (form.street || '').trim();
+        payload.side = form.side || '';
       }
       if (editing) {
         if (form.status) payload.status = form.status;
@@ -370,6 +378,30 @@ const ProjectFormDialog = ({
             </Grid>
           )}
 
+          {form.hierarchyLevel === 'sub' && (
+            <>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  label="Street"
+                  value={form.street}
+                  onChange={set('street')}
+                  placeholder="e.g. Street 15"
+                />
+              </Grid>
+              <Grid item xs={12} md={6}>
+                <FormControl fullWidth>
+                  <InputLabel>Side</InputLabel>
+                  <Select value={form.side || ''} label="Side" onChange={set('side')}>
+                    <MenuItem value="">— Not set —</MenuItem>
+                    <MenuItem value="Left">Left</MenuItem>
+                    <MenuItem value="Right">Right</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+            </>
+          )}
+
           <Grid item xs={12}>
             <TextField fullWidth label="Address / Location" value={form.address} onChange={set('address')} />
           </Grid>
@@ -430,6 +462,9 @@ const ProjectFormDialog = ({
 // ─── Main Page ────────────────────────────────────────────────────────────────
 const ProjectManagement = () => {
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const isDeveloper = user?.role === 'developer';
+  const [permanentDelete, setPermanentDelete] = useState(null);
 
   const [projects, setProjects] = useState([]);
   const [stats, setStats] = useState(null);
@@ -510,36 +545,6 @@ const ProjectManagement = () => {
       setError(err.response?.data?.message || 'Failed to cancel project');
     } finally {
       setDeleting(false);
-    }
-  };
-
-  const handleApproveBudget = async (project) => {
-    try {
-      await updateBudgetStatus(project._id, 'approve');
-      setSuccess('Budget approved');
-      loadProjects();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to approve budget');
-    }
-  };
-
-  const handleSubmitBudget = async (project) => {
-    try {
-      await updateBudgetStatus(project._id, 'submit');
-      setSuccess('Budget submitted successfully');
-      loadProjects();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to submit budget');
-    }
-  };
-
-  const handleResetBudget = async (project) => {
-    try {
-      await updateBudgetStatus(project._id, 'reset');
-      setSuccess('Budget reset to Draft');
-      loadProjects();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to reset budget');
     }
   };
 
@@ -680,11 +685,11 @@ const ProjectManagement = () => {
             </Grid>
             <Grid item xs={12} sm={6} md={3}>
               <StatCard 
-                label="Total Budget" 
-                value={fmt(stats.totalBudget)}
+                label="Total Spent" 
+                value={fmt(stats.totalSpent)}
                 color="warning.main" 
                 icon={<MoneyIcon />}
-                subtitle={`Spent: ${fmt(stats.totalSpent)}`} 
+                subtitle="Recorded project expenses" 
               />
             </Grid>
           </>
@@ -739,7 +744,6 @@ const ProjectManagement = () => {
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Type</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Status</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Progress</TableCell>
-                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Overall Budget</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Actual Spent</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Expected Timeline</TableCell>
                   <TableCell align="right" sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Actions</TableCell>
@@ -749,14 +753,14 @@ const ProjectManagement = () => {
                 {loading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      {Array.from({ length: 9 }).map((__, j) => (
+                      {Array.from({ length: 8 }).map((__, j) => (
                         <TableCell key={j}><Skeleton /></TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : projects.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={9} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={8} align="center" sx={{ py: 6 }}>
                       <TrendingIcon sx={{ fontSize: 48, color: 'grey.300', mb: 1, display: 'block', mx: 'auto' }} />
                       <Typography color="text.secondary">No projects found</Typography>
                       <Button
@@ -782,7 +786,7 @@ const ProjectManagement = () => {
                       if (statusFilter && p.status !== statusFilter) return false;
                       if (typeFilter && p.projectType !== typeFilter) return false;
                       if (!q) return true;
-                      return [p.name, p.projectNumber, p.society, p.sector, p.projectType]
+                      return [p.name, p.projectNumber, p.society, p.sector, p.street, p.projectType]
                         .filter(Boolean)
                         .some((v) => String(v).toLowerCase().includes(q));
                     };
@@ -830,9 +834,6 @@ const ProjectManagement = () => {
 
                     const renderRow = (project, depth = 0) => {
                       const pct = project.overallProgress || 0;
-                      const budgetUsed = project.totalApprovedBudget
-                        ? Math.round((project.totalActualSpent / project.totalApprovedBudget) * 100)
-                        : 0;
                       const level = getHierarchyLevel(project);
                       const chip = levelChip(level);
                       const borderColor = level === 'main' ? '#1976d2' : 'transparent';
@@ -878,9 +879,13 @@ const ProjectManagement = () => {
                                   sx={{ height: 18, fontSize: '0.65rem', fontWeight: 600, borderRadius: 1 }}
                                 />
                               </Stack>
-                              {(project.sector || project.society) && (
+                              {(project.sector || project.society || project.street || project.side) && (
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ pl: depth > 0 ? 2.5 : 0 }}>
-                                  {[project.society, project.sector].filter(Boolean).join(' — ')}
+                                  {[
+                                    [project.society, project.sector].filter(Boolean).join(' — '),
+                                    project.street,
+                                    project.side && `${project.side} side`
+                                  ].filter(Boolean).join(' · ')}
                                 </Typography>
                               )}
                             </Box>
@@ -895,16 +900,7 @@ const ProjectManagement = () => {
                           </TableCell>
                           <TableCell sx={{ minWidth: 130 }}>
                             <Stack spacing={0.5}>
-                              <Stack direction="row" justifyContent="space-between">
-                                <Typography variant="caption">{pct}%</Typography>
-                                {project.budgetStatus === 'Approved' && (
-                                  <Tooltip title={`Budget ${budgetUsed}% used`}>
-                                    <Typography variant="caption" color={budgetUsed > 90 ? 'error.main' : 'text.secondary'}>
-                                      💰 {budgetUsed}%
-                                    </Typography>
-                                  </Tooltip>
-                                )}
-                              </Stack>
+                              <Typography variant="caption">{pct}%</Typography>
                               <LinearProgress
                                 variant="determinate"
                                 value={pct}
@@ -914,24 +910,7 @@ const ProjectManagement = () => {
                             </Stack>
                           </TableCell>
                           <TableCell>
-                            <Stack>
-                              <Typography variant="body2">
-                                {fmt(
-                                  getHierarchyLevel(project) === 'main'
-                                    ? (project.lumpSumBudget || project.totalApprovedBudget || project.totalEstimatedCost)
-                                    : (project.allocatedBudget || project.totalApprovedBudget || project.totalEstimatedCost)
-                                )}
-                              </Typography>
-                              <Chip
-                                size="small"
-                                label={project.budgetStatus}
-                                color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'}
-                                sx={{ fontSize: '0.65rem', height: 18 }}
-                              />
-                            </Stack>
-                          </TableCell>
-                          <TableCell>
-                            <Typography variant="body2" color={budgetUsed > 100 ? 'error.main' : 'text.primary'}>
+                            <Typography variant="body2">
                               {fmt(project.totalActualSpent)}
                             </Typography>
                           </TableCell>
@@ -1004,36 +983,20 @@ const ProjectManagement = () => {
                                   <EditIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              {project.budgetStatus === 'Draft' && (
-                                <Tooltip title="Submit Budget">
-                                  <IconButton size="small" color="warning"
-                                    onClick={() => handleSubmitBudget(project)}>
-                                    <SubmitIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                              {project.budgetStatus === 'Submitted' && (
-                                <Tooltip title="Approve Budget">
-                                  <IconButton size="small" color="success"
-                                    onClick={() => handleApproveBudget(project)}>
-                                    <CheckIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
-                              {project.budgetStatus === 'Approved' && (
-                                <Tooltip title="Reset Budget to Draft">
-                                  <IconButton size="small" color="default"
-                                    onClick={() => handleResetBudget(project)}>
-                                    <ResetIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                              )}
                               <Tooltip title="Cancel Project">
                                 <IconButton size="small" color="error"
                                   onClick={() => setDeleteConfirm(project)}>
                                   <DeleteIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
+                              {isDeveloper && (
+                                <Tooltip title={level === 'main' ? 'Delete permanently with all Sub Projects (Developer)' : 'Delete permanently (Developer)'}>
+                                  <IconButton size="small" color="error"
+                                    onClick={() => setPermanentDelete(project)}>
+                                    <DeleteForeverIcon fontSize="small" />
+                                  </IconButton>
+                                </Tooltip>
+                              )}
                             </Stack>
                           </TableCell>
                         </TableRow>
@@ -1103,6 +1066,18 @@ const ProjectManagement = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <PermanentDeleteProjectDialog
+        project={permanentDelete}
+        onClose={() => setPermanentDelete(null)}
+        onDeleted={(message) => {
+          setPermanentDelete(null);
+          setSuccess(message);
+          loadProjects();
+          loadStats();
+          loadHierarchyOptions();
+        }}
+      />
     </Box>
   );
 };

@@ -14,6 +14,9 @@ const DailyProgressReport = require('../models/projectManagement/DailyProgressRe
 const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
 const CheckRequest = require('../models/projectManagement/CheckRequest');
 const SubletContract = require('../models/projectManagement/SubletContract');
+const WbsActivity = require('../models/projectManagement/WbsActivity');
+const { WBS_PROJECT_TYPES, normalizeProjectType } = require('../models/projectManagement/WbsActivity');
+const SlabSchedule = require('../models/projectManagement/SlabSchedule');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 
@@ -68,9 +71,9 @@ const syncParentProjectProgress = async (parentProjectId) => {
   }
 };
 
-// Recalculate project.overallProgress from task average
+// Recalculate project.overallProgress from WBS activity average
 const syncProjectProgress = async (projectId) => {
-  const tasks = await ProjectTask.find({ project: projectId, level: { $gt: 0 } }).select('progressPercent');
+  const tasks = await ProjectTask.find({ project: projectId, level: { $gt: 0 }, activity: { $ne: null } }).select('progressPercent');
   if (!tasks.length) return;
   const avg = Math.round(tasks.reduce((s, t) => s + (t.progressPercent || 0), 0) / tasks.length);
   const project = await ConstructionProject.findByIdAndUpdate(projectId, { overallProgress: avg }, { new: true });
@@ -377,7 +380,7 @@ router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => 
 
 // POST /api/project-management/projects — create
 router.post('/projects', asyncHandler(async (req, res) => {
-  const { name, projectType, description, society, sector, plotNumber, address,
+  const { name, projectType, description, society, sector, street, side, plotNumber, address,
     clientName, clientContact, projectManager, startDate, expectedEndDate,
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty } = req.body;
 
@@ -386,6 +389,8 @@ router.post('/projects', asyncHandler(async (req, res) => {
   const project = new ConstructionProject({
     name: name.trim(),
     projectType, description, society, sector, plotNumber, address,
+    street: street || '',
+    side: ['Left', 'Right'].includes(side) ? side : '',
     clientName, clientContact, notes, tags,
     projectManager: projectManager || null,
     startDate: startDate ? new Date(startDate) : undefined,
@@ -399,7 +404,16 @@ router.post('/projects', asyncHandler(async (req, res) => {
     updatedBy: req.user?._id
   });
 
-  await project.save();
+  // Two projects created at the same moment can draw the same number; regenerate and retry
+  for (let attempt = 1; ; attempt += 1) {
+    try {
+      await project.save();
+      break;
+    } catch (err) {
+      if (err?.code !== 11000 || !err.keyPattern?.projectNumber || attempt >= 5) throw err;
+      project.projectNumber = undefined;
+    }
+  }
 
   if (project.parentProject) {
     await syncParentProjectProgress(project.parentProject);
@@ -417,7 +431,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
 
   const allowed = [
     'name', 'projectType', 'description', 'status', 'society', 'sector',
-    'plotNumber', 'address', 'clientName', 'clientContact', 'projectManager',
+    'plotNumber', 'street', 'side', 'address', 'clientName', 'clientContact', 'projectManager',
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
     'parentProject', 'contractValue'
@@ -604,6 +618,94 @@ router.delete('/projects/:id', asyncHandler(async (req, res) => {
   }
 
   res.json({ success: true, message: 'Project cancelled successfully' });
+}));
+
+// ─── Developer-only permanent delete (project + every Sub Project + all their records) ──
+
+const requireDeveloper = (req, res) => {
+  if (req.user?.role === 'developer') return true;
+  res.status(403).json({ success: false, message: 'Only a developer can permanently delete projects' });
+  return false;
+};
+
+/** The project plus all descendant Sub Projects (any depth). */
+const collectProjectTree = async (rootId) => {
+  const ids = [new mongoose.Types.ObjectId(rootId)];
+  for (let frontier = [...ids]; frontier.length;) {
+    const children = await ConstructionProject.find({ parentProject: { $in: frontier } }).select('_id').lean();
+    frontier = children.map((c) => c._id).filter((id) => !ids.some((x) => x.equals(id)));
+    ids.push(...frontier);
+  }
+  return ids;
+};
+
+const PROJECT_CHILD_MODELS = [
+  ['boqItems', BOQItem],
+  ['boqHeaders', ProjectBOQ],
+  ['subletContracts', SubletContract],
+  ['checkRequests', CheckRequest],
+  ['invoices', ProjectInvoice],
+  ['expenses', ProjectExpense],
+  ['dailyReports', DailyProgressReport],
+  ['wbsRows', ProjectTask]
+];
+
+const countProjectDeleteImpact = async (ids) => {
+  const counts = { subProjects: ids.length - 1 };
+  await Promise.all(PROJECT_CHILD_MODELS.map(async ([key, Model]) => {
+    counts[key] = await Model.countDocuments({ project: { $in: ids } });
+  }));
+  return counts;
+};
+
+// GET /api/project-management/projects/:id/delete-impact — what a permanent delete would remove
+router.get('/projects/:id/delete-impact', asyncHandler(async (req, res) => {
+  if (!requireDeveloper(req, res)) return;
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('name projectNumber parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+
+  const ids = await collectProjectTree(project._id);
+  res.json({ success: true, data: { project, counts: await countProjectDeleteImpact(ids) } });
+}));
+
+// DELETE /api/project-management/projects/:id/permanent — developer only, cannot be undone
+router.delete('/projects/:id/permanent', asyncHandler(async (req, res) => {
+  if (!requireDeveloper(req, res)) return;
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('name projectNumber parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+
+  // Guard against deleting the wrong record: the client must echo the project number (or name if it has none)
+  const expected = String(project.projectNumber || project.name || '').trim();
+  if (!expected || String(req.body?.confirmText || '').trim() !== expected) {
+    return badRequest(res, `Type "${expected}" exactly to confirm deletion`);
+  }
+
+  const ids = await collectProjectTree(project._id);
+  const counts = await countProjectDeleteImpact(ids);
+
+  for (const [, Model] of PROJECT_CHILD_MODELS) {
+    await Model.deleteMany({ project: { $in: ids } });
+  }
+  // BOQ lines of surviving (parent) projects may be allocated to the deleted Sub Projects
+  await BOQItem.updateMany(
+    { 'allocations.subProject': { $in: ids } },
+    { $pull: { allocations: { subProject: { $in: ids } } } }
+  );
+  await BOQItem.updateMany({ subProject: { $in: ids } }, { $set: { subProject: null } });
+  await ConstructionProject.deleteMany({ _id: { $in: ids } });
+
+  if (project.parentProject) {
+    await syncParentProjectProgress(project.parentProject);
+  }
+
+  console.log(`[project-management] Developer ${req.user?._id} permanently deleted project ${project.projectNumber} (${project.name}) with`, counts);
+  res.json({
+    success: true,
+    message: `${project.projectNumber} — ${project.name} permanently deleted${counts.subProjects ? ` with ${counts.subProjects} Sub Project(s)` : ''}`,
+    data: counts
+  });
 }));
 
 // ─── BOQ ─────────────────────────────────────────────────────────────────────
@@ -1023,70 +1125,153 @@ router.delete('/projects/:id/boq/:itemId', asyncHandler(async (req, res) => {
 
 // ─── TASKS ───────────────────────────────────────────────────────────────────
 
-// GET /api/project-management/projects/:id/tasks
+/**
+ * Make a Sub Project's WBS mirror the master activities of its Project Type.
+ * Creates missing group (level 0) / activity (level 1) rows and keeps titles + order in sync.
+ * Per-project fields (dates, progress, verification) are never touched.
+ */
+const syncProjectWbsFromMaster = async (project) => {
+  const projectType = normalizeProjectType(project.projectType);
+  if (!projectType) return { projectType: null };
+
+  const masters = await WbsActivity.find({ projectType, isActive: true })
+    .sort({ orderIndex: 1, name: 1 })
+    .lean();
+
+  const existing = await ProjectTask.find({
+    project: project._id,
+    $or: [{ activity: { $ne: null } }, { level: 0, activityGroup: { $ne: '' } }]
+  });
+  const groupRows = new Map(existing.filter((t) => t.level === 0 && t.activityGroup).map((t) => [t.activityGroup, t]));
+  const activityRows = new Map(existing.filter((t) => t.activity).map((t) => [String(t.activity), t]));
+
+  // Group order follows first appearance in the sorted master list
+  const groupOrder = [];
+  masters.forEach((m) => { if (!groupOrder.includes(m.group)) groupOrder.push(m.group); });
+
+  // A concurrent request may create the same row first; the unique index rejects ours, so reuse theirs
+  const createOrFind = async (doc, findFilter) => {
+    try {
+      return await ProjectTask.create(doc);
+    } catch (err) {
+      if (err?.code !== 11000) throw err;
+      return ProjectTask.findOne(findFilter);
+    }
+  };
+
+  for (let gi = 0; gi < groupOrder.length; gi += 1) {
+    const group = groupOrder[gi];
+    let row = groupRows.get(group);
+    if (!row) {
+      row = await createOrFind(
+        { project: project._id, level: 0, title: group, activityGroup: group, orderIndex: gi },
+        { project: project._id, level: 0, activityGroup: group }
+      );
+      groupRows.set(group, row);
+    } else if (row.orderIndex !== gi || row.title !== group) {
+      row.orderIndex = gi;
+      row.title = group;
+      await row.save();
+    }
+  }
+
+  for (let ai = 0; ai < masters.length; ai += 1) {
+    const m = masters[ai];
+    const parent = groupRows.get(m.group);
+    const row = activityRows.get(String(m._id));
+    if (!row) {
+      await createOrFind(
+        {
+          project: project._id,
+          level: 1,
+          parentTask: parent._id,
+          activity: m._id,
+          activityGroup: m.group,
+          title: m.name,
+          description: m.description || '',
+          orderIndex: ai
+        },
+        { project: project._id, activity: m._id }
+      );
+    } else if (
+      row.title !== m.name ||
+      row.activityGroup !== m.group ||
+      String(row.parentTask || '') !== String(parent._id) ||
+      row.orderIndex !== ai
+    ) {
+      row.title = m.name;
+      row.activityGroup = m.group;
+      row.parentTask = parent._id;
+      row.orderIndex = ai;
+      await row.save();
+    }
+  }
+
+  return { projectType, activeActivityIds: new Set(masters.map((m) => String(m._id))) };
+};
+
+// GET /api/project-management/projects/:id/tasks — WBS built from the master activities of the project's type
 router.get('/projects/:id/tasks', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
-  const tasks = await ProjectTask.find({ project: req.params.id })
-    .populate('createdBy', 'firstName lastName')
-    .sort({ level: 1, orderIndex: 1, createdAt: 1 })
+  const project = await ConstructionProject.findById(req.params.id).select('projectType parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+
+  const { projectType, activeActivityIds = new Set() } = await syncProjectWbsFromMaster(project);
+
+  const rows = await ProjectTask.find({
+    project: req.params.id,
+    $or: [{ activity: { $ne: null } }, { level: 0, activityGroup: { $ne: '' } }]
+  })
+    .populate('activity', 'code unit isActive')
+    .sort({ orderIndex: 1, createdAt: 1 })
     .lean();
 
-  // Build tree: phases (level 0) → tasks (level 1) → subtasks (level 2)
-  const phases = tasks.filter(t => t.level === 0);
-  const byParent = tasks.filter(t => t.level > 0).reduce((acc, t) => {
-    const pid = t.parentTask?.toString() || 'root';
+  // Hide activities removed from the master unless work was already recorded on them
+  const activities = rows.filter((t) => t.level > 0 && (
+    activeActivityIds.has(String(t.activity?._id || t.activity)) ||
+    (t.progressPercent || 0) > 0 ||
+    t.isPhysicallyVerified
+  ));
+  const byParent = activities.reduce((acc, t) => {
+    const pid = String(t.parentTask || 'root');
     (acc[pid] = acc[pid] || []).push(t);
     return acc;
   }, {});
 
-  const tree = phases.map(phase => ({
-    ...phase,
-    children: (byParent[phase._id.toString()] || []).map(task => ({
-      ...task,
-      children: byParent[task._id.toString()] || []
-    }))
-  }));
+  const tree = rows
+    .filter((t) => t.level === 0)
+    .map((group) => ({ ...group, children: byParent[String(group._id)] || [] }))
+    .filter((group) => group.children.length > 0);
 
-  // Include orphan tasks (no parent phase)
-  const orphans = tasks.filter(t => t.level === 1 && !t.parentTask);
-  if (orphans.length) {
-    orphans.forEach(t => tree.push({ ...t, children: byParent[t._id.toString()] || [] }));
-  }
-
-  res.json({ success: true, data: { tasks, tree } });
-}));
-
-// POST /api/project-management/projects/:id/tasks — create phase or task
-router.post('/projects/:id/tasks', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const { title, description, level, parentTask, plannedStartDate, plannedEndDate,
-    assignedTo, estimatedLaborCost, notes, orderIndex } = req.body;
-
-  if (!title) return badRequest(res, 'Task title is required');
-
-  const task = await ProjectTask.create({
-    project: req.params.id,
-    title, description,
-    level: level ?? 0,
-    parentTask: parentTask || null,
-    plannedStartDate: plannedStartDate ? new Date(plannedStartDate) : undefined,
-    plannedEndDate: plannedEndDate ? new Date(plannedEndDate) : undefined,
-    assignedTo, estimatedLaborCost,
-    notes,
-    orderIndex: orderIndex ?? 0,
-    createdBy: req.user?._id
+  // Roll group progress and planned/actual span up from its activities
+  const minDate = (dates) => (dates.length ? new Date(Math.min(...dates.map((d) => new Date(d).getTime()))) : null);
+  const maxDate = (dates) => (dates.length ? new Date(Math.max(...dates.map((d) => new Date(d).getTime()))) : null);
+  tree.forEach((group) => {
+    const kids = group.children;
+    const avg = Math.round(kids.reduce((s, c) => s + (c.progressPercent || 0), 0) / kids.length);
+    group.progressPercent = avg;
+    group.status = avg === 100 ? 'Completed' : avg > 0 ? 'In Progress' : 'Not Started';
+    group.plannedStartDate = minDate(kids.map((c) => c.plannedStartDate).filter(Boolean));
+    group.plannedEndDate = maxDate(kids.map((c) => c.plannedEndDate).filter(Boolean));
+    group.actualStartDate = minDate(kids.map((c) => c.actualStartDate).filter(Boolean));
+    group.actualEndDate = avg === 100 ? maxDate(kids.map((c) => c.actualEndDate).filter(Boolean)) : null;
   });
 
-  res.status(201).json({ success: true, message: 'Task created', data: task });
+  const tasks = tree.flatMap((g) => [g, ...g.children]);
+  res.json({ success: true, data: { tasks, tree, projectType } });
 }));
 
-// PUT /api/project-management/projects/:id/tasks/:taskId
+// POST /api/project-management/projects/:id/tasks — retired: activities come from the WBS master
+router.post('/projects/:id/tasks', asyncHandler(async (req, res) => (
+  badRequest(res, 'WBS activities are managed in Project Management → WBS Activities (per Project Type)')
+)));
+
+// PUT /api/project-management/projects/:id/tasks/:taskId — per-project progress, dates and verification
 router.put('/projects/:id/tasks/:taskId', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id) || !isValidId(req.params.taskId)) return badRequest(res, 'Invalid ID');
 
-  const allowed = ['title', 'description', 'status', 'progressPercent', 'plannedStartDate',
+  const allowed = ['status', 'progressPercent', 'plannedStartDate',
     'plannedEndDate', 'actualStartDate', 'actualEndDate', 'assignedTo',
     'estimatedLaborCost', 'actualLaborCost', 'notes', 'orderIndex', 'dependencies',
     'isPhysicallyVerified', 'verifiedAt', 'verifiedBy', 'verificationNotes', 'verificationPhotoUrl'];
@@ -1109,16 +1294,228 @@ router.put('/projects/:id/tasks/:taskId', asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Task updated', data: task });
 }));
 
-// DELETE /api/project-management/projects/:id/tasks/:taskId
-router.delete('/projects/:id/tasks/:taskId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.taskId)) return badRequest(res, 'Invalid ID');
+// DELETE /api/project-management/projects/:id/tasks/:taskId — retired: deactivate the master activity instead
+router.delete('/projects/:id/tasks/:taskId', asyncHandler(async (req, res) => (
+  badRequest(res, 'WBS activities are managed in Project Management → WBS Activities (per Project Type)')
+)));
 
-  // Also delete child tasks
-  await ProjectTask.deleteMany({ parentTask: req.params.taskId });
-  const task = await ProjectTask.findOneAndDelete({ _id: req.params.taskId, project: req.params.id });
-  if (!task) return notFound(res, 'Task');
+// ─── WBS ACTIVITY MASTER (per Project Type) ──────────────────────────────────
 
-  res.json({ success: true, message: 'Task deleted' });
+// GET /api/project-management/wbs-activities?projectType=VILLAS&includeInactive=true
+router.get('/wbs-activities', asyncHandler(async (req, res) => {
+  const filter = {};
+  if (req.query.projectType) {
+    const type = normalizeProjectType(req.query.projectType);
+    if (!type) return badRequest(res, 'Invalid project type');
+    filter.projectType = type;
+  }
+  if (req.query.includeInactive !== 'true') filter.isActive = true;
+
+  const activities = await WbsActivity.find(filter)
+    .sort({ projectType: 1, orderIndex: 1, name: 1 })
+    .lean();
+  const groups = [...new Set(activities.map((a) => a.group))];
+
+  res.json({ success: true, data: { activities, groups, projectTypes: WBS_PROJECT_TYPES } });
+}));
+
+const pickActivityFields = (body) => {
+  const out = {};
+  ['group', 'name', 'code', 'unit', 'description'].forEach((k) => {
+    if (body[k] !== undefined) out[k] = String(body[k] || '').trim();
+  });
+  if (body.orderIndex !== undefined) out.orderIndex = Number(body.orderIndex) || 0;
+  if (body.isActive !== undefined) out.isActive = Boolean(body.isActive);
+  return out;
+};
+
+const duplicateActivityResponse = (res, err) => {
+  if (err?.code === 11000) return badRequest(res, 'An activity with this name already exists in this group');
+  throw err;
+};
+
+// POST /api/project-management/wbs-activities
+router.post('/wbs-activities', asyncHandler(async (req, res) => {
+  const projectType = normalizeProjectType(req.body.projectType);
+  if (!projectType) return badRequest(res, 'Project type is required');
+  const fields = pickActivityFields(req.body);
+  if (!fields.group) return badRequest(res, 'Activity group is required');
+  if (!fields.name) return badRequest(res, 'Activity name is required');
+
+  if (fields.orderIndex === undefined) {
+    const last = await WbsActivity.findOne({ projectType }).sort({ orderIndex: -1 }).select('orderIndex').lean();
+    fields.orderIndex = (Number(last?.orderIndex) || 0) + 1;
+  }
+
+  try {
+    const activity = await WbsActivity.create({
+      ...fields,
+      projectType,
+      createdBy: req.user?._id,
+      updatedBy: req.user?._id
+    });
+    res.status(201).json({ success: true, message: 'Activity created', data: activity });
+  } catch (err) {
+    duplicateActivityResponse(res, err);
+  }
+}));
+
+// PUT /api/project-management/wbs-activities/:activityId
+router.put('/wbs-activities/:activityId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.activityId)) return badRequest(res, 'Invalid activity ID');
+  const fields = pickActivityFields(req.body);
+  if (fields.group === '') return badRequest(res, 'Activity group is required');
+  if (fields.name === '') return badRequest(res, 'Activity name is required');
+
+  try {
+    const activity = await WbsActivity.findByIdAndUpdate(
+      req.params.activityId,
+      { $set: { ...fields, updatedBy: req.user?._id } },
+      { new: true, runValidators: true }
+    );
+    if (!activity) return notFound(res, 'Activity');
+    res.json({ success: true, message: 'Activity updated', data: activity });
+  } catch (err) {
+    duplicateActivityResponse(res, err);
+  }
+}));
+
+// DELETE /api/project-management/wbs-activities/:activityId — delete if unused, otherwise deactivate
+router.delete('/wbs-activities/:activityId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.activityId)) return badRequest(res, 'Invalid activity ID');
+  const activity = await WbsActivity.findById(req.params.activityId);
+  if (!activity) return notFound(res, 'Activity');
+
+  const [usedInProgress, usedInSchedules, usedInContracts] = await Promise.all([
+    ProjectTask.exists({ activity: activity._id, $or: [{ progressPercent: { $gt: 0 } }, { isPhysicallyVerified: true }] }),
+    SlabSchedule.exists({ 'slabs.activities': activity._id }),
+    SubletContract.exists({ 'slabs.activities.activity': activity._id })
+  ]);
+
+  if (usedInProgress || usedInSchedules || usedInContracts) {
+    activity.isActive = false;
+    activity.updatedBy = req.user?._id;
+    await activity.save();
+    return res.json({ success: true, message: 'Activity is in use, so it was deactivated instead of deleted', data: activity });
+  }
+
+  await ProjectTask.deleteMany({ activity: activity._id });
+  await activity.deleteOne();
+  res.json({ success: true, message: 'Activity deleted' });
+}));
+
+// ─── SLAB SCHEDULES (percentage-wise payment stages per Project Type) ────────
+
+const populateSlabSchedule = (query) =>
+  query.populate('slabs.activities', 'name group code unit isActive');
+
+/** Validate slab rows: names, % totalling 100, activities from the same project type. */
+const buildSlabRows = async (projectType, rawSlabs = []) => {
+  if (!Array.isArray(rawSlabs) || !rawSlabs.length) return { error: 'Add at least one slab' };
+
+  const slabs = rawSlabs.map((s) => ({
+    name: String(s.name || '').trim(),
+    percentage: Number(s.percentage) || 0,
+    description: String(s.description || '').trim(),
+    activities: [...new Set((s.activities || []).map((a) => String(a?._id || a)).filter(isValidId))]
+  }));
+
+  if (slabs.some((s) => !s.name)) return { error: 'Every slab needs a name' };
+  if (slabs.some((s) => s.percentage <= 0)) return { error: 'Every slab needs a percentage above 0' };
+  const total = slabs.reduce((sum, s) => sum + s.percentage, 0);
+  if (Math.abs(total - 100) > 0.001) return { error: `Slab percentages must total 100% (currently ${total}%)` };
+
+  const allIds = slabs.flatMap((s) => s.activities);
+  const seen = new Set();
+  for (const id of allIds) {
+    if (seen.has(id)) return { error: 'An activity can only belong to one slab in a schedule' };
+    seen.add(id);
+  }
+  if (allIds.length) {
+    const count = await WbsActivity.countDocuments({ _id: { $in: allIds }, projectType });
+    if (count !== allIds.length) return { error: `All activities must belong to ${projectType}` };
+  }
+
+  return { slabs };
+};
+
+// GET /api/project-management/slab-schedules?projectType=VILLAS
+router.get('/slab-schedules', asyncHandler(async (req, res) => {
+  const filter = {};
+  if (req.query.projectType) {
+    const type = normalizeProjectType(req.query.projectType);
+    if (!type) return badRequest(res, 'Invalid project type');
+    filter.projectType = type;
+  }
+  if (req.query.includeInactive !== 'true') filter.isActive = true;
+
+  const schedules = await populateSlabSchedule(
+    SlabSchedule.find(filter).sort({ projectType: 1, name: 1 })
+  ).lean();
+  res.json({ success: true, data: schedules });
+}));
+
+// POST /api/project-management/slab-schedules
+router.post('/slab-schedules', asyncHandler(async (req, res) => {
+  const projectType = normalizeProjectType(req.body.projectType);
+  if (!projectType) return badRequest(res, 'Project type is required');
+  const name = String(req.body.name || '').trim();
+  if (!name) return badRequest(res, 'Schedule name is required');
+
+  const { slabs, error } = await buildSlabRows(projectType, req.body.slabs);
+  if (error) return badRequest(res, error);
+
+  const schedule = await SlabSchedule.create({
+    projectType,
+    name,
+    description: String(req.body.description || '').trim(),
+    slabs,
+    createdBy: req.user?._id,
+    updatedBy: req.user?._id
+  });
+  const populated = await populateSlabSchedule(SlabSchedule.findById(schedule._id)).lean();
+  res.status(201).json({ success: true, message: 'Slab schedule created', data: populated });
+}));
+
+// PUT /api/project-management/slab-schedules/:scheduleId
+router.put('/slab-schedules/:scheduleId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.scheduleId)) return badRequest(res, 'Invalid schedule ID');
+  const schedule = await SlabSchedule.findById(req.params.scheduleId);
+  if (!schedule) return notFound(res, 'Slab schedule');
+
+  if (req.body.name !== undefined) {
+    const name = String(req.body.name || '').trim();
+    if (!name) return badRequest(res, 'Schedule name is required');
+    schedule.name = name;
+  }
+  if (req.body.description !== undefined) schedule.description = String(req.body.description || '').trim();
+  if (req.body.isActive !== undefined) schedule.isActive = Boolean(req.body.isActive);
+  if (req.body.slabs !== undefined) {
+    const { slabs, error } = await buildSlabRows(schedule.projectType, req.body.slabs);
+    if (error) return badRequest(res, error);
+    schedule.slabs = slabs;
+  }
+  schedule.updatedBy = req.user?._id;
+  await schedule.save();
+
+  const populated = await populateSlabSchedule(SlabSchedule.findById(schedule._id)).lean();
+  res.json({ success: true, message: 'Slab schedule updated', data: populated });
+}));
+
+// DELETE /api/project-management/slab-schedules/:scheduleId — delete if unused, otherwise deactivate
+router.delete('/slab-schedules/:scheduleId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.scheduleId)) return badRequest(res, 'Invalid schedule ID');
+  const schedule = await SlabSchedule.findById(req.params.scheduleId);
+  if (!schedule) return notFound(res, 'Slab schedule');
+
+  if (await SubletContract.exists({ slabSchedule: schedule._id })) {
+    schedule.isActive = false;
+    schedule.updatedBy = req.user?._id;
+    await schedule.save();
+    return res.json({ success: true, message: 'Schedule is used by sublet contracts, so it was deactivated instead of deleted' });
+  }
+  await schedule.deleteOne();
+  res.json({ success: true, message: 'Slab schedule deleted' });
 }));
 
 // ─── EXPENSES ────────────────────────────────────────────────────────────────
@@ -1793,10 +2190,36 @@ const populateCheckRequest = (query) =>
   query
     .populate('contractor', 'name email phone vendorType')
     .populate('task', 'title status progressPercent')
+    .populate('activity', 'name group code unit projectType')
     .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractorBilledQuantity')
     .populate('createdBy', 'firstName lastName')
     .populate('submittedBy', 'firstName lastName')
     .populate('linkedInvoice', 'invoiceNumber ipcNumber status invoiceAmount');
+
+/**
+ * Resolve the WBS activity for a check request: it must be an active master activity of the
+ * Sub Project's type. Required whenever that type has activities defined.
+ * Returns { activityId } or { error }.
+ */
+const resolveCheckRequestActivity = async (project, rawActivity, { keepId = null } = {}) => {
+  const projectType = normalizeProjectType(project.projectType);
+  const id = rawActivity?._id || rawActivity;
+  if (!id) {
+    if (projectType && await WbsActivity.exists({ projectType, isActive: true })) {
+      return { error: 'Select the WBS activity this check request is for' };
+    }
+    return { activityId: null };
+  }
+  if (!isValidId(id)) return { error: 'Invalid WBS activity' };
+  // An activity already on this check request stays valid even if later deactivated in the master
+  if (keepId && String(keepId) === String(id)) return { activityId: keepId };
+  const activity = await WbsActivity.findOne({ _id: id, isActive: true }).select('projectType').lean();
+  if (!activity) return { error: 'WBS activity not found or inactive' };
+  if (activity.projectType !== projectType) {
+    return { error: `That activity belongs to ${activity.projectType}, but this Sub Project is ${projectType || 'not typed'}` };
+  }
+  return { activityId: activity._id };
+};
 
 const buildCheckRequestItems = async (projectId, masterProjectId, rawItems = []) => {
   const items = [];
@@ -1909,6 +2332,9 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
   const { title, contractor, task, items = [], notes } = req.body;
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
 
+  const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity);
+  if (activityError) return badRequest(res, activityError);
+
   const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
     req.params.id,
     project.parentProject,
@@ -1923,6 +2349,7 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
     masterProject: project.parentProject,
     title: String(title).trim(),
     contractor: contractor && isValidId(contractor) ? contractor : null,
+    activity: activityId,
     task: task && isValidId(task) ? task : null,
     items: builtItems,
     claimedTotal,
@@ -1947,7 +2374,7 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
     return badRequest(res, 'Only Draft or Rejected Check Requests can be edited');
   }
 
-  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
   const { title, contractor, task, items, notes } = req.body;
 
   if (title !== undefined) {
@@ -1959,6 +2386,11 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
   }
   if (task !== undefined) {
     cr.task = task && isValidId(task) ? task : null;
+  }
+  if (req.body.activity !== undefined) {
+    const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity, { keepId: cr.activity });
+    if (activityError) return badRequest(res, activityError);
+    cr.activity = activityId;
   }
   if (notes !== undefined) cr.notes = notes || '';
 
@@ -2166,6 +2598,7 @@ const populateSublet = (query) =>
   query
     .populate('contractor', 'name email phone vendorType vendorCategory supplierId')
     .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractor')
+    .populate('slabSchedule', 'name projectType')
     .populate('createdBy', 'firstName lastName')
     .populate('activatedBy', 'firstName lastName');
 
@@ -2234,6 +2667,80 @@ const buildSubletItems = async (projectId, masterProjectId, rawItems = [], exclu
   return { items, totalAmount };
 };
 
+/**
+ * Slab-wise contract stages: % of contract value, each covering master WBS activities of the
+ * sub project's type. An activity can sit in only one open slab-wise contract per sub project.
+ */
+const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabSchedule }, excludeContractId = null) => {
+  const fail = (message) => {
+    const err = new Error(message);
+    err.statusCode = 400;
+    throw err;
+  };
+
+  const projectType = normalizeProjectType(project.projectType);
+  if (!projectType) fail('Set the Sub Project\'s Project Type (Infra / Commercial / Villas) before creating a slab-wise contract');
+
+  const value = Number(contractValue) || 0;
+  if (value <= 0) fail('Enter the contract value for a slab-wise contract');
+
+  let scheduleId = null;
+  if (slabSchedule) {
+    if (!isValidId(slabSchedule)) fail('Invalid slab schedule');
+    const schedule = await SlabSchedule.findById(slabSchedule).select('projectType').lean();
+    if (!schedule) fail('Slab schedule not found');
+    if (schedule.projectType !== projectType) fail(`Slab schedule is for ${schedule.projectType}, but this Sub Project is ${projectType}`);
+    scheduleId = schedule._id;
+  }
+
+  const { slabs, error } = await buildSlabRows(projectType, rawSlabs);
+  if (error) fail(error);
+
+  const activityIds = slabs.flatMap((s) => s.activities);
+  const masters = activityIds.length
+    ? await WbsActivity.find({ _id: { $in: activityIds } }).select('name group').lean()
+    : [];
+  const masterById = new Map(masters.map((m) => [String(m._id), m]));
+
+  if (activityIds.length) {
+    const clashFilter = {
+      project: project._id,
+      contractType: 'Slab',
+      status: { $in: ['Draft', 'Active', 'Completed'] },
+      'slabs.activities.activity': { $in: activityIds }
+    };
+    if (excludeContractId) clashFilter._id = { $ne: excludeContractId };
+    const clash = await SubletContract.findOne(clashFilter).select('contractNumber slabs.activities').lean();
+    if (clash) {
+      const taken = new Set(clash.slabs.flatMap((s) => s.activities.map((a) => String(a.activity))));
+      const names = activityIds.filter((id) => taken.has(id)).map((id) => masterById.get(id)?.name).filter(Boolean);
+      fail(`Already covered by sublet contract ${clash.contractNumber}: ${names.join(', ')}`);
+    }
+  }
+
+  // Round each slab to whole rupees; the last slab absorbs the remainder so slabs sum to the contract value
+  let allocated = 0;
+  const built = slabs.map((s, idx) => {
+    const amount = idx === slabs.length - 1
+      ? Math.max(0, value - allocated)
+      : Math.round((value * s.percentage) / 100);
+    allocated += amount;
+    return {
+      name: s.name,
+      percentage: s.percentage,
+      amount,
+      notes: s.description || '',
+      activities: s.activities.map((id) => ({
+        activity: id,
+        name: masterById.get(id)?.name || '',
+        group: masterById.get(id)?.group || ''
+      }))
+    };
+  });
+
+  return { slabs: built, totalAmount: value, slabSchedule: scheduleId };
+};
+
 const syncSubletToBoq = async (contract, projectId) => {
   for (const line of contract.items) {
     const boq = await BOQItem.findById(line.boqItem);
@@ -2273,6 +2780,9 @@ router.get('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
 
   const filter = { project: req.params.id };
   if (req.query.status) filter.status = req.query.status;
+  // Contracts saved before contract types existed have no field and are BOQ-wise
+  if (req.query.contractType === 'Slab') filter.contractType = 'Slab';
+  if (req.query.contractType === 'BOQ') filter.contractType = { $ne: 'Slab' };
   if (req.query.contractor && isValidId(req.query.contractor)) {
     filter.contractor = req.query.contractor;
   }
@@ -2326,18 +2836,25 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
   const society = project.society || project.parentProject.society || '';
 
   const { title, contractor, items = [], notes, startDate, endDate, activate } = req.body;
+  const contractType = req.body.contractType === 'Slab' ? 'Slab' : 'BOQ';
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
   if (!contractor || !isValidId(contractor)) return badRequest(res, 'Subcontractor is required');
 
-  let built;
+  let typeFields;
   try {
-    built = await buildSubletItems(req.params.id, masterProjectId, items);
+    if (contractType === 'Slab') {
+      const built = await buildSubletSlabs(project, req.body);
+      typeFields = { items: [], slabs: built.slabs, slabSchedule: built.slabSchedule, totalAmount: built.totalAmount };
+    } else {
+      const built = await buildSubletItems(req.params.id, masterProjectId, items);
+      if (!built.items.length) {
+        return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
+      }
+      typeFields = { items: built.items, slabs: [], slabSchedule: null, totalAmount: built.totalAmount };
+    }
   } catch (err) {
     if (err.statusCode === 400) return badRequest(res, err.message);
     throw err;
-  }
-  if (!built.items.length) {
-    return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
   }
 
   const contract = await SubletContract.create({
@@ -2349,8 +2866,8 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     society,
     title: String(title).trim(),
     contractor,
-    items: built.items,
-    totalAmount: built.totalAmount,
+    contractType,
+    ...typeFields,
     notes: notes || '',
     startDate: startDate ? new Date(startDate) : undefined,
     endDate: endDate ? new Date(endDate) : undefined,
@@ -2364,7 +2881,7 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     contract.activatedAt = new Date();
     contract.activatedBy = req.user?._id;
     await contract.save();
-    await syncSubletToBoq(contract, req.params.id);
+    if (contractType === 'BOQ') await syncSubletToBoq(contract, req.params.id);
   }
 
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
@@ -2385,8 +2902,11 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
     return badRequest(res, 'Only Draft sublet contracts can be edited');
   }
 
-  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
   const { title, contractor, items, notes, startDate, endDate } = req.body;
+  const contractType = req.body.contractType === 'Slab' || req.body.contractType === 'BOQ'
+    ? req.body.contractType
+    : (contract.contractType || 'BOQ');
 
   if (title !== undefined) {
     if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
@@ -2400,25 +2920,47 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
   if (startDate !== undefined) contract.startDate = startDate ? new Date(startDate) : undefined;
   if (endDate !== undefined) contract.endDate = endDate ? new Date(endDate) : undefined;
 
-  if (Array.isArray(items)) {
-    let built;
-    try {
-      built = await buildSubletItems(
-        req.params.id,
-        project?.parentProject,
-        items,
+  const typeChanged = contractType !== (contract.contractType || 'BOQ');
+  try {
+    if (contractType === 'Slab' && (typeChanged || req.body.slabs !== undefined || req.body.contractValue !== undefined)) {
+      const built = await buildSubletSlabs(
+        project,
+        {
+          contractValue: req.body.contractValue ?? contract.totalAmount,
+          slabs: req.body.slabs ?? contract.slabs.map((s) => ({
+            name: s.name,
+            percentage: s.percentage,
+            description: s.notes,
+            activities: s.activities.map((a) => a.activity)
+          })),
+          slabSchedule: req.body.slabSchedule !== undefined ? req.body.slabSchedule : contract.slabSchedule
+        },
         contract._id
       );
-    } catch (err) {
-      if (err.statusCode === 400) return badRequest(res, err.message);
-      throw err;
+      contract.slabs = built.slabs;
+      contract.slabSchedule = built.slabSchedule;
+      contract.totalAmount = built.totalAmount;
+      contract.items = [];
+    } else if (contractType === 'BOQ' && (typeChanged || Array.isArray(items))) {
+      const built = await buildSubletItems(
+        req.params.id,
+        project?.parentProject,
+        Array.isArray(items) ? items : [],
+        contract._id
+      );
+      if (!built.items.length) {
+        return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
+      }
+      contract.items = built.items;
+      contract.totalAmount = built.totalAmount;
+      contract.slabs = [];
+      contract.slabSchedule = null;
     }
-    if (!built.items.length) {
-      return badRequest(res, 'Add at least one BOQ line with quantity to sublet');
-    }
-    contract.items = built.items;
-    contract.totalAmount = built.totalAmount;
+  } catch (err) {
+    if (err.statusCode === 400) return badRequest(res, err.message);
+    throw err;
   }
+  contract.contractType = contractType;
 
   contract.updatedBy = req.user?._id;
   await contract.save();
@@ -2436,21 +2978,40 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
   if (contract.status !== 'Draft') {
     return badRequest(res, 'Only Draft contracts can be activated');
   }
-  if (!contract.items?.length) return badRequest(res, 'Contract has no items');
+  const isSlab = contract.contractType === 'Slab';
+  if (isSlab && !contract.slabs?.length) return badRequest(res, 'Contract has no slabs');
+  if (!isSlab && !contract.items?.length) return badRequest(res, 'Contract has no items');
 
-  // Re-validate quantities against other contracts
-  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  // Re-validate against other contracts (BOQ quantities / slab activities)
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
   try {
-    await buildSubletItems(
-      req.params.id,
-      project?.parentProject,
-      contract.items.map((i) => ({
-        boqItemId: i.boqItem,
-        quantity: i.quantity,
-        unitPrice: i.unitPrice
-      })),
-      contract._id
-    );
+    if (isSlab) {
+      await buildSubletSlabs(
+        project,
+        {
+          contractValue: contract.totalAmount,
+          slabs: contract.slabs.map((s) => ({
+            name: s.name,
+            percentage: s.percentage,
+            description: s.notes,
+            activities: s.activities.map((a) => a.activity)
+          })),
+          slabSchedule: contract.slabSchedule
+        },
+        contract._id
+      );
+    } else {
+      await buildSubletItems(
+        req.params.id,
+        project?.parentProject,
+        contract.items.map((i) => ({
+          boqItemId: i.boqItem,
+          quantity: i.quantity,
+          unitPrice: i.unitPrice
+        })),
+        contract._id
+      );
+    }
   } catch (err) {
     if (err.statusCode === 400) return badRequest(res, err.message);
     throw err;
@@ -2461,12 +3022,14 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
   contract.activatedBy = req.user?._id;
   contract.updatedBy = req.user?._id;
   await contract.save();
-  await syncSubletToBoq(contract, req.params.id);
+  if (!isSlab) await syncSubletToBoq(contract, req.params.id);
 
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
   res.json({
     success: true,
-    message: 'Sublet contract activated — BOQ lines assigned to subcontractor',
+    message: isSlab
+      ? 'Slab-wise sublet contract activated'
+      : 'Sublet contract activated — BOQ lines assigned to subcontractor',
     data: populated
   });
 }));

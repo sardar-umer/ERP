@@ -86,6 +86,9 @@ const constructionProjectSchema = new mongoose.Schema({
   society: { type: String, trim: true },
   sector: { type: String, trim: true },
   plotNumber: { type: String, trim: true },
+  // Sub Project location within the sector
+  street: { type: String, trim: true, default: '' },
+  side: { type: String, enum: ['', 'Left', 'Right'], default: '' },
   address: { type: String, trim: true },
 
   // Client
@@ -154,9 +157,16 @@ const constructionProjectSchema = new mongoose.Schema({
 // Auto-generate project number and recompute totals before save
 constructionProjectSchema.pre('save', async function (next) {
   if (this.isNew && !this.projectNumber) {
+    // Next number after the highest one used this year (a document count repeats numbers once anything is deleted)
     const year = new Date().getFullYear();
-    const count = await this.constructor.countDocuments();
-    this.projectNumber = `CP-${year}-${String(count + 1).padStart(4, '0')}`;
+    const prefix = `CP-${year}-`;
+    const [latest] = await this.constructor.aggregate([
+      { $match: { projectNumber: new RegExp(`^${prefix}\\d+$`) } },
+      { $project: { seq: { $toInt: { $substrCP: ['$projectNumber', prefix.length, 10] } } } },
+      { $sort: { seq: -1 } },
+      { $limit: 1 }
+    ]);
+    this.projectNumber = `${prefix}${String((latest?.seq || 0) + 1).padStart(4, '0')}`;
   }
 
   // Recompute totals
@@ -229,7 +239,7 @@ constructionProjectSchema.pre('findOneAndUpdate', async function (next) {
   next();
 });
 
-constructionProjectSchema.index({ projectNumber: 1 });
+// projectNumber is indexed by its `unique: true` field option; a second plain index here conflicts with it
 constructionProjectSchema.index({ status: 1 });
 constructionProjectSchema.index({ projectType: 1 });
 constructionProjectSchema.index({ createdAt: -1 });

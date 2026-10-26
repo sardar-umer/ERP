@@ -14,6 +14,10 @@ const projectTaskSchema = new mongoose.Schema({
   orderIndex: { type: Number, default: 0 },
 
   title: { type: String, required: true, trim: true },
+  // Master WBS link: level 0 rows mirror an activity group, level 1 rows mirror a WbsActivity.
+  // Rows without these are legacy free-form tasks (hidden from the WBS tab).
+  activity: { type: mongoose.Schema.Types.ObjectId, ref: 'WbsActivity', default: null, index: true },
+  activityGroup: { type: String, trim: true, default: '' },
   description: { type: String, trim: true },
 
   // Timeline
@@ -64,5 +68,14 @@ projectTaskSchema.pre('save', function (next) {
 
 projectTaskSchema.index({ project: 1, parentTask: 1, orderIndex: 1 });
 projectTaskSchema.index({ project: 1, level: 1 });
+// One WBS row per master activity / activity group per project (guards concurrent master sync)
+projectTaskSchema.index(
+  { project: 1, activity: 1 },
+  { unique: true, partialFilterExpression: { activity: { $type: 'objectId' } } }
+);
+projectTaskSchema.index(
+  { project: 1, activityGroup: 1 },
+  { unique: true, partialFilterExpression: { level: 0, activityGroup: { $gt: '' } } }
+);
 
 module.exports = mongoose.model('ProjectTask', projectTaskSchema);

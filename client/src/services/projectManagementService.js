@@ -21,6 +21,14 @@ export const updateProject = (id, data) =>
 export const cancelProject = (id) =>
   api.delete(`${BASE}/projects/${id}`);
 
+/** Developer only: what a permanent delete would remove (Sub Projects, BOQ, contracts, …). */
+export const getProjectDeleteImpact = (id) =>
+  api.get(`${BASE}/projects/${id}/delete-impact`);
+
+/** Developer only: permanently delete a project, all its Sub Projects and their records. */
+export const deleteProjectPermanently = (id, confirmText) =>
+  api.delete(`${BASE}/projects/${id}/permanent`, { data: { confirmText } });
+
 export const updateBudgetStatus = (id, action, notes = '') =>
   api.put(`${BASE}/projects/${id}/budget-status`, { action, notes });
 
@@ -131,6 +139,32 @@ export const createPOFromBOQ = (projectId, data) =>
 export const getProjectPurchaseOrders = (projectId) =>
   api.get(`${BASE}/projects/${projectId}/purchase-orders`);
 
+// ─── WBS Activity Master (per Project Type) ───────────────────────────────────
+export const getWbsActivities = (params = {}) =>
+  api.get(`${BASE}/wbs-activities`, { params });
+
+export const createWbsActivity = (data) =>
+  api.post(`${BASE}/wbs-activities`, data);
+
+export const updateWbsActivity = (activityId, data) =>
+  api.put(`${BASE}/wbs-activities/${activityId}`, data);
+
+export const deleteWbsActivity = (activityId) =>
+  api.delete(`${BASE}/wbs-activities/${activityId}`);
+
+// ─── Slab Schedules (percentage-wise payment stages per Project Type) ────────
+export const getSlabSchedules = (params = {}) =>
+  api.get(`${BASE}/slab-schedules`, { params });
+
+export const createSlabSchedule = (data) =>
+  api.post(`${BASE}/slab-schedules`, data);
+
+export const updateSlabSchedule = (scheduleId, data) =>
+  api.put(`${BASE}/slab-schedules/${scheduleId}`, data);
+
+export const deleteSlabSchedule = (scheduleId) =>
+  api.delete(`${BASE}/slab-schedules/${scheduleId}`);
+
 // ─── Sublet Contracts (BOQ lines → subcontractors) ────────────────────────────
 export const getSubletContracts = (projectId, params = {}) =>
   api.get(`${BASE}/projects/${projectId}/sublet-contracts`, { params });
@@ -196,10 +230,13 @@ export const deleteProjectInvoice = (projectId, invoiceId) =>
 
 const projectManagementService = {
   getProjects, getProjectStats, getProjectById, createProject, updateProject, cancelProject,
+  getProjectDeleteImpact, deleteProjectPermanently,
   updateBudgetStatus, setLumpSumBudget, allocateBudgetToSubs,
   addMilestone, updateMilestone, deleteMilestone,
   getBOQ, addBOQItem, bulkAddBOQItems, updateBOQItem, updateBoqDiscount, deleteBOQItem,
   getTasks, createTask, updateTask, deleteTask,
+  getWbsActivities, createWbsActivity, updateWbsActivity, deleteWbsActivity,
+  getSlabSchedules, createSlabSchedule, updateSlabSchedule, deleteSlabSchedule,
   getSubletContracts, getSubletContractById, createSubletContract, updateSubletContract,
   activateSubletContract, completeSubletContract, cancelSubletContract,
   getCheckRequests, getCheckRequestById, createCheckRequest, updateCheckRequest,

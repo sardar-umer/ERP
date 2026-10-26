@@ -1911,7 +1911,8 @@ const FinanceHelper = {
     financeApprovalAuthorities = null,
     companyId: optsCompanyId = null,
     payingCompanyId: optsPayingCompanyId = null,
-    categoryLines = []
+    categoryLines = [],
+    costCenter = null
   }) => {
     const amount_ = Math.round((Number(amount) || 0) * 100) / 100;
     if (amount_ <= 0) throw new Error('Advance amount must be greater than zero');
@@ -2002,6 +2003,7 @@ const FinanceHelper = {
       createdBy,
       department,
       module,
+      costCenter: costCenter || null,
       referenceType,
       referenceId,
       categoryLines: Array.isArray(categoryLines) ? categoryLines : [],
@@ -2087,6 +2089,7 @@ const FinanceHelper = {
               description: `Vendor Advance: ${vendorName || 'Vendor'} (paid by ${payingName})`,
               department,
               module,
+              costCenter: costCenter || null,
               referenceId: advance._id,
               referenceType: 'payment',
               journalCode: 'BANK',
@@ -2117,6 +2120,7 @@ const FinanceHelper = {
               description: `Vendor Advance payment for ${targetName}: ${vendorName || 'Vendor'}`,
               department,
               module,
+              costCenter: costCenter || null,
               referenceId: advance._id,
               referenceType: 'payment',
               journalCode: 'BANK',
@@ -2158,6 +2162,7 @@ const FinanceHelper = {
               description: `Vendor Advance: ${vendorName || 'Vendor'} (pending finance signatures)`,
               department,
               module,
+              costCenter: costCenter || null,
               referenceId: advance._id,
               referenceType: 'payment',
               journalCode: 'BANK',

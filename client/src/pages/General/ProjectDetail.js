@@ -1,25 +1,25 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
-import GanttChart from './GanttChart';
 import ProjectInvoicesTab from './ProjectInvoicesTab';
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
   DialogActions, DialogContent, DialogTitle, Divider, FormControl, Grid,
   IconButton, InputLabel, LinearProgress, MenuItem, Paper, Select, Skeleton,
   Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, Tabs, TextField, Tooltip, Typography, Collapse, InputAdornment, Autocomplete
+  TableRow, Tabs, TextField, Tooltip, Typography, InputAdornment, Autocomplete
 } from '@mui/material';
 import {
-  Add as AddIcon, ArrowBack as BackIcon, Assignment as TaskIcon,
-  AttachMoney as MoneyIcon, BarChart as ChartIcon, CheckCircle as CheckIcon,
+  Add as AddIcon, ArrowBack as BackIcon,
+  AttachMoney as MoneyIcon, BarChart as ChartIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon, Edit as EditIcon,
-  ExpandLess, ExpandMore, FiberManualRecord as DotIcon, Flag as FlagIcon,
+  Flag as FlagIcon,
   PhotoCamera as PhotoIcon, Refresh as RefreshIcon, Search as SearchIcon,
   Warning as WarnIcon, ShoppingCart as POIcon, Receipt as InvoiceIcon,
   Visibility as ViewIcon, Engineering as ContractorIcon,
   AccountTree as TreeIcon,
   FactCheck as CheckRequestIcon,
-  Handshake as SubletIcon
+  Handshake as SubletIcon,
+  DeleteForever as DeleteForeverIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -27,11 +27,10 @@ import { Checkbox } from '@mui/material';
 import dayjs from 'dayjs';
 import { getImageUrl } from '../../utils/imageService';
 import {
-  getProjectById, updateProject, updateBudgetStatus, setLumpSumBudget, allocateBudgetToSubs,
+  getProjectById,
   getBOQHeaders, createBOQHeader, updateBOQHeader, deleteBOQHeader, allocateBOQItem,
   getBOQ, addBOQItem, updateBOQItem, deleteBOQItem,
   updateBoqDiscount, batchAssignBOQContractor, getSuppliers,
-  getTasks, createTask, updateTask, deleteTask,
   getExpenses, addExpense, updateExpense, deleteExpense,
   getDPRList, submitDPR, deleteDPR,
   addMilestone, updateMilestone, deleteMilestone,
@@ -41,6 +40,8 @@ import {
 import api from '../../services/api';
 import CheckRequestsTab from './CheckRequestsTab';
 import SubletContractsTab from './SubletContractsTab';
+import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
+import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 /** Segregated budget groups for Sub project category allocation */
@@ -75,11 +76,6 @@ const STATUS_COLOR = {
   'On Hold': 'warning', Completed: 'primary', Cancelled: 'error'
 };
 
-const TASK_STATUS_COLOR = {
-  'Not Started': 'default', 'In Progress': 'info',
-  Completed: 'success', 'On Hold': 'warning', Cancelled: 'error'
-};
-
 const MS_STATUS_COLOR = {
   Pending: 'default', 'In Progress': 'info', Completed: 'success', Delayed: 'error'
 };
@@ -89,11 +85,9 @@ const ALL_TABS = [
   { id: 'overview', label: 'Overview', icon: <ViewIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'tasks', label: 'Tasks / WBS', icon: <TaskIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'expenses', label: 'Expenses', icon: <MoneyIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'dpr', label: 'Daily Reports', icon: <PhotoIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'gantt', label: 'Gantt Chart', icon: <ChartIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true }
 ];
 
@@ -112,9 +106,6 @@ const boqDiscTotal = (i) => {
 };
 const boqNetTotal = (i) => Number(i?.netEstimatedCost) || (boqEstTotal(i) - boqDiscTotal(i));
 const boqActTotal = (i) => (Number(i?.usedQuantity) || 0) * (Number(i?.actualUnitPrice) || 0) || Number(i?.actualTotalCost) || 0;
-
-const pct = (spent, total) =>
-  total > 0 ? Math.min(Math.round((spent / total) * 100), 100) : 0;
 
 // ─── Mini components ──────────────────────────────────────────────────────────
 const SectionHeader = ({ title, action }) => (
@@ -1611,594 +1602,8 @@ const BOQTab = ({ projectId, project }) => {
   );
 };
 
-// ─── Tasks Tab ────────────────────────────────────────────────────────────────
-const TasksTab = ({ projectId }) => {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editTask, setEditTask] = useState(null);
-  const [parentPhase, setParentPhase] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [expanded, setExpanded] = useState({});
-  const [form, setForm] = useState({ title: '', description: '', plannedStartDate: '', plannedEndDate: '', assignedTo: '', estimatedLaborCost: '', level: 0, notes: '' });
-  
-  const [viewTask, setViewTask] = useState(null);
-  const [verifyDialogOpen, setVerifyDialogOpen] = useState(false);
-  const [verifyTaskItem, setVerifyTaskItem] = useState(null);
-  const [verificationForm, setVerificationForm] = useState({
-    isPhysicallyVerified: false,
-    verifiedBy: '',
-    verificationNotes: '',
-    verificationPhotoUrl: ''
-  });
-
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await getTasks(projectId);
-      setData(res.data?.data || null);
-      // Expand all phases by default
-      const expanded = {};
-      (res.data?.data?.tree || []).forEach(p => { expanded[p._id] = true; });
-      setExpanded(expanded);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to load tasks');
-    } finally { setLoading(false); }
-  }, [projectId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const openAddPhase = () => {
-    setEditTask(null); setParentPhase(null);
-    setForm({ title: '', description: '', plannedStartDate: '', plannedEndDate: '', assignedTo: '', estimatedLaborCost: '', level: 0, notes: '' });
-    setDialogOpen(true);
-  };
-
-  const openAddTask = (phase) => {
-    setEditTask(null); setParentPhase(phase);
-    setForm({ title: '', description: '', plannedStartDate: '', plannedEndDate: '', assignedTo: '', estimatedLaborCost: '', level: 1, notes: '' });
-    setDialogOpen(true);
-  };
-
-  const openEdit = (task) => {
-    setEditTask(task); setParentPhase(null);
-    setForm({
-      title: task.title, description: task.description || '', level: task.level,
-      plannedStartDate: task.plannedStartDate ? dayjs(task.plannedStartDate).format('YYYY-MM-DD') : '',
-      plannedEndDate: task.plannedEndDate ? dayjs(task.plannedEndDate).format('YYYY-MM-DD') : '',
-      assignedTo: task.assignedTo || '', estimatedLaborCost: task.estimatedLaborCost || '',
-      progressPercent: task.progressPercent || 0, status: task.status, notes: task.notes || ''
-    });
-    setDialogOpen(true);
-  };
-
-  const handleSave = async () => {
-    if (!form.title) { setError('Title is required'); return; }
-    setSaving(true); setError('');
-    try {
-      const payload = {
-        ...form,
-        plannedStartDate: form.plannedStartDate || undefined,
-        plannedEndDate: form.plannedEndDate || undefined,
-        parentTask: parentPhase?._id || undefined
-      };
-      if (editTask) {
-        await updateTask(projectId, editTask._id, payload);
-      } else {
-        await createTask(projectId, payload);
-      }
-      setSuccess(editTask ? 'Task updated' : 'Task created');
-      setDialogOpen(false);
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save task');
-    } finally { setSaving(false); }
-  };
-
-  const handleProgressChange = async (task, value) => {
-    try {
-      await updateTask(projectId, task._id, { progressPercent: Number(value) });
-      load();
-    } catch { /* silent */ }
-  };
-
-  const openVerifyDialog = (task) => {
-    setVerifyTaskItem(task);
-    setVerificationForm({
-      isPhysicallyVerified: Boolean(task.isPhysicallyVerified),
-      verifiedBy: task.verifiedBy || '',
-      verificationNotes: task.verificationNotes || '',
-      verificationPhotoUrl: task.verificationPhotoUrl || ''
-    });
-    setVerifyDialogOpen(true);
-  };
-
-  const handleSaveVerification = async () => {
-    if (!verifyTaskItem) return;
-    setSaving(true);
-    try {
-      await updateTask(projectId, verifyTaskItem._id, {
-        isPhysicallyVerified: verificationForm.isPhysicallyVerified,
-        verifiedBy: verificationForm.verifiedBy,
-        verificationNotes: verificationForm.verificationNotes,
-        verificationPhotoUrl: verificationForm.verificationPhotoUrl,
-        verifiedAt: verificationForm.isPhysicallyVerified ? new Date() : null
-      });
-      setSuccess('Physical verification updated successfully');
-      setVerifyDialogOpen(false);
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to update physical verification');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleDelete = async (taskId) => {
-    if (!window.confirm('Delete this task and all subtasks?')) return;
-    try {
-      await deleteTask(projectId, taskId);
-      setSuccess('Task deleted');
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to delete');
-    }
-  };
-
-  const set = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  if (loading) return <Skeleton height={300} />;
-
-  const tree = data?.tree || [];
-
-  return (
-    <Box>
-      {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
-      {success && <Alert severity="success" onClose={() => setSuccess('')} sx={{ mb: 2 }}>{success}</Alert>}
-
-      <SectionHeader
-        title="Work Breakdown Structure"
-        action={
-          <Stack direction="row" gap={1}>
-            <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={load}>Refresh</Button>
-            <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={openAddPhase}>Add Phase</Button>
-          </Stack>
-        }
-      />
-
-      {!tree.length ? (
-        <EmptyState icon={TaskIcon} text="No phases or tasks yet. Start by adding a phase."
-          action={<Button variant="outlined" startIcon={<AddIcon />} onClick={openAddPhase}>Add Phase</Button>} />
-      ) : (
-        tree.map(phase => (
-          <Card key={phase._id} variant="outlined" sx={{ mb: 2 }}>
-            <CardContent sx={{ pb: 1 }}>
-              {/* Phase header */}
-              <Stack direction="row" alignItems="center" justifyContent="space-between">
-                <Stack direction="row" alignItems="center" gap={1}>
-                  <IconButton size="small" onClick={() => setExpanded(prev => ({ ...prev, [phase._id]: !prev[phase._id] }))}>
-                    {expanded[phase._id] ? <ExpandLess /> : <ExpandMore />}
-                  </IconButton>
-                  <Typography variant="subtitle1" fontWeight={700}>{phase.title}</Typography>
-                  <Chip label={phase.status} size="small" color={TASK_STATUS_COLOR[phase.status] || 'default'} />
-                </Stack>
-                <Stack direction="row" gap={0.5}>
-                  <Tooltip title="View Details">
-                    <IconButton size="small" onClick={() => setViewTask(phase)}>
-                      <ViewIcon fontSize="small" />
-                    </IconButton>
-                  </Tooltip>
-                  <Button size="small" startIcon={<AddIcon />} onClick={() => openAddTask(phase)}>Add Task</Button>
-                  <IconButton size="small" onClick={() => openEdit(phase)}><EditIcon fontSize="small" /></IconButton>
-                  <IconButton size="small" color="error" onClick={() => handleDelete(phase._id)}><DeleteIcon fontSize="small" /></IconButton>
-                </Stack>
-              </Stack>
-
-              {/* Phase timeline */}
-              {(phase.plannedStartDate || phase.plannedEndDate) && (
-                <Typography variant="caption" color="text.secondary" sx={{ ml: 5 }}>
-                  {phase.plannedStartDate ? dayjs(phase.plannedStartDate).format('DD MMM') : '—'}
-                  {' → '}
-                  {phase.plannedEndDate ? dayjs(phase.plannedEndDate).format('DD MMM YYYY') : '—'}
-                </Typography>
-              )}
-
-              {/* Tasks */}
-              <Collapse in={expanded[phase._id] !== false} timeout="auto">
-                {phase.children?.length > 0 && (
-                  <TableContainer sx={{ mt: 1 }}>
-                    <Table size="small">
-                      <TableHead>
-                        <TableRow>
-                          <TableCell><strong>Task</strong></TableCell>
-                          <TableCell><strong>Assigned To</strong></TableCell>
-                          <TableCell><strong>Planned Dates</strong></TableCell>
-                          <TableCell><strong>Status</strong></TableCell>
-                          <TableCell sx={{ width: 140 }}><strong>Progress</strong></TableCell>
-                          <TableCell sx={{ width: 140 }}><strong>Physical Verification</strong></TableCell>
-                          <TableCell align="right"><strong>Actions</strong></TableCell>
-                        </TableRow>
-                      </TableHead>
-                      <TableBody>
-                        {phase.children.map(task => (
-                          <TableRow key={task._id} hover>
-                            <TableCell>
-                              <Stack direction="row" alignItems="center" gap={0.5}>
-                                <DotIcon sx={{ fontSize: 8, color: 'grey.400' }} />
-                                <Typography variant="body2">{task.title}</Typography>
-                              </Stack>
-                              {task.description && (
-                                <Typography variant="caption" color="text.secondary" sx={{ ml: 2 }}>
-                                  {task.description}
-                                </Typography>
-                              )}
-                            </TableCell>
-                            <TableCell>
-                              <Typography variant="body2">{task.assignedTo || '—'}</Typography>
-                            </TableCell>
-                            <TableCell>
-                              <Typography variant="caption">
-                                {task.plannedStartDate ? dayjs(task.plannedStartDate).format('DD MMM') : '—'}
-                                {' → '}
-                                {task.plannedEndDate ? dayjs(task.plannedEndDate).format('DD MMM') : '—'}
-                              </Typography>
-                            </TableCell>
-                            <TableCell>
-                              <Chip label={task.status} size="small" color={TASK_STATUS_COLOR[task.status] || 'default'} />
-                            </TableCell>
-                            <TableCell>
-                              <Stack spacing={0.5}>
-                                <Stack direction="row" justifyContent="space-between">
-                                  <Typography variant="caption">{task.progressPercent}%</Typography>
-                                </Stack>
-                                <TextField
-                                  type="number"
-                                  size="small"
-                                  value={task.progressPercent}
-                                  onChange={(e) => handleProgressChange(task, e.target.value)}
-                                  InputProps={{ inputProps: { min: 0, max: 100 }, sx: { py: 0.5, fontSize: '0.75rem' } }}
-                                  sx={{ width: 70, display: 'inline-block' }}
-                                />
-                                <LinearProgress
-                                  variant="determinate"
-                                  value={task.progressPercent || 0}
-                                  color={task.progressPercent === 100 ? 'success' : task.progressPercent > 0 ? 'info' : 'inherit'}
-                                  sx={{ height: 4, borderRadius: 2 }}
-                                />
-                              </Stack>
-                            </TableCell>
-                            <TableCell>
-                              {task.isPhysicallyVerified ? (
-                                <Tooltip title={`Verified by ${task.verifiedBy || 'QC'} on ${dayjs(task.verifiedAt).format('DD MMM YY')}${task.verificationNotes ? ': ' + task.verificationNotes : ''}`}>
-                                  <Chip
-                                    label="Verified"
-                                    size="small"
-                                    color="success"
-                                    icon={<CheckIcon sx={{ fontSize: '0.8rem !important' }} />}
-                                    onClick={() => openVerifyDialog(task)}
-                                    sx={{ cursor: 'pointer', height: 22, fontSize: '0.7rem' }}
-                                  />
-                                </Tooltip>
-                              ) : (
-                                <Chip
-                                  label="Pending Audit"
-                                  size="small"
-                                  variant="outlined"
-                                  color="default"
-                                  onClick={() => openVerifyDialog(task)}
-                                  sx={{ cursor: 'pointer', height: 22, fontSize: '0.7rem' }}
-                                />
-                              )}
-                            </TableCell>
-                            <TableCell align="right">
-                              <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                                <Tooltip title="View Details">
-                                  <IconButton size="small" onClick={() => setViewTask(task)}>
-                                    <ViewIcon fontSize="small" />
-                                  </IconButton>
-                                </Tooltip>
-                                <IconButton size="small" onClick={() => openEdit(task)}><EditIcon fontSize="small" /></IconButton>
-                                <IconButton size="small" color="error" onClick={() => handleDelete(task._id)}><DeleteIcon fontSize="small" /></IconButton>
-                              </Stack>
-                            </TableCell>
-                          </TableRow>
-                        ))}
-                      </TableBody>
-                    </Table>
-                  </TableContainer>
-                )}
-                {!phase.children?.length && (
-                  <Typography variant="caption" color="text.secondary" sx={{ ml: 5, mt: 1, display: 'block' }}>
-                    No tasks in this phase.{' '}
-                    <Box component="span" sx={{ cursor: 'pointer', color: 'primary.main' }} onClick={() => openAddTask(phase)}>
-                      Add a task
-                    </Box>
-                  </Typography>
-                )}
-              </Collapse>
-            </CardContent>
-          </Card>
-        ))
-      )}
-
-      {/* Task Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>
-          {editTask ? `Edit: ${editTask.title}` : parentPhase ? `Add Task to "${parentPhase.title}"` : 'Add Phase'}
-        </DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Grid container spacing={2}>
-            <Grid item xs={12}>
-              <TextField fullWidth required label="Title" value={form.title} onChange={set('title')} />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField fullWidth label="Description" value={form.description} onChange={set('description')} multiline rows={2} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth type="date" label="Planned Start" value={form.plannedStartDate}
-                onChange={set('plannedStartDate')} InputLabelProps={{ shrink: true }} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth type="date" label="Planned End" value={form.plannedEndDate}
-                onChange={set('plannedEndDate')} InputLabelProps={{ shrink: true }} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Assigned To (Contractor)" value={form.assignedTo} onChange={set('assignedTo')} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Est. Labor Cost" type="number" value={form.estimatedLaborCost} onChange={set('estimatedLaborCost')} />
-            </Grid>
-            {editTask && (
-              <>
-                <Grid item xs={6}>
-                  <TextField fullWidth label="Progress %" type="number" value={form.progressPercent}
-                    onChange={set('progressPercent')} InputProps={{ inputProps: { min: 0, max: 100 } }} />
-                </Grid>
-                <Grid item xs={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Status</InputLabel>
-                    <Select value={form.status || 'Not Started'} label="Status" onChange={set('status')}>
-                      {['Not Started', 'In Progress', 'Completed', 'On Hold', 'Cancelled'].map(s =>
-                        <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </Grid>
-              </>
-            )}
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : editTask ? 'Update' : 'Create'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* Physical Verification Dialog */}
-      <Dialog open={verifyDialogOpen} onClose={() => setVerifyDialogOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 1.5 }}>
-          <Stack direction="row" alignItems="center" gap={1}>
-            <CheckIcon color="success" />
-            <Typography variant="h6" fontWeight={600}>WBS Physical Verification</Typography>
-          </Stack>
-        </DialogTitle>
-        <DialogContent sx={{ pt: 3 }}>
-          <Stack spacing={2.5}>
-            <Typography variant="body2" color="text.secondary">
-              Optional WBS task sign-off for: <strong>{verifyTaskItem?.title}</strong>.
-              For payment / IPC, use the <strong>Check Requests</strong> tab instead.
-            </Typography>
-            
-            <FormControl fullWidth>
-              <InputLabel>Verification Audit Status</InputLabel>
-              <Select
-                value={verificationForm.isPhysicallyVerified ? 'true' : 'false'}
-                label="Verification Audit Status"
-                onChange={(e) => setVerificationForm(p => ({ ...p, isPhysicallyVerified: e.target.value === 'true' }))}
-              >
-                <MenuItem value="false">⚠️ Pending Visual Inspection</MenuItem>
-                <MenuItem value="true">✅ Physically Inspected & Verified</MenuItem>
-              </Select>
-            </FormControl>
-
-            <TextField
-              fullWidth
-              label="Auditor / Verified By"
-              placeholder="e.g. Lead Site Engineer, QC Manager"
-              value={verificationForm.verifiedBy}
-              onChange={(e) => setVerificationForm(p => ({ ...p, verifiedBy: e.target.value }))}
-            />
-
-            <TextField
-              fullWidth
-              label="Verification Audit Notes"
-              placeholder="Provide comments on physical inspection quality and compliance..."
-              multiline
-              rows={3}
-              value={verificationForm.verificationNotes}
-              onChange={(e) => setVerificationForm(p => ({ ...p, verificationNotes: e.target.value }))}
-            />
-
-            <TextField
-              fullWidth
-              label="Inspection / Proof Image URL (Optional)"
-              placeholder="e.g. https://images.unsplash.com/photo-1541888946425-d81bb19240f5"
-              value={verificationForm.verificationPhotoUrl}
-              onChange={(e) => setVerificationForm(p => ({ ...p, verificationPhotoUrl: e.target.value }))}
-            />
-
-            {verificationForm.isPhysicallyVerified && verificationForm.verificationPhotoUrl && (
-              <Box sx={{ mt: 1, border: '1px solid', borderColor: 'divider', borderRadius: 1.5, overflow: 'hidden' }}>
-                <Typography variant="caption" sx={{ px: 1.5, py: 0.5, display: 'block', bgcolor: 'grey.50', fontWeight: 600 }}>Inspection Proof Preview</Typography>
-                <img
-                  src={getImageUrl(verificationForm.verificationPhotoUrl)}
-                  alt="Inspection Proof Preview"
-                  style={{ width: '100%', height: 140, objectFit: 'cover' }}
-                  onError={(e) => { e.target.style.display = 'none'; }}
-                />
-              </Box>
-            )}
-          </Stack>
-        </DialogContent>
-        <DialogActions sx={{ borderTop: '1px solid', borderColor: 'divider', px: 3, py: 2 }}>
-          <Button onClick={() => setVerifyDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="success" onClick={handleSaveVerification} disabled={saving}>
-            {saving ? 'Saving Sign-off…' : 'Save Verification'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      {/* View Phase / Task Details Dialog */}
-      <Dialog open={Boolean(viewTask)} onClose={() => setViewTask(null)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ borderBottom: '1px solid', borderColor: 'divider', pb: 1.5 }}>
-          <Stack direction="row" alignItems="center" gap={1}>
-            <ViewIcon color="primary" />
-            <Typography variant="h6" fontWeight={600}>
-              WBS {viewTask?.level === 0 ? 'Phase' : 'Task'} Detailed Specification
-            </Typography>
-          </Stack>
-        </DialogTitle>
-        <DialogContent sx={{ pt: 3 }}>
-          {viewTask && (
-            <Stack spacing={2.5}>
-              <Box>
-                <Typography variant="caption" color="text.secondary">Title</Typography>
-                <Typography variant="body1" fontWeight={600} color="primary.main">
-                  {viewTask.title}
-                </Typography>
-              </Box>
-
-              <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Level</Typography>
-                  <Typography variant="body2" fontWeight={500}>{viewTask.level === 0 ? 'Phase (Level 0)' : 'Task (Level 1/2)'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Status</Typography>
-                  <Box sx={{ mt: 0.5 }}>
-                    <Chip label={viewTask.status} size="small" color={TASK_STATUS_COLOR[viewTask.status] || 'default'} />
-                  </Box>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Planned Dates</Typography>
-                  <Typography variant="body2" fontWeight={500}>
-                    {viewTask.plannedStartDate ? dayjs(viewTask.plannedStartDate).format('DD MMM YYYY') : '—'}
-                    {' → '}
-                    {viewTask.plannedEndDate ? dayjs(viewTask.plannedEndDate).format('DD MMM YYYY') : '—'}
-                  </Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Progress %</Typography>
-                  <Stack direction="row" alignItems="center" gap={1} sx={{ mt: 0.5 }}>
-                    <LinearProgress
-                      variant="determinate"
-                      value={viewTask.progressPercent || 0}
-                      color={viewTask.progressPercent === 100 ? 'success' : 'info'}
-                      sx={{ width: 80, height: 6, borderRadius: 3 }}
-                    />
-                    <Typography variant="body2" fontWeight={700}>{viewTask.progressPercent || 0}%</Typography>
-                  </Stack>
-                </Grid>
-              </Grid>
-
-              {viewTask.description && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary">Description</Typography>
-                  <Typography variant="body2" sx={{ whiteSpace: 'pre-line', bgcolor: 'grey.50', p: 1.5, borderRadius: 1 }}>
-                    {viewTask.description}
-                  </Typography>
-                </Box>
-              )}
-
-              <Divider />
-
-              <Typography variant="subtitle2" fontWeight={700}>Financials & Assignment</Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Assigned Contractor</Typography>
-                  <Typography variant="body2" fontWeight={500}>{viewTask.assignedTo || '—'}</Typography>
-                </Grid>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Estimated Labor Cost</Typography>
-                  <Typography variant="body2" fontWeight={600}>{fmt(viewTask.estimatedLaborCost)}</Typography>
-                </Grid>
-              </Grid>
-
-              <Divider />
-
-              <Typography variant="subtitle2" fontWeight={700}>Physical Verification Sign-off</Typography>
-              <Grid container spacing={2}>
-                <Grid item xs={6}>
-                  <Typography variant="caption" color="text.secondary">Inspection Status</Typography>
-                  <Box sx={{ mt: 0.5 }}>
-                    {viewTask.isPhysicallyVerified ? (
-                      <Chip label="Verified & Approved" size="small" color="success" icon={<CheckIcon sx={{ fontSize: '0.8rem !important' }} />} />
-                    ) : (
-                      <Chip label="Pending Visual Audit" size="small" variant="outlined" />
-                    )}
-                  </Box>
-                </Grid>
-                {viewTask.isPhysicallyVerified && (
-                  <>
-                    <Grid item xs={6}>
-                      <Typography variant="caption" color="text.secondary">Verified At</Typography>
-                      <Typography variant="body2" fontWeight={500}>
-                        {viewTask.verifiedAt ? dayjs(viewTask.verifiedAt).format('DD MMM YYYY HH:mm') : '—'}
-                      </Typography>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <Typography variant="caption" color="text.secondary">Verified By (Auditor)</Typography>
-                      <Typography variant="body2" fontWeight={600} color="primary.main">{viewTask.verifiedBy || 'QC Officer'}</Typography>
-                    </Grid>
-                    <Grid item xs={12}>
-                      <Typography variant="caption" color="text.secondary">Auditor Notes</Typography>
-                      <Typography variant="body2" sx={{ fontStyle: 'italic', bgcolor: 'grey.50', p: 1.5, borderRadius: 1 }}>
-                        {viewTask.verificationNotes || 'No notes provided.'}
-                      </Typography>
-                    </Grid>
-                  </>
-                )}
-              </Grid>
-
-              {viewTask.isPhysicallyVerified && viewTask.verificationPhotoUrl && (
-                <Box>
-                  <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 0.5 }}>Site Verification Photo Proof</Typography>
-                  <Box sx={{ border: '1px solid', borderColor: 'divider', borderRadius: 2, overflow: 'hidden' }}>
-                    <img
-                      src={getImageUrl(viewTask.verificationPhotoUrl)}
-                      alt="Verification site photo proof"
-                      style={{ width: '100%', maxHeight: 280, objectFit: 'cover', cursor: 'pointer' }}
-                      onClick={() => {
-                        const url = getImageUrl(viewTask.verificationPhotoUrl);
-                        if (url.startsWith('data:')) {
-                          const w = window.open('');
-                          w.document.write(`<img src="${url}" style="max-width:100%"/>`);
-                        } else {
-                          window.open(url, '_blank');
-                        }
-                      }}
-                      onError={(e) => { e.target.style.display = 'none'; }}
-                    />
-                  </Box>
-                </Box>
-              )}
-            </Stack>
-          )}
-        </DialogContent>
-        <DialogActions sx={{ borderTop: '1px solid', borderColor: 'divider', px: 3, py: 1.5 }}>
-          <Button variant="contained" onClick={() => setViewTask(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  );
-};
-
 // ─── Expenses Tab ─────────────────────────────────────────────────────────────
-const ExpensesTab = ({ projectId, project }) => {
+const ExpensesTab = ({ projectId }) => {
   const [data, setData] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -2273,17 +1678,6 @@ const ExpensesTab = ({ projectId, project }) => {
 
   const set = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
 
-  // Build budget vs actual per category
-  const budgetByCategory = (project?.budgetCategories || []).reduce((acc, c) => {
-    acc[c.category] = c.approvedAmount || c.estimatedAmount || 0;
-    return acc;
-  }, {});
-
-  const spentByCategory = (data?.summary || []).reduce((acc, s) => {
-    acc[s._id] = s.total;
-    return acc;
-  }, {});
-
   if (loading) return <Skeleton height={300} />;
 
   return (
@@ -2300,42 +1694,6 @@ const ExpensesTab = ({ projectId, project }) => {
           </Stack>
         }
       />
-
-      {/* Budget vs Actual by category */}
-      {Object.keys(budgetByCategory).length > 0 && (
-        <Card variant="outlined" sx={{ mb: 3, p: 2 }}>
-          <Typography variant="subtitle2" fontWeight={600} gutterBottom>Budget vs Actual by Category</Typography>
-          <Grid container spacing={1}>
-            {BUDGET_CATEGORIES.filter(c => budgetByCategory[c] > 0 || spentByCategory[c] > 0).map(cat => {
-              const budget = budgetByCategory[cat] || 0;
-              const spent = spentByCategory[cat] || 0;
-              const utilPct = pct(spent, budget);
-              return (
-                <Grid item xs={12} sm={6} md={4} key={cat}>
-                  <Box>
-                    <Stack direction="row" justifyContent="space-between">
-                      <Typography variant="caption" fontWeight={500}>{cat}</Typography>
-                      <Typography variant="caption" color={utilPct > 100 ? 'error.main' : 'text.secondary'}>
-                        {utilPct}%
-                      </Typography>
-                    </Stack>
-                    <LinearProgress
-                      variant="determinate"
-                      value={Math.min(utilPct, 100)}
-                      color={utilPct > 100 ? 'error' : utilPct > 80 ? 'warning' : 'success'}
-                      sx={{ height: 6, borderRadius: 3, mb: 0.5 }}
-                    />
-                    <Stack direction="row" justifyContent="space-between">
-                      <Typography variant="caption" color="text.secondary">Budget: {fmt(budget)}</Typography>
-                      <Typography variant="caption">Spent: {fmt(spent)}</Typography>
-                    </Stack>
-                  </Box>
-                </Grid>
-              );
-            })}
-          </Grid>
-        </Card>
-      )}
 
       {/* Expenses table */}
       {(!data?.expenses?.length) ? (
@@ -2802,275 +2160,31 @@ const MainKpi = ({ label, value, hint, accent = '#0f766e' }) => (
 );
 
 // ─── Main portfolio overview (distinct from Sub execution view) ───────────────
-const MainProjectOverview = ({ project, onRefresh }) => {
+const MainProjectOverview = ({ project }) => {
   const navigate = useNavigate();
-  const alloc = project.budgetAllocation || {};
-  const [lumpInput, setLumpInput] = useState(String(project.lumpSumBudget || alloc.lumpSumBudget || ''));
-  const [rowAmounts, setRowAmounts] = useState({});
-  const [savingLump, setSavingLump] = useState(false);
-  const [savingAlloc, setSavingAlloc] = useState(false);
-  const [budgetActionLoading, setBudgetActionLoading] = useState(false);
-  const [msg, setMsg] = useState('');
-  const [err, setErr] = useState('');
-
-  useEffect(() => {
-    setLumpInput(String(project.lumpSumBudget || alloc.lumpSumBudget || ''));
-    const next = {};
-    (alloc.subProjects || []).forEach((s) => {
-      next[s._id] = String(s.allocatedBudget || '');
-    });
-    setRowAmounts(next);
-  }, [project._id, project.lumpSumBudget, project.budgetStatus, alloc.lumpSumBudget, alloc.totalAllocated, alloc.subProjects]);
-
-  const lump = Number(alloc.lumpSumBudget) || Number(project.lumpSumBudget) || 0;
-  const totalAllocated = Number(alloc.totalAllocated) || 0;
-  const remaining = Number(alloc.remaining) || Math.max(0, lump - totalAllocated);
-  const usedPct = lump > 0 ? Math.min(100, Math.round((totalAllocated / lump) * 100)) : 0;
+  const subs = project.budgetAllocation?.subProjects || [];
   const spent = Number(project.totalActualSpent) || 0;
-  const subs = alloc.subProjects || [];
-
-  const handleSaveLump = async () => {
-    setSavingLump(true);
-    setErr('');
-    setMsg('');
-    try {
-      await setLumpSumBudget(project._id, Number(lumpInput) || 0);
-      setMsg('Lump-sum budget saved');
-      onRefresh();
-    } catch (e) {
-      setErr(e.response?.data?.message || 'Failed to save lump-sum budget');
-    } finally {
-      setSavingLump(false);
-    }
-  };
-
-  const handleSaveAllocations = async () => {
-    setSavingAlloc(true);
-    setErr('');
-    setMsg('');
-    try {
-      const allocations = subs.map((s) => ({
-        subProjectId: s._id,
-        amount: Number(rowAmounts[s._id]) || 0
-      }));
-      await allocateBudgetToSubs(project._id, allocations);
-      setMsg('Budget allocated to sub projects');
-      onRefresh();
-    } catch (e) {
-      setErr(e.response?.data?.message || 'Failed to allocate budget');
-    } finally {
-      setSavingAlloc(false);
-    }
-  };
-
-  const handleBudgetAction = async (action) => {
-    setBudgetActionLoading(true);
-    setErr('');
-    setMsg('');
-    try {
-      await updateBudgetStatus(project._id, action);
-      setMsg(`Budget ${action}d`);
-      onRefresh();
-    } catch (e) {
-      setErr(e.response?.data?.message || `Failed to ${action} budget`);
-    } finally {
-      setBudgetActionLoading(false);
-    }
-  };
+  const activeSubs = subs.filter((s) => s.status === 'Active').length;
 
   return (
     <Box>
       <Grid container spacing={2} sx={{ mb: 2.5 }}>
         <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Lump Sum" value={fmt(lump)} hint={`Status: ${project.budgetStatus || 'Draft'}`} accent="#0f766e" />
+          <MainKpi label="Sub Projects" value={String(subs.length)} hint={`${activeSubs} active`} accent="#0f766e" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Allocated" value={fmt(totalAllocated)} hint={`${usedPct}% of envelope`} accent="#0369a1" />
+          <MainKpi label="Portfolio Progress" value={`${project.overallProgress || 0}%`} hint="Average of Sub Projects" accent="#0369a1" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <MainKpi
-            label="Remaining"
-            value={fmt(remaining)}
-            hint={remaining === 0 && lump > 0 ? 'Fully allocated' : 'Still available'}
-            accent={remaining === 0 && lump > 0 ? '#15803d' : '#b45309'}
-          />
+          <MainKpi label="Spent" value={fmt(spent)} hint="Recorded expenses" accent="#b45309" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Portfolio Progress" value={`${project.overallProgress || 0}%`} hint={`Spent ${fmt(spent)}`} accent="#334155" />
+          <MainKpi label="Status" value={project.status || '—'} hint={project.society || ' '} accent="#334155" />
         </Grid>
       </Grid>
 
       <Grid container spacing={2.5}>
-        <Grid item xs={12} lg={8}>
-          <Paper
-            elevation={0}
-            sx={{
-              p: { xs: 2, sm: 2.5 },
-              borderRadius: 2.5,
-              border: '1px solid',
-              borderColor: 'rgba(15, 118, 110, 0.18)',
-              background: 'linear-gradient(180deg, #f0fdfa 0%, #ffffff 42%)'
-            }}
-          >
-            <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5} sx={{ mb: 2 }}>
-              <Box>
-                <Stack direction="row" alignItems="center" gap={1}>
-                  <MoneyIcon sx={{ color: '#0f766e' }} />
-                  <Typography variant="h6" fontWeight={800} sx={{ color: '#134e4a' }}>
-                    Budget Envelope
-                  </Typography>
-                </Stack>
-                <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>
-                  Set one lump-sum pool for the Main project, then distribute to Subs.
-                </Typography>
-              </Box>
-              <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-                <Chip
-                  label={project.budgetStatus}
-                  size="small"
-                  color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'}
-                  sx={{ fontWeight: 700 }}
-                />
-                {project.budgetStatus === 'Draft' && (
-                  <Button size="small" variant="outlined" disabled={budgetActionLoading || lump <= 0} onClick={() => handleBudgetAction('submit')}>
-                    Submit
-                  </Button>
-                )}
-                {project.budgetStatus === 'Submitted' && (
-                  <Button size="small" variant="contained" color="success" disabled={budgetActionLoading} onClick={() => handleBudgetAction('approve')}>
-                    Approve
-                  </Button>
-                )}
-                {(project.budgetStatus === 'Submitted' || project.budgetStatus === 'Approved') && (
-                  <Button size="small" disabled={budgetActionLoading} onClick={() => handleBudgetAction('reset')}>
-                    Reset
-                  </Button>
-                )}
-              </Stack>
-            </Stack>
-
-            {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
-            {msg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsg('')}>{msg}</Alert>}
-
-            <Stack direction={{ xs: 'column', sm: 'row' }} gap={1.5} alignItems={{ sm: 'center' }} sx={{ mb: 2 }}>
-              <TextField
-                fullWidth
-                size="small"
-                label="Lump Sum Budget (PKR)"
-                type="number"
-                value={lumpInput}
-                onChange={(e) => setLumpInput(e.target.value)}
-                InputProps={{ startAdornment: <InputAdornment position="start">Rs</InputAdornment> }}
-                sx={{ maxWidth: { sm: 320 }, bgcolor: '#fff' }}
-              />
-              <Button variant="contained" onClick={handleSaveLump} disabled={savingLump} sx={{ bgcolor: '#0f766e', '&:hover': { bgcolor: '#0d9488' } }}>
-                {savingLump ? 'Saving…' : 'Save Envelope'}
-              </Button>
-            </Stack>
-
-            <Box sx={{ mb: 1 }}>
-              <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-                <Typography variant="caption" fontWeight={700} color="text.secondary">Allocation coverage</Typography>
-                <Typography variant="caption" fontWeight={700}>{usedPct}%</Typography>
-              </Stack>
-              <LinearProgress
-                variant="determinate"
-                value={usedPct}
-                sx={{
-                  height: 10,
-                  borderRadius: 999,
-                  bgcolor: 'rgba(15, 118, 110, 0.12)',
-                  '& .MuiLinearProgress-bar': { bgcolor: '#0f766e', borderRadius: 999 }
-                }}
-              />
-            </Box>
-            <Typography variant="caption" color="text.secondary">
-              {fmt(totalAllocated)} allocated · {fmt(remaining)} remaining
-            </Typography>
-          </Paper>
-
-          <Paper
-            elevation={0}
-            sx={{
-              mt: 2.5,
-              p: { xs: 2, sm: 2.5 },
-              borderRadius: 2.5,
-              border: '1px solid',
-              borderColor: 'divider',
-              bgcolor: '#fff'
-            }}
-          >
-            <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }} flexWrap="wrap" gap={1}>
-              <Box>
-                <Typography variant="h6" fontWeight={800}>Allocate to Sub Projects</Typography>
-                <Typography variant="body2" color="text.secondary">
-                  Assign each Sub its share of the Main envelope.
-                </Typography>
-              </Box>
-              <Button
-                variant="contained"
-                onClick={handleSaveAllocations}
-                disabled={savingAlloc || lump <= 0 || !subs.length}
-                sx={{ bgcolor: '#0f766e', '&:hover': { bgcolor: '#0d9488' } }}
-              >
-                {savingAlloc ? 'Saving…' : 'Save Allocations'}
-              </Button>
-            </Stack>
-
-            {!subs.length ? (
-              <Alert severity="info">Create Sub Projects under this Main first, then allocate budget here.</Alert>
-            ) : (
-              <TableContainer sx={{ borderRadius: 2, border: '1px solid', borderColor: 'divider' }}>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                      <TableCell sx={{ fontWeight: 700 }}>Sub Project</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Sector</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Type</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700 }}>Allocated (PKR)</TableCell>
-                      <TableCell sx={{ fontWeight: 700 }}>Budget</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {subs.map((s) => (
-                      <TableRow key={s._id} hover>
-                        <TableCell>
-                          <Typography
-                            variant="body2"
-                            fontWeight={700}
-                            sx={{ cursor: 'pointer', color: '#0f766e', '&:hover': { textDecoration: 'underline' } }}
-                            onClick={() => navigate(`/general/project-management/${s._id}`)}
-                          >
-                            {s.name}
-                          </Typography>
-                          <Typography variant="caption" color="text.secondary">{s.projectNumber}</Typography>
-                        </TableCell>
-                        <TableCell>{s.sector || '—'}</TableCell>
-                        <TableCell>
-                          <Typography variant="caption">{s.projectType}</Typography>
-                        </TableCell>
-                        <TableCell align="right" sx={{ minWidth: 150 }}>
-                          <TextField
-                            size="small"
-                            type="number"
-                            value={rowAmounts[s._id] ?? ''}
-                            onChange={(e) => setRowAmounts((prev) => ({ ...prev, [s._id]: e.target.value }))}
-                            inputProps={{ min: 0, style: { textAlign: 'right' } }}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <Chip label={s.budgetStatus || 'Draft'} size="small" variant="outlined" />
-                        </TableCell>
-                      </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            )}
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} lg={4}>
+        <Grid item xs={12} md={5} lg={4}>
           <Paper
             elevation={0}
             sx={{
@@ -3101,7 +2215,9 @@ const MainProjectOverview = ({ project, onRefresh }) => {
               ))}
             </Stack>
           </Paper>
+        </Grid>
 
+        <Grid item xs={12} md={7} lg={8}>
           <Paper elevation={0} sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
             <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
               <TreeIcon sx={{ color: '#0f766e' }} fontSize="small" />
@@ -3132,9 +2248,7 @@ const MainProjectOverview = ({ project, onRefresh }) => {
                           {[s.sector, s.projectType].filter(Boolean).join(' · ') || s.projectNumber}
                         </Typography>
                       </Box>
-                      <Typography variant="caption" fontWeight={800} sx={{ color: '#0f766e' }}>
-                        {fmt(s.allocatedBudget)}
-                      </Typography>
+                      <Chip label={s.status || 'Draft'} size="small" variant="outlined" />
                     </Stack>
                   </Box>
                 ))}
@@ -3147,340 +2261,6 @@ const MainProjectOverview = ({ project, onRefresh }) => {
   );
 };
 
-// ─── Sub project budget (allocated ceiling + segregated categories) ───────────
-const SubBudgetPanel = ({ project, onRefresh }) => {
-  const ceiling = Number(project.allocatedBudget) || 0;
-  const locked = project.budgetStatus === 'Approved';
-  const [cats, setCats] = useState([]);
-  const [saving, setSaving] = useState(false);
-  const [budgetActionLoading, setBudgetActionLoading] = useState(false);
-  const [err, setErr] = useState('');
-  const [msg, setMsg] = useState('');
-
-  useEffect(() => {
-    const existing = project.budgetCategories || [];
-    const byName = new Map(existing.map((c) => [c.category, c]));
-    setCats(BUDGET_CATEGORIES.map((name) => ({
-      category: name,
-      estimatedAmount: byName.get(name)?.estimatedAmount || 0,
-      approvedAmount: byName.get(name)?.approvedAmount || 0
-    })));
-  }, [project._id, project.budgetCategories, project.allocatedBudget]);
-
-  const amountByName = (name) => Number(cats.find((c) => c.category === name)?.estimatedAmount) || 0;
-  const setAmount = (name, value) => {
-    setCats((prev) => prev.map((c) => (
-      c.category === name ? { ...c, estimatedAmount: Math.max(0, Number(value) || 0) } : c
-    )));
-  };
-
-  const catTotal = cats.reduce((s, c) => s + (Number(c.estimatedAmount) || 0), 0);
-  const remaining = Math.max(0, ceiling - catTotal);
-  const over = catTotal > ceiling && ceiling > 0;
-  const coverage = ceiling > 0 ? Math.min(100, Math.round((catTotal / ceiling) * 100)) : 0;
-  const parentName = project.parentProject?.name || 'Main Project';
-
-  const handleSaveCategories = async () => {
-    if (over) {
-      setErr(`Category total (${fmt(catTotal)}) exceeds allocated budget (${fmt(ceiling)})`);
-      return;
-    }
-    setSaving(true);
-    setErr('');
-    setMsg('');
-    try {
-      await updateProject(project._id, { budgetCategories: cats });
-      setMsg('Category budget saved');
-      onRefresh();
-    } catch (e) {
-      setErr(e.response?.data?.message || 'Failed to save categories');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const handleBudgetAction = async (action) => {
-    setBudgetActionLoading(true);
-    setErr('');
-    setMsg('');
-    try {
-      await updateBudgetStatus(project._id, action);
-      setMsg(`Budget ${action}d`);
-      onRefresh();
-    } catch (e) {
-      setErr(e.response?.data?.message || `Failed to ${action} budget`);
-    } finally {
-      setBudgetActionLoading(false);
-    }
-  };
-
-  return (
-    <Box sx={{ mt: 2 }}>
-      {/* Ceiling banner */}
-      <Paper
-        elevation={0}
-        sx={{
-          p: { xs: 2, sm: 2.5 },
-          mb: 2,
-          borderRadius: 2.5,
-          border: '1px solid',
-          borderColor: over ? 'error.light' : 'rgba(29, 78, 216, 0.2)',
-          background: over
-            ? 'linear-gradient(135deg, #fef2f2 0%, #fff 70%)'
-            : 'linear-gradient(135deg, #eff6ff 0%, #ffffff 55%)'
-        }}
-      >
-        <Stack direction="row" justifyContent="space-between" alignItems="flex-start" flexWrap="wrap" gap={1.5} sx={{ mb: 2 }}>
-          <Box>
-            <Typography variant="overline" sx={{ color: '#64748b', letterSpacing: 1.1, fontWeight: 700 }}>
-              Budget Allocation · Sub Project
-            </Typography>
-            <Typography variant="h6" fontWeight={800} sx={{ color: '#0f172a' }}>
-              Distribute allocated funds by category
-            </Typography>
-            <Typography variant="body2" color="text.secondary">
-              Ceiling from <strong>{parentName}</strong> — segregate into groups, then submit for approval.
-            </Typography>
-          </Box>
-          <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
-            <Chip
-              label={project.budgetStatus}
-              size="small"
-              color={project.budgetStatus === 'Approved' ? 'success' : project.budgetStatus === 'Submitted' ? 'warning' : 'default'}
-              sx={{ fontWeight: 700 }}
-            />
-            {project.budgetStatus === 'Draft' && (
-              <Button size="small" variant="outlined" disabled={budgetActionLoading || ceiling <= 0} onClick={() => handleBudgetAction('submit')}>
-                Submit Budget
-              </Button>
-            )}
-            {project.budgetStatus === 'Submitted' && (
-              <Button size="small" variant="contained" color="success" disabled={budgetActionLoading} onClick={() => handleBudgetAction('approve')}>
-                Approve
-              </Button>
-            )}
-            {(project.budgetStatus === 'Submitted' || project.budgetStatus === 'Approved') && (
-              <Button size="small" disabled={budgetActionLoading} onClick={() => handleBudgetAction('reset')}>
-                Reset
-              </Button>
-            )}
-          </Stack>
-        </Stack>
-
-        {ceiling <= 0 && (
-          <Alert severity="warning" sx={{ mb: 2 }}>
-            No budget allocated yet. Open the Main Project and allocate lump-sum budget to this Sub first.
-          </Alert>
-        )}
-        {err && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setErr('')}>{err}</Alert>}
-        {msg && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setMsg('')}>{msg}</Alert>}
-        {over && (
-          <Alert severity="error" sx={{ mb: 2 }}>
-            Category total exceeds the Main allocation by {fmt(catTotal - ceiling)}. Reduce one or more categories.
-          </Alert>
-        )}
-
-        <Grid container spacing={1.5} sx={{ mb: 1.5 }}>
-          {[
-            { label: 'Allocated from Main', value: fmt(ceiling), color: '#1d4ed8' },
-            { label: 'Distributed', value: fmt(catTotal), color: over ? '#b91c1c' : '#0f172a' },
-            { label: 'Unassigned', value: fmt(remaining), color: remaining === 0 && ceiling > 0 ? '#15803d' : '#b45309' },
-            { label: 'Coverage', value: `${coverage}%`, color: '#334155' }
-          ].map((kpi) => (
-            <Grid item xs={6} md={3} key={kpi.label}>
-              <Box
-                sx={{
-                  p: 1.5,
-                  borderRadius: 2,
-                  bgcolor: '#fff',
-                  border: '1px solid',
-                  borderColor: 'divider',
-                  borderLeft: `3px solid ${kpi.color}`
-                }}
-              >
-                <Typography variant="caption" color="text.secondary" fontWeight={700} sx={{ textTransform: 'uppercase', letterSpacing: 0.4 }}>
-                  {kpi.label}
-                </Typography>
-                <Typography variant="subtitle1" fontWeight={800} sx={{ color: kpi.color, mt: 0.25 }}>
-                  {kpi.value}
-                </Typography>
-              </Box>
-            </Grid>
-          ))}
-        </Grid>
-
-        <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-          <Typography variant="caption" fontWeight={700} color="text.secondary">Distribution vs allocation</Typography>
-          <Typography variant="caption" fontWeight={700}>{coverage}%</Typography>
-        </Stack>
-        <LinearProgress
-          variant="determinate"
-          value={Math.min(coverage, 100)}
-          color={over ? 'error' : 'primary'}
-          sx={{ height: 10, borderRadius: 999, bgcolor: 'rgba(29, 78, 216, 0.12)' }}
-        />
-      </Paper>
-
-      {/* Grouped category tables */}
-      <Stack spacing={2}>
-        {BUDGET_CATEGORY_GROUPS.map((group) => {
-          const groupTotal = group.categories.reduce((s, name) => s + amountByName(name), 0);
-          const groupPct = ceiling > 0 ? Math.round((groupTotal / ceiling) * 100) : 0;
-          return (
-            <Paper
-              key={group.id}
-              elevation={0}
-              sx={{
-                borderRadius: 2.5,
-                border: '1px solid',
-                borderColor: 'divider',
-                overflow: 'hidden',
-                bgcolor: '#fff'
-              }}
-            >
-              <Box
-                sx={{
-                  px: 2,
-                  py: 1.5,
-                  display: 'flex',
-                  justifyContent: 'space-between',
-                  alignItems: 'center',
-                  gap: 1,
-                  flexWrap: 'wrap',
-                  bgcolor: `${group.accent}0d`,
-                  borderBottom: '1px solid',
-                  borderColor: 'divider',
-                  borderLeft: `4px solid ${group.accent}`
-                }}
-              >
-                <Box>
-                  <Typography variant="subtitle1" fontWeight={800} sx={{ color: group.accent }}>
-                    {group.title}
-                  </Typography>
-                  <Typography variant="caption" color="text.secondary">{group.subtitle}</Typography>
-                </Box>
-                <Box sx={{ textAlign: 'right' }}>
-                  <Typography variant="subtitle2" fontWeight={800}>{fmt(groupTotal)}</Typography>
-                  <Typography variant="caption" color="text.secondary">{groupPct}% of allocation</Typography>
-                </Box>
-              </Box>
-
-              <TableContainer>
-                <Table size="small">
-                  <TableHead>
-                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                      <TableCell sx={{ fontWeight: 700, width: '36%' }}>Category</TableCell>
-                      <TableCell sx={{ fontWeight: 700, width: '28%' }} align="right">Amount (PKR)</TableCell>
-                      <TableCell sx={{ fontWeight: 700, width: '12%' }} align="right">Share</TableCell>
-                      <TableCell sx={{ fontWeight: 700, width: '24%' }}>Of allocation</TableCell>
-                    </TableRow>
-                  </TableHead>
-                  <TableBody>
-                    {group.categories.map((name) => {
-                      const amount = amountByName(name);
-                      const share = ceiling > 0 ? Math.min(100, (amount / ceiling) * 100) : 0;
-                      return (
-                        <TableRow key={name} hover>
-                          <TableCell>
-                            <Typography variant="body2" fontWeight={600}>{name}</Typography>
-                          </TableCell>
-                          <TableCell align="right">
-                            <TextField
-                              size="small"
-                              type="number"
-                              value={amount || ''}
-                              disabled={locked || ceiling <= 0}
-                              onChange={(e) => setAmount(name, e.target.value)}
-                              inputProps={{ min: 0, style: { textAlign: 'right' } }}
-                              sx={{ width: { xs: 120, sm: 160 } }}
-                              InputProps={{
-                                startAdornment: <InputAdornment position="start">Rs</InputAdornment>
-                              }}
-                            />
-                          </TableCell>
-                          <TableCell align="right">
-                            <Typography variant="caption" fontWeight={700}>
-                              {share ? `${share.toFixed(1)}%` : '—'}
-                            </Typography>
-                          </TableCell>
-                          <TableCell>
-                            <LinearProgress
-                              variant="determinate"
-                              value={share}
-                              sx={{
-                                height: 6,
-                                borderRadius: 999,
-                                bgcolor: 'rgba(15, 23, 42, 0.06)',
-                                '& .MuiLinearProgress-bar': { bgcolor: group.accent, borderRadius: 999 }
-                              }}
-                            />
-                          </TableCell>
-                        </TableRow>
-                      );
-                    })}
-                    <TableRow sx={{ bgcolor: '#f8fafc' }}>
-                      <TableCell>
-                        <Typography variant="body2" fontWeight={800}>Group total</Typography>
-                      </TableCell>
-                      <TableCell align="right">
-                        <Typography variant="body2" fontWeight={800}>{fmt(groupTotal)}</Typography>
-                      </TableCell>
-                      <TableCell align="right">
-                        <Typography variant="caption" fontWeight={700}>{groupPct}%</Typography>
-                      </TableCell>
-                      <TableCell />
-                    </TableRow>
-                  </TableBody>
-                </Table>
-              </TableContainer>
-            </Paper>
-          );
-        })}
-      </Stack>
-
-      {!locked && (
-        <Paper
-          elevation={0}
-          sx={{
-            mt: 2,
-            p: 2,
-            borderRadius: 2.5,
-            border: '1px solid',
-            borderColor: 'divider',
-            bgcolor: '#fff',
-            position: 'sticky',
-            bottom: 8,
-            zIndex: 2
-          }}
-        >
-          <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1.5}>
-            <Box>
-              <Typography variant="body2" fontWeight={700}>
-                Total distributed: {fmt(catTotal)}
-                {ceiling > 0 && (
-                  <Typography component="span" variant="body2" color="text.secondary"> · Remaining {fmt(remaining)}</Typography>
-                )}
-              </Typography>
-              <Typography variant="caption" color={over ? 'error.main' : 'text.secondary'}>
-                {over ? 'Fix over-allocation before saving' : 'Save categories, then Submit → Approve'}
-              </Typography>
-            </Box>
-            <Button
-              variant="contained"
-              onClick={handleSaveCategories}
-              disabled={saving || ceiling <= 0 || over}
-              sx={{ minWidth: 160 }}
-            >
-              {saving ? 'Saving…' : 'Save Category Budget'}
-            </Button>
-          </Stack>
-        </Paper>
-      )}
-    </Box>
-  );
-};
-
-// ─── Overview Tab ─────────────────────────────────────────────────────────────
 const OverviewTab = ({ project, onRefresh }) => (
   !project.parentProject
     ? <MainProjectOverview project={project} onRefresh={onRefresh} />
@@ -3557,8 +2337,6 @@ const SubProjectOverview = ({ project, onRefresh }) => {
 
   const setMs = (field) => (e) => setMsForm(prev => ({ ...prev, [field]: e.target.value }));
 
-  const displayBudget = project.allocatedBudget || project.totalApprovedBudget || project.totalEstimatedCost;
-  const budgetPct = pct(project.totalActualSpent, displayBudget);
   const daysLeft = project.expectedEndDate
     ? dayjs(project.expectedEndDate).diff(dayjs(), 'day')
     : null;
@@ -3568,7 +2346,7 @@ const SubProjectOverview = ({ project, onRefresh }) => {
       {/* Key Metrics */}
       <Grid item xs={12} md={8}>
         <Grid container spacing={2}>
-          <Grid item xs={6} sm={3}>
+          <Grid item xs={12} sm={4}>
             <Card variant="outlined">
               <CardContent sx={{ py: 1.5 }}>
                 <Typography variant="caption" color="text.secondary">Progress</Typography>
@@ -3579,26 +2357,17 @@ const SubProjectOverview = ({ project, onRefresh }) => {
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={6} sm={3}>
-            <Card variant="outlined">
-              <CardContent sx={{ py: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">Allocated Budget</Typography>
-                <Typography variant="h6" fontWeight={700}>{fmt(displayBudget)}</Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={6} sm={3}>
+          <Grid item xs={12} sm={4}>
             <Card variant="outlined">
               <CardContent sx={{ py: 1.5 }}>
                 <Typography variant="caption" color="text.secondary">Spent</Typography>
-                <Typography variant="h6" fontWeight={700} color={budgetPct > 90 ? 'error.main' : 'text.primary'}>
+                <Typography variant="h6" fontWeight={700}>
                   {fmt(project.totalActualSpent)}
                 </Typography>
-                <Typography variant="caption" color="text.secondary">{budgetPct}% of budget</Typography>
               </CardContent>
             </Card>
           </Grid>
-          <Grid item xs={6} sm={3}>
+          <Grid item xs={12} sm={4}>
             <Card variant="outlined">
               <CardContent sx={{ py: 1.5 }}>
                 <Typography variant="caption" color="text.secondary">Days Remaining</Typography>
@@ -3610,7 +2379,6 @@ const SubProjectOverview = ({ project, onRefresh }) => {
           </Grid>
         </Grid>
 
-        <SubBudgetPanel project={project} onRefresh={onRefresh} />
       </Grid>
 
       {/* Project Details */}
@@ -3625,6 +2393,8 @@ const SubProjectOverview = ({ project, onRefresh }) => {
               ['Contact', project.clientContact],
               ['Society', project.society],
               ['Sector', project.sector],
+              ['Street', project.street],
+              ['Side', project.side],
               ['Plot #', project.plotNumber],
               ['Address', project.address],
               ['Manager', project.projectManager ? `${project.projectManager.firstName} ${project.projectManager.lastName}` : null],
@@ -3894,6 +2664,8 @@ const SubProjectOverview = ({ project, onRefresh }) => {
 const ProjectDetail = () => {
   const { id } = useParams();
   const navigate = useNavigate();
+  const { user } = useAuth();
+  const [permanentDeleteOpen, setPermanentDeleteOpen] = useState(false);
   const [searchParams, setSearchParams] = useSearchParams();
 
   const [project, setProject] = useState(null);
@@ -3901,15 +2673,10 @@ const ProjectDetail = () => {
   const [error, setError] = useState('');
   const [tab, setTab] = useState(0);
 
-  useEffect(() => {
-    if (id) {
-      localStorage.setItem('pmLastProjectId', id);
-    }
-  }, [id]);
-
   const loadProject = useCallback(async () => {
     try {
       setLoading(true);
+      setError('');
       const res = await getProjectById(id);
       const data = res.data?.data || null;
       setProject(data);
@@ -3921,7 +2688,16 @@ const ProjectDetail = () => {
         }
       }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to load project');
+      setProject(null);
+      if (err.response?.status === 404 || err.response?.status === 400) {
+        // Stale shortcut (project deleted or link mistyped): forget it so sidebar links stop landing here
+        ['pmLastProjectId', 'pmLastSubProjectId'].forEach((key) => {
+          if (localStorage.getItem(key) === String(id)) localStorage.removeItem(key);
+        });
+        setError('not-found');
+      } else {
+        setError(err.response?.data?.message || 'Could not load this project. Please try again.');
+      }
     } finally { setLoading(false); }
   }, [id]);
 
@@ -3965,20 +2741,45 @@ const ProjectDetail = () => {
   }
 
   if (error || !project) {
+    const notFound = !project && (!error || error === 'not-found');
+    const requestedTab = searchParams.get('tab');
+    const canPickAnother = requestedTab && requestedTab !== 'overview';
     return (
-      <Box sx={{ p: 3 }}>
-        <Alert severity="error">{error || 'Project not found'}</Alert>
-        <Button startIcon={<BackIcon />} onClick={() => navigate('/general/project-management')} sx={{ mt: 2 }}>
-          Back to Projects
-        </Button>
+      <Box sx={{ p: { xs: 2, sm: 3 } }}>
+        <Paper variant="outlined" sx={{ p: { xs: 2, sm: 3 }, maxWidth: 640, borderRadius: 2 }}>
+          <Typography variant="h6" fontWeight={700} gutterBottom>
+            {notFound ? 'This project is no longer available' : 'Something went wrong'}
+          </Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2.5 }}>
+            {notFound
+              ? 'It may have been deleted, or the link is out of date. Pick another project to continue.'
+              : error}
+          </Typography>
+          <Stack direction={{ xs: 'column', sm: 'row' }} gap={1}>
+            {canPickAnother && (
+              <Button variant="contained" onClick={() => navigate(`/general/project-management/workspace/${requestedTab}`, { replace: true })}>
+                Choose another project
+              </Button>
+            )}
+            {!notFound && (
+              <Button variant={canPickAnother ? 'outlined' : 'contained'} startIcon={<RefreshIcon />} onClick={loadProject}>
+                Try again
+              </Button>
+            )}
+            <Button
+              variant={canPickAnother || !notFound ? 'outlined' : 'contained'}
+              startIcon={<BackIcon />}
+              onClick={() => navigate('/general/project-management/projects')}
+            >
+              All Projects
+            </Button>
+          </Stack>
+        </Paper>
       </Box>
     );
   }
 
-  const alloc = project.budgetAllocation || {};
-  const mainLump = Number(project.lumpSumBudget) || Number(alloc.lumpSumBudget) || 0;
-  const mainAllocated = Number(alloc.totalAllocated) || 0;
-  const mainRemaining = Number(alloc.remaining) || Math.max(0, mainLump - mainAllocated);
+  const mainSubCount = (project.budgetAllocation?.subProjects || []).length;
 
   return (
     <Box
@@ -4073,6 +2874,8 @@ const ProjectDetail = () => {
                   {!isMainProject && project.projectType ? ` · ${project.projectType}` : ''}
                   {project.society && ` · ${project.society}`}
                   {project.sector && `, ${project.sector}`}
+                  {!isMainProject && project.street && ` · ${project.street}`}
+                  {!isMainProject && project.side && ` (${project.side} side)`}
                 </Typography>
               </Box>
             </Stack>
@@ -4087,16 +2890,27 @@ const ProjectDetail = () => {
                 <RefreshIcon />
               </IconButton>
             </Tooltip>
+            {user?.role === 'developer' && (
+              <Button
+                size="small"
+                variant="contained"
+                color="error"
+                startIcon={<DeleteForeverIcon />}
+                onClick={() => setPermanentDeleteOpen(true)}
+              >
+                Delete (Developer)
+              </Button>
+            )}
           </Stack>
         </Stack>
 
         {isMainProject && (
           <Grid container spacing={1.5} sx={{ mt: 2, position: 'relative' }}>
             {[
-              { label: 'Lump Sum', value: fmt(mainLump) },
-              { label: 'Allocated', value: fmt(mainAllocated) },
-              { label: 'Remaining', value: fmt(mainRemaining) },
-              { label: 'Progress', value: `${project.overallProgress || 0}%` }
+              { label: 'Sub Projects', value: String(mainSubCount) },
+              { label: 'Progress', value: `${project.overallProgress || 0}%` },
+              { label: 'Spent', value: fmt(project.totalActualSpent || 0) },
+              { label: 'Status', value: project.status || '—' }
             ].map((item) => (
               <Grid item xs={6} md={3} key={item.label}>
                 <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}>
@@ -4127,15 +2941,7 @@ const ProjectDetail = () => {
           </Card>
 
           <Grid container spacing={1.5} sx={{ mb: 2 }}>
-            <Grid item xs={12} sm={6} md={3}>
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-                <Typography variant="caption" color="text.secondary">Allocated Budget</Typography>
-                <Typography variant="body2" fontWeight={700}>
-                  {fmt(project.allocatedBudget || project.totalApprovedBudget || project.totalEstimatedCost)}
-                </Typography>
-              </Paper>
-            </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={4}>
               <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
                 <Typography variant="caption" color="text.secondary">Spent</Typography>
                 <Typography variant="body2" fontWeight={700}>
@@ -4143,7 +2949,7 @@ const ProjectDetail = () => {
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={4}>
               <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
                 <Typography variant="caption" color="text.secondary">Timeline</Typography>
                 <Typography variant="body2" fontWeight={700}>
@@ -4151,7 +2957,7 @@ const ProjectDetail = () => {
                 </Typography>
               </Paper>
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={4}>
               <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
                 <Typography variant="caption" color="text.secondary">Expected End</Typography>
                 <Typography variant="body2" fontWeight={700}>
@@ -4221,14 +3027,24 @@ const ProjectDetail = () => {
           {activeTab?.id === 'overview' && <OverviewTab project={project} onRefresh={loadProject} />}
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} />}
-          {activeTab?.id === 'tasks' && <TasksTab projectId={id} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} />}
           {activeTab?.id === 'expenses' && <ExpensesTab projectId={id} project={project} />}
           {activeTab?.id === 'dpr' && <DPRTab projectId={id} />}
-          {activeTab?.id === 'gantt' && <GanttChart project={project} />}
           {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} />}
         </Box>
       </Paper>
+
+      <PermanentDeleteProjectDialog
+        project={permanentDeleteOpen ? project : null}
+        onClose={() => setPermanentDeleteOpen(false)}
+        onDeleted={() => {
+          setPermanentDeleteOpen(false);
+          ['pmLastProjectId', 'pmLastSubProjectId'].forEach((key) => {
+            if (localStorage.getItem(key) === String(id)) localStorage.removeItem(key);
+          });
+          navigate('/general/project-management/projects', { replace: true });
+        }}
+      />
     </Box>
   );
 };

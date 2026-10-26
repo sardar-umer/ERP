@@ -129,6 +129,19 @@ async function sumPostedVendorAdvancesForPo(poId, sumKind = 'strict') {
   return sum;
 }
 
+/**
+ * Everything already committed against a PO: every linked advance except rejected ones, whatever stage
+ * its voucher is in. Use this to cap new payments so a PO can be paid in parts but never overpaid.
+ */
+const vendorAdvanceCommittedToPo = (a) => a?.voucherWorkflowStatus !== 'rejected';
+
+async function sumCommittedVendorAdvancesForPo(poId) {
+  const rows = await fetchVendorAdvancesLinkedToPurchaseOrder(poId);
+  return rows
+    .filter(vendorAdvanceCommittedToPo)
+    .reduce((sum, a) => sum + Math.round((Number(a.amount) || 0) * 100) / 100, 0);
+}
+
 /** True when PO uses full-advance terms and counted vendor advances cover PO total (finance: signed voucher). */
 async function isFullAdvancePaidForPo(poDoc) {
   if (!poDoc?._id || !isFullAdvancePaymentTerm(poDoc.paymentTerms)) return false;
@@ -217,6 +230,8 @@ module.exports = {
   buildJournalEntrySignedMapForVendorAdvances,
   vendorAdvanceAmountCountsForPo,
   vendorAdvanceAmountCountsForProcurement,
+  vendorAdvanceCommittedToPo,
+  sumCommittedVendorAdvancesForPo,
   vendorAdvancesLinkedToPurchaseOrderFilter,
   sumPostedVendorAdvancesForPo,
   isFullAdvancePaidForPo,

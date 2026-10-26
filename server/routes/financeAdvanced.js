@@ -276,8 +276,8 @@ const attachBillPaymentDetails = async (entries) => {
 };
 const {
   isFullAdvancePaymentTerm,
-  buildJournalEntrySignedMapForVendorAdvances,
-  vendorAdvanceAmountCountsForPo,
+  vendorAdvanceCommittedToPo,
+  sumCommittedVendorAdvancesForPo,
   sumPostedVendorAdvancesForPo,
   vendorAdvancesLinkedToPurchaseOrderFilter
 } = require('../utils/fullAdvancePoGate');
@@ -289,6 +289,20 @@ const router = express.Router();
 // Lock for auto-seeding to prevent duplicate key errors during concurrent requests
 const activeAccountSeedings = new Map();
 const { ACCOUNT_TYPES_GROUPED, ACCOUNT_TYPE_TO_SECTION, DETAIL_TYPES_BY_ACCOUNT_TYPE } = require('../config/accountDetailTypes');
+
+/**
+ * Set a vendor advance's amount (e.g. to match its edited voucher) and keep the rest consistent:
+ * a single category line follows the amount, and the open / partially applied / applied status is recomputed.
+ */
+function syncVendorAdvanceAmount(advance, newAmount) {
+  const amount = Math.round((Number(newAmount) || 0) * 100) / 100;
+  advance.amount = amount;
+  const lines = (advance.categoryLines || []).filter((l) => Number(l.amount) > 0);
+  if (lines.length === 1) lines[0].amount = amount;
+  const applied = Number(advance.appliedAmount) || 0;
+  advance.status = applied <= 0.009 ? 'open' : applied + 0.009 >= amount ? 'applied' : 'partially_applied';
+  return advance;
+}
 
 async function tryAutoApprovePoAfterVendorAdvance(advance, userId) {
   if (!advance.referenceId) return;
@@ -1582,6 +1596,24 @@ router.put('/journal-entries/:id',
       entry.companyId = company._id;
     }
 
+    // A vendor advance voucher's total is the advance amount: editing the voucher must update the advance,
+    // otherwise Vendor Advance keeps showing the old figure (e.g. 1,560,000 vs a corrected 780,000 voucher)
+    const linkedVendorAdvanceForEdit = Array.isArray(req.body.lines)
+      ? await VendorAdvance.findOne({ $or: [{ journalEntryId: entry._id }, { payingJournalEntryId: entry._id }] })
+      : null;
+    const editedVoucherTotal = Array.isArray(req.body.lines)
+      ? Math.round(req.body.lines.reduce((sum, l) => sum + (Number(l.debit) || 0), 0) * 100) / 100
+      : null;
+    const vendorAdvanceAmountChanges = Boolean(
+      linkedVendorAdvanceForEdit && Math.abs((Number(linkedVendorAdvanceForEdit.amount) || 0) - editedVoucherTotal) > 0.009
+    );
+    if (vendorAdvanceAmountChanges && editedVoucherTotal + 0.009 < (Number(linkedVendorAdvanceForEdit.appliedAmount) || 0)) {
+      return res.status(400).json({
+        success: false,
+        message: `This voucher belongs to vendor advance ${linkedVendorAdvanceForEdit.reference || ''}, which has already been applied to bills for PKR ${Number(linkedVendorAdvanceForEdit.appliedAmount).toLocaleString('en-PK')}. The voucher total cannot go below that.`
+      });
+    }
+
     const wasPosted = entry.status === 'posted';
     const oldLines = entry.lines ? entry.lines.map((l) => ({
       account: l.account?._id || l.account,
@@ -1641,9 +1673,21 @@ router.put('/journal-entries/:id',
       await entry.save();
     }
 
+    let vendorAdvanceNote = '';
+    if (vendorAdvanceAmountChanges) {
+      const adv = linkedVendorAdvanceForEdit;
+      const previous = Number(adv.amount) || 0;
+      syncVendorAdvanceAmount(adv, editedVoucherTotal);
+      await adv.save();
+      vendorAdvanceNote = ` Vendor advance ${adv.reference || ''} updated from PKR ${previous.toLocaleString('en-PK')} to PKR ${editedVoucherTotal.toLocaleString('en-PK')}.`;
+      if (adv.payingJournalEntryId && adv.journalEntryId) {
+        vendorAdvanceNote += ' This is an intercompany advance: also edit its other company voucher to the same amount.';
+      }
+    }
+
     res.json({
       success: true,
-      message: 'Journal entry updated successfully',
+      message: `Journal entry updated successfully.${vendorAdvanceNote}`,
       data: entry
     });
   })
@@ -3080,6 +3124,14 @@ router.get('/accounts-payable/vendor-advances',
       cos.forEach((c) => { companyById[String(c._id)] = c; });
     }
 
+    const costCenterIds = [...new Set(rows.map((r) => r.costCenter).filter(Boolean).map((id) => String(id)))];
+    const costCenterById = {};
+    if (costCenterIds.length > 0) {
+      const FinanceCostCenter = require('../models/finance/CostCenter');
+      const ccRows = await FinanceCostCenter.find({ _id: { $in: costCenterIds } }).select('name code').lean();
+      ccRows.forEach((c) => { costCenterById[String(c._id)] = c; });
+    }
+
     const bankIds = [...new Set(rows.map((r) => r.bankAccountId).filter(Boolean).map((id) => String(id)))];
     const bankById = {};
     if (bankIds.length > 0) {
@@ -3123,6 +3175,9 @@ router.get('/accounts-payable/vendor-advances',
         reference: a.reference,
         chequeNumber: a.chequeNumber || null,
         paymentDate: a.paymentDate,
+        costCenter: a.costCenter && costCenterById[String(a.costCenter)]
+          ? { _id: a.costCenter, ...costCenterById[String(a.costCenter)] }
+          : null,
         status: a.status,
         referenceType: a.referenceType,
         referenceId: a.referenceId,
@@ -3195,17 +3250,17 @@ router.get('/accounts-payable/vendor-advance-po-queue',
         .lean()
       : [];
 
-    const jeSignedByJournalId = await buildJournalEntrySignedMapForVendorAdvances(advances);
-
     const pendingVoucherByPo = new Set(
       advances
         .filter((a) => a.voucherWorkflowStatus === 'pending_authority' && a.journalEntryId)
         .map((a) => String(a.referenceId))
     );
 
+    // Remaining = PO total minus every advance already recorded (pending, approved or signed), so a
+    // partly paid PO stays in the queue with exactly its balance and can never be paid twice
     const sumByPo = {};
     for (const a of advances) {
-      if (!vendorAdvanceAmountCountsForPo(a, jeSignedByJournalId)) continue;
+      if (!vendorAdvanceCommittedToPo(a)) continue;
       const id = String(a.referenceId);
       sumByPo[id] = (sumByPo[id] || 0) + Math.round((Number(a.amount) || 0) * 100) / 100;
     }
@@ -3298,12 +3353,18 @@ router.get('/vendor-advances/po/:purchaseOrderId/pending-voucher',
     })
       .select('_id reference journalEntryId')
       .lean();
+    const po = await PurchaseOrder.findById(req.params.purchaseOrderId).select('totalAmount').lean();
+    const poTotal = Math.round((Number(po?.totalAmount) || 0) * 100) / 100;
+    const committed = po ? await sumCommittedVendorAdvancesForPo(req.params.purchaseOrderId) : 0;
     res.json({
       success: true,
       data: {
         hasPending: Boolean(pending),
         advanceId: pending?._id || null,
-        journalEntryId: pending?.journalEntryId || null
+        journalEntryId: pending?.journalEntryId || null,
+        poTotal,
+        alreadyRecorded: Math.round(committed * 100) / 100,
+        remaining: Math.max(0, Math.round((poTotal - committed) * 100) / 100)
       }
     });
   })
@@ -3995,11 +4056,21 @@ router.post('/accounts-payable/advance-payment',
     body('vendorName').trim().notEmpty().withMessage('Vendor name is required'),
     body('amount').isFloat({ min: 0.01 }).withMessage('Advance amount must be greater than zero'),
     body('paymentMethod').optional().isIn(['cash', 'check', 'cheque', 'credit_card', 'bank_transfer', 'ach', 'other']).withMessage('Valid payment method is required'),
-    body('bankAccountId').optional().isMongoId().withMessage('Valid bank account id is required when provided')
+    body('bankAccountId').optional().isMongoId().withMessage('Valid bank account id is required when provided'),
+    body('costCenter').optional({ values: 'falsy' }).isMongoId().withMessage('Valid cost center is required when provided')
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) return res.status(400).json({ success: false, message: 'Validation failed', errors: errors.array() });
+
+    let costCenterId = null;
+    if (req.body.costCenter) {
+      const FinanceCostCenter = require('../models/finance/CostCenter');
+      const cc = await FinanceCostCenter.findById(req.body.costCenter).select('isActive name').lean();
+      if (!cc) return res.status(400).json({ success: false, message: 'Selected cost center was not found' });
+      if (cc.isActive === false) return res.status(400).json({ success: false, message: `Cost center "${cc.name}" is inactive` });
+      costCenterId = cc._id;
+    }
 
     const referenceType = req.body.referenceType || 'advance';
     const referenceId = req.body.referenceId || null;
@@ -4013,18 +4084,20 @@ router.post('/accounts-payable/advance-payment',
           $or: [{ journalEntryId: null }, { journalEntryId: { $exists: false } }]
         });
 
-        const blocked = await VendorAdvance.findOne({
-          ...vendorAdvancesLinkedToPurchaseOrderFilter(referenceId),
-          voucherWorkflowStatus: 'pending_authority',
-          journalEntryId: { $ne: null }
-        })
-          .select('_id')
-          .lean();
-        if (blocked) {
+        // A PO may be paid in several advances (e.g. 90% now, 10% later) but never beyond its total.
+        // Earlier advances count even while their vouchers are still awaiting signatures.
+        const po = await PurchaseOrder.findById(referenceId).select('orderNumber totalAmount').lean();
+        const poTotal = Math.round((Number(po?.totalAmount) || 0) * 100) / 100;
+        const committed = await sumCommittedVendorAdvancesForPo(referenceId);
+        const remaining = Math.max(0, Math.round((poTotal - committed) * 100) / 100);
+        const requested = Math.round((Number(req.body.amount) || 0) * 100) / 100;
+        if (poTotal > 0 && requested > remaining + 0.009) {
+          const fmtPkr = (v) => `PKR ${Number(v).toLocaleString('en-PK')}`;
           return res.status(400).json({
             success: false,
-            message:
-              'This PO already has a vendor advance waiting for finance voucher signatures. Finish approvals or reject that voucher before recording another advance for the same PO.'
+            message: remaining <= 0.009
+              ? `PO ${po.orderNumber || ''} is already fully covered by vendor advances (${fmtPkr(committed)} of ${fmtPkr(poTotal)}).`
+              : `This advance (${fmtPkr(requested)}) is more than the remaining balance on PO ${po.orderNumber || ''}: ${fmtPkr(remaining)} (PO total ${fmtPkr(poTotal)}, already recorded ${fmtPkr(committed)}).`
           });
         }
       }
@@ -4121,7 +4194,8 @@ router.post('/accounts-payable/advance-payment',
       financeApprovalAuthorities,
       companyId: resolvedCompanyId,
       payingCompanyId: resolvedPayingId || resolvedCompanyId,
-      categoryLines: req.body.categoryLines || []
+      categoryLines: req.body.categoryLines || [],
+      costCenter: costCenterId
     });
 
     const message =

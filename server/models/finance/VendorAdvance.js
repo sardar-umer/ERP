@@ -32,6 +32,8 @@ const vendorAdvanceSchema = new mongoose.Schema({
     enum: ['cash', 'check', 'cheque', 'credit_card', 'bank_transfer', 'bank', 'ach', 'other'],
     default: 'bank_transfer'
   },
+  /** Finance cost center the advance is charged to (copied onto its voucher(s), like bill payments) */
+  costCenter: { type: mongoose.Schema.Types.ObjectId, ref: 'FinanceCostCenter', default: null },
   /** Chart-of-accounts bank or cash account credited on the vendor advance voucher */
   bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', default: null },
   reference: { type: String, trim: true },

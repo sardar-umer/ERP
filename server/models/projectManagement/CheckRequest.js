@@ -58,7 +58,15 @@ const checkRequestSchema = new mongoose.Schema(
       index: true
     },
 
-    /** Optional WBS task link (planning reference only) */
+    /** Master WBS activity being inspected / claimed (from the Sub Project's Project Type) */
+    activity: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'WbsActivity',
+      default: null,
+      index: true
+    },
+
+    /** Legacy per-project WBS task link (check requests created before WBS activities) */
     task: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ProjectTask',

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   Alert,
+  Autocomplete,
   Box,
   Button,
   Chip,
@@ -44,12 +45,13 @@ import {
   getBOQ,
   getCheckRequests,
   getSuppliers,
-  getTasks,
+  getWbsActivities,
   rejectCheckRequest,
   submitCheckRequest,
   updateCheckRequest,
   verifyCheckRequest
 } from '../../services/projectManagementService';
+import { normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -70,6 +72,7 @@ const STATUS_COLOR = {
 const emptyForm = {
   title: '',
   contractor: '',
+  activity: '',
   task: '',
   notes: '',
   lines: []
@@ -80,7 +83,8 @@ const CheckRequestsTab = ({ projectId, project }) => {
   const [counts, setCounts] = useState({});
   const [boqItems, setBoqItems] = useState([]);
   const [suppliers, setSuppliers] = useState([]);
-  const [tasks, setTasks] = useState([]);
+  const [activities, setActivities] = useState([]);
+  const wbsType = normalizeWbsProjectType(project?.projectType);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -108,33 +112,39 @@ const CheckRequestsTab = ({ projectId, project }) => {
     try {
       setLoading(true);
       setError('');
-      const [crRes, boqRes, suppRes, taskRes] = await Promise.all([
+      const [crRes, boqRes, suppRes, actRes] = await Promise.all([
         getCheckRequests(projectId, statusFilter ? { status: statusFilter } : {}),
         getBOQ(projectId, { limit: 500 }),
         getSuppliers().catch(() => ({ data: { data: [] } })),
-        getTasks(projectId).catch(() => ({ data: { data: { tasks: [] } } }))
+        wbsType
+          ? getWbsActivities({ projectType: wbsType }).catch(() => ({ data: { data: {} } }))
+          : { data: { data: {} } }
       ]);
       setRows(crRes.data?.data?.checkRequests || []);
       setCounts(crRes.data?.data?.counts || {});
       setBoqItems(boqRes.data?.data?.items || []);
       const suppList = suppRes.data?.data?.suppliers || suppRes.data?.data || [];
       setSuppliers(Array.isArray(suppList) ? suppList : []);
-      setTasks(taskRes.data?.data?.tasks || []);
+      setActivities(actRes.data?.data?.activities || []);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load check requests');
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter]);
+  }, [projectId, statusFilter, wbsType]);
 
   useEffect(() => {
     load();
   }, [load]);
 
-  const flatTasks = useMemo(
-    () => (tasks || []).filter((t) => t.level > 0 || !t.level),
-    [tasks]
-  );
+  // Keep the activity on an edited request selectable even if it was later deactivated in the master
+  const activityOptions = useMemo(() => {
+    const current = editing?.activity;
+    if (current?._id && !activities.some((a) => String(a._id) === String(current._id))) {
+      return [...activities, current];
+    }
+    return activities;
+  }, [activities, editing]);
 
   const openCreate = () => {
     setEditing(null);
@@ -165,6 +175,7 @@ const CheckRequestsTab = ({ projectId, project }) => {
     setForm({
       title: row.title || '',
       contractor: row.contractor?._id || row.contractor || '',
+      activity: row.activity?._id || row.activity || '',
       task: row.task?._id || row.task || '',
       notes: row.notes || '',
       lines: boqItems.map((b) => {
@@ -191,6 +202,10 @@ const CheckRequestsTab = ({ projectId, project }) => {
       setError('Title is required');
       return;
     }
+    if (activities.length && !form.activity) {
+      setError('Select the WBS activity this check request is for');
+      return;
+    }
     const items = form.lines
       .filter((l) => l.selected && Number(l.claimedQuantity) > 0)
       .map((l) => ({
@@ -209,6 +224,7 @@ const CheckRequestsTab = ({ projectId, project }) => {
       const payload = {
         title: form.title.trim(),
         contractor: form.contractor || null,
+        activity: form.activity || null,
         task: form.task || null,
         notes: form.notes,
         items
@@ -388,7 +404,7 @@ const CheckRequestsTab = ({ projectId, project }) => {
       )}
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        WBS Physical Verification is only a task sign-off. Commercial payment must go through a
+        Raise a Check Request for a WBS activity. Commercial payment must go through a
         Verified Check Request before Subcontractor IPC or linked expense.
       </Alert>
 
@@ -423,9 +439,11 @@ const CheckRequestsTab = ({ projectId, project }) => {
                     <Typography variant="body2" fontWeight={600}>
                       {row.title}
                     </Typography>
-                    {row.task?.title && (
-                      <Typography variant="caption" color="text.secondary">
-                        WBS: {row.task.title}
+                    {(row.activity?.name || row.task?.title) && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        WBS: {row.activity
+                          ? `${row.activity.group} › ${row.activity.name}`
+                          : row.task.title}
                       </Typography>
                     )}
                   </TableCell>
@@ -526,21 +544,24 @@ const CheckRequestsTab = ({ projectId, project }) => {
               </FormControl>
             </Grid>
             <Grid item xs={12} md={6}>
-              <FormControl fullWidth>
-                <InputLabel>Linked WBS Task (optional)</InputLabel>
-                <Select
-                  label="Linked WBS Task (optional)"
-                  value={form.task}
-                  onChange={(e) => setForm((f) => ({ ...f, task: e.target.value }))}
-                >
-                  <MenuItem value="">None</MenuItem>
-                  {flatTasks.map((t) => (
-                    <MenuItem key={t._id} value={t._id}>
-                      {t.title}
-                    </MenuItem>
-                  ))}
-                </Select>
-              </FormControl>
+              <Autocomplete
+                options={activityOptions}
+                groupBy={(a) => a.group}
+                getOptionLabel={(a) => (a?.code ? `${a.code} — ${a.name}` : a?.name || '')}
+                isOptionEqualToValue={(a, b) => String(a._id) === String(b._id)}
+                value={activityOptions.find((a) => String(a._id) === String(form.activity)) || null}
+                onChange={(_, v) => setForm((f) => ({ ...f, activity: v?._id || '' }))}
+                noOptionsText={wbsType
+                  ? `No WBS activities for ${wbsProjectTypeLabel(wbsType)} yet — add them in WBS Activities`
+                  : 'Set this Sub Project\'s Project Type to see WBS activities'}
+                renderInput={(params) => (
+                  <TextField
+                    {...params}
+                    required={activityOptions.length > 0}
+                    label={`WBS Activity${wbsType ? ` (${wbsProjectTypeLabel(wbsType)})` : ''}`}
+                  />
+                )}
+              />
             </Grid>
             <Grid item xs={12}>
               <TextField

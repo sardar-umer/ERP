@@ -25,6 +25,8 @@ import {
   TableHead,
   TableRow,
   TextField,
+  ToggleButton,
+  ToggleButtonGroup,
   Tooltip,
   Typography
 } from '@mui/material';
@@ -38,16 +40,21 @@ import {
   Visibility as ViewIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   activateSubletContract,
   cancelSubletContract,
   completeSubletContract,
   createSubletContract,
   getBOQ,
+  getSlabSchedules,
   getSubletContracts,
   getSuppliers,
+  getWbsActivities,
   updateSubletContract
 } from '../../services/projectManagementService';
+import SlabRowsEditor, { emptySlab, slabsTotalPercent } from '../../components/ProjectManagement/SlabRowsEditor';
+import { SLAB_SCHEDULES_PATH, normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -63,14 +70,32 @@ const STATUS_COLOR = {
   Cancelled: 'error'
 };
 
+const CONTRACT_TYPE_LABEL = { BOQ: 'BOQ Wise', Slab: 'Slab Wise' };
+const CONTRACT_TYPE_COLOR = { BOQ: 'primary', Slab: 'secondary' };
+const contractTypeOf = (row) => (row?.contractType === 'Slab' ? 'Slab' : 'BOQ');
+
 const emptyForm = {
   title: '',
   contractor: '',
   notes: '',
   startDate: dayjs().format('YYYY-MM-DD'),
   endDate: '',
-  lines: []
+  contractType: 'BOQ',
+  lines: [],
+  contractValue: '',
+  slabScheduleId: '',
+  slabs: []
 };
+
+/** Contract slabs → SlabRowsEditor rows (activities as ids). */
+const toEditorSlabs = (slabs = []) =>
+  slabs.map((s) => ({
+    key: s._id || emptySlab().key,
+    name: s.name,
+    percentage: s.percentage,
+    description: s.notes || s.description || '',
+    activities: (s.activities || []).map((a) => String(a.activity?._id || a.activity || a._id || a))
+  }));
 
 const SubletContractsTab = ({ projectId, project }) => {
   const [rows, setRows] = useState([]);
@@ -81,6 +106,11 @@ const SubletContractsTab = ({ projectId, project }) => {
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
+  const [typeFilter, setTypeFilter] = useState('');
+  const [slabSchedules, setSlabSchedules] = useState([]);
+  const [wbsActivities, setWbsActivities] = useState([]);
+  const [dialogError, setDialogError] = useState('');
+  const wbsType = normalizeWbsProjectType(project?.projectType);
 
   const [dialogOpen, setDialogOpen] = useState(false);
   const [editing, setEditing] = useState(null);
@@ -92,12 +122,19 @@ const SubletContractsTab = ({ projectId, project }) => {
     try {
       setLoading(true);
       setError('');
-      const [scRes, boqRes, suppRes] = await Promise.all([
-        getSubletContracts(projectId, statusFilter ? { status: statusFilter } : {}),
+      const params = {};
+      if (statusFilter) params.status = statusFilter;
+      if (typeFilter) params.contractType = typeFilter;
+      const [scRes, boqRes, suppRes, schedRes, actRes] = await Promise.all([
+        getSubletContracts(projectId, params),
         getBOQ(projectId, { limit: 500 }),
-        getSuppliers().catch(() => ({ data: { data: [] } }))
+        getSuppliers().catch(() => ({ data: { data: [] } })),
+        wbsType ? getSlabSchedules({ projectType: wbsType }).catch(() => ({ data: { data: [] } })) : { data: { data: [] } },
+        wbsType ? getWbsActivities({ projectType: wbsType }).catch(() => ({ data: { data: {} } })) : { data: { data: {} } }
       ]);
       setRows(scRes.data?.data?.contracts || []);
+      setSlabSchedules(schedRes.data?.data || []);
+      setWbsActivities(actRes.data?.data?.activities || []);
       setCounts(scRes.data?.data?.counts || {});
       setBoqItems(boqRes.data?.data?.items || []);
       const suppList = suppRes.data?.data?.suppliers || suppRes.data?.data || [];
@@ -107,7 +144,7 @@ const SubletContractsTab = ({ projectId, project }) => {
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter]);
+  }, [projectId, statusFilter, typeFilter, wbsType]);
 
   useEffect(() => {
     load();
@@ -131,6 +168,7 @@ const SubletContractsTab = ({ projectId, project }) => {
 
   const openCreate = () => {
     setEditing(null);
+    setDialogError('');
     setForm({
       ...emptyForm,
       title: `Sublet — ${project?.name || ''}`.trim(),
@@ -141,6 +179,7 @@ const SubletContractsTab = ({ projectId, project }) => {
 
   const openEdit = (row) => {
     setEditing(row);
+    setDialogError('');
     const selectedMap = new Map(
       (row.items || []).map((i) => [
         String(i.boqItem?._id || i.boqItem),
@@ -153,48 +192,88 @@ const SubletContractsTab = ({ projectId, project }) => {
       notes: row.notes || '',
       startDate: row.startDate ? dayjs(row.startDate).format('YYYY-MM-DD') : '',
       endDate: row.endDate ? dayjs(row.endDate).format('YYYY-MM-DD') : '',
-      lines: buildLinesFromBoq(selectedMap)
+      contractType: contractTypeOf(row),
+      lines: buildLinesFromBoq(selectedMap),
+      contractValue: contractTypeOf(row) === 'Slab' ? row.totalAmount || '' : '',
+      slabScheduleId: row.slabSchedule?._id || row.slabSchedule || '',
+      slabs: toEditorSlabs(row.slabs)
     });
     setDialogOpen(true);
   };
 
-  const totalAmount = form.lines
-    .filter((l) => l.selected && Number(l.quantity) > 0)
-    .reduce((s, l) => s + Number(l.quantity) * Number(l.unitPrice), 0);
+  const isSlabForm = form.contractType === 'Slab';
+  const totalAmount = isSlabForm
+    ? Number(form.contractValue) || 0
+    : form.lines
+      .filter((l) => l.selected && Number(l.quantity) > 0)
+      .reduce((s, l) => s + Number(l.quantity) * Number(l.unitPrice), 0);
+
+  // Activities already covered by another open slab-wise contract on this Sub Project
+  const takenActivityIds = new Set(
+    rows
+      .filter((r) => contractTypeOf(r) === 'Slab' && r.status !== 'Cancelled' && r._id !== editing?._id)
+      .flatMap((r) => (r.slabs || []).flatMap((sl) => (sl.activities || []).map((a) => String(a.activity?._id || a.activity))))
+  );
+
+  const applySlabSchedule = (scheduleId) => {
+    const schedule = slabSchedules.find((sc) => String(sc._id) === String(scheduleId));
+    setForm((f) => ({
+      ...f,
+      slabScheduleId: scheduleId,
+      slabs: schedule
+        ? toEditorSlabs(schedule.slabs).map((sl) => ({
+          ...sl,
+          key: emptySlab().key,
+          activities: sl.activities.filter((id) => !takenActivityIds.has(String(id)))
+        }))
+        : f.slabs
+    }));
+  };
 
   const handleSave = async (activateAfter = false) => {
-    if (!form.title.trim()) {
-      setError('Title is required');
-      return;
-    }
-    if (!form.contractor) {
-      setError('Subcontractor is required');
-      return;
-    }
-    const items = form.lines
-      .filter((l) => l.selected && Number(l.quantity) > 0)
-      .map((l) => ({
-        boqItemId: l.boqItemId,
-        quantity: Number(l.quantity),
-        unitPrice: Number(l.unitPrice) || 0
+    const fail = (msg) => setDialogError(msg);
+    if (!form.title.trim()) return fail('Title is required');
+    if (!form.contractor) return fail('Subcontractor is required');
+
+    const payload = {
+      title: form.title.trim(),
+      contractor: form.contractor,
+      notes: form.notes,
+      startDate: form.startDate || undefined,
+      endDate: form.endDate || undefined,
+      contractType: form.contractType,
+      activate: activateAfter && !editing
+    };
+
+    if (isSlabForm) {
+      if (!wbsType) return fail('Set this Sub Project\'s Project Type before creating a slab-wise contract');
+      if (!(Number(form.contractValue) > 0)) return fail('Enter the contract value');
+      if (!form.slabs.length) return fail('Add at least one slab');
+      if (form.slabs.some((sl) => !String(sl.name).trim())) return fail('Every slab needs a name');
+      if (Math.abs(slabsTotalPercent(form.slabs) - 100) >= 0.001) return fail('Slab percentages must total 100%');
+      payload.contractValue = Number(form.contractValue);
+      payload.slabSchedule = form.slabScheduleId || null;
+      payload.slabs = form.slabs.map((sl) => ({
+        name: String(sl.name).trim(),
+        percentage: Number(sl.percentage) || 0,
+        description: sl.description || '',
+        activities: sl.activities
       }));
-    if (!items.length) {
-      setError('Select at least one BOQ line with quantity to sublet');
-      return;
+    } else {
+      const items = form.lines
+        .filter((l) => l.selected && Number(l.quantity) > 0)
+        .map((l) => ({
+          boqItemId: l.boqItemId,
+          quantity: Number(l.quantity),
+          unitPrice: Number(l.unitPrice) || 0
+        }));
+      if (!items.length) return fail('Select at least one BOQ line with quantity to sublet');
+      payload.items = items;
     }
 
     try {
       setSaving(true);
-      setError('');
-      const payload = {
-        title: form.title.trim(),
-        contractor: form.contractor,
-        notes: form.notes,
-        startDate: form.startDate || undefined,
-        endDate: form.endDate || undefined,
-        items,
-        activate: activateAfter && !editing
-      };
+      setDialogError('');
 
       if (editing) {
         await updateSubletContract(projectId, editing._id, payload);
@@ -211,7 +290,7 @@ const SubletContractsTab = ({ projectId, project }) => {
       setDialogOpen(false);
       await load();
     } catch (err) {
-      setError(err.response?.data?.message || 'Save failed');
+      setDialogError(err.response?.data?.message || 'Save failed');
     } finally {
       setSaving(false);
     }
@@ -219,8 +298,8 @@ const SubletContractsTab = ({ projectId, project }) => {
 
   const handleActivate = async (row) => {
     try {
-      await activateSubletContract(projectId, row._id);
-      setSuccess('Activated — BOQ lines assigned to subcontractor');
+      const res = await activateSubletContract(projectId, row._id);
+      setSuccess(res.data?.message || 'Sublet contract activated');
       await load();
     } catch (err) {
       setError(err.response?.data?.message || 'Activate failed');
@@ -264,10 +343,18 @@ const SubletContractsTab = ({ projectId, project }) => {
             Sublet Contracts
           </Typography>
           <Typography variant="body2" color="text.secondary">
-            Sublet BOQ line items to subcontractors with qty and rate
+            Sublet work to subcontractors — BOQ wise (qty × rate) or Slab wise (% of contract value per stage)
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>Type</InputLabel>
+            <Select label="Type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
+              <MenuItem value="">All types</MenuItem>
+              <MenuItem value="BOQ">BOQ Wise</MenuItem>
+              <MenuItem value="Slab">Slab Wise</MenuItem>
+            </Select>
+          </FormControl>
           <FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>Status</InputLabel>
             <Select
@@ -321,8 +408,9 @@ const SubletContractsTab = ({ projectId, project }) => {
       )}
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        Create a draft, select BOQ lines + quantities, then <strong>Activate</strong> to assign those
-        lines to the subcontractor on the BOQ. Check Requests / IPC can then use that contractor.
+        <strong>BOQ Wise:</strong> select BOQ lines + quantities and rates. <strong>Slab Wise:</strong> enter the
+        contract value and split it into slabs (stages) by %, each covering WBS activities. Save as draft, then{' '}
+        <strong>Activate</strong>. Check Requests / IPC can then use that contractor.
       </Alert>
 
       <TableContainer component={Paper} variant="outlined">
@@ -330,11 +418,12 @@ const SubletContractsTab = ({ projectId, project }) => {
               <TableHead>
             <TableRow>
               <TableCell>Number</TableCell>
+              <TableCell>Type</TableCell>
               <TableCell>Title</TableCell>
               <TableCell>Main / Sub</TableCell>
               <TableCell>Sector / Block</TableCell>
               <TableCell>Subcontractor</TableCell>
-              <TableCell align="right">Lines</TableCell>
+              <TableCell align="right">Lines / Slabs</TableCell>
               <TableCell align="right">Amount</TableCell>
               <TableCell>Status</TableCell>
               <TableCell>Period</TableCell>
@@ -344,7 +433,7 @@ const SubletContractsTab = ({ projectId, project }) => {
           <TableBody>
             {rows.length === 0 ? (
               <TableRow>
-                <TableCell colSpan={10} align="center">
+                <TableCell colSpan={11} align="center">
                   <Typography color="text.secondary" py={3}>
                     No sublet contracts yet
                   </Typography>
@@ -354,6 +443,14 @@ const SubletContractsTab = ({ projectId, project }) => {
               rows.map((row) => (
                 <TableRow key={row._id} hover>
                   <TableCell>{row.contractNumber}</TableCell>
+                  <TableCell>
+                    <Chip
+                      size="small"
+                      variant="outlined"
+                      label={CONTRACT_TYPE_LABEL[contractTypeOf(row)]}
+                      color={CONTRACT_TYPE_COLOR[contractTypeOf(row)]}
+                    />
+                  </TableCell>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>
                       {row.title}
@@ -369,7 +466,11 @@ const SubletContractsTab = ({ projectId, project }) => {
                   </TableCell>
                   <TableCell>{row.sector || project?.sector || '—'}</TableCell>
                   <TableCell>{row.contractor?.name || '—'}</TableCell>
-                  <TableCell align="right">{row.items?.length || 0}</TableCell>
+                  <TableCell align="right">
+                    {contractTypeOf(row) === 'Slab'
+                      ? `${row.slabs?.length || 0} slab${row.slabs?.length === 1 ? '' : 's'}`
+                      : `${row.items?.length || 0} line${row.items?.length === 1 ? '' : 's'}`}
+                  </TableCell>
                   <TableCell align="right">{fmt(row.totalAmount)}</TableCell>
                   <TableCell>
                     <Chip size="small" label={row.status} color={STATUS_COLOR[row.status] || 'default'} />
@@ -420,10 +521,39 @@ const SubletContractsTab = ({ projectId, project }) => {
         </Table>
       </TableContainer>
 
-      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>{editing ? 'Edit Sublet Contract' : 'New Sublet Contract'}</DialogTitle>
+      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} maxWidth={isSlabForm ? 'lg' : 'md'} fullWidth>
+        <DialogTitle>{editing ? `Edit Sublet Contract ${editing.contractNumber || ''}` : 'New Sublet Contract'}</DialogTitle>
         <DialogContent dividers>
+          {dialogError && (
+            <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDialogError('')}>
+              {dialogError}
+            </Alert>
+          )}
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="text.secondary" fontWeight={700} display="block" mb={0.75}>
+                Contract type
+              </Typography>
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                color="primary"
+                value={form.contractType}
+                onChange={(_, v) => {
+                  if (!v) return;
+                  setDialogError('');
+                  setForm((f) => ({ ...f, contractType: v, slabs: v === 'Slab' && !f.slabs.length ? [emptySlab()] : f.slabs }));
+                }}
+              >
+                <ToggleButton value="BOQ" sx={{ px: 2.5 }}>BOQ Wise</ToggleButton>
+                <ToggleButton value="Slab" sx={{ px: 2.5 }}>Slab Wise (Percentage)</ToggleButton>
+              </ToggleButtonGroup>
+              <Typography variant="caption" color="text.secondary" display="block" mt={0.75}>
+                {isSlabForm
+                  ? 'Lump-sum contract paid in stages: each slab is a % of the contract value and covers WBS activities.'
+                  : 'Paid on measured quantities: BOQ line quantity × rate.'}
+              </Typography>
+            </Grid>
             <Grid item xs={12}>
               <Paper
                 variant="outlined"
@@ -542,6 +672,75 @@ const SubletContractsTab = ({ projectId, project }) => {
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
               />
             </Grid>
+            {isSlabForm && (
+              <Grid item xs={12}>
+                {!wbsType ? (
+                  <Alert severity="warning">
+                    This Sub Project's type ({project?.projectType || 'not set'}) has no WBS activities or slabs.
+                    Set its Project Type to Infrastructure Development, Commercial or Villas first.
+                  </Alert>
+                ) : (
+                  <>
+                    <Grid container spacing={2} mb={2}>
+                      <Grid item xs={12} md={6}>
+                        <FormControl fullWidth size="small">
+                          <InputLabel>Load slab schedule ({wbsProjectTypeLabel(wbsType)})</InputLabel>
+                          <Select
+                            label={`Load slab schedule (${wbsProjectTypeLabel(wbsType)})`}
+                            value={form.slabScheduleId}
+                            onChange={(e) => applySlabSchedule(e.target.value)}
+                          >
+                            <MenuItem value="">— Custom slabs —</MenuItem>
+                            {slabSchedules.map((sc) => (
+                              <MenuItem key={sc._id} value={sc._id}>
+                                {sc.name} ({sc.slabs.length} slabs)
+                              </MenuItem>
+                            ))}
+                          </Select>
+                        </FormControl>
+                        {!slabSchedules.length && (
+                          <Typography variant="caption" color="text.secondary">
+                            No saved schedules for {wbsProjectTypeLabel(wbsType)}. Create them in{' '}
+                            <RouterLink to={SLAB_SCHEDULES_PATH}>Slabs (Percentage Wise)</RouterLink>, or enter slabs below.
+                          </Typography>
+                        )}
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          required
+                          type="number"
+                          label="Contract Value (PKR)"
+                          value={form.contractValue}
+                          onChange={(e) => setForm((f) => ({ ...f, contractValue: e.target.value }))}
+                          inputProps={{ min: 0, step: 'any' }}
+                        />
+                      </Grid>
+                    </Grid>
+                    <Typography variant="subtitle2" fontWeight={700} mb={1}>
+                      Slabs (payment stages)
+                    </Typography>
+                    <SlabRowsEditor
+                      slabs={form.slabs}
+                      activities={wbsActivities}
+                      contractValue={form.contractValue}
+                      disabledActivityIds={takenActivityIds}
+                      onChange={(slabs) => setForm((f) => ({ ...f, slabs }))}
+                    />
+                    {takenActivityIds.size > 0 && (
+                      <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+                        Greyed-out activities are already covered by another slab-wise contract on this Sub Project.
+                      </Typography>
+                    )}
+                    <Typography variant="subtitle2" mt={1.5} fontWeight={700}>
+                      Contract total: {fmt(totalAmount)}
+                    </Typography>
+                  </>
+                )}
+              </Grid>
+            )}
+            {!isSlabForm && (
             <Grid item xs={12}>
               <Typography variant="subtitle2" fontWeight={700} mb={1}>
                 BOQ lines to sublet
@@ -638,6 +837,7 @@ const SubletContractsTab = ({ projectId, project }) => {
                 Contract total: {fmt(totalAmount)}
               </Typography>
             </Grid>
+            )}
           </Grid>
         </DialogContent>
         <DialogActions>
@@ -662,6 +862,12 @@ const SubletContractsTab = ({ projectId, project }) => {
             <Stack spacing={1.5}>
               <Stack direction="row" spacing={1} alignItems="center">
                 <Chip size="small" label={viewRow.status} color={STATUS_COLOR[viewRow.status]} />
+                <Chip
+                  size="small"
+                  variant="outlined"
+                  label={CONTRACT_TYPE_LABEL[contractTypeOf(viewRow)]}
+                  color={CONTRACT_TYPE_COLOR[contractTypeOf(viewRow)]}
+                />
                 <Typography variant="body2">
                   Subcontractor: {viewRow.contractor?.name || '—'}
                 </Typography>
@@ -676,6 +882,43 @@ const SubletContractsTab = ({ projectId, project }) => {
               <Typography variant="body2" color="text.secondary">
                 {viewRow.notes || 'No notes'}
               </Typography>
+              {contractTypeOf(viewRow) === 'Slab' ? (
+                <>
+                  {viewRow.slabSchedule?.name && (
+                    <Typography variant="body2">
+                      <strong>Slab schedule:</strong> {viewRow.slabSchedule.name}
+                    </Typography>
+                  )}
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell>#</TableCell>
+                        <TableCell>Slab / Stage</TableCell>
+                        <TableCell align="right">%</TableCell>
+                        <TableCell align="right">Amount</TableCell>
+                        <TableCell>WBS Activities</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {(viewRow.slabs || []).map((sl, idx) => (
+                        <TableRow key={sl._id || idx}>
+                          <TableCell>{idx + 1}</TableCell>
+                          <TableCell>{sl.name}</TableCell>
+                          <TableCell align="right">{sl.percentage}%</TableCell>
+                          <TableCell align="right">{fmt(sl.amount)}</TableCell>
+                          <TableCell>
+                            <Stack direction="row" flexWrap="wrap" gap={0.5}>
+                              {(sl.activities || []).length
+                                ? sl.activities.map((a) => <Chip key={String(a.activity)} size="small" label={a.name} />)
+                                : '—'}
+                            </Stack>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </>
+              ) : (
               <Table size="small">
                 <TableHead>
                   <TableRow>
@@ -698,6 +941,7 @@ const SubletContractsTab = ({ projectId, project }) => {
                   ))}
                 </TableBody>
               </Table>
+              )}
               <Typography variant="subtitle2" fontWeight={700}>
                 Total: {fmt(viewRow.totalAmount)}
               </Typography>

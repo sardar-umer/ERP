@@ -18,6 +18,27 @@ const subletItemSchema = new mongoose.Schema(
   { _id: true }
 );
 
+/** Slab-wise contracts: payment stage = % of contract value, covering master WBS activities. */
+const subletSlabSchema = new mongoose.Schema(
+  {
+    name: { type: String, required: true, trim: true },
+    percentage: { type: Number, required: true, min: 0, max: 100 },
+    amount: { type: Number, default: 0, min: 0 },
+    activities: [
+      {
+        _id: false,
+        activity: { type: mongoose.Schema.Types.ObjectId, ref: 'WbsActivity' },
+        name: { type: String, trim: true, default: '' },
+        group: { type: String, trim: true, default: '' }
+      }
+    ],
+    notes: { type: String, trim: true, default: '' }
+  },
+  { _id: true }
+);
+
+const SUBLET_CONTRACT_TYPES = ['BOQ', 'Slab'];
+
 const subletContractSchema = new mongoose.Schema(
   {
     project: {
@@ -61,8 +82,23 @@ const subletContractSchema = new mongoose.Schema(
     sector: { type: String, trim: true, default: '' },
     society: { type: String, trim: true, default: '' },
 
+    /** BOQ = quantity × rate on BOQ lines; Slab = lump sum paid in % stages */
+    contractType: {
+      type: String,
+      enum: SUBLET_CONTRACT_TYPES,
+      default: 'BOQ',
+      index: true
+    },
+
     items: {
       type: [subletItemSchema],
+      default: []
+    },
+
+    /** Slab-wise only */
+    slabSchedule: { type: mongoose.Schema.Types.ObjectId, ref: 'SlabSchedule', default: null },
+    slabs: {
+      type: [subletSlabSchema],
       default: []
     },
 
@@ -116,3 +152,4 @@ subletContractSchema.pre('save', async function generateNumber(next) {
 });
 
 module.exports = mongoose.model('SubletContract', subletContractSchema);
+module.exports.SUBLET_CONTRACT_TYPES = SUBLET_CONTRACT_TYPES;

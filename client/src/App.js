@@ -239,6 +239,8 @@ import Payments from './pages/General/Payments';
 import ProjectManagement from './pages/General/ProjectManagement';
 import ProjectDetail from './pages/General/ProjectDetail';
 import ProjectWorkspaceRedirect from './pages/General/ProjectWorkspaceRedirect';
+import WbsActivities from './pages/General/WbsActivities';
+import SlabSchedules from './pages/General/SlabSchedules';
 import GeneralCostCenters from './pages/General/CostCenters/GeneralCostCenters';
 import PresidentSecretariatDashboard from './pages/General/PresidentSecretariat/Dashboard';
 import PresidentMeetings from './pages/General/PresidentSecretariat/Meetings';
@@ -886,6 +888,14 @@ function App() {
                     <Route
                       path="/general/project-management/projects"
                       element={<ProtectedRoute><ProjectManagement /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/project-management/wbs-activities"
+                      element={<ProtectedRoute><WbsActivities /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/project-management/slabs"
+                      element={<ProtectedRoute><SlabSchedules /></ProtectedRoute>}
                     />
                     <Route
                       path="/general/project-management/workspace/:section"

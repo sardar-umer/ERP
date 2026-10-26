@@ -146,14 +146,17 @@ const VendorAdvance = () => {
     bankAccountId: '',
     chequeNumber: '',
     reference: '',
-    paymentDate: new Date().toISOString().split('T')[0]
+    paymentDate: new Date().toISOString().split('T')[0],
+    costCenter: ''
   });
+  const [costCenters, setCostCenters] = useState([]);
   const [finAuth, setFinAuth] = useState({
     accountsManagerUser: null,
     financeControllerUser: null
   });
   const [approverPool, setApproverPool] = useState([]);
-  const [poPendingVoucher, setPoPendingVoucher] = useState({ loading: false, hasPending: false });
+  // PO balance check: earlier advances (any voucher stage) reduce what can still be paid on this PO
+  const [poPendingVoucher, setPoPendingVoucher] = useState({ loading: false, hasPending: false, poTotal: 0, alreadyRecorded: 0, remaining: null });
   const [bankAccounts, setBankAccounts] = useState([]);
   const advanceHistorySectionRef = useRef(null);
   const [highlightPoId, setHighlightPoId] = useState(null);
@@ -382,6 +385,15 @@ const VendorAdvance = () => {
     }
   }, []);
 
+  // Same cost center list as bill payments
+  useEffect(() => {
+    let cancelled = false;
+    api.get('/finance/cost-centers')
+      .then((res) => { if (!cancelled && res.data?.success) setCostCenters(res.data.data || []); })
+      .catch(() => {});
+    return () => { cancelled = true; };
+  }, []);
+
   useEffect(() => {
     loadVendors();
   }, [loadVendors]);
@@ -478,8 +490,13 @@ const VendorAdvance = () => {
     if (companyBlockedForPayment) {
       return 'Select the PO company in the company filter (top right), or link a PO that has a company. All Companies cannot create vouchers.';
     }
-    if (selectedPo?._id && poPendingVoucher.hasPending) {
-      return 'This PO already has a vendor advance pending voucher approval.';
+    if (selectedPo?._id && poPendingVoucher.remaining != null && poPendingVoucher.poTotal > 0) {
+      if (poPendingVoucher.remaining <= 0.009) {
+        return 'This PO is already fully covered by vendor advances.';
+      }
+      if (categoryTotal > poPendingVoucher.remaining + 0.009) {
+        return `Amount is more than the remaining balance on this PO (${formatPKR(poPendingVoucher.remaining)}).`;
+      }
     }
     if (!finAuth.accountsManagerUser || !finAuth.financeControllerUser) {
       return 'Select Sr Manager Accounts and GM Finance.';
@@ -498,7 +515,9 @@ const VendorAdvance = () => {
     submitting,
     companyBlockedForPayment,
     selectedPo?._id,
-    poPendingVoucher.hasPending,
+    poPendingVoucher.remaining,
+    poPendingVoucher.poTotal,
+    categoryTotal,
     finAuth.accountsManagerUser,
     finAuth.financeControllerUser,
     bankAccounts.length,
@@ -677,18 +696,27 @@ const VendorAdvance = () => {
   useEffect(() => {
     let cancelled = false;
     const poId = selectedPo?._id;
+    const empty = { loading: false, hasPending: false, poTotal: 0, alreadyRecorded: 0, remaining: null };
     if (!poId) {
-      setPoPendingVoucher({ loading: false, hasPending: false });
+      setPoPendingVoucher(empty);
       return undefined;
     }
     (async () => {
       setPoPendingVoucher((p) => ({ ...p, loading: true }));
       try {
         const res = await api.get(`/finance/vendor-advances/po/${poId}/pending-voucher`);
-        const hasPending = Boolean(res.data?.data?.hasPending);
-        if (!cancelled) setPoPendingVoucher({ loading: false, hasPending });
+        const d = res.data?.data || {};
+        if (!cancelled) {
+          setPoPendingVoucher({
+            loading: false,
+            hasPending: Boolean(d.hasPending),
+            poTotal: Number(d.poTotal) || 0,
+            alreadyRecorded: Number(d.alreadyRecorded) || 0,
+            remaining: d.remaining == null ? null : Number(d.remaining)
+          });
+        }
       } catch {
-        if (!cancelled) setPoPendingVoucher({ loading: false, hasPending: false });
+        if (!cancelled) setPoPendingVoucher(empty);
       }
     })();
     return () => { cancelled = true; };
@@ -733,8 +761,9 @@ const VendorAdvance = () => {
       toast.error('Select the PO company in the finance company filter (not All Companies). Paying company can differ for intercompany.');
       return;
     }
-    if (selectedPo?._id && poPendingVoucher.hasPending) {
-      toast.error('This PO already has an advance pending voucher approval. You cannot record another until that is finished.');
+    if (selectedPo?._id && poPendingVoucher.remaining != null && poPendingVoucher.poTotal > 0
+      && categoryTotal > poPendingVoucher.remaining + 0.009) {
+      toast.error(`This PO only has ${formatPKR(poPendingVoucher.remaining)} remaining. Reduce the amount.`);
       return;
     }
     const ref = (form.reference || '').trim() || `ADV-${Date.now()}`;
@@ -772,7 +801,8 @@ const VendorAdvance = () => {
         },
         companyId: originalCompanyId,
         payingCompanyId: effectivePayingCompanyId,
-        categoryLines: validCategoryLines
+        categoryLines: validCategoryLines,
+        costCenter: form.costCenter || null
       };
       const res = await api.post('/finance/accounts-payable/advance-payment', body);
       if (res.data?.success) {
@@ -783,7 +813,8 @@ const VendorAdvance = () => {
           bankAccountId: '',
           chequeNumber: '',
           reference: '',
-          paymentDate: new Date().toISOString().split('T')[0]
+          paymentDate: new Date().toISOString().split('T')[0],
+          costCenter: ''
         });
         setCategoryLines([emptyCategoryLine(), emptyCategoryLine()]);
         setSelectedPo(null);
@@ -802,10 +833,6 @@ const VendorAdvance = () => {
   };
 
   const preparePaymentFromQueue = (row) => {
-    if (row.hasPendingVoucherApproval) {
-      toast.error('This PO already has a vendor advance in voucher approval. Finish or reject it first.');
-      return;
-    }
     setSelectedPo(null);
     const v = vendors.find((x) => String(x._id) === String(row.vendor?._id));
     const vendorObj = v || {
@@ -880,7 +907,7 @@ const VendorAdvance = () => {
       await loadAdvancesForVendor(selectedVendor?._id || null);
       loadPoQueue();
       if (selectedPo?._id) {
-        setPoPendingVoucher({ loading: false, hasPending: false });
+        setPoPendingVoucher({ loading: false, hasPending: false, poTotal: 0, alreadyRecorded: 0, remaining: null });
       }
     } catch (e) {
       toast.error(e.response?.data?.message || 'Failed to remove broken advance');
@@ -1008,22 +1035,15 @@ const VendorAdvance = () => {
                             <ArticleOutlinedIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
-                        <Tooltip
-                          title={
-                            row.hasPendingVoucherApproval
-                              ? 'An advance for this PO is waiting for voucher signatures — finish or reject it first.'
-                              : ''
-                          }
-                        >
+                        <Tooltip title={`Pay the remaining ${formatPKR(row.remainingAdvanceDue || 0)}`}>
                           <span>
                             <Button
                               size="small"
                               variant="contained"
                               color="warning"
-                              disabled={Boolean(row.hasPendingVoucherApproval)}
                               onClick={() => preparePaymentFromQueue(row)}
                             >
-                              Prepare payment
+                              {Number(row.advanceRecordedAmount) > 0 ? 'Pay remaining' : 'Prepare payment'}
                             </Button>
                           </span>
                         </Tooltip>
@@ -1111,10 +1131,29 @@ const VendorAdvance = () => {
                   <Typography variant="caption" color="text.secondary">Checking this PO for pending voucher approval…</Typography>
                 </Grid>
               ) : null}
-              {selectedPo?._id && poPendingVoucher.hasPending ? (
+              {selectedPo?._id && !poPendingVoucher.loading && poPendingVoucher.poTotal > 0 && poPendingVoucher.remaining != null ? (
                 <Grid item xs={12}>
-                  <Alert severity="warning">
-                    This PO already has a vendor advance in <strong>voucher approval</strong>. You cannot record another advance for this PO until that voucher is fully approved or rejected.
+                  <Alert
+                    severity={poPendingVoucher.remaining <= 0.009 ? 'warning' : 'info'}
+                    action={poPendingVoucher.remaining > 0.009 && Math.abs(categoryTotal - poPendingVoucher.remaining) > 0.009 ? (
+                      <Button
+                        color="inherit"
+                        size="small"
+                        onClick={() => setCategoryLines((lines) => {
+                          const next = lines.length ? [...lines] : [emptyCategoryLine()];
+                          next[0] = { ...next[0], amount: String(poPendingVoucher.remaining) };
+                          return next.map((l, i) => (i === 0 ? l : { ...l, amount: '' }));
+                        })}
+                      >
+                        Use remaining
+                      </Button>
+                    ) : null}
+                  >
+                    PO total <strong>{formatPKR(poPendingVoucher.poTotal)}</strong>
+                    {' · '}already recorded <strong>{formatPKR(poPendingVoucher.alreadyRecorded)}</strong>
+                    {' · '}remaining <strong>{formatPKR(poPendingVoucher.remaining)}</strong>
+                    {poPendingVoucher.remaining <= 0.009 && ' — this PO is fully covered, no more advances can be recorded.'}
+                    {poPendingVoucher.hasPending && poPendingVoucher.remaining > 0.009 && ' (an earlier advance is still awaiting voucher signatures — it is already counted above)'}
                   </Alert>
                 </Grid>
               ) : null}
@@ -1204,6 +1243,24 @@ const VendorAdvance = () => {
                   onChange={(e) => setForm((f) => ({ ...f, paymentDate: e.target.value }))}
                   InputLabelProps={{ shrink: true }}
                 />
+              </Grid>
+              <Grid item xs={12} md={8}>
+                <FormControl fullWidth>
+                  <InputLabel id="vendor-advance-cost-center-label">Cost Center (Optional)</InputLabel>
+                  <Select
+                    labelId="vendor-advance-cost-center-label"
+                    value={form.costCenter}
+                    label="Cost Center (Optional)"
+                    onChange={(e) => setForm((f) => ({ ...f, costCenter: e.target.value }))}
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    {costCenters.filter((cc) => cc.isActive).map((cc) => (
+                      <MenuItem key={cc._id} value={cc._id}>
+                        {cc.code ? `${cc.code} — ${cc.name}` : cc.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
               </Grid>
               <Grid item xs={12} md={6}>
                 <TextField
@@ -1492,6 +1549,7 @@ const VendorAdvance = () => {
                   <TableCell><b>Company</b></TableCell>
                   <TableCell><b>Paying company</b></TableCell>
                   <TableCell><b>Pay from account</b></TableCell>
+                  <TableCell><b>Cost center</b></TableCell>
                   <TableCell><b>Linked PO</b></TableCell>
                   <TableCell><b>Voucher</b></TableCell>
                   <TableCell><b>Issuance</b></TableCell>
@@ -1533,6 +1591,7 @@ const VendorAdvance = () => {
                         ? `${a.bankAccount.name}${a.bankAccount.accountNumber ? ` (${a.bankAccount.accountNumber})` : ''}`
                         : '—'}
                     </TableCell>
+                    <TableCell>{a.costCenter?.name || '—'}</TableCell>
                     <TableCell>{a.linkedPoNumber || '—'}</TableCell>
                     <TableCell>
                       <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5 }}>
