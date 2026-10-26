@@ -69,6 +69,7 @@ import {
   Store as StoreIcon,
   Business as VendorIcon
 } from '@mui/icons-material';
+import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
@@ -184,6 +185,8 @@ const PreAudit = () => {
   
   // Dialog states
   const [viewDialog, setViewDialog] = useState({ open: false, document: null, fullDocument: null, loading: false, quotations: [], grns: [], caLinkedDocs: [], poAuditTab: 0 });
+  // Project Management subcontractor IPC opened for review
+  const [ipcReviewId, setIpcReviewId] = useState(null);
   const [imageViewer, setImageViewer] = useState({ open: false, imageUrl: '', imageName: '', isBlob: false });
   const [imageZoom, setImageZoom] = useState(1);
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
@@ -386,7 +389,11 @@ const PreAudit = () => {
       const doc = approveDialog.document;
 
       let approveResponse;
-      if (doc.isCashApproval) {
+      if (doc.isProjectIpc) {
+        approveResponse = await api.put(`/project-management/ipcs/${doc._id}/audit-approve`, {
+          approvalComments
+        });
+      } else if (doc.isCashApproval) {
         approveResponse = await api.put(`/cash-approvals/${doc._id}/audit-approve`, {
           approvalComments,
           useStamp: useStampForAction
@@ -449,7 +456,11 @@ const PreAudit = () => {
       setError(null);
       const doc = returnDialog.document;
       
-      if (doc.isCashApproval) {
+      if (doc.isProjectIpc) {
+        await api.put(`/project-management/ipcs/${doc._id}/audit-return`, {
+          returnComments
+        });
+      } else if (doc.isCashApproval) {
         await api.put(`/cash-approvals/${doc._id}/audit-return`, {
           returnComments
         });
@@ -505,7 +516,13 @@ const PreAudit = () => {
         return;
       }
 
-      if (doc.isCashApproval) {
+      if (doc.isProjectIpc) {
+        await api.put(`/project-management/ipcs/${doc._id}/audit-reject`, {
+          rejectionComments: rejectionComments || 'Rejected with observations',
+          observations: observations.length > 0 ? observations : undefined
+        });
+        setSuccess('IPC rejected — sent back to the Project Management initiator.');
+      } else if (doc.isCashApproval) {
         await api.put(`/cash-approvals/${doc._id}/audit-reject`, {
           rejectionComments: rejectionComments || 'Rejected with observations',
           observations: observations.length > 0 ? observations : undefined
@@ -2794,6 +2811,10 @@ const PreAudit = () => {
                                                   <IconButton
                                                     size="small"
                                                     onClick={async () => {
+                                                      if (doc.isProjectIpc) {
+                                                        setIpcReviewId(doc._id);
+                                                        return;
+                                                      }
                                                       setViewDialog({ open: true, document: doc, fullDocument: null, loading: true });
                                                       
                                                       // If it's a Purchase Order, fetch full PO and related Comparative Statement data (quotations by indent)
@@ -3027,6 +3048,7 @@ const PreAudit = () => {
                                                             </IconButton>
                                                           </Tooltip>
                                                         )}
+                                                        {!doc.isProjectIpc && (
                                                         <Tooltip title="Add Observation">
                                                           <IconButton
                                                             size="small"
@@ -3036,6 +3058,7 @@ const PreAudit = () => {
                                                             <CommentIcon fontSize="small" />
                                                           </IconButton>
                                                         </Tooltip>
+                                                        )}
                                                         <Tooltip title="Reject with Observation">
                                                           <IconButton
                                                             size="small"
@@ -5324,6 +5347,8 @@ const PreAudit = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
 
       {/* Add Observation Dialog */}
       <Dialog

@@ -20,14 +20,13 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { getProjects } from '../../services/projectManagementService';
 
 /** Sections that only exist on Sub Projects (Main only has overview + BOQ). */
-const SUB_ONLY_SECTIONS = new Set(['sublet-contracts', 'check-requests', 'expenses', 'dpr', 'invoices']);
+const SUB_ONLY_SECTIONS = new Set(['sublet-contracts', 'check-requests', 'dpr', 'invoices']);
 
 const SECTION_LABELS = {
   overview: 'Overview',
   boq: 'BOQ',
   'sublet-contracts': 'Sublet Contracts',
   'check-requests': 'Check Requests',
-  expenses: 'Expenses',
   dpr: 'Daily Reports',
   invoices: 'Invoices'
 };

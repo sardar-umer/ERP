@@ -465,6 +465,72 @@ router.get('/',
       console.error('Error fetching cash approvals for pre-audit:', caErr);
     }
 
+    // Project Management: subcontractor IPCs (same lifecycle as Cash Approvals)
+    try {
+      const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+      const ipcQuery = {
+        invoiceType: 'Subcontractor_IPC',
+        $or: [
+          { approvalStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO', 'Approved'] } },
+          { approvalStatus: 'Rejected', returnedFromStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director'] } }
+        ]
+      };
+      if (search) {
+        ipcQuery.$and = [{ $or: [
+          { invoiceNumber: { $regex: search, $options: 'i' } },
+          { description: { $regex: search, $options: 'i' } }
+        ] }];
+      }
+      const ipcDocs = await ProjectInvoice.find(ipcQuery)
+        .populate('contractor', 'name')
+        .populate({ path: 'project', select: 'name projectNumber parentProject', populate: { path: 'parentProject', select: 'name' } })
+        .populate('createdBy', 'firstName lastName email')
+        .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
+        .populate('observations.addedBy', 'firstName lastName email')
+        .sort({ updatedAt: -1 })
+        .limit(300)
+        .lean();
+      for (const doc of ipcDocs) {
+        const st = doc.approvalStatus;
+        const preAuditStatus = st === 'Rejected' ? 'returned_with_observations'
+          : st === 'Forwarded to Audit Director' ? 'forwarded_to_director'
+            : ['Send to CEO Office', 'Forwarded to CEO', 'Approved'].includes(st) ? 'approved'
+              : doc.preAuditInitialApprovedAt ? 'under_review' : 'pending';
+        const projectLabel = [doc.project?.parentProject?.name, doc.project?.name].filter(Boolean).join(' / ');
+        workflowDocs.push({
+          _id: doc._id,
+          documentNumber: doc.invoiceNumber,
+          title: `${doc.ipcKind && doc.ipcKind !== 'Work' ? `Subcontractor ${doc.ipcKind}` : 'Subcontractor IPC'} #${doc.ipcNumber}: ${doc.invoiceNumber}`,
+          description: `${doc.contractor?.name || 'Subcontractor'} — ${projectLabel}${doc.description ? ` — ${doc.description}` : ''}`,
+          sourceModule: 'project_management',
+          sourceDepartmentName: 'Project Management',
+          sourceDepartment: null,
+          documentType: 'Subcontractor IPC',
+          documentDate: doc.issueDate || doc.createdAt,
+          amount: doc.netPayableAmount || doc.invoiceAmount || 0,
+          referenceNumber: doc.invoiceNumber,
+          status: preAuditStatus,
+          workflowStatus: st,
+          priority: 'high',
+          isWorkflowDocument: false,
+          isPurchaseOrder: false,
+          isCashApproval: false,
+          isProjectIpc: true,
+          originalDocument: doc,
+          createdAt: doc.createdAt,
+          updatedAt: doc.updatedAt,
+          createdBy: doc.createdBy,
+          workflowHistory: doc.workflowHistory || [],
+          auditObservations: (doc.observations || []).map((o) => ({ ...o, addedBy: o.addedBy })),
+          preAuditInitialApprovedAt: doc.preAuditInitialApprovedAt || null,
+          initialAuditApproved: Boolean(doc.preAuditInitialApprovedAt),
+          auditApprovedAt: doc.auditApprovedAt || null
+        });
+      }
+    } catch (ipcErr) {
+      console.error('Error fetching project IPCs for pre-audit:', ipcErr);
+    }
+
     // Vendor Bills in audit queue (Pending Audit, Forwarded to Audit Director, Returned from Audit, Approved)
     try {
       const AccountsPayableModel = require('../models/finance/AccountsPayable');
@@ -1144,6 +1210,45 @@ router.put('/:id/forward',
       } catch (error) {
         // Continue to next module
         console.error(`Error checking workflow module ${submodule}:`, error.message);
+      }
+    }
+
+    // Project Management IPC: Pending Audit -> Forwarded to Audit Director
+    {
+      const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+      const ipc = await ProjectInvoice.findOne({ _id: req.params.id, invoiceType: 'Subcontractor_IPC' }).catch(() => null);
+      if (ipc) {
+        if (ipc.approvalStatus === 'Forwarded to Audit Director') {
+          return res.status(400).json({ success: false, message: 'Document is already forwarded to Audit Director' });
+        }
+        if (ipc.approvalStatus !== 'Pending Audit') {
+          return res.status(400).json({ success: false, message: `IPC is ${ipc.approvalStatus}, not Pending Audit` });
+        }
+        if (!ipc.preAuditInitialApprovedAt) {
+          return res.status(400).json({ success: false, message: 'Initial pre-audit approval is required before forwarding to Audit Director.' });
+        }
+        ipc.workflowHistory.push({
+          fromStatus: 'Pending Audit',
+          toStatus: 'Forwarded to Audit Director',
+          changedBy: req.user.id,
+          changedAt: new Date(),
+          comments: forwardComments || 'Forwarded to Audit Director for approval',
+          module: 'Pre-Audit'
+        });
+        ipc.approvalStatus = 'Forwarded to Audit Director';
+        await ipc.save();
+        await notifyAuditDirectorQueue({
+          actorId: req.user.id,
+          title: 'Document forwarded to Audit Director',
+          message: `Subcontractor IPC ${ipc.invoiceNumber} is waiting for your approval.`,
+          entityId: ipc._id,
+          entityType: 'ProjectInvoice'
+        });
+        return res.json({
+          success: true,
+          message: 'Document forwarded to Audit Director successfully',
+          data: { _id: ipc._id, isProjectIpc: true, status: 'Forwarded to Audit Director', workflowStatus: ipc.approvalStatus }
+        });
       }
     }
 

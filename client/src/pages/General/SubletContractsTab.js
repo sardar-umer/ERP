@@ -97,7 +97,7 @@ const toEditorSlabs = (slabs = []) =>
     activities: (s.activities || []).map((a) => String(a.activity?._id || a.activity || a._id || a))
   }));
 
-const SubletContractsTab = ({ projectId, project }) => {
+const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   const [rows, setRows] = useState([]);
   const [counts, setCounts] = useState({});
   const [boqItems, setBoqItems] = useState([]);
@@ -434,9 +434,19 @@ const SubletContractsTab = ({ projectId, project }) => {
             {rows.length === 0 ? (
               <TableRow>
                 <TableCell colSpan={11} align="center">
-                  <Typography color="text.secondary" py={3}>
-                    No sublet contracts yet
-                  </Typography>
+                  <Box py={3}>
+                    <Typography color="text.secondary">No sublet contracts yet</Typography>
+                    <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5, mb: 1.5 }}>
+                      {boqItems.length
+                        ? 'Award BOQ lines to a subcontractor at agreed rates, then activate the contract.'
+                        : 'This Sub Project has no BOQ lines yet — add them before creating a contract.'}
+                    </Typography>
+                    {boqItems.length ? (
+                      <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreate}>New Sublet Contract</Button>
+                    ) : onGoToTab && (
+                      <Button variant="outlined" size="small" onClick={() => onGoToTab('boq')}>Go to BOQ</Button>
+                    )}
+                  </Box>
                 </TableCell>
               </TableRow>
             ) : (
@@ -701,7 +711,7 @@ const SubletContractsTab = ({ projectId, project }) => {
                         {!slabSchedules.length && (
                           <Typography variant="caption" color="text.secondary">
                             No saved schedules for {wbsProjectTypeLabel(wbsType)}. Create them in{' '}
-                            <RouterLink to={SLAB_SCHEDULES_PATH}>Slabs (Percentage Wise)</RouterLink>, or enter slabs below.
+                            <RouterLink to={SLAB_SCHEDULES_PATH}>Slab Templates</RouterLink>, or enter slabs below.
                           </Typography>
                         )}
                       </Grid>
@@ -746,7 +756,16 @@ const SubletContractsTab = ({ projectId, project }) => {
                 BOQ lines to sublet
               </Typography>
               {boqItems.length === 0 ? (
-                <Alert severity="warning">No BOQ items on this Sub Project yet.</Alert>
+                <Alert
+                  severity="warning"
+                  action={onGoToTab && (
+                    <Button color="inherit" size="small" onClick={() => { setDialogOpen(false); onGoToTab('boq'); }}>
+                      Go to BOQ
+                    </Button>
+                  )}
+                >
+                  No BOQ items on this Sub Project yet. Add lines or allocate quantity from the Main Project BOQ first.
+                </Alert>
               ) : (
                 <Table size="small">
                   <TableHead>

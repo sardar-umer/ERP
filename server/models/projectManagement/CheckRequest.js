@@ -13,6 +13,8 @@ const checkRequestItemSchema = new mongoose.Schema(
     claimedQuantity: { type: Number, default: 0, min: 0 },
     verifiedQuantity: { type: Number, default: 0, min: 0 },
     billedQuantity: { type: Number, default: 0, min: 0 },
+    /** Verified quantity already billed to the client (Client Invoice from verified work) */
+    clientBilledQuantity: { type: Number, default: 0, min: 0 },
     unitPrice: { type: Number, default: 0, min: 0 },
     claimedAmount: { type: Number, default: 0, min: 0 },
     verifiedAmount: { type: Number, default: 0, min: 0 },
@@ -71,6 +73,33 @@ const checkRequestSchema = new mongoose.Schema(
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ProjectTask',
       default: null
+    },
+
+    /** BOQ = claim executed BOQ quantities; Slab = claim one payment stage of a slab-wise sublet contract */
+    claimType: {
+      type: String,
+      enum: ['BOQ', 'Slab'],
+      default: 'BOQ'
+    },
+    subletContract: {
+      type: mongoose.Schema.Types.ObjectId,
+      ref: 'SubletContract',
+      default: null,
+      index: true
+    },
+    /** Snapshot of the claimed slab (Slab claims only) */
+    slab: {
+      slabId: { type: mongoose.Schema.Types.ObjectId, default: null },
+      name: { type: String, trim: true, default: '' },
+      percentage: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 },
+      activities: [
+        {
+          _id: false,
+          activity: { type: mongoose.Schema.Types.ObjectId, ref: 'WbsActivity' },
+          name: { type: String, trim: true, default: '' }
+        }
+      ]
     },
 
     items: {

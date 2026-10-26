@@ -243,7 +243,7 @@ const accountsPayableSchema = new mongoose.Schema({
   },
   referenceType: {
     type: String,
-    enum: ['purchase_order', 'grn', 'sin', 'receipt', 'service', 'product', 'bill', 'manual', 'utility_bill'],
+    enum: ['purchase_order', 'grn', 'sin', 'receipt', 'service', 'product', 'bill', 'manual', 'utility_bill', 'project_ipc'],
     default: 'manual'
   },
   preAuditInitialApprovedAt: { type: Date },

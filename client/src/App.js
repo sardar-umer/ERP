@@ -241,6 +241,8 @@ import ProjectDetail from './pages/General/ProjectDetail';
 import ProjectWorkspaceRedirect from './pages/General/ProjectWorkspaceRedirect';
 import WbsActivities from './pages/General/WbsActivities';
 import SlabSchedules from './pages/General/SlabSchedules';
+import ProjectApprovals from './pages/General/ProjectApprovals';
+import SubcontractorStatement from './pages/General/SubcontractorStatement';
 import GeneralCostCenters from './pages/General/CostCenters/GeneralCostCenters';
 import PresidentSecretariatDashboard from './pages/General/PresidentSecretariat/Dashboard';
 import PresidentMeetings from './pages/General/PresidentSecretariat/Meetings';
@@ -888,6 +890,14 @@ function App() {
                     <Route
                       path="/general/project-management/projects"
                       element={<ProtectedRoute><ProjectManagement /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/project-management/subcontractor-statement"
+                      element={<ProtectedRoute><SubcontractorStatement /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/project-management/approvals"
+                      element={<ProtectedRoute><ProjectApprovals /></ProtectedRoute>}
                     />
                     <Route
                       path="/general/project-management/wbs-activities"

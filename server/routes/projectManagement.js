@@ -14,11 +14,24 @@ const DailyProgressReport = require('../models/projectManagement/DailyProgressRe
 const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
 const CheckRequest = require('../models/projectManagement/CheckRequest');
 const SubletContract = require('../models/projectManagement/SubletContract');
+const InspectionReport = require('../models/projectManagement/InspectionReport');
+const User = require('../models/User');
+const NotificationService = require('../services/notificationService');
 const WbsActivity = require('../models/projectManagement/WbsActivity');
 const { WBS_PROJECT_TYPES, normalizeProjectType } = require('../models/projectManagement/WbsActivity');
 const SlabSchedule = require('../models/projectManagement/SlabSchedule');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
+const { syncProjectMetrics } = require('../services/projectMetricsService');
+const { postIpcToFinance, resolveProjectCompanyId } = require('../utils/projectIpcFinance');
+const { hasAuditAccess, canPerformInitialPreAuditActions } = require('../utils/auditAccess');
+const { canActAsAuditDirector } = require('../utils/auditDirectorRole');
+const {
+  isDesignatedCeoApprover,
+  hasCeoSecretariatAccess,
+  hasCeoSecretariatCoordinatorAccess
+} = require('../utils/executiveAccess');
+const { createAndEmitNotification } = require('../services/realtimeNotificationService');
 
 const router = express.Router();
 
@@ -35,6 +48,36 @@ const storage = multer.diskStorage({
 });
 const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
+// Inspection evidence: photos + site videos, kept apart from other PM uploads
+const INSPECTION_MIN_IMAGES = 3;
+const INSPECTION_MIN_VIDEOS = 1;
+const INSPECTION_IMAGE_MAX_BYTES = 10 * 1024 * 1024;
+const inspectionDir = path.join(uploadDir, 'inspections');
+if (!fs.existsSync(inspectionDir)) fs.mkdirSync(inspectionDir, { recursive: true });
+const inspectionUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, inspectionDir),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`)
+  }),
+  limits: { fileSize: 200 * 1024 * 1024, files: 16 },
+  // Skip (don't abort on) wrong file types so parsing finishes cleanly; the handler rejects and cleans up
+  fileFilter: (req, file, cb) => {
+    const ok = (file.fieldname === 'images' && file.mimetype.startsWith('image/'))
+      || (file.fieldname === 'videos' && file.mimetype.startsWith('video/'));
+    if (!ok) (req.rejectedEvidence = req.rejectedEvidence || []).push(file.originalname);
+    cb(null, ok);
+  }
+}).fields([{ name: 'images', maxCount: 12 }, { name: 'videos', maxCount: 3 }]);
+
+/** Run the inspection upload, turning multer errors into 400s and removing files on any failure */
+const removeUploaded = (req) => Object.values(req.files || {}).flat().forEach((f) => fs.unlink(f.path, () => {}));
+const withInspectionUpload = (req, res, next) => inspectionUpload(req, res, (err) => {
+  if (!err) return next();
+  removeUploaded(req);
+  const message = err.code === 'LIMIT_FILE_SIZE' ? 'Each video must be under 200 MB' : err.message;
+  return res.status(400).json({ success: false, message });
+});
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
 
@@ -43,15 +86,6 @@ const notFound = (res, entity = 'Record') =>
 
 const badRequest = (res, message) =>
   res.status(400).json({ success: false, message });
-
-// Recalculate project.totalActualSpent from expense records
-const syncProjectActuals = async (projectId) => {
-  const [{ total } = { total: 0 }] = await ProjectExpense.aggregate([
-    { $match: { project: new mongoose.Types.ObjectId(projectId), paymentStatus: { $ne: 'Cancelled' } } },
-    { $group: { _id: null, total: { $sum: '$amount' } } }
-  ]);
-  await ConstructionProject.findByIdAndUpdate(projectId, { totalActualSpent: total });
-};
 
 // Recalculate parent project's progress based on its child projects
 const syncParentProjectProgress = async (parentProjectId) => {
@@ -68,17 +102,6 @@ const syncParentProjectProgress = async (parentProjectId) => {
   const parent = await ConstructionProject.findById(parentProjectId).select('parentProject');
   if (parent && parent.parentProject) {
     await syncParentProjectProgress(parent.parentProject);
-  }
-};
-
-// Recalculate project.overallProgress from WBS activity average
-const syncProjectProgress = async (projectId) => {
-  const tasks = await ProjectTask.find({ project: projectId, level: { $gt: 0 }, activity: { $ne: null } }).select('progressPercent');
-  if (!tasks.length) return;
-  const avg = Math.round(tasks.reduce((s, t) => s + (t.progressPercent || 0), 0) / tasks.length);
-  const project = await ConstructionProject.findByIdAndUpdate(projectId, { overallProgress: avg }, { new: true });
-  if (project && project.parentProject) {
-    await syncParentProjectProgress(project.parentProject);
   }
 };
 
@@ -197,7 +220,9 @@ router.get('/projects/statistics', asyncHandler(async (req, res) => {
               ]
             }
           },
-          totalSpent: { $sum: { $ifNull: ['$totalActualSpent', 0] } }
+          totalSpent: {
+            $sum: { $cond: [{ $ifNull: ['$parentProject', false] }, { $ifNull: ['$totalActualSpent', 0] }, 0] }
+          }
         }
       }
     ]),
@@ -232,6 +257,195 @@ router.get('/projects/:id/rollup', asyncHandler(async (req, res) => {
   res.json({
     success: true,
     data: summary
+  });
+}));
+
+// ─── COST REPORT (budget vs actual) ──────────────────────────────────────────
+
+/**
+ * Budget vs actual for one Sub Project.
+ * BOQ lines: budget (scope qty × estimate rate) → contracted (BOQ-wise sublet) → verified (check requests)
+ * → billed (Work IPCs) → approved (CEO). Slab-wise contracts are reported per slab.
+ */
+const buildSubCostReport = async (projectId) => {
+  const pid = new mongoose.Types.ObjectId(String(projectId));
+  const { projectFilter } = buildBoqFilter(projectId, { isSubProject: true });
+  const [boqItems, contracts, crs, ipcs] = await Promise.all([
+    BOQItem.find(projectFilter).select('title description unit estimatedQuantity estimatedUnitPrice discountAmount netEstimatedCost project allocations').lean(),
+    SubletContract.find({ project: pid, status: { $in: ['Active', 'Completed'] } })
+      .populate('contractor', 'name').select('contractNumber contractType status totalAmount items slabs contractor').lean(),
+    CheckRequest.find({ project: pid, status: { $in: ['Verified', 'Billed'] } }).select('claimType items slab subletContract verifiedTotal').lean(),
+    ProjectInvoice.find({ project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
+      .select('ipcKind approvalStatus items grossAmount checkRequest paidAmount retentionAmount advanceRecoveryAmount').lean()
+  ]);
+
+  const add = (map, key, f) => map.set(String(key), (map.get(String(key)) || 0) + f);
+  const contractedQty = new Map(); const contractedAmt = new Map(); const contractorsByLine = new Map();
+  contracts.filter((c) => c.contractType !== 'Slab').forEach((c) => (c.items || []).forEach((i) => {
+    add(contractedQty, i.boqItem, Number(i.quantity) || 0);
+    add(contractedAmt, i.boqItem, Number(i.amount) || (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0));
+    const names = contractorsByLine.get(String(i.boqItem)) || new Set();
+    names.add(c.contractor?.name); contractorsByLine.set(String(i.boqItem), names);
+  }));
+  const verifiedQty = new Map(); const verifiedAmt = new Map();
+  crs.filter((c) => c.claimType !== 'Slab').forEach((c) => (c.items || []).forEach((i) => {
+    add(verifiedQty, i.boqItem, Number(i.verifiedQuantity) || 0);
+    add(verifiedAmt, i.boqItem, Number(i.verifiedAmount) || 0);
+  }));
+  const work = ipcs.filter((i) => !NON_WORK_IPC_KINDS.includes(i.ipcKind));
+  const billedQty = new Map(); const billedAmt = new Map(); const approvedAmt = new Map();
+  work.forEach((inv) => (inv.items || []).forEach((i) => {
+    add(billedQty, i.boqItem, Number(i.currentQuantity) || 0);
+    add(billedAmt, i.boqItem, Number(i.currentAmount) || 0);
+    if (inv.approvalStatus === 'Approved') add(approvedAmt, i.boqItem, Number(i.currentAmount) || 0);
+  }));
+
+  const lines = boqItems.map((b) => {
+    const id = String(b._id);
+    const own = String(b.project) === String(projectId);
+    // Lines allocated from the Main Project budget only the quantity allocated to this Sub
+    const scopeQty = own
+      ? Number(b.estimatedQuantity) || 0
+      : (b.allocations || []).filter((a) => String(a.subProject) === String(projectId)).reduce((t, a) => t + (Number(a.allocatedQuantity) || 0), 0);
+    const rate = Number(b.estimatedUnitPrice) || 0;
+    const budget = round2(own && b.netEstimatedCost ? b.netEstimatedCost : scopeQty * rate);
+    const contracted = round2(contractedAmt.get(id) || 0);
+    const verified = round2(verifiedAmt.get(id) || 0);
+    const billed = round2(billedAmt.get(id) || 0);
+    const flags = [];
+    if (contracted > budget + 0.5) flags.push('Contracted above budget');
+    if ((verifiedQty.get(id) || 0) > scopeQty + 1e-6) flags.push('Verified quantity above BOQ');
+    if (contracted && billed > contracted + 0.5) flags.push('Billed above contract');
+    return {
+      boqItem: id,
+      title: b.title || b.description,
+      unit: b.unit,
+      scopeQty,
+      rate,
+      budget,
+      contractors: [...(contractorsByLine.get(id) || [])].filter(Boolean),
+      contractedQty: contractedQty.get(id) || 0,
+      contracted,
+      verifiedQty: verifiedQty.get(id) || 0,
+      verified,
+      billedQty: billedQty.get(id) || 0,
+      billed,
+      approved: round2(approvedAmt.get(id) || 0),
+      variance: round2((contracted || verified) - budget),
+      flags
+    };
+  });
+
+  const slabContracts = contracts.filter((c) => c.contractType === 'Slab').map((c) => {
+    const crForSlab = (slabId) => crs.find((cr) => cr.claimType === 'Slab' && String(cr.slab?.slabId) === String(slabId));
+    return {
+      contractNumber: c.contractNumber,
+      contractor: c.contractor?.name,
+      status: c.status,
+      value: c.totalAmount,
+      slabs: (c.slabs || []).map((sl) => {
+        const cr = crForSlab(sl._id);
+        const ipc = cr && work.find((i) => String(i.checkRequest) === String(cr._id));
+        return {
+          name: sl.name,
+          percentage: sl.percentage,
+          amount: sl.amount,
+          activities: (sl.activities || []).map((a) => a.name),
+          verified: cr ? round2(cr.verifiedTotal) : 0,
+          billed: ipc ? round2(ipc.grossAmount) : 0,
+          approved: ipc && ipc.approvalStatus === 'Approved' ? round2(ipc.grossAmount) : 0
+        };
+      })
+    };
+  });
+
+  const sum = (list, f) => round2(list.reduce((t, r) => t + (Number(r[f]) || 0), 0));
+  const slabRows = slabContracts.flatMap((c) => c.slabs);
+  const summary = {
+    budget: sum(lines, 'budget'),
+    contracted: round2(contracts.reduce((t, c) => t + (Number(c.totalAmount) || 0), 0)),
+    verified: round2(sum(lines, 'verified') + sum(slabRows, 'verified')),
+    billed: sum(work, 'grossAmount'),
+    approved: sum(work.filter((i) => i.approvalStatus === 'Approved'), 'grossAmount'),
+    paid: sum(work.concat(ipcs.filter((i) => NON_WORK_IPC_KINDS.includes(i.ipcKind))), 'paidAmount'),
+    retentionHeld: round2(sum(work.filter((i) => i.approvalStatus === 'Approved'), 'retentionAmount')
+      - sum(ipcs.filter((i) => i.ipcKind === 'Retention Release'), 'grossAmount')),
+    advanceOutstanding: Math.max(0, round2(sum(ipcs.filter((i) => i.ipcKind === 'Advance' && i.approvalStatus === 'Approved'), 'grossAmount')
+      - sum(work, 'advanceRecoveryAmount'))),
+    linesOverBudget: lines.filter((l) => l.flags.length).length
+  };
+  summary.variance = round2(summary.contracted - summary.budget);
+  return { lines, slabContracts, summary };
+};
+
+// GET /api/project-management/projects/:id/cost-report — Sub: per line + per slab; Main: per Sub Project
+router.get('/projects/:id/cost-report', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('name parentProject totalEstimatedCost lumpSumBudget').lean();
+  if (!project) return notFound(res, 'Project');
+  if (project.parentProject) {
+    return res.json({ success: true, data: { level: 'sub', ...(await buildSubCostReport(req.params.id)) } });
+  }
+  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
+    .select('name projectNumber sector').sort({ name: 1 }).lean();
+  const rows = await Promise.all(subs.map(async (sp) => ({ project: sp, ...(await buildSubCostReport(sp._id)).summary })));
+  const keys = ['budget', 'contracted', 'verified', 'billed', 'approved', 'paid', 'retentionHeld', 'advanceOutstanding', 'variance', 'linesOverBudget'];
+  const summary = Object.fromEntries(keys.map((k) => [k, round2(rows.reduce((t, r) => t + (Number(r[k]) || 0), 0))]));
+  summary.lumpSumBudget = Number(project.lumpSumBudget) || 0;
+  res.json({ success: true, data: { level: 'main', subProjects: rows, summary } });
+}));
+
+// GET /api/project-management/projects/:id/workflow — step-by-step status for the Sub Project workflow strip
+router.get('/projects/:id/workflow', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+  if (!project.parentProject) return badRequest(res, 'Workflow applies to Sub Projects only');
+
+  const { projectFilter } = buildBoqFilter(req.params.id, { isSubProject: true });
+  const [boqLines, contracts, checkRequests, ipcs] = await Promise.all([
+    BOQItem.countDocuments(projectFilter),
+    SubletContract.find({ project: req.params.id, status: { $ne: 'Cancelled' } }).select('status').lean(),
+    CheckRequest.find({ project: req.params.id, status: { $ne: 'Cancelled' } })
+      .select('status items claimType verifiedTotal linkedInvoice').lean(),
+    ProjectInvoice.find({ project: req.params.id, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
+      .select('status approvalStatus netPayableAmount invoiceAmount paidAmount').lean()
+  ]);
+
+  const countBy = (rows, status) => rows.filter((r) => r.status === status).length;
+  const billable = (cr) => checkRequestBillable(cr) > 0;
+  // Finance owes only what the CEO has approved
+  const unpaid = ipcs.filter((i) => i.approvalStatus === 'Approved' && i.status !== 'Paid');
+
+  res.json({
+    success: true,
+    data: {
+      boq: { lines: boqLines },
+      contracts: {
+        draft: countBy(contracts, 'Draft'),
+        active: countBy(contracts, 'Active'),
+        completed: countBy(contracts, 'Completed')
+      },
+      checkRequests: {
+        draft: countBy(checkRequests, 'Draft'),
+        rejected: countBy(checkRequests, 'Rejected'),
+        submitted: countBy(checkRequests, 'Submitted'),
+        readyForIpc: checkRequests.filter(billable).length,
+        verifiedOrBilled: checkRequests.filter((c) => ['Verified', 'Billed'].includes(c.status)).length
+      },
+      ipcs: {
+        total: ipcs.length,
+        draft: ipcs.filter((i) => (i.approvalStatus || 'Draft') === 'Draft').length,
+        rejected: ipcs.filter((i) => i.approvalStatus === 'Rejected').length,
+        inApproval: ipcs.filter((i) => ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO'].includes(i.approvalStatus)).length,
+        approved: ipcs.filter((i) => i.approvalStatus === 'Approved').length,
+        unpaid: unpaid.length,
+        unpaidAmount: unpaid.reduce(
+          (s, i) => s + Math.max(0, (Number(i.netPayableAmount) || Number(i.invoiceAmount) || 0) - (Number(i.paidAmount) || 0)), 0
+        ),
+        paid: countBy(ipcs, 'Paid')
+      }
+    }
   });
 }));
 
@@ -382,7 +596,7 @@ router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => 
 router.post('/projects', asyncHandler(async (req, res) => {
   const { name, projectType, description, society, sector, street, side, plotNumber, address,
     clientName, clientContact, projectManager, startDate, expectedEndDate,
-    budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty } = req.body;
+    budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
   if (!name || !name.trim()) return badRequest(res, 'Project name is required');
 
@@ -392,6 +606,7 @@ router.post('/projects', asyncHandler(async (req, res) => {
     street: street || '',
     side: ['Left', 'Right'].includes(side) ? side : '',
     clientName, clientContact, notes, tags,
+    companyId: companyId && isValidId(companyId) ? companyId : null,
     projectManager: projectManager || null,
     startDate: startDate ? new Date(startDate) : undefined,
     expectedEndDate: expectedEndDate ? new Date(expectedEndDate) : undefined,
@@ -434,11 +649,12 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     'plotNumber', 'street', 'side', 'address', 'clientName', 'clientContact', 'projectManager',
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
-    'parentProject', 'contractValue'
+    'parentProject', 'contractValue', 'companyId'
   ];
 
   const updates = {};
   allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
+  if (updates.companyId !== undefined) updates.companyId = updates.companyId && isValidId(updates.companyId) ? updates.companyId : null;
   updates.updatedBy = req.user?._id;
 
   // Convert empty string refs to null to avoid CastError
@@ -479,7 +695,9 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   }
   if (oldProject && oldProject.parentProject && String(oldProject.parentProject) !== String(project.parentProject)) {
     await syncParentProjectProgress(oldProject.parentProject);
+    await syncProjectMetrics(oldProject.parentProject);
   }
+  await syncProjectMetrics(project._id);
 
   res.json({ success: true, message: 'Project updated successfully', data: project });
 }));
@@ -644,6 +862,7 @@ const PROJECT_CHILD_MODELS = [
   ['boqHeaders', ProjectBOQ],
   ['subletContracts', SubletContract],
   ['checkRequests', CheckRequest],
+  ['inspectionReports', InspectionReport],
   ['invoices', ProjectInvoice],
   ['expenses', ProjectExpense],
   ['dailyReports', DailyProgressReport],
@@ -823,8 +1042,12 @@ router.delete('/projects/:id/boq-headers/:boqId', asyncHandler(async (req, res) 
 // POST /api/project-management/projects/:id/boq/allocate — allocate item quantity to Sub-Project & Subcontractor
 router.post('/projects/:id/boq/allocate', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-  const { itemId, subProjectId, contractorId, allocatedQuantity, contractorUnitPrice, notes } = req.body;
+  const { itemId, subProjectId, allocatedQuantity, notes } = req.body;
   if (!itemId || !isValidId(itemId)) return badRequest(res, 'Valid itemId is required');
+  // Subcontractors are assigned only through Sublet Contracts on the Sub Project
+  if (!subProjectId || !isValidId(subProjectId)) return badRequest(res, 'Select the Sub Project to allocate this quantity to');
+  const subProject = await ConstructionProject.findOne({ _id: subProjectId, parentProject: req.params.id }).select('_id').lean();
+  if (!subProject) return badRequest(res, 'Sub Project must belong to this Main Project');
 
   const item = await BOQItem.findById(itemId);
   if (!item) return notFound(res, 'BOQ Item');
@@ -840,17 +1063,14 @@ router.post('/projects/:id/boq/allocate', asyncHandler(async (req, res) => {
     );
   }
 
+  if (allocQty <= 0) return badRequest(res, 'Allocated quantity must be greater than zero');
+
   item.allocations.push({
-    subProject: subProjectId || null,
-    contractor: contractorId || null,
+    subProject: subProjectId,
     allocatedQuantity: allocQty,
-    contractorUnitPrice: Number(contractorUnitPrice) || item.contractorUnitPrice || item.estimatedUnitPrice || 0,
     notes: notes || ''
   });
-
-  if (contractorId) item.contractor = contractorId;
-  if (subProjectId) item.subProject = subProjectId;
-  if (contractorUnitPrice) item.contractorUnitPrice = Number(contractorUnitPrice);
+  item.subProject = subProjectId;
 
   await item.save();
 
@@ -981,27 +1201,6 @@ router.put('/projects/:id/boq/discount', asyncHandler(async (req, res) => {
     message: 'BOQ discount updated',
     data: { boqDiscountAmount: project.boqDiscountAmount, ...calcBoqSummary(rows, project.boqDiscountAmount) }
   });
-}));
-
-// PUT /api/project-management/projects/:id/boq/batch-assign-contractor
-router.put('/projects/:id/boq/batch-assign-contractor', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-  const { itemIds, contractorId, subProjectId, contractorUnitPrice } = req.body;
-  if (!Array.isArray(itemIds) || !itemIds.length) return badRequest(res, 'itemIds array is required');
-
-  const update = {};
-  if (contractorId) update.contractor = contractorId;
-  if (subProjectId) update.subProject = subProjectId;
-  if (contractorUnitPrice != null && contractorUnitPrice !== '') {
-    update.contractorUnitPrice = Number(contractorUnitPrice);
-  }
-
-  await BOQItem.updateMany(
-    { _id: { $in: itemIds }, project: req.params.id },
-    { $set: update }
-  );
-
-  res.json({ success: true, message: `${itemIds.length} BOQ items assigned successfully` });
 }));
 
 // POST /api/project-management/projects/:id/boq — add single item
@@ -1286,11 +1485,6 @@ router.put('/projects/:id/tasks/:taskId', asyncHandler(async (req, res) => {
   );
   if (!task) return notFound(res, 'Task');
 
-  // Sync project progress when a task's progress changes
-  if (updates.progressPercent !== undefined) {
-    await syncProjectProgress(req.params.id);
-  }
-
   res.json({ success: true, message: 'Task updated', data: task });
 }));
 
@@ -1518,117 +1712,6 @@ router.delete('/slab-schedules/:scheduleId', asyncHandler(async (req, res) => {
   res.json({ success: true, message: 'Slab schedule deleted' });
 }));
 
-// ─── EXPENSES ────────────────────────────────────────────────────────────────
-
-// GET /api/project-management/projects/:id/expenses
-router.get('/projects/:id/expenses', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const { category, paymentStatus, page = 1, limit = 50 } = req.query;
-  const filter = { project: req.params.id };
-  if (category) filter.category = category;
-  if (paymentStatus) filter.paymentStatus = paymentStatus;
-
-  const skip = (Number(page) - 1) * Number(limit);
-  const [expenses, total] = await Promise.all([
-    ProjectExpense.find(filter)
-      .populate('approvedBy', 'firstName lastName')
-      .sort({ expenseDate: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .lean(),
-    ProjectExpense.countDocuments(filter)
-  ]);
-
-  // Category-wise summary
-  const summary = await ProjectExpense.aggregate([
-    { $match: { project: new mongoose.Types.ObjectId(req.params.id), paymentStatus: { $ne: 'Cancelled' } } },
-    { $group: { _id: '$category', total: { $sum: '$amount' }, count: { $sum: 1 } } },
-    { $sort: { total: -1 } }
-  ]);
-
-  res.json({
-    success: true,
-    data: {
-      expenses,
-      summary,
-      pagination: { total, page: Number(page), limit: Number(limit) }
-    }
-  });
-}));
-
-// POST /api/project-management/projects/:id/expenses — add expense
-router.post('/projects/:id/expenses', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const { category, description, amount, expenseDate, vendor, invoiceNumber,
-    paymentStatus, paymentMethod, paymentDate, task, checkRequest, notes } = req.body;
-
-  if (!description) return badRequest(res, 'Description is required');
-  if (!category) return badRequest(res, 'Category is required');
-  if (!amount || Number(amount) <= 0) return badRequest(res, 'Valid amount is required');
-
-  let checkRequestId = null;
-  if (checkRequest) {
-    if (!isValidId(checkRequest)) return badRequest(res, 'Invalid check request ID');
-    const cr = await CheckRequest.findOne({ _id: checkRequest, project: req.params.id });
-    if (!cr) return badRequest(res, 'Check request not found on this project');
-    if (!['Verified', 'Billed'].includes(cr.status)) {
-      return badRequest(res, 'Expense can only be linked to a Verified (or billed) Check Request');
-    }
-    checkRequestId = cr._id;
-  }
-
-  const expense = await ProjectExpense.create({
-    project: req.params.id,
-    category, description,
-    amount: Number(amount),
-    expenseDate: expenseDate ? new Date(expenseDate) : new Date(),
-    vendor, invoiceNumber,
-    paymentStatus: paymentStatus || 'Pending',
-    paymentMethod: paymentMethod || 'Bank Transfer',
-    paymentDate: paymentDate ? new Date(paymentDate) : undefined,
-    task: task || null,
-    checkRequest: checkRequestId,
-    notes,
-    createdBy: req.user?._id
-  });
-
-  await syncProjectActuals(req.params.id);
-  res.status(201).json({ success: true, message: 'Expense recorded', data: expense });
-}));
-
-// PUT /api/project-management/projects/:id/expenses/:expenseId
-router.put('/projects/:id/expenses/:expenseId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.expenseId)) return badRequest(res, 'Invalid ID');
-
-  const allowed = ['category', 'description', 'amount', 'expenseDate', 'vendor',
-    'invoiceNumber', 'paymentStatus', 'paymentMethod', 'paymentDate', 'notes'];
-  const updates = {};
-  allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
-
-  const expense = await ProjectExpense.findOneAndUpdate(
-    { _id: req.params.expenseId, project: req.params.id },
-    { $set: updates },
-    { new: true, runValidators: true }
-  );
-  if (!expense) return notFound(res, 'Expense');
-
-  await syncProjectActuals(req.params.id);
-  res.json({ success: true, message: 'Expense updated', data: expense });
-}));
-
-// DELETE /api/project-management/projects/:id/expenses/:expenseId
-router.delete('/projects/:id/expenses/:expenseId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.expenseId)) return badRequest(res, 'Invalid ID');
-
-  const expense = await ProjectExpense.findOneAndDelete({ _id: req.params.expenseId, project: req.params.id });
-  if (!expense) return notFound(res, 'Expense');
-
-  await syncProjectActuals(req.params.id);
-  res.json({ success: true, message: 'Expense deleted' });
-}));
-
 // ─── DAILY PROGRESS REPORTS ──────────────────────────────────────────────────
 
 // GET /api/project-management/projects/:id/dpr
@@ -1840,6 +1923,41 @@ const syncProjectInvoiceTotals = async (projectId) => {
   await ConstructionProject.findByIdAndUpdate(projectId, { totalInvoiced: total });
 };
 
+/**
+ * Undo what an IPC billed: check request billed quantities / slab, and the BOQ contractor counters.
+ * Called when an unpaid IPC is cancelled or deleted, so the verified work can be billed again.
+ */
+const reverseIpcBilling = async (invoice, userId) => {
+  if (invoice.invoiceType !== 'Subcontractor_IPC') return;
+  await Promise.all((invoice.items || []).map((item) =>
+    BOQItem.updateOne(
+      { _id: item.boqItem },
+      { $inc: { contractorBilledQuantity: -(Number(item.currentQuantity) || 0), contractorBilledAmount: -(Number(item.currentAmount) || 0) } }
+    )
+  ));
+  if (!invoice.checkRequest) return;
+  const cr = await CheckRequest.findById(invoice.checkRequest);
+  if (!cr) return;
+  (invoice.items || []).forEach((item) => {
+    const crItem = cr.items.find((i) => String(i.boqItem) === String(item.boqItem));
+    if (crItem) crItem.billedQuantity = Math.max(0, (Number(crItem.billedQuantity) || 0) - (Number(item.currentQuantity) || 0));
+  });
+  if (String(cr.linkedInvoice || '') === String(invoice._id)) cr.linkedInvoice = null;
+  if (cr.status === 'Billed') cr.status = 'Verified';
+  cr.updatedBy = userId;
+  await cr.save();
+};
+
+/** Add (sign 1) or remove (sign -1) an IPC's lines from the BOQ contractor counters */
+const applyBoqCounters = (items, sign) => Promise.all((items || []).map((item) =>
+  BOQItem.updateOne(
+    { _id: item.boqItem },
+    { $inc: { contractorBilledQuantity: sign * (Number(item.currentQuantity) || 0), contractorBilledAmount: sign * (Number(item.currentAmount) || 0) } }
+  )
+));
+
+const invoiceBalance = (inv) => Math.max(0, (Number(inv.netPayableAmount) || Number(inv.invoiceAmount) || 0) - (Number(inv.paidAmount) || 0));
+
 // GET /api/project-management/projects/:id/invoices
 router.get('/projects/:id/invoices', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
@@ -1854,12 +1972,218 @@ router.get('/projects/:id/invoices', asyncHandler(async (req, res) => {
     .lean();
 
   // Summary stats
-  const totalInvoiced = invoices.filter(i => i.status !== 'Cancelled').reduce((s, i) => s + (i.netPayableAmount || i.invoiceAmount), 0);
-  const totalPaid = invoices.filter(i => i.status === 'Paid').reduce((s, i) => s + (i.paidAmount || i.invoiceAmount), 0);
-  const totalOutstanding = totalInvoiced - totalPaid;
+  const live = invoices.filter((i) => i.status !== 'Cancelled');
+  const totalInvoiced = live.reduce((s, i) => s + (Number(i.netPayableAmount) || Number(i.invoiceAmount) || 0), 0);
+  const totalPaid = live.reduce((s, i) => s + (Number(i.paidAmount) || 0), 0);
+  const totalOutstanding = live.reduce((s, i) => s + invoiceBalance(i), 0);
 
   res.json({ success: true, data: { invoices, totalInvoiced, totalPaid, totalOutstanding } });
 }));
+
+/**
+ * Lines for a BOQ-wise IPC from a verified check request: quantities capped at verified-but-unbilled,
+ * rate locked to the verified rate, "previous" = this subcontractor's earlier IPCs on this line.
+ * excludeInvoiceId leaves an IPC being revised out of "previous".
+ * Returns { processedItems, grossAmount } or { error }.
+ */
+const buildIpcLines = async (projectId, cr, items, excludeInvoiceId = null) => {
+  const inputByBoq = new Map();
+  (Array.isArray(items) ? items : []).forEach((itemInput) => {
+    const key = String(itemInput.boqItemId || itemInput.boqItem || '');
+    if (key) inputByBoq.set(key, itemInput);
+  });
+
+  const processedItems = [];
+  let grossAmount = 0;
+  for (const crItem of cr.items) {
+    const billableQty = Math.max(0, (Number(crItem.verifiedQuantity) || 0) - (Number(crItem.billedQuantity) || 0));
+    if (billableQty <= 0) continue;
+
+    const override = inputByBoq.get(String(crItem.boqItem));
+    const currentQuantity = override?.currentQuantity !== undefined ? Number(override.currentQuantity) || 0 : billableQty;
+    if (currentQuantity <= 0) continue;
+    if (currentQuantity > billableQty) {
+      return { error: `Quantity for "${crItem.title || crItem.description}" exceeds verified unpaid qty (${billableQty} ${crItem.unit}).` };
+    }
+
+    // Rate is the one verified on the check request (the sublet contract rate) — not editable on the IPC
+    const unitPrice = Number(crItem.unitPrice) || 0;
+    const currentAmount = Math.round(currentQuantity * unitPrice * 100) / 100;
+    grossAmount += currentAmount;
+
+    const [prev] = await ProjectInvoice.aggregate([
+      {
+        $match: {
+          project: new mongoose.Types.ObjectId(String(projectId)),
+          contractor: cr.contractor,
+          invoiceType: 'Subcontractor_IPC',
+          status: { $ne: 'Cancelled' },
+          ...(excludeInvoiceId ? { _id: { $ne: new mongoose.Types.ObjectId(String(excludeInvoiceId)) } } : {})
+        }
+      },
+      { $unwind: '$items' },
+      { $match: { 'items.boqItem': crItem.boqItem } },
+      { $group: { _id: null, qty: { $sum: '$items.currentQuantity' } } }
+    ]);
+    const previousQuantity = Number(prev?.qty) || 0;
+
+    processedItems.push({
+      boqItem: crItem.boqItem,
+      title: crItem.title || '',
+      description: crItem.description || '',
+      unit: crItem.unit || '',
+      previousQuantity,
+      currentQuantity,
+      cumulativeQuantity: previousQuantity + currentQuantity,
+      unitPrice,
+      currentAmount,
+      _crItemId: crItem._id
+    });
+  }
+  if (!processedItems.length) return { error: 'No billable verified quantities left on this Check Request' };
+  return { processedItems, grossAmount: Math.round(grossAmount * 100) / 100 };
+};
+
+/** Apply an IPC's lines to the BOQ contractor counters and the check request's billed quantities. */
+const applyIpcBilling = async (cr, processedItems, invoiceId, userId) => {
+  await Promise.all(processedItems.map((item) =>
+    BOQItem.findByIdAndUpdate(item.boqItem, {
+      $inc: { contractorBilledQuantity: item.currentQuantity, contractorBilledAmount: item.currentAmount }
+    })
+  ));
+  for (const item of processedItems) {
+    const crItem = cr.items.id(item._crItemId) || cr.items.find((i) => String(i.boqItem) === String(item.boqItem));
+    if (crItem) crItem.billedQuantity = (Number(crItem.billedQuantity) || 0) + item.currentQuantity;
+  }
+  const stillBillable = cr.items.some((i) => (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0) > 0.0001);
+  cr.status = cr.claimType === 'Slab' || !stillBillable ? 'Billed' : 'Verified';
+  cr.linkedInvoice = invoiceId;
+  cr.updatedBy = userId;
+  await cr.save();
+};
+
+/** IPC kinds that are not certified work (no cost, no check request) */
+const NON_WORK_IPC_KINDS = ['Advance', 'Retention Release'];
+
+/**
+ * Money position of one subcontractor on one Sub Project, from its (non-cancelled) IPCs:
+ * retention held / released and advances paid / recovered. excludeInvoiceId leaves an IPC being revised out.
+ */
+const subcontractorBalances = async (projectId, contractorId, excludeInvoiceId = null) => {
+  const filter = {
+    project: new mongoose.Types.ObjectId(String(projectId)),
+    contractor: new mongoose.Types.ObjectId(String(contractorId)),
+    invoiceType: 'Subcontractor_IPC',
+    status: { $ne: 'Cancelled' }
+  };
+  if (excludeInvoiceId) filter._id = { $ne: new mongoose.Types.ObjectId(String(excludeInvoiceId)) };
+  const rows = await ProjectInvoice.find(filter)
+    .select('ipcKind approvalStatus grossAmount retentionAmount advanceRecoveryAmount advanceRecoveryPercent ceoApprovedAt createdAt')
+    .lean();
+  const approved = (r) => r.approvalStatus === 'Approved';
+  const sum = (list, f) => round2(list.reduce((t, r) => t + (Number(r[f]) || 0), 0));
+  const work = rows.filter((r) => !NON_WORK_IPC_KINDS.includes(r.ipcKind));
+  const advances = rows.filter((r) => r.ipcKind === 'Advance');
+  const releases = rows.filter((r) => r.ipcKind === 'Retention Release');
+
+  const retentionHeld = sum(work.filter(approved), 'retentionAmount');
+  const retentionReleased = sum(releases, 'grossAmount'); // pending releases count too, so nothing is released twice
+  const advancePaid = sum(advances.filter(approved), 'grossAmount');
+  const advanceRecovered = sum(work, 'advanceRecoveryAmount');
+  const latestAdvance = advances.filter(approved)
+    .sort((a, b) => new Date(b.ceoApprovedAt || b.createdAt) - new Date(a.ceoApprovedAt || a.createdAt))[0];
+  return {
+    retentionHeld,
+    retentionPendingApproval: sum(work.filter((r) => !approved(r)), 'retentionAmount'),
+    retentionReleased,
+    retentionAvailable: Math.max(0, round2(retentionHeld - retentionReleased)),
+    advancePaid,
+    advancePendingApproval: sum(advances.filter((r) => !approved(r)), 'grossAmount'),
+    advanceRecovered,
+    advanceOutstanding: Math.max(0, round2(advancePaid - advanceRecovered)),
+    recoveryPercent: Number(latestAdvance?.advanceRecoveryPercent) || 0
+  };
+};
+
+/** Advance recovery for a Work IPC: given → must fit the outstanding advance; omitted → recovery % of gross, capped */
+const resolveAdvanceRecovery = async (projectId, contractorId, gross, given, excludeInvoiceId = null) => {
+  const bal = await subcontractorBalances(projectId, contractorId, excludeInvoiceId);
+  if (given === undefined || given === null || given === '') {
+    return { amount: Math.min(bal.advanceOutstanding, round2((gross * bal.recoveryPercent) / 100)) };
+  }
+  const amount = Number(given) || 0;
+  if (amount > bal.advanceOutstanding + 0.01) {
+    return { error: `Advance recovery (${amount}) is more than the advance still outstanding (${bal.advanceOutstanding})` };
+  }
+  return { amount };
+};
+
+/** Retention / WHT / advance → net payable, or { error } when they don't fit the gross. */
+const computeIpcDeductions = (gross, { retentionPercentage = 0, whtPercentage = 0, advanceRecoveryAmount = 0 }) => {
+  const retentionP = Number(retentionPercentage) || 0;
+  const whtP = Number(whtPercentage) || 0;
+  const advRec = Number(advanceRecoveryAmount) || 0;
+  if (retentionP < 0 || retentionP > 100) return { error: 'Retention must be between 0% and 100%' };
+  if (whtP < 0 || whtP > 100) return { error: 'WHT must be between 0% and 100%' };
+  if (advRec < 0) return { error: 'Advance recovery cannot be negative' };
+  const retentionAmount = Math.round(gross * (retentionP / 100) * 100) / 100;
+  const whtAmount = Math.round(gross * (whtP / 100) * 100) / 100;
+  if (retentionAmount + whtAmount + advRec > gross) {
+    return { error: `Deductions (${retentionAmount + whtAmount + advRec}) exceed the gross bill (${gross})` };
+  }
+  return {
+    retentionPercentage: retentionP,
+    retentionAmount,
+    whtPercentage: whtP,
+    whtAmount,
+    advanceRecoveryAmount: advRec,
+    netPayableAmount: Math.max(0, Math.round((gross - retentionAmount - advRec - whtAmount) * 100) / 100)
+  };
+};
+
+/** Verified BOQ work not yet billed to the client, priced at the BOQ (client) rate */
+const clientBillableLines = async (projectId) => {
+  const crs = await CheckRequest.find({ project: projectId, claimType: { $ne: 'Slab' }, status: { $in: ['Verified', 'Billed'] } })
+    .populate('contractor', 'name').select('checkRequestNumber title contractor items verifiedAt').sort({ verifiedAt: 1 }).lean();
+  const boqIds = [...new Set(crs.flatMap((c) => c.items.map((i) => String(i.boqItem))))];
+  const boqs = await BOQItem.find({ _id: { $in: boqIds } }).select('estimatedUnitPrice title description unit').lean();
+  const boqById = new Map(boqs.map((b) => [String(b._id), b]));
+  return crs.flatMap((cr) => cr.items.map((i) => {
+    const remaining = round2((Number(i.verifiedQuantity) || 0) - (Number(i.clientBilledQuantity) || 0));
+    if (remaining <= 0) return null;
+    const boq = boqById.get(String(i.boqItem));
+    const clientRate = Number(boq?.estimatedUnitPrice) || 0;
+    return {
+      checkRequest: String(cr._id),
+      checkRequestNumber: cr.checkRequestNumber,
+      contractor: cr.contractor?.name,
+      crItem: String(i._id),
+      boqItem: String(i.boqItem),
+      title: i.title || boq?.title || boq?.description,
+      unit: i.unit || boq?.unit,
+      remaining,
+      clientRate,
+      costRate: Number(i.unitPrice) || 0
+    };
+  })).filter(Boolean);
+};
+
+// GET /api/project-management/projects/:id/client-billable — verified work not yet billed to the client
+router.get('/projects/:id/client-billable', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  res.json({ success: true, data: await clientBillableLines(req.params.id) });
+}));
+
+/** Give a client invoice's verified quantities back (cancel / delete) */
+const reverseClientBilling = async (invoice) => {
+  for (const src of invoice.clientBillingSources || []) {
+    const cr = await CheckRequest.findById(src.checkRequest);
+    const item = cr?.items.id(src.crItem);
+    if (!item) continue;
+    item.clientBilledQuantity = Math.max(0, round2((Number(item.clientBilledQuantity) || 0) - (Number(src.quantity) || 0)));
+    await cr.save();
+  }
+};
 
 // POST /api/project-management/projects/:id/invoices — manual / Subcontractor IPC invoice creation
 router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
@@ -1870,15 +2194,77 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
 
   const masterProjectId = project.parentProject || null;
 
-  const { invoiceType = 'Subcontractor_IPC', contractor, items = [], retentionPercentage = 0,
-    advanceRecoveryAmount = 0, whtPercentage = 0, invoiceAmount, description, issueDate, dueDate,
+  const { invoiceType = 'Subcontractor_IPC', items = [], retentionPercentage = 0,
+    advanceRecoveryAmount: advanceRecoveryInput, whtPercentage = 0, invoiceAmount, description, issueDate, dueDate,
     billingPercentage, milestoneId, milestoneName, notes, clientName, clientContact, clientAddress,
     boqItemId, checkRequestId } = req.body;
+
+  // Subcontractor money goes only through IPCs; the only other bill is the client milestone invoice
+  if (!['Subcontractor_IPC', 'Client_Invoice'].includes(invoiceType)) {
+    return badRequest(res, 'Invoice type must be a Subcontractor IPC or a Client Milestone Invoice');
+  }
 
   let processedItems = [];
   let grossAmount = 0;
   let ipcNumber = 1;
   let linkedCheckRequest = null;
+
+  // Client Invoice from verified work: bill verified quantities at the BOQ (client) rate, once each
+  if (invoiceType === 'Client_Invoice' && Array.isArray(req.body.clientLines) && req.body.clientLines.length) {
+    const available = new Map((await clientBillableLines(req.params.id)).map((l) => [l.crItem, l]));
+    const lines = [];
+    for (const row of req.body.clientLines) {
+      const line = available.get(String(row.crItem));
+      const qty = round2(row.quantity);
+      if (!line) return badRequest(res, 'A selected line is no longer available to bill');
+      if (!(qty > 0)) continue;
+      if (qty > line.remaining + 1e-6) return badRequest(res, `"${line.title}" has only ${line.remaining} ${line.unit} left to bill to the client`);
+      lines.push({ line, qty });
+    }
+    if (!lines.length) return badRequest(res, 'Enter a quantity to bill on at least one line');
+    const prevByBoq = new Map();
+    (await ProjectInvoice.find({ project: req.params.id, invoiceType: 'Client_Invoice', status: { $ne: 'Cancelled' } }).select('items').lean())
+      .forEach((inv) => (inv.items || []).forEach((i) => prevByBoq.set(String(i.boqItem), (prevByBoq.get(String(i.boqItem)) || 0) + (Number(i.currentQuantity) || 0))));
+    const items = lines.map(({ line, qty }) => {
+      const previousQuantity = prevByBoq.get(line.boqItem) || 0;
+      prevByBoq.set(line.boqItem, previousQuantity + qty);
+      return {
+        boqItem: line.boqItem, title: line.title, unit: line.unit, previousQuantity, currentQuantity: qty,
+        cumulativeQuantity: previousQuantity + qty, unitPrice: line.clientRate, currentAmount: round2(qty * line.clientRate)
+      };
+    });
+    const amount = round2(items.reduce((t, i) => t + i.currentAmount, 0));
+    if (!(amount > 0)) return badRequest(res, 'These lines have no client rate on the BOQ — set the BOQ unit price first');
+    const project = await ConstructionProject.findById(req.params.id).select('parentProject clientName clientContact address contractValue').lean();
+    const invoice = await ProjectInvoice.create({
+      project: req.params.id,
+      masterProject: project?.parentProject || null,
+      invoiceType: 'Client_Invoice',
+      items,
+      grossAmount: amount,
+      netPayableAmount: amount,
+      invoiceAmount: amount,
+      clientBillingSources: lines.map(({ line, qty }) => ({
+        checkRequest: line.checkRequest, crItem: line.crItem, quantity: qty, costAmount: round2(qty * line.costRate)
+      })),
+      clientName: clientName || project?.clientName || '',
+      clientContact: clientContact || project?.clientContact || '',
+      clientAddress: clientAddress || project?.address || '',
+      contractValue: project?.contractValue || 0,
+      description: description || 'Client invoice for verified work',
+      issueDate: issueDate ? new Date(issueDate) : new Date(),
+      dueDate: dueDate ? new Date(dueDate) : undefined,
+      notes,
+      createdBy: req.user?._id
+    });
+    for (const { line, qty } of lines) {
+      await CheckRequest.updateOne({ _id: line.checkRequest, 'items._id': line.crItem }, { $inc: { 'items.$.clientBilledQuantity': qty } });
+    }
+    await syncProjectInvoiceTotals(req.params.id);
+    if (project?.parentProject) await syncProjectInvoiceTotals(project.parentProject);
+    const populated = await ProjectInvoice.findById(invoice._id).lean();
+    return res.status(201).json({ success: true, message: `Client invoice created — ${amount} for verified work`, data: populated });
+  }
 
   // Subcontractor IPC must come from a Verified Check Request
   if (invoiceType === 'Subcontractor_IPC') {
@@ -1895,74 +2281,27 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     }
   }
 
+  // An IPC pays the subcontractor who raised the check request — never someone picked on the form
   if (linkedCheckRequest) {
-    if (contractor && isValidId(contractor)) {
-      const existingIpcCount = await ProjectInvoice.countDocuments({
-        $or: [{ project: req.params.id }, { masterProject: req.params.id }],
-        contractor,
-        invoiceType: 'Subcontractor_IPC',
-        status: { $ne: 'Cancelled' }
-      });
-      ipcNumber = existingIpcCount + 1;
-    } else if (linkedCheckRequest.contractor) {
-      const existingIpcCount = await ProjectInvoice.countDocuments({
-        $or: [{ project: req.params.id }, { masterProject: req.params.id }],
-        contractor: linkedCheckRequest.contractor,
-        invoiceType: 'Subcontractor_IPC',
-        status: { $ne: 'Cancelled' }
-      });
-      ipcNumber = existingIpcCount + 1;
-    }
+    if (!linkedCheckRequest.contractor) return badRequest(res, 'This check request has no subcontractor to pay');
+    const lastIpc = await ProjectInvoice.findOne({
+      project: req.params.id,
+      contractor: linkedCheckRequest.contractor,
+      invoiceType: 'Subcontractor_IPC'
+    }).sort({ ipcNumber: -1 }).select('ipcNumber').lean();
+    ipcNumber = (Number(lastIpc?.ipcNumber) || 0) + 1;
+  }
 
-    const inputByBoq = new Map();
-    (Array.isArray(items) ? items : []).forEach((itemInput) => {
-      const key = String(itemInput.boqItemId || itemInput.boqItem || '');
-      if (key) inputByBoq.set(key, itemInput);
-    });
+  const slabClaim = linkedCheckRequest?.claimType === 'Slab';
+  if (slabClaim) {
+    grossAmount = checkRequestBillable(linkedCheckRequest);
+    if (grossAmount <= 0) return badRequest(res, 'This slab has already been billed');
+  } else if (linkedCheckRequest) {
 
-    for (const crItem of linkedCheckRequest.items) {
-      const billableQty = Math.max(
-        0,
-        (Number(crItem.verifiedQuantity) || 0) - (Number(crItem.billedQuantity) || 0)
-      );
-      if (billableQty <= 0) continue;
-
-      const override = inputByBoq.get(String(crItem.boqItem));
-      let currentQuantity = override?.currentQuantity !== undefined
-        ? Number(override.currentQuantity) || 0
-        : billableQty;
-      if (currentQuantity <= 0) continue;
-      if (currentQuantity > billableQty) {
-        return badRequest(
-          res,
-          `Quantity for "${crItem.title || crItem.description}" exceeds verified unpaid qty (${billableQty} ${crItem.unit}).`
-        );
-      }
-
-      const unitPrice = Number(override?.unitPrice) || Number(crItem.unitPrice) || 0;
-      const currentAmount = currentQuantity * unitPrice;
-      grossAmount += currentAmount;
-
-      const boq = await BOQItem.findById(crItem.boqItem).select('contractorBilledQuantity estimatedQuantity').lean();
-      const previousQuantity = Number(boq?.contractorBilledQuantity) || 0;
-
-      processedItems.push({
-        boqItem: crItem.boqItem,
-        title: crItem.title || '',
-        description: crItem.description || '',
-        unit: crItem.unit || '',
-        previousQuantity,
-        currentQuantity,
-        cumulativeQuantity: previousQuantity + currentQuantity,
-        unitPrice,
-        currentAmount,
-        _crItemId: crItem._id
-      });
-    }
-
-    if (!processedItems.length) {
-      return badRequest(res, 'No billable verified quantities left on this Check Request');
-    }
+    const built = await buildIpcLines(req.params.id, linkedCheckRequest, items);
+    if (built.error) return badRequest(res, built.error);
+    processedItems = built.processedItems;
+    grossAmount = built.grossAmount;
   } else if (Array.isArray(items) && items.length > 0) {
     // Non-IPC invoices may still use free BOQ lines
     for (const itemInput of items) {
@@ -2003,23 +2342,36 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     }
   }
 
-  const finalGross = processedItems.length > 0 ? grossAmount : (Number(invoiceAmount) || 0);
+  const computedGross = processedItems.length > 0 || slabClaim;
+  const finalGross = computedGross ? grossAmount : (Number(invoiceAmount) || 0);
   if (finalGross <= 0 && (!invoiceAmount || Number(invoiceAmount) <= 0)) {
     return badRequest(res, 'Invoice amount or valid BOQ executed line items are required');
   }
 
-  const retentionP = Math.max(0, Number(retentionPercentage) || 0);
+  let advanceRecoveryAmount = 0;
+  if (linkedCheckRequest) {
+    const recovery = await resolveAdvanceRecovery(req.params.id, linkedCheckRequest.contractor, finalGross, advanceRecoveryInput);
+    if (recovery.error) return badRequest(res, recovery.error);
+    advanceRecoveryAmount = recovery.amount;
+  }
+
+  const retentionP = Number(retentionPercentage) || 0;
+  const whtP = Number(whtPercentage) || 0;
+  const advRec = Number(advanceRecoveryAmount) || 0;
+  if (retentionP < 0 || retentionP > 100) return badRequest(res, 'Retention must be between 0% and 100%');
+  if (whtP < 0 || whtP > 100) return badRequest(res, 'WHT must be between 0% and 100%');
+  if (advRec < 0) return badRequest(res, 'Advance recovery cannot be negative');
   const retentionAmount = Math.round(finalGross * (retentionP / 100) * 100) / 100;
-  const advRec = Math.max(0, Number(advanceRecoveryAmount) || 0);
-  const whtP = Math.max(0, Number(whtPercentage) || 0);
   const whtAmount = Math.round(finalGross * (whtP / 100) * 100) / 100;
+  if (computedGross && retentionAmount + whtAmount + advRec > finalGross) {
+    return badRequest(res, `Deductions (${retentionAmount + whtAmount + advRec}) exceed the gross bill (${finalGross})`);
+  }
 
   const netPayableAmount = Math.max(0, Math.round((finalGross - retentionAmount - advRec - whtAmount) * 100) / 100);
-  const finalInvoiceAmt = processedItems.length > 0 ? netPayableAmount : Number(invoiceAmount);
+  const finalInvoiceAmt = computedGross ? netPayableAmount : Number(invoiceAmount);
 
-  const invoiceContractor = (contractor && isValidId(contractor))
-    ? contractor
-    : (linkedCheckRequest?.contractor || null);
+  // Client invoices bill the client — they never carry a subcontractor
+  const invoiceContractor = linkedCheckRequest ? linkedCheckRequest.contractor : null;
 
   const invoice = await ProjectInvoice.create({
     project: req.params.id,
@@ -2046,7 +2398,9 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     billingPercentage: Number(billingPercentage) || 0,
     invoiceAmount: finalInvoiceAmt,
     description: description || (invoiceType === 'Subcontractor_IPC'
-      ? `IPC #${ipcNumber} from ${linkedCheckRequest.checkRequestNumber}`
+      ? `IPC #${ipcNumber} from ${linkedCheckRequest.checkRequestNumber}${slabClaim
+        ? ` — Slab: ${linkedCheckRequest.slab?.name} (${linkedCheckRequest.slab?.percentage}%)`
+        : ''}`
       : ''),
     issueDate: issueDate ? new Date(issueDate) : new Date(),
     dueDate: dueDate ? new Date(dueDate) : undefined,
@@ -2054,39 +2408,16 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     createdBy: req.user?._id
   });
 
-  // Update BOQ + Check Request billed quantities
-  if (processedItems.length > 0) {
-    await Promise.all(processedItems.map((item) =>
-      BOQItem.findByIdAndUpdate(item.boqItem, {
-        $inc: {
-          contractorBilledQuantity: item.currentQuantity,
-          contractorBilledAmount: item.currentAmount
-        }
-      })
-    ));
-  }
-
+  // Update BOQ + Check Request billed quantities (client invoices don't bill the subcontractor)
   if (linkedCheckRequest) {
-    for (const item of processedItems) {
-      const crItem = linkedCheckRequest.items.id(item._crItemId)
-        || linkedCheckRequest.items.find((i) => String(i.boqItem) === String(item.boqItem));
-      if (crItem) {
-        crItem.billedQuantity = (Number(crItem.billedQuantity) || 0) + item.currentQuantity;
-      }
-    }
-    const stillBillable = linkedCheckRequest.items.some(
-      (i) => (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0) > 0.0001
-    );
-    linkedCheckRequest.status = stillBillable ? 'Verified' : 'Billed';
-    linkedCheckRequest.linkedInvoice = invoice._id;
-    linkedCheckRequest.updatedBy = req.user?._id;
-    await linkedCheckRequest.save();
+    await applyIpcBilling(linkedCheckRequest, processedItems, invoice._id, req.user?._id);
   }
 
   await syncProjectInvoiceTotals(req.params.id);
   if (masterProjectId) {
     await syncProjectInvoiceTotals(masterProjectId);
   }
+  await syncProjectMetrics(req.params.id);
 
   const populated = await ProjectInvoice.findById(invoice._id)
     .populate('contractor', 'name email phone vendorType')
@@ -2153,35 +2484,616 @@ router.post('/projects/:id/milestones/:msId/generate-invoice', asyncHandler(asyn
 router.put('/projects/:id/invoices/:invoiceId', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id) || !isValidId(req.params.invoiceId)) return badRequest(res, 'Invalid ID');
 
-  const allowed = ['status', 'invoiceAmount', 'description', 'issueDate', 'dueDate',
-    'paidAmount', 'paidDate', 'paymentMethod', 'paymentReference', 'notes',
-    'clientName', 'clientContact', 'clientAddress', 'billingPercentage', 'boqItemId'];
-
-  const updates = {};
-  allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
-
-  const invoice = await ProjectInvoice.findOneAndUpdate(
-    { _id: req.params.invoiceId, project: req.params.id },
-    { $set: updates },
-    { new: true, runValidators: true }
-  );
+  const invoice = await ProjectInvoice.findOne({ _id: req.params.invoiceId, project: req.params.id });
   if (!invoice) return notFound(res, 'Invoice');
+  if (invoice.status === 'Cancelled') return badRequest(res, 'Cancelled invoices cannot be edited');
 
+  const isIpc = invoice.invoiceType === 'Subcontractor_IPC';
+  if (isIpc && !ipcWithInitiator(invoice)) {
+    return badRequest(res, `This IPC is ${invoice.approvalStatus} — it can only be edited while Draft or Rejected`);
+  }
+  // IPC amounts come from the verified check request; payments use /payments; cancelling uses /cancel
+  const allowed = isIpc
+    ? ['description', 'issueDate', 'dueDate', 'notes']
+    : ['invoiceAmount', 'description', 'issueDate', 'dueDate', 'notes', 'clientName', 'clientContact',
+      'clientAddress', 'billingPercentage', 'boqItemId'];
+  allowed.forEach((k) => { if (req.body[k] !== undefined) invoice[k] = req.body[k]; });
+
+  if (req.body.status !== undefined && req.body.status !== invoice.status) {
+    if (req.body.status !== 'Sent' || invoice.status !== 'Draft') {
+      return badRequest(res, 'Only Draft → Sent can be set here; record payments or cancel with their own actions');
+    }
+    invoice.status = 'Sent';
+  }
+  if (!isIpc && req.body.invoiceAmount !== undefined && (invoice.clientBillingSources || []).length
+    && Number(req.body.invoiceAmount) !== Number(invoice.grossAmount)) {
+    return badRequest(res, 'This client invoice is priced from verified work — cancel it and raise a new one to change the amount');
+  }
+  if (!isIpc && req.body.invoiceAmount !== undefined && (Number(invoice.paidAmount) || 0) > Number(invoice.invoiceAmount)) {
+    return badRequest(res, 'Invoice amount cannot be less than what has already been paid');
+  }
+
+  await invoice.save();
   await syncProjectInvoiceTotals(req.params.id);
+  await syncProjectMetrics(req.params.id);
   res.json({ success: true, message: 'Invoice updated', data: invoice });
 }));
 
-// DELETE /api/project-management/projects/:id/invoices/:invoiceId
+// POST /api/project-management/projects/:id/invoices/:invoiceId/payments — record a (part) payment
+router.post('/projects/:id/invoices/:invoiceId/payments', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.invoiceId)) return badRequest(res, 'Invalid ID');
+
+  const invoice = await ProjectInvoice.findOne({ _id: req.params.invoiceId, project: req.params.id });
+  if (!invoice) return notFound(res, 'Invoice');
+  if (['Cancelled', 'Paid'].includes(invoice.status)) return badRequest(res, `This invoice is already ${invoice.status.toLowerCase()}`);
+  if (invoice.invoiceType === 'Subcontractor_IPC') {
+    return badRequest(res, 'Subcontractor IPCs are paid by Finance from their Accounts Payable bill once the CEO approves them');
+  }
+
+  const amount = Math.round((Number(req.body.amount) || 0) * 100) / 100;
+  const balance = invoiceBalance(invoice);
+  if (amount <= 0) return badRequest(res, 'Payment amount must be greater than zero');
+  if (amount > balance + 0.009) return badRequest(res, `Payment exceeds the balance due (${balance})`);
+
+  invoice.payments.push({
+    amount,
+    paidDate: req.body.paidDate ? new Date(req.body.paidDate) : new Date(),
+    paymentMethod: req.body.paymentMethod || '',
+    paymentReference: req.body.paymentReference || '',
+    recordedBy: req.user?._id
+  });
+  invoice.paidAmount = Math.round(invoice.payments.reduce((s, p) => s + (Number(p.amount) || 0), 0) * 100) / 100;
+  invoice.paidDate = invoice.payments[invoice.payments.length - 1].paidDate;
+  invoice.paymentMethod = req.body.paymentMethod || invoice.paymentMethod;
+  invoice.paymentReference = req.body.paymentReference || invoice.paymentReference;
+  invoice.status = invoiceBalance(invoice) <= 0.009 ? 'Paid' : 'Partially Paid';
+  await invoice.save();
+
+  await syncProjectInvoiceTotals(req.params.id);
+  await syncProjectMetrics(req.params.id);
+  res.json({
+    success: true,
+    message: invoice.status === 'Paid' ? 'Payment recorded — fully paid' : `Payment recorded — ${invoiceBalance(invoice)} still due`,
+    data: invoice
+  });
+}));
+
+// POST /api/project-management/projects/:id/invoices/:invoiceId/cancel — void an unpaid invoice, freeing its work to rebill
+router.post('/projects/:id/invoices/:invoiceId/cancel', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.invoiceId)) return badRequest(res, 'Invalid ID');
+
+  const invoice = await ProjectInvoice.findOne({ _id: req.params.invoiceId, project: req.params.id });
+  if (!invoice) return notFound(res, 'Invoice');
+  if (invoice.status === 'Cancelled') return badRequest(res, 'Already cancelled');
+  if ((Number(invoice.paidAmount) || 0) > 0) return badRequest(res, 'Payments have been recorded — a paid invoice cannot be cancelled');
+  if (invoice.invoiceType === 'Subcontractor_IPC' && !ipcWithInitiator(invoice)) {
+    return badRequest(res, `This IPC is ${invoice.approvalStatus} — it can only be cancelled while Draft or Rejected`);
+  }
+
+  await reverseIpcBilling(invoice, req.user?._id);
+  await reverseClientBilling(invoice);
+  invoice.status = 'Cancelled';
+  invoice.cancelledAt = new Date();
+  invoice.cancellationReason = String(req.body?.reason || '').trim();
+  await invoice.save();
+
+  await syncProjectInvoiceTotals(req.params.id);
+  await syncProjectMetrics(req.params.id);
+  res.json({ success: true, message: 'Invoice cancelled — its verified work can be billed again', data: invoice });
+}));
+
+// DELETE /api/project-management/projects/:id/invoices/:invoiceId — Draft only (anything sent is cancelled instead)
 router.delete('/projects/:id/invoices/:invoiceId', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id) || !isValidId(req.params.invoiceId)) return badRequest(res, 'Invalid ID');
 
-  const invoice = await ProjectInvoice.findOneAndDelete({
-    _id: req.params.invoiceId, project: req.params.id
-  });
+  const invoice = await ProjectInvoice.findOne({ _id: req.params.invoiceId, project: req.params.id });
   if (!invoice) return notFound(res, 'Invoice');
+  if (invoice.status !== 'Draft' || (Number(invoice.paidAmount) || 0) > 0
+    || (invoice.invoiceType === 'Subcontractor_IPC' && (invoice.approvalStatus || 'Draft') !== 'Draft')) {
+    return badRequest(res, 'Only unpaid Draft invoices that were never submitted can be deleted — cancel it instead to keep the record');
+  }
+
+  // A cancelled IPC was already reversed; anything else gives its work back before it goes
+  await reverseIpcBilling(invoice, req.user?._id);
+  await reverseClientBilling(invoice);
+  await invoice.deleteOne();
 
   await syncProjectInvoiceTotals(req.params.id);
+  await syncProjectMetrics(req.params.id);
   res.json({ success: true, message: 'Invoice deleted' });
+}));
+
+// ─── IPC APPROVAL CHAIN ──────────────────────────────────────────────────────
+// Draft → Pending Audit (pre-audit initial approval, then forward) → Forwarded to Audit Director →
+// Send to CEO Office (PS forwards) → Forwarded to CEO → Approved → posted to Finance (AP).
+// Any desk can reject: IPC goes back to its initiator as Rejected (returnedFromStatus = that desk);
+// after revising, resubmission returns it straight to the desk that rejected it.
+
+const IPC_STAGE_LABEL = {
+  'Pending Audit': 'Pre-Audit',
+  'Forwarded to Audit Director': 'Audit Director',
+  'Send to CEO Office': 'CEO Secretariat',
+  'Forwarded to CEO': 'CEO'
+};
+
+/** IPC is back with the project team (never submitted, or rejected) */
+const ipcWithInitiator = (inv) => ['Draft', 'Rejected', undefined, null, ''].includes(inv.approvalStatus);
+
+const userIdsByRoles = async (roles) =>
+  (await User.find({ isActive: true, role: { $in: roles } }).select('_id').lean()).map((u) => String(u._id));
+
+const notifyIpc = async (recipientIds, actorId, title, message, invoice, actionUrl) => {
+  const ids = [...new Set((recipientIds || []).map(String).filter(Boolean))].filter((id) => id !== String(actorId || ''));
+  if (!ids.length) return;
+  try {
+    await createAndEmitNotification({
+      recipientIds: ids,
+      title,
+      message,
+      type: 'info',
+      category: 'approval',
+      priority: 'high',
+      actionUrl,
+      entityId: invoice._id,
+      entityType: 'ProjectInvoice',
+      module: 'project_management',
+      metadata: { entityId: invoice._id, entityType: 'ProjectInvoice', projectId: invoice.project }
+    });
+  } catch (err) {
+    console.error('[IPC workflow] notification failed:', err.message);
+  }
+};
+
+const ipcInitiatorUrl = (inv) => `/general/project-management/${inv.project?._id || inv.project}?tab=invoices`;
+
+const pushIpcHistory = (inv, from, to, userId, comments, module) => {
+  inv.workflowHistory = inv.workflowHistory || [];
+  inv.workflowHistory.push({ fromStatus: from, toStatus: to, changedBy: userId, changedAt: new Date(), comments: comments || '', module });
+};
+
+const populateIpc = (query) =>
+  query
+    .populate('contractor', 'name email phone')
+    .populate({ path: 'project', select: 'name projectNumber sector society parentProject companyId', populate: { path: 'parentProject', select: 'name projectNumber companyId' } })
+    .populate('checkRequest', 'checkRequestNumber title claimType slab verifiedBy verifiedAt')
+    .populate('createdBy', 'firstName lastName email')
+    .populate('submittedBy', 'firstName lastName email')
+    .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
+    .populate('observations.addedBy', 'firstName lastName')
+    .populate('preAuditInitialApprovedBy auditApprovedBy ceoForwardedBy ceoApprovedBy', 'firstName lastName digitalSignature')
+    .populate('rejection.by', 'firstName lastName');
+
+const loadIpc = async (req, res) => {
+  if (!isValidId(req.params.ipcId)) { badRequest(res, 'Invalid IPC ID'); return null; }
+  const inv = await ProjectInvoice.findOne({ _id: req.params.ipcId, invoiceType: 'Subcontractor_IPC' });
+  if (!inv) { notFound(res, 'IPC'); return null; }
+  return inv;
+};
+
+const ipcDone = async (res, inv, message) => {
+  const data = await populateIpc(ProjectInvoice.findById(inv._id)).lean();
+  return res.json({ success: true, message, data });
+};
+
+/** Reject from any desk: back to the initiator with comments + observations; remembers the desk */
+const rejectIpc = async (req, res, inv, stage) => {
+  const comments = String(req.body.rejectionComments || req.body.returnComments || req.body.comments || '').trim();
+  if (!comments) return badRequest(res, 'Write the reason for rejection');
+  pushIpcHistory(inv, stage, 'Rejected', req.user._id, comments, IPC_STAGE_LABEL[stage]);
+  inv.approvalStatus = 'Rejected';
+  inv.returnedFromStatus = stage;
+  inv.rejection = { stage, by: req.user._id, at: new Date(), comments };
+  (Array.isArray(req.body.observations) ? req.body.observations : []).forEach((o) => {
+    const text = String(o?.observation || o?.text || o || '').trim();
+    if (!text) return;
+    inv.observations.push({
+      observation: text,
+      severity: ['low', 'medium', 'high', 'critical'].includes(String(o?.severity).toLowerCase()) ? String(o.severity).toLowerCase() : 'medium',
+      stage: IPC_STAGE_LABEL[stage],
+      addedBy: req.user._id
+    });
+  });
+  inv.updatedBy = req.user._id;
+  await inv.save();
+  await notifyIpc([inv.createdBy, inv.submittedBy], req.user._id, `IPC ${inv.invoiceNumber} rejected by ${IPC_STAGE_LABEL[stage]}`,
+    `Reason: ${comments}. Revise it in Project Management → Invoices and resubmit.`, inv, ipcInitiatorUrl(inv));
+  return ipcDone(res, inv, `IPC rejected — sent back to the initiator`);
+};
+
+// GET /api/project-management/ipcs/ceo-secretariat — CEO Secretariat (PS) and CEO queues
+router.get('/ipcs/ceo-secretariat', asyncHandler(async (req, res) => {
+  const statuses = [];
+  if (hasCeoSecretariatCoordinatorAccess(req.user)) statuses.push('Send to CEO Office', 'Forwarded to CEO', 'Approved', 'Rejected');
+  if (isDesignatedCeoApprover(req.user)) statuses.push('Forwarded to CEO');
+  if (!statuses.length) return res.json({ success: true, data: [] });
+  const filter = { invoiceType: 'Subcontractor_IPC', approvalStatus: { $in: [...new Set(statuses)] } };
+  // Finished items only for the recent past so the queue stays readable
+  const since = new Date(Date.now() - 60 * 24 * 60 * 60 * 1000);
+  const list = await populateIpc(ProjectInvoice.find({
+    ...filter,
+    $or: [{ approvalStatus: { $in: ['Send to CEO Office', 'Forwarded to CEO'] } }, { updatedAt: { $gte: since } }]
+  }).sort({ updatedAt: -1 }).limit(300)).lean();
+  res.json({ success: true, data: list });
+}));
+
+// GET /api/project-management/ipcs/desk-report — average days per desk + IPCs waiting now
+router.get('/ipcs/desk-report', asyncHandler(async (req, res) => {
+  const { buildDeskReport } = require('../utils/projectIpcReminders');
+  const sinceDays = Math.min(730, Math.max(7, Number(req.query.days) || 180));
+  res.json({ success: true, data: await buildDeskReport({ sinceDays }) });
+}));
+
+// GET /api/project-management/ipcs/:ipcId — full IPC for any desk in the chain
+router.get('/ipcs/:ipcId', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.ipcId)) return badRequest(res, 'Invalid IPC ID');
+  const data = await populateIpc(ProjectInvoice.findOne({ _id: req.params.ipcId, invoiceType: 'Subcontractor_IPC' })).lean();
+  if (!data) return notFound(res, 'IPC');
+  res.json({ success: true, data });
+}));
+
+/** Advance against a sublet contract: contract must be Active; all live advances on it stay within its value */
+const checkAdvanceAmount = async (contractId, amount, excludeInvoiceId = null) => {
+  if (!(amount > 0)) return { error: 'Enter the advance amount' };
+  const contract = contractId ? await SubletContract.findById(contractId).select('status totalAmount contractNumber').lean() : null;
+  if (!contract) return { error: 'Sublet contract not found' };
+  if (contract.status !== 'Active') return { error: `Advances are paid only against Active contracts (${contract.contractNumber} is ${contract.status})` };
+  const filter = { subletContract: contract._id, ipcKind: 'Advance', status: { $ne: 'Cancelled' } };
+  if (excludeInvoiceId) filter._id = { $ne: excludeInvoiceId };
+  const others = round2((await ProjectInvoice.find(filter).select('grossAmount').lean()).reduce((t, r) => t + (Number(r.grossAmount) || 0), 0));
+  if (others + amount > (Number(contract.totalAmount) || 0) + 0.01) {
+    return { error: `Advances (${others + amount}) would exceed contract ${contract.contractNumber}'s value (${contract.totalAmount})` };
+  }
+  return { contract };
+};
+
+/** Retention release: only retention already held on CEO-approved Work IPCs, minus earlier / pending releases */
+const checkRetentionRelease = async (projectId, contractorId, amount, excludeInvoiceId = null) => {
+  if (!(amount > 0)) return { error: 'Enter the retention amount to release' };
+  const bal = await subcontractorBalances(projectId, contractorId, excludeInvoiceId);
+  if (amount > bal.retentionAvailable + 0.01) {
+    return { error: `Only ${bal.retentionAvailable} of retention is held and not yet released for this subcontractor` };
+  }
+  return { bal };
+};
+
+/** Shared create for the non-work IPC kinds (no check request, no deductions) */
+const createNonWorkIpc = async (req, { kind, contractor, amount, subletContract = null, recoveryPercent = 0 }) => {
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const lastIpc = await ProjectInvoice.findOne({ project: req.params.id, contractor, invoiceType: 'Subcontractor_IPC' })
+    .sort({ ipcNumber: -1 }).select('ipcNumber').lean();
+  const ipcNumber = (Number(lastIpc?.ipcNumber) || 0) + 1;
+  return ProjectInvoice.create({
+    project: req.params.id,
+    masterProject: project?.parentProject || null,
+    contractor,
+    invoiceType: 'Subcontractor_IPC',
+    ipcKind: kind,
+    ipcNumber,
+    subletContract,
+    advanceRecoveryPercent: kind === 'Advance' ? recoveryPercent : 0,
+    items: [],
+    grossAmount: amount,
+    netPayableAmount: amount,
+    invoiceAmount: amount,
+    description: req.body.description || `${kind} — IPC #${ipcNumber}`,
+    issueDate: req.body.issueDate ? new Date(req.body.issueDate) : new Date(),
+    dueDate: req.body.dueDate ? new Date(req.body.dueDate) : undefined,
+    notes: req.body.notes || '',
+    createdBy: req.user?._id
+  });
+};
+
+// GET /api/project-management/projects/:id/subcontractor-balances[?contractor=] — retention & advance position
+router.get('/projects/:id/subcontractor-balances', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const contractorIds = req.query.contractor && isValidId(req.query.contractor)
+    ? [req.query.contractor]
+    : (await SubletContract.distinct('contractor', { project: req.params.id, status: { $ne: 'Cancelled' } })).map(String);
+  const suppliers = await Supplier.find({ _id: { $in: contractorIds } }).select('name').lean();
+  const nameById = new Map(suppliers.map((sp) => [String(sp._id), sp.name]));
+  const contracts = await SubletContract.find({ project: req.params.id, contractor: { $in: contractorIds }, status: 'Active' })
+    .select('contractNumber title contractType totalAmount contractor').lean();
+  const data = await Promise.all(contractorIds.map(async (cid) => ({
+    contractor: { _id: cid, name: nameById.get(String(cid)) || '—' },
+    activeContracts: contracts.filter((c) => String(c.contractor) === String(cid)),
+    ...(await subcontractorBalances(req.params.id, cid))
+  })));
+  res.json({ success: true, data });
+}));
+
+// POST /api/project-management/projects/:id/advances — mobilisation advance IPC against an active sublet contract
+router.post('/projects/:id/advances', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const amount = round2(req.body.amount);
+  const recoveryPercent = Number(req.body.recoveryPercent);
+  if (!(recoveryPercent > 0 && recoveryPercent <= 100)) {
+    return badRequest(res, 'Set the recovery % — the share of each later IPC deducted until the advance is recovered');
+  }
+  if (!isValidId(req.body.subletContract)) return badRequest(res, 'Select the sublet contract');
+  const check = await checkAdvanceAmount(req.body.subletContract, amount);
+  if (check.error) return badRequest(res, check.error);
+  const contract = await SubletContract.findOne({ _id: req.body.subletContract, project: req.params.id }).select('contractor').lean();
+  if (!contract) return badRequest(res, 'That contract is not on this Sub Project');
+  const inv = await createNonWorkIpc(req, { kind: 'Advance', contractor: contract.contractor, amount, subletContract: contract._id, recoveryPercent });
+  await syncProjectInvoiceTotals(req.params.id);
+  return ipcDone(res.status(201), inv, `Advance IPC created — submit it for approval`);
+}));
+
+// POST /api/project-management/projects/:id/retention-releases — pay back retention held from a subcontractor
+router.post('/projects/:id/retention-releases', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.body.contractor)) return badRequest(res, 'Select the subcontractor');
+  if (!String(req.body.description || '').trim()) {
+    return badRequest(res, 'Say why retention is being released (e.g. defects liability period ended on …)');
+  }
+  const amount = round2(req.body.amount);
+  const check = await checkRetentionRelease(req.params.id, req.body.contractor, amount);
+  if (check.error) return badRequest(res, check.error);
+  const inv = await createNonWorkIpc(req, { kind: 'Retention Release', contractor: req.body.contractor, amount });
+  await syncProjectInvoiceTotals(req.params.id);
+  return ipcDone(res.status(201), inv, 'Retention release IPC created — submit it for approval');
+}));
+
+// POST /api/project-management/ipcs/:ipcId/submit — initiator sends a Draft IPC to Pre-Audit
+router.post('/ipcs/:ipcId/submit', asyncHandler(async (req, res) => {
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if ((inv.approvalStatus || 'Draft') !== 'Draft') return badRequest(res, `This IPC is already ${inv.approvalStatus}`);
+  if (inv.status === 'Cancelled') return badRequest(res, 'Cancelled IPCs cannot be submitted');
+  // IPCs paid from Project Management before the approval chain existed must not reach Finance a second time
+  if ((Number(inv.paidAmount) || 0) > 0) return badRequest(res, 'This IPC was already paid outside the approval chain and cannot be submitted');
+  const project = await ConstructionProject.findById(inv.project).select('companyId parentProject').lean();
+  if (!(await resolveProjectCompanyId(project))) {
+    return badRequest(res, 'Set the Finance company on the Main Project first — approved IPCs post to that company\'s accounts');
+  }
+  pushIpcHistory(inv, 'Draft', 'Pending Audit', req.user._id, req.body.comments || 'Submitted for pre-audit', 'Project Management');
+  inv.approvalStatus = 'Pending Audit';
+  inv.submittedBy = req.user._id;
+  inv.submittedAt = new Date();
+  if (inv.status === 'Draft') inv.status = 'Sent';
+  await inv.save();
+  await notifyIpc(await userIdsByRoles(['audit_manager', 'auditor', 'admin', 'super_admin']), req.user._id,
+    `IPC ${inv.invoiceNumber} pending pre-audit`, `Subcontractor IPC #${inv.ipcNumber} — PKR ${Number(inv.netPayableAmount || 0).toLocaleString()} is waiting in Pre-Audit.`,
+    inv, '/audit/pre-audit');
+  return ipcDone(res, inv, 'IPC submitted to Pre-Audit');
+}));
+
+// POST /api/project-management/ipcs/:ipcId/resubmit — after revising, back to the desk that rejected it
+router.post('/ipcs/:ipcId/resubmit', asyncHandler(async (req, res) => {
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Rejected') return badRequest(res, 'Only rejected IPCs can be resubmitted');
+  const comments = String(req.body.comments || '').trim();
+  if (!comments) return badRequest(res, 'Write what you changed / your response to the observations');
+  const target = IPC_STAGE_LABEL[inv.returnedFromStatus] ? inv.returnedFromStatus : 'Pending Audit';
+  // Rejected at the first desk → that desk approves again from scratch
+  if (target === 'Pending Audit') {
+    inv.preAuditInitialApprovedAt = undefined;
+    inv.preAuditInitialApprovedBy = undefined;
+  }
+  inv.observations.forEach((o) => {
+    if (!o.resolved) { o.resolved = true; o.initiatorResponse = comments; }
+  });
+  pushIpcHistory(inv, 'Rejected', target, req.user._id, `Resubmitted: ${comments}`, 'Project Management');
+  inv.approvalStatus = target;
+  inv.returnedFromStatus = '';
+  inv.updatedBy = req.user._id;
+  await inv.save();
+  const recipients = target === 'Forwarded to CEO'
+    ? await userIdsByRoles(['higher_management', 'admin', 'super_admin'])
+    : target === 'Send to CEO Office'
+      ? await userIdsByRoles(['hr_manager', 'admin', 'super_admin'])
+      : await userIdsByRoles(['audit_manager', 'auditor', 'audit_director', 'admin', 'super_admin']);
+  await notifyIpc(recipients, req.user._id, `IPC ${inv.invoiceNumber} resubmitted`,
+    `Revised IPC is back with ${IPC_STAGE_LABEL[target]}: ${comments}`, inv, target.startsWith('Pending') || target.includes('Audit') ? '/audit/pre-audit' : '/general/ceo-secretariat/payments');
+  return ipcDone(res, inv, `Resubmitted to ${IPC_STAGE_LABEL[target]}`);
+}));
+
+// POST /api/project-management/projects/:id/invoices/:invoiceId/revise — initiator edits quantities / deductions while Draft or Rejected
+router.post('/projects/:id/invoices/:invoiceId/revise', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.invoiceId)) return badRequest(res, 'Invalid ID');
+  const inv = await ProjectInvoice.findOne({ _id: req.params.invoiceId, project: req.params.id, invoiceType: 'Subcontractor_IPC' });
+  if (!inv) return notFound(res, 'IPC');
+  if (!ipcWithInitiator(inv) || inv.status === 'Cancelled') return badRequest(res, 'Only Draft or Rejected IPCs can be revised');
+
+  if (NON_WORK_IPC_KINDS.includes(inv.ipcKind)) {
+    const amount = round2(req.body.amount ?? inv.grossAmount);
+    const check = inv.ipcKind === 'Advance'
+      ? await checkAdvanceAmount(inv.subletContract, amount, inv._id)
+      : await checkRetentionRelease(req.params.id, inv.contractor, amount, inv._id);
+    if (check.error) return badRequest(res, check.error);
+    if (inv.ipcKind === 'Advance' && req.body.recoveryPercent !== undefined) {
+      const pct = Number(req.body.recoveryPercent);
+      if (!(pct > 0 && pct <= 100)) return badRequest(res, 'Recovery % must be between 1 and 100');
+      inv.advanceRecoveryPercent = pct;
+    }
+    const before = `amount ${inv.grossAmount}`;
+    Object.assign(inv, { grossAmount: amount, netPayableAmount: amount, invoiceAmount: amount });
+    ['description', 'issueDate', 'dueDate', 'notes'].forEach((k) => { if (req.body[k] !== undefined) inv[k] = req.body[k]; });
+    pushIpcHistory(inv, inv.approvalStatus || 'Draft', inv.approvalStatus || 'Draft', req.user._id,
+      `Revised: ${before} → ${amount}${req.body.comments ? ` — ${req.body.comments}` : ''}`, 'Project Management');
+    inv.updatedBy = req.user._id;
+    await inv.save();
+    await syncProjectInvoiceTotals(req.params.id);
+    return ipcDone(res, inv, 'IPC revised');
+  }
+
+  const cr = inv.checkRequest ? await CheckRequest.findById(inv.checkRequest) : null;
+  if (!cr) return badRequest(res, 'The check request behind this IPC no longer exists');
+
+  // Give this IPC's quantities back, rebuild from the request, then bill again — all-or-nothing
+  const snapshot = cr.toObject();
+  await reverseIpcBilling(inv, req.user._id);
+  const freshCr = await CheckRequest.findById(cr._id);
+  let gross;
+  let lines = [];
+  if (freshCr.claimType === 'Slab') {
+    gross = checkRequestBillable(freshCr);
+  } else {
+    const built = await buildIpcLines(req.params.id, freshCr, req.body.items, inv._id);
+    if (built.error) {
+      await CheckRequest.updateOne({ _id: cr._id }, { $set: { items: snapshot.items, status: snapshot.status, linkedInvoice: snapshot.linkedInvoice } });
+      await applyBoqCounters(inv.items, 1);
+      return badRequest(res, built.error);
+    }
+    lines = built.processedItems;
+    gross = built.grossAmount;
+  }
+  const recovery = await resolveAdvanceRecovery(req.params.id, inv.contractor, gross,
+    req.body.advanceRecoveryAmount ?? inv.advanceRecoveryAmount, inv._id);
+  const ded = recovery.error ? recovery : computeIpcDeductions(gross, {
+    retentionPercentage: req.body.retentionPercentage ?? inv.retentionPercentage,
+    whtPercentage: req.body.whtPercentage ?? inv.whtPercentage,
+    advanceRecoveryAmount: recovery.amount
+  });
+  if (ded.error) {
+    await CheckRequest.updateOne({ _id: cr._id }, { $set: { items: snapshot.items, status: snapshot.status, linkedInvoice: snapshot.linkedInvoice } });
+    await applyBoqCounters(inv.items, 1);
+    return badRequest(res, ded.error);
+  }
+
+  const before = `gross ${inv.grossAmount}, net ${inv.netPayableAmount}`;
+  inv.items = lines.map(({ _crItemId, ...rest }) => rest);
+  inv.grossAmount = gross;
+  Object.assign(inv, ded);
+  inv.invoiceAmount = ded.netPayableAmount;
+  ['description', 'issueDate', 'dueDate', 'notes'].forEach((k) => { if (req.body[k] !== undefined) inv[k] = req.body[k]; });
+  pushIpcHistory(inv, inv.approvalStatus || 'Draft', inv.approvalStatus || 'Draft', req.user._id,
+    `Revised: ${before} → gross ${gross}, net ${ded.netPayableAmount}${req.body.comments ? ` — ${req.body.comments}` : ''}`, 'Project Management');
+  inv.updatedBy = req.user._id;
+  await inv.save();
+  await applyIpcBilling(freshCr, lines, inv._id, req.user._id);
+
+  await syncProjectInvoiceTotals(req.params.id);
+  await syncProjectMetrics(req.params.id);
+  return ipcDone(res, inv, 'IPC revised');
+}));
+
+// PUT /api/project-management/ipcs/:ipcId/audit-approve — pre-audit initial approval, then Audit Director final approval
+router.put('/ipcs/:ipcId/audit-approve', asyncHandler(async (req, res) => {
+  if (!hasAuditAccess(req.user)) return res.status(403).json({ success: false, message: 'Audit access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  const comments = req.body.approvalComments || req.body.comments || '';
+
+  if (inv.approvalStatus === 'Pending Audit') {
+    if (!canPerformInitialPreAuditActions(req.user)) {
+      return res.status(403).json({ success: false, message: 'Initial approval is done by pre-audit staff, not the Audit Director' });
+    }
+    inv.preAuditInitialApprovedBy = req.user._id;
+    inv.preAuditInitialApprovedAt = new Date();
+    inv.preAuditInitialComments = comments;
+    pushIpcHistory(inv, 'Pending Audit', 'Pending Audit', req.user._id, comments || 'Initial pre-audit approval recorded', 'Pre-Audit');
+    await inv.save();
+    return ipcDone(res, inv, 'Initial pre-audit approval recorded. Forward to Audit Director for final approval.');
+  }
+
+  if (inv.approvalStatus !== 'Forwarded to Audit Director') {
+    return badRequest(res, 'IPC must be Pending Audit or Forwarded to Audit Director');
+  }
+  if (!canActAsAuditDirector(req.user)) return res.status(403).json({ success: false, message: 'Only the Audit Director can give final audit approval' });
+  pushIpcHistory(inv, 'Forwarded to Audit Director', 'Send to CEO Office', req.user._id, comments || 'Audit Director approved', 'Pre-Audit');
+  inv.approvalStatus = 'Send to CEO Office';
+  inv.auditApprovedBy = req.user._id;
+  inv.auditApprovedAt = new Date();
+  inv.auditComments = comments;
+  await inv.save();
+  await notifyIpc(await userIdsByRoles(['hr_manager', 'admin', 'super_admin']), req.user._id,
+    `IPC ${inv.invoiceNumber} pending CEO Secretariat`, 'Audit-approved subcontractor IPC is waiting in Payments (CEO Secretariat).',
+    inv, '/general/ceo-secretariat/payments');
+  return ipcDone(res, inv, 'Audit approved — sent to CEO Secretariat');
+}));
+
+// PUT /api/project-management/ipcs/:ipcId/forward-to-audit-director
+router.put('/ipcs/:ipcId/forward-to-audit-director', asyncHandler(async (req, res) => {
+  if (!hasAuditAccess(req.user)) return res.status(403).json({ success: false, message: 'Audit access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Pending Audit') return badRequest(res, 'IPC must be Pending Audit');
+  if (!inv.preAuditInitialApprovedAt) return badRequest(res, 'Initial pre-audit approval is required before forwarding to the Audit Director');
+  pushIpcHistory(inv, 'Pending Audit', 'Forwarded to Audit Director', req.user._id, req.body.comments || 'Forwarded to Audit Director', 'Pre-Audit');
+  inv.approvalStatus = 'Forwarded to Audit Director';
+  await inv.save();
+  await notifyIpc(await userIdsByRoles(['audit_director', 'admin', 'super_admin']), req.user._id,
+    `IPC ${inv.invoiceNumber} forwarded to Audit Director`, 'Subcontractor IPC is waiting for your approval.', inv, '/audit/pre-audit');
+  return ipcDone(res, inv, 'Forwarded to Audit Director');
+}));
+
+// PUT /api/project-management/ipcs/:ipcId/audit-reject (and audit-return — same: back to the initiator)
+const auditReject = asyncHandler(async (req, res) => {
+  if (!hasAuditAccess(req.user)) return res.status(403).json({ success: false, message: 'Audit access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (!['Pending Audit', 'Forwarded to Audit Director'].includes(inv.approvalStatus)) {
+    return badRequest(res, 'Audit can only reject IPCs that are Pending Audit or with the Audit Director');
+  }
+  return rejectIpc(req, res, inv, inv.approvalStatus);
+});
+router.put('/ipcs/:ipcId/audit-reject', auditReject);
+router.put('/ipcs/:ipcId/audit-return', auditReject);
+
+// PUT /api/project-management/ipcs/:ipcId/forward-to-ceo — CEO Secretariat (PS)
+router.put('/ipcs/:ipcId/forward-to-ceo', asyncHandler(async (req, res) => {
+  if (!hasCeoSecretariatAccess(req.user)) return res.status(403).json({ success: false, message: 'CEO Secretariat access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Send to CEO Office') return badRequest(res, 'IPC must be in Send to CEO Office');
+  pushIpcHistory(inv, 'Send to CEO Office', 'Forwarded to CEO', req.user._id, req.body.comments || 'Forwarded to CEO for approval', 'CEO Secretariat');
+  inv.approvalStatus = 'Forwarded to CEO';
+  inv.ceoForwardedBy = req.user._id;
+  inv.ceoForwardedAt = new Date();
+  await inv.save();
+  await notifyIpc(await userIdsByRoles(['higher_management', 'admin', 'super_admin']), req.user._id,
+    `IPC ${inv.invoiceNumber} pending CEO approval`, 'Subcontractor IPC was forwarded to the CEO.', inv, '/dashboard');
+  return ipcDone(res, inv, 'Forwarded to CEO');
+}));
+
+// PUT /api/project-management/ipcs/:ipcId/ceo-secretariat-reject (and -return)
+const secretariatReject = asyncHandler(async (req, res) => {
+  if (!hasCeoSecretariatAccess(req.user)) return res.status(403).json({ success: false, message: 'CEO Secretariat access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Send to CEO Office') return badRequest(res, 'IPC must be in Send to CEO Office');
+  return rejectIpc(req, res, inv, 'Send to CEO Office');
+});
+router.put('/ipcs/:ipcId/ceo-secretariat-reject', secretariatReject);
+router.put('/ipcs/:ipcId/ceo-secretariat-return', secretariatReject);
+
+// PUT /api/project-management/ipcs/:ipcId/ceo-approve → Approved, posted to Finance as an AP bill
+router.put('/ipcs/:ipcId/ceo-approve', asyncHandler(async (req, res) => {
+  if (!isDesignatedCeoApprover(req.user)) return res.status(403).json({ success: false, message: 'CEO approval access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Forwarded to CEO') return badRequest(res, 'IPC must be Forwarded to CEO');
+  const comments = req.body.comments || 'CEO approved';
+  pushIpcHistory(inv, 'Forwarded to CEO', 'Approved', req.user._id, comments, 'CEO');
+  inv.approvalStatus = 'Approved';
+  inv.ceoApprovedBy = req.user._id;
+  inv.ceoApprovedAt = new Date();
+  inv.ceoComments = comments;
+  inv.ceoDigitalSignature = (req.body.digitalSignature && String(req.body.digitalSignature).trim())
+    || req.user.digitalSignature || `${req.user.firstName || ''} ${req.user.lastName || ''}`.trim();
+  await inv.save();
+
+  const posting = await postIpcToFinance(inv._id, req.user._id);
+  await notifyIpc([inv.createdBy, inv.submittedBy], req.user._id, `IPC ${inv.invoiceNumber} approved by CEO`,
+    posting.posted ? `Posted to Finance as ${posting.billNumber} for payment.` : `Approved — Finance posting pending: ${posting.error}`,
+    inv, ipcInitiatorUrl(inv));
+  const fresh = await ProjectInvoice.findById(inv._id);
+  return ipcDone(res, fresh, posting.posted
+    ? `CEO approved — posted to Finance as ${posting.billNumber}`
+    : `CEO approved, but Finance posting needs attention: ${posting.error}`);
+}));
+
+// PUT /api/project-management/ipcs/:ipcId/ceo-reject (and ceo-return)
+const ceoReject = asyncHandler(async (req, res) => {
+  if (!isDesignatedCeoApprover(req.user)) return res.status(403).json({ success: false, message: 'CEO access required' });
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Forwarded to CEO') return badRequest(res, 'IPC must be Forwarded to CEO');
+  return rejectIpc(req, res, inv, 'Forwarded to CEO');
+});
+router.put('/ipcs/:ipcId/ceo-reject', ceoReject);
+router.put('/ipcs/:ipcId/ceo-return', ceoReject);
+
+// POST /api/project-management/ipcs/:ipcId/post-to-finance — retry after Finance fixes its chart / company
+router.post('/ipcs/:ipcId/post-to-finance', asyncHandler(async (req, res) => {
+  const inv = await loadIpc(req, res); if (!inv) return;
+  if (inv.approvalStatus !== 'Approved') return badRequest(res, 'Only CEO-approved IPCs can be posted to Finance');
+  const posting = await postIpcToFinance(inv._id, req.user._id);
+  if (!posting.posted) return badRequest(res, posting.error);
+  const fresh = await ProjectInvoice.findById(inv._id);
+  return ipcDone(res, fresh, `Posted to Finance as ${posting.billNumber}`);
 }));
 
 // ─── CHECK REQUESTS (commercial gate before IPC / payment) ───────────────────
@@ -2194,7 +3106,8 @@ const populateCheckRequest = (query) =>
     .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractorBilledQuantity')
     .populate('createdBy', 'firstName lastName')
     .populate('submittedBy', 'firstName lastName')
-    .populate('linkedInvoice', 'invoiceNumber ipcNumber status invoiceAmount');
+    .populate('linkedInvoice', 'invoiceNumber ipcNumber status invoiceAmount')
+    .populate('subletContract', 'contractNumber title contractType totalAmount');
 
 /**
  * Resolve the WBS activity for a check request: it must be an active master activity of the
@@ -2219,6 +3132,73 @@ const resolveCheckRequestActivity = async (project, rawActivity, { keepId = null
     return { error: `That activity belongs to ${activity.projectType}, but this Sub Project is ${projectType || 'not typed'}` };
   }
   return { activityId: activity._id };
+};
+
+/**
+ * A check request is raised by a subcontractor holding an Active sublet contract on this Sub Project.
+ * Returns { contractorId, types } — types = contract types held ('BOQ' / 'Slab').
+ * keepId lets an edited request keep its contractor even if that contract has since closed.
+ */
+const resolveCheckRequestContractor = async (projectId, rawContractor, { keepId = null } = {}) => {
+  const id = rawContractor?._id || rawContractor;
+  if (!id) return { error: 'Select the subcontractor this check request is for' };
+  if (!isValidId(id)) return { error: 'Invalid subcontractor' };
+
+  const contracts = await SubletContract.find({ project: projectId, contractor: id, status: 'Active' })
+    .select('contractType')
+    .lean();
+  const keeping = keepId && String(keepId) === String(id);
+  if (!contracts.length && !keeping) {
+    return { error: 'This subcontractor has no active Sublet Contract on this Sub Project' };
+  }
+  return { contractorId: id, types: new Set(contracts.map((c) => c.contractType || 'BOQ')) };
+};
+
+/**
+ * Slab-wise claim: one payment stage (slab) of the contractor's Active slab contract.
+ * A slab can be claimed by only one live check request (cancelled ones free it up).
+ */
+const resolveSlabClaim = async (projectId, contractorId, rawContractId, rawSlabId, excludeCrId = null) => {
+  if (!rawContractId || !isValidId(rawContractId)) return { error: 'Select the slab-wise contract' };
+  if (!rawSlabId || !isValidId(rawSlabId)) return { error: 'Select the slab (stage) being claimed' };
+
+  const contract = await SubletContract.findOne({
+    _id: rawContractId, project: projectId, contractor: contractorId, contractType: 'Slab'
+  }).lean();
+  if (!contract) return { error: "Slab-wise contract not found for this subcontractor on this Sub Project" };
+  if (contract.status !== 'Active') return { error: 'Only stages of an Active contract can be claimed' };
+
+  const slab = (contract.slabs || []).find((sl) => String(sl._id) === String(rawSlabId));
+  if (!slab) return { error: 'That slab is not part of the selected contract' };
+
+  const duplicate = await CheckRequest.findOne({
+    subletContract: contract._id,
+    'slab.slabId': slab._id,
+    status: { $ne: 'Cancelled' },
+    ...(excludeCrId ? { _id: { $ne: excludeCrId } } : {})
+  }).select('checkRequestNumber').lean();
+  if (duplicate) return { error: `Slab "${slab.name}" is already claimed in ${duplicate.checkRequestNumber}` };
+
+  const amount = Number(slab.amount) || Math.round(((Number(contract.totalAmount) || 0) * (Number(slab.percentage) || 0)) / 100);
+  return {
+    contract,
+    slab: {
+      slabId: slab._id,
+      name: slab.name,
+      percentage: Number(slab.percentage) || 0,
+      amount,
+      activities: (slab.activities || []).map((a) => ({ activity: a.activity, name: a.name }))
+    }
+  };
+};
+
+/** Verified value still to be billed as an IPC (slab claims bill once, in full). */
+const checkRequestBillable = (cr) => {
+  if (cr.status !== 'Verified') return 0;
+  if (cr.claimType === 'Slab') return cr.linkedInvoice ? 0 : Number(cr.verifiedTotal) || 0;
+  return (cr.items || []).reduce(
+    (s, i) => s + Math.max(0, (Number(i.verifiedQuantity) || 0) - (Number(i.billedQuantity) || 0)) * (Number(i.unitPrice) || 0), 0
+  );
 };
 
 const buildCheckRequestItems = async (projectId, masterProjectId, rawItems = []) => {
@@ -2288,9 +3268,9 @@ router.get('/projects/:id/check-requests', asyncHandler(async (req, res) => {
         (s, i) => s + i.billableQuantity * (Number(i.unitPrice) || 0),
         0
       );
-      return { ...cr, remainingItems, billableTotal };
+      return { ...cr, remainingItems, billableTotal: cr.claimType === 'Slab' ? checkRequestBillable(cr) : billableTotal };
     })
-    .filter((cr) => (req.query.billable === 'true' ? cr.remainingItems.length > 0 : true));
+    .filter((cr) => (req.query.billable === 'true' ? cr.billableTotal > 0 : true));
 
   res.json({
     success: true,
@@ -2331,34 +3311,50 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
 
   const { title, contractor, task, items = [], notes } = req.body;
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
+  const claimType = req.body.claimType === 'Slab' ? 'Slab' : 'BOQ';
 
-  const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity);
-  if (activityError) return badRequest(res, activityError);
-
-  const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
-    req.params.id,
-    project.parentProject,
-    items
-  );
-  if (!builtItems.length) {
-    return badRequest(res, 'Add at least one BOQ line with claimed quantity');
+  const { contractorId, types, error: contractorError } = await resolveCheckRequestContractor(req.params.id, contractor);
+  if (contractorError) return badRequest(res, contractorError);
+  if (!types.has(claimType)) {
+    return badRequest(res, `This subcontractor has no active ${claimType === 'Slab' ? 'slab-wise' : 'BOQ-wise'} contract here`);
   }
 
-  const cr = await CheckRequest.create({
+  const base = {
     project: req.params.id,
     masterProject: project.parentProject,
     title: String(title).trim(),
-    contractor: contractor && isValidId(contractor) ? contractor : null,
-    activity: activityId,
+    contractor: contractorId,
+    claimType,
     task: task && isValidId(task) ? task : null,
-    items: builtItems,
-    claimedTotal,
     verifiedTotal: 0,
     notes: notes || '',
     status: 'Draft',
     createdBy: req.user?._id,
     updatedBy: req.user?._id
-  });
+  };
+
+  let cr;
+  if (claimType === 'Slab') {
+    const claim = await resolveSlabClaim(req.params.id, contractorId, req.body.subletContract, req.body.slabId);
+    if (claim.error) return badRequest(res, claim.error);
+    cr = await CheckRequest.create({
+      ...base,
+      subletContract: claim.contract._id,
+      slab: claim.slab,
+      activity: null,
+      items: [],
+      claimedTotal: claim.slab.amount
+    });
+  } else {
+    const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity);
+    if (activityError) return badRequest(res, activityError);
+
+    const { items: builtItems, claimedTotal } = await buildCheckRequestItems(req.params.id, project.parentProject, items);
+    if (!builtItems.length) {
+      return badRequest(res, 'Add at least one BOQ line with claimed quantity');
+    }
+    cr = await CheckRequest.create({ ...base, activity: activityId, items: builtItems, claimedTotal });
+  }
 
   const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
   res.status(201).json({ success: true, message: 'Check Request created', data: populated });
@@ -2376,36 +3372,73 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
 
   const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
   const { title, contractor, task, items, notes } = req.body;
+  const claimType = req.body.claimType
+    ? (req.body.claimType === 'Slab' ? 'Slab' : 'BOQ')
+    : (cr.claimType || 'BOQ');
 
   if (title !== undefined) {
     if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
     cr.title = String(title).trim();
   }
-  if (contractor !== undefined) {
-    cr.contractor = contractor && isValidId(contractor) ? contractor : null;
+  if (contractor !== undefined || req.body.claimType !== undefined) {
+    const resolved = await resolveCheckRequestContractor(
+      req.params.id,
+      contractor !== undefined ? contractor : cr.contractor,
+      { keepId: cr.contractor }
+    );
+    if (resolved.error) return badRequest(res, resolved.error);
+    const changed = String(resolved.contractorId) !== String(cr.contractor) || claimType !== (cr.claimType || 'BOQ');
+    if (changed && !resolved.types.has(claimType)) {
+      return badRequest(res, `This subcontractor has no active ${claimType === 'Slab' ? 'slab-wise' : 'BOQ-wise'} contract here`);
+    }
+    cr.contractor = resolved.contractorId;
   }
   if (task !== undefined) {
     cr.task = task && isValidId(task) ? task : null;
   }
-  if (req.body.activity !== undefined) {
-    const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity, { keepId: cr.activity });
-    if (activityError) return badRequest(res, activityError);
-    cr.activity = activityId;
-  }
   if (notes !== undefined) cr.notes = notes || '';
 
-  if (Array.isArray(items)) {
-    const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
+  if (claimType === 'Slab') {
+    const claim = await resolveSlabClaim(
       req.params.id,
-      project?.parentProject,
-      items
+      cr.contractor,
+      req.body.subletContract !== undefined ? req.body.subletContract : cr.subletContract,
+      req.body.slabId !== undefined ? req.body.slabId : cr.slab?.slabId,
+      cr._id
     );
-    if (!builtItems.length) {
-      return badRequest(res, 'Add at least one BOQ line with claimed quantity');
-    }
-    cr.items = builtItems;
-    cr.claimedTotal = claimedTotal;
+    if (claim.error) return badRequest(res, claim.error);
+    cr.claimType = 'Slab';
+    cr.subletContract = claim.contract._id;
+    cr.slab = claim.slab;
+    cr.activity = null;
+    cr.items = [];
+    cr.claimedTotal = claim.slab.amount;
     cr.verifiedTotal = 0;
+  } else {
+    if (cr.claimType === 'Slab' && !Array.isArray(items)) {
+      return badRequest(res, 'Add the BOQ lines being claimed');
+    }
+    cr.claimType = 'BOQ';
+    cr.subletContract = null;
+    cr.slab = undefined;
+    if (req.body.activity !== undefined) {
+      const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity, { keepId: cr.activity });
+      if (activityError) return badRequest(res, activityError);
+      cr.activity = activityId;
+    }
+    if (Array.isArray(items)) {
+      const { items: builtItems, claimedTotal } = await buildCheckRequestItems(
+        req.params.id,
+        project?.parentProject,
+        items
+      );
+      if (!builtItems.length) {
+        return badRequest(res, 'Add at least one BOQ line with claimed quantity');
+      }
+      cr.items = builtItems;
+      cr.claimedTotal = claimedTotal;
+      cr.verifiedTotal = 0;
+    }
   }
 
   if (cr.status === 'Rejected') {
@@ -2431,7 +3464,7 @@ router.post('/projects/:id/check-requests/:crId/submit', asyncHandler(async (req
   if (!['Draft', 'Rejected'].includes(cr.status)) {
     return badRequest(res, 'Only Draft or Rejected Check Requests can be submitted');
   }
-  if (!cr.items?.length) return badRequest(res, 'Check Request has no items');
+  if (cr.claimType !== 'Slab' && !cr.items?.length) return badRequest(res, 'Check Request has no items');
 
   cr.status = 'Submitted';
   cr.submittedAt = new Date();
@@ -2444,25 +3477,29 @@ router.post('/projects/:id/check-requests/:crId/submit', asyncHandler(async (req
   res.json({ success: true, message: 'Check Request submitted for verification', data: populated });
 }));
 
-// POST verify (physical verification of Check Request)
-router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+/**
+ * Mark a Submitted check request Verified. BOQ claims take verified quantities (capped by claim and
+ * remaining BOQ); slab claims verify the whole stage. Used by the inspection report once every
+ * inspector has approved. Returns { cr } or { error }.
+ */
+const applyCheckRequestVerification = async (cr, {
+  projectId, userId, verifiedBy, verificationNotes = '', verificationPhotoUrl = '', items: verifiedRows = []
+}) => {
+  if (cr.status !== 'Submitted') return { error: 'Only Submitted Check Requests can be verified' };
 
-  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
-  if (!cr) return notFound(res, 'Check Request');
-  if (cr.status !== 'Submitted') {
-    return badRequest(res, 'Only Submitted Check Requests can be verified');
-  }
-
-  const {
-    verifiedBy = '',
-    verificationNotes = '',
-    verificationPhotoUrl = '',
-    items: verifiedRows = []
-  } = req.body;
-
-  if (!String(verifiedBy).trim()) {
-    return badRequest(res, 'Verified by (auditor name) is required');
+  // Slab claim: the auditor confirms the whole stage is complete
+  if (cr.claimType === 'Slab') {
+    cr.status = 'Verified';
+    cr.verifiedTotal = Number(cr.slab?.amount) || Number(cr.claimedTotal) || 0;
+    cr.verifiedAt = new Date();
+    cr.verifiedBy = String(verifiedBy).trim();
+    cr.verifiedByUser = userId;
+    cr.verificationNotes = verificationNotes || '';
+    cr.verificationPhotoUrl = verificationPhotoUrl || '';
+    cr.updatedBy = userId;
+    await cr.save();
+    await syncProjectMetrics(projectId);
+    return { cr };
   }
 
   const overrideMap = new Map();
@@ -2481,10 +3518,7 @@ router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req
 
     if (verifiedQuantity < 0) verifiedQuantity = 0;
     if (verifiedQuantity > Number(item.claimedQuantity)) {
-      return badRequest(
-        res,
-        `Verified qty for "${item.title || item.description}" cannot exceed claimed qty (${item.claimedQuantity} ${item.unit})`
-      );
+      return { error: `Verified qty for "${item.title || item.description}" cannot exceed claimed qty (${item.claimedQuantity} ${item.unit})` };
     }
 
     // Cap against remaining BOQ estimate after already-verified (other CRs) + billed
@@ -2493,7 +3527,7 @@ router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req
       const otherVerified = await CheckRequest.aggregate([
         {
           $match: {
-            project: new mongoose.Types.ObjectId(req.params.id),
+            project: new mongoose.Types.ObjectId(projectId),
             _id: { $ne: cr._id },
             status: { $in: ['Verified', 'Billed', 'Submitted'] }
           }
@@ -2518,10 +3552,7 @@ router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req
       const reserved = Number(otherVerified[0]?.qty) || 0;
       const remainingEst = Math.max(0, (Number(boq.estimatedQuantity) || 0) - reserved);
       if (verifiedQuantity > remainingEst) {
-        return badRequest(
-          res,
-          `Verified qty for "${boq.title || boq.description}" exceeds remaining BOQ quantity (${remainingEst} ${boq.unit})`
-        );
+        return { error: `Verified qty for "${boq.title || boq.description}" exceeds remaining BOQ quantity (${remainingEst} ${boq.unit})` };
       }
     }
 
@@ -2531,22 +3562,26 @@ router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req
   }
 
   if (verifiedTotal <= 0 && !cr.items.some((i) => (Number(i.verifiedQuantity) || 0) > 0)) {
-    return badRequest(res, 'At least one line must have verified quantity greater than zero');
+    return { error: 'At least one line must have verified quantity greater than zero' };
   }
 
   cr.status = 'Verified';
   cr.verifiedTotal = verifiedTotal;
   cr.verifiedAt = new Date();
   cr.verifiedBy = String(verifiedBy).trim();
-  cr.verifiedByUser = req.user?._id;
+  cr.verifiedByUser = userId;
   cr.verificationNotes = verificationNotes || '';
   cr.verificationPhotoUrl = verificationPhotoUrl || '';
-  cr.updatedBy = req.user?._id;
+  cr.updatedBy = userId;
   await cr.save();
+  await syncProjectMetrics(projectId);
+  return { cr };
+};
 
-  const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
-  res.json({ success: true, message: 'Check Request verified — ready for IPC / expense', data: populated });
-}));
+// POST verify — retired: check requests are verified by an approved Inspection Report
+router.post('/projects/:id/check-requests/:crId/verify', asyncHandler(async (req, res) => (
+  badRequest(res, 'Check requests are verified through an Inspection Report — create one and have every inspector approve it')
+)));
 
 // POST reject
 router.post('/projects/:id/check-requests/:crId/reject', asyncHandler(async (req, res) => {
@@ -2560,6 +3595,9 @@ router.post('/projects/:id/check-requests/:crId/reject', asyncHandler(async (req
 
   const reason = String(req.body?.rejectionReason || '').trim();
   if (!reason) return badRequest(res, 'Rejection reason is required');
+  if (await InspectionReport.exists({ checkRequest: cr._id, status: 'Pending' })) {
+    return badRequest(res, 'An inspection report is in progress — inspectors approve or reject it there');
+  }
 
   cr.status = 'Rejected';
   cr.rejectionReason = reason;
@@ -2588,8 +3626,230 @@ router.delete('/projects/:id/check-requests/:crId', asyncHandler(async (req, res
   cr.status = 'Cancelled';
   cr.updatedBy = req.user?._id;
   await cr.save();
+  await InspectionReport.updateMany(
+    { checkRequest: cr._id, status: 'Pending' },
+    { $set: { status: 'Cancelled', completedAt: new Date(), updatedBy: req.user?._id } }
+  );
+  await syncProjectMetrics(req.params.id);
 
   res.json({ success: true, message: 'Check Request cancelled' });
+}));
+
+// ─── INSPECTION REPORTS (site inspection that verifies a Submitted Check Request) ───
+
+const fullName = (u) => [u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() || u?.email || '';
+
+const populateInspection = (query) =>
+  query
+    .populate({
+      path: 'checkRequest',
+      select: 'checkRequestNumber title status claimType contractor subletContract slab claimedTotal',
+      populate: [
+        { path: 'contractor', select: 'name' },
+        { path: 'subletContract', select: 'contractNumber contractType' }
+      ]
+    })
+    .populate('inspectors.user', 'firstName lastName email position digitalSignature')
+    .populate('createdBy', 'firstName lastName');
+
+// GET /api/project-management/projects/:id/inspection-reports[?checkRequest=]
+router.get('/projects/:id/inspection-reports', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const filter = { project: req.params.id };
+  if (req.query.checkRequest && isValidId(req.query.checkRequest)) filter.checkRequest = req.query.checkRequest;
+  const reports = await populateInspection(InspectionReport.find(filter).sort({ createdAt: -1 })).lean();
+  res.json({ success: true, data: reports });
+}));
+
+// POST /api/project-management/projects/:id/check-requests/:crId/inspection-reports — assign inspectors
+router.post('/projects/:id/check-requests/:crId/inspection-reports', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.crId)) return badRequest(res, 'Invalid ID');
+
+  const cr = await CheckRequest.findOne({ _id: req.params.crId, project: req.params.id });
+  if (!cr) return notFound(res, 'Check Request');
+  if (cr.status !== 'Submitted') return badRequest(res, 'Inspection reports are raised on Submitted check requests');
+  const open = await InspectionReport.findOne({ checkRequest: cr._id, status: { $in: ['Pending', 'Approved'] } })
+    .select('reportNumber status').lean();
+  if (open) return badRequest(res, `${open.reportNumber} is already ${open.status.toLowerCase()} for this check request`);
+
+  const { inspectionDate, location = '', remarks = '', inspectors = [], items = [] } = req.body;
+  const inspectorIds = [...new Set((Array.isArray(inspectors) ? inspectors : []).map((u) => String(u?._id || u)))]
+    .filter(isValidId);
+  if (!inspectorIds.length) return badRequest(res, 'Assign at least one inspector');
+  const users = await User.find({ _id: { $in: inspectorIds }, isActive: { $ne: false } })
+    .select('firstName lastName email position').lean();
+  if (users.length !== inspectorIds.length) return badRequest(res, 'One or more inspectors were not found or are inactive');
+  const userById = new Map(users.map((u) => [String(u._id), u]));
+
+  let reportItems = [];
+  let inspectedTotal = 0;
+  if (cr.claimType === 'Slab') {
+    inspectedTotal = Number(cr.slab?.amount) || Number(cr.claimedTotal) || 0;
+  } else {
+    const byBoq = new Map((Array.isArray(items) ? items : []).map((r) => [String(r.boqItemId || r.boqItem), r]));
+    for (const it of cr.items) {
+      const row = byBoq.get(String(it.boqItem));
+      const inspected = row?.inspectedQuantity !== undefined ? Number(row.inspectedQuantity) : Number(it.claimedQuantity);
+      if (!Number.isFinite(inspected) || inspected < 0) return badRequest(res, `Invalid inspected quantity for "${it.title}"`);
+      if (inspected > Number(it.claimedQuantity)) {
+        return badRequest(res, `Inspected qty for "${it.title || it.description}" cannot exceed claimed qty (${it.claimedQuantity} ${it.unit})`);
+      }
+      reportItems.push({
+        boqItem: it.boqItem, title: it.title || it.description, unit: it.unit,
+        claimedQuantity: it.claimedQuantity, inspectedQuantity: inspected, unitPrice: it.unitPrice
+      });
+      inspectedTotal += inspected * (Number(it.unitPrice) || 0);
+    }
+    if (!reportItems.some((i) => i.inspectedQuantity > 0)) {
+      return badRequest(res, 'At least one line must have an inspected quantity greater than zero');
+    }
+  }
+
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  const report = await InspectionReport.create({
+    project: req.params.id,
+    masterProject: project?.parentProject || null,
+    checkRequest: cr._id,
+    inspectionDate: inspectionDate ? new Date(inspectionDate) : new Date(),
+    location,
+    remarks,
+    claimType: cr.claimType || 'BOQ',
+    items: reportItems,
+    slab: cr.claimType === 'Slab' ? { name: cr.slab?.name, percentage: cr.slab?.percentage, amount: cr.slab?.amount } : undefined,
+    inspectedTotal,
+    inspectors: inspectorIds.map((id) => ({
+      user: id,
+      name: fullName(userById.get(id)),
+      designation: userById.get(id)?.position || ''
+    })),
+    createdBy: req.user?._id,
+    updatedBy: req.user?._id
+  });
+
+  try {
+    await NotificationService.createSystemAlert(
+      `Inspection ${report.reportNumber} assigned to you`,
+      `Please inspect ${cr.checkRequestNumber} — ${cr.title} and approve or reject with your observations.`,
+      'high',
+      inspectorIds,
+      { module: 'other', entityId: report._id, entityType: 'InspectionReport', additionalData: { projectId: req.params.id } }
+    );
+  } catch { /* notification failure must not block the report */ }
+
+  const populated = await populateInspection(InspectionReport.findById(report._id)).lean();
+  res.status(201).json({ success: true, message: `Inspection report ${report.reportNumber} created`, data: populated });
+}));
+
+// POST /api/project-management/projects/:id/inspection-reports/:irId/decision — inspector approves / rejects
+router.post('/projects/:id/inspection-reports/:irId/decision', withInspectionUpload, asyncHandler(async (req, res) => {
+  // Any early return below must not leave orphaned uploads behind
+  const fail = (status, message) => { removeUploaded(req); return res.status(status).json({ success: false, message }); };
+  if (!isValidId(req.params.id) || !isValidId(req.params.irId)) return fail(400, 'Invalid ID');
+
+  if (req.rejectedEvidence?.length) {
+    return fail(400, `${req.rejectedEvidence.join(', ')}: photos must be image files and videos must be video files`);
+  }
+  const images = req.files?.images || [];
+  const videos = req.files?.videos || [];
+  if (images.length < INSPECTION_MIN_IMAGES || videos.length < INSPECTION_MIN_VIDEOS) {
+    return fail(400, `Attach at least ${INSPECTION_MIN_IMAGES} photos and ${INSPECTION_MIN_VIDEOS} video of the site (got ${images.length} photo(s), ${videos.length} video(s))`);
+  }
+  const bigImage = images.find((f) => f.size > INSPECTION_IMAGE_MAX_BYTES);
+  if (bigImage) return fail(400, `${bigImage.originalname} is over 10 MB — photos must be under 10 MB each`);
+
+  const decision = req.body?.decision === 'Approved' ? 'Approved' : req.body?.decision === 'Rejected' ? 'Rejected' : null;
+  const observations = String(req.body?.observations || '').trim();
+  if (!decision) return fail(400, 'Decision must be Approved or Rejected');
+  if (decision === 'Rejected' && !observations) return fail(400, 'Write your observations to reject');
+
+  const report = await InspectionReport.findOne({ _id: req.params.irId, project: req.params.id });
+  if (!report) return fail(404, 'Inspection Report not found');
+  if (report.status !== 'Pending') return fail(400, `This inspection report is already ${report.status.toLowerCase()}`);
+
+  const me = String(req.user?._id || '');
+  const slot = report.inspectors.find((i) => String(i.user) === me);
+  if (!slot) return fail(403, 'You are not an assigned inspector on this report');
+  if (slot.status !== 'Pending') return fail(400, `You already ${slot.status.toLowerCase()} this report`);
+
+  const user = await User.findById(me).select('firstName lastName email position digitalSignature').lean();
+  if (!user?.digitalSignature) {
+    return fail(400, 'Upload your digital signature in your profile before signing an inspection report');
+  }
+
+  slot.status = decision;
+  slot.observations = observations;
+  slot.signature = user.digitalSignature;
+  slot.name = fullName(user) || slot.name;
+  slot.designation = user.position || slot.designation;
+  slot.actedAt = new Date();
+  slot.attachments = [
+    ...images.map((f) => ({ kind: 'image', file: f })),
+    ...videos.map((f) => ({ kind: 'video', file: f }))
+  ].map(({ kind, file }) => ({
+    kind,
+    url: `/uploads/project-management/inspections/${file.filename}`,
+    originalName: file.originalname,
+    mimeType: file.mimetype,
+    size: file.size
+  }));
+
+  const cr = await CheckRequest.findById(report.checkRequest);
+  if (!cr) return fail(404, 'Check Request not found');
+
+  if (decision === 'Rejected') {
+    report.status = 'Rejected';
+    report.completedAt = new Date();
+    if (cr.status === 'Submitted') {
+      cr.status = 'Rejected';
+      cr.rejectionReason = `Inspection ${report.reportNumber} rejected by ${slot.name}: ${observations}`;
+      cr.rejectedAt = new Date();
+      cr.rejectedBy = req.user?._id;
+      cr.updatedBy = req.user?._id;
+      await cr.save();
+    }
+  } else if (report.inspectors.every((i) => i.status === 'Approved')) {
+    // Last signature: verify the check request first so a failed cap leaves the report pending
+    const signers = report.inspectors.map((i) => i.name).filter(Boolean).join(', ');
+    const notes = [
+      `Inspection Report ${report.reportNumber}`,
+      report.remarks,
+      ...report.inspectors.filter((i) => i.observations).map((i) => `${i.name}: ${i.observations}`)
+    ].filter(Boolean).join(' — ');
+    const result = await applyCheckRequestVerification(cr, {
+      projectId: req.params.id,
+      userId: req.user?._id,
+      verifiedBy: signers,
+      verificationNotes: notes,
+      items: report.items.map((i) => ({ boqItemId: i.boqItem, verifiedQuantity: i.inspectedQuantity }))
+    });
+    if (result.error) return fail(400, result.error);
+    report.status = 'Approved';
+    report.completedAt = new Date();
+  }
+
+  report.updatedBy = req.user?._id;
+  await report.save();
+
+  const populated = await populateInspection(InspectionReport.findById(report._id)).lean();
+  const message = report.status === 'Approved'
+    ? 'All inspectors approved — check request verified and ready for IPC'
+    : report.status === 'Rejected'
+      ? 'Inspection rejected — check request sent back with your observations'
+      : `${decision} — waiting for the other inspectors`;
+  res.json({ success: true, message, data: populated });
+}));
+
+// POST /api/project-management/projects/:id/inspection-reports/:irId/cancel
+router.post('/projects/:id/inspection-reports/:irId/cancel', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.irId)) return badRequest(res, 'Invalid ID');
+  const report = await InspectionReport.findOne({ _id: req.params.irId, project: req.params.id });
+  if (!report) return notFound(res, 'Inspection Report');
+  if (report.status !== 'Pending') return badRequest(res, 'Only pending inspection reports can be cancelled');
+  report.status = 'Cancelled';
+  report.completedAt = new Date();
+  report.updatedBy = req.user?._id;
+  await report.save();
+  res.json({ success: true, message: `Inspection report ${report.reportNumber} cancelled` });
 }));
 
 // ─── SUBLET CONTRACTS (sublet BOQ lines to subcontractors) ───────────────────
@@ -2964,6 +4224,7 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
 
   contract.updatedBy = req.user?._id;
   await contract.save();
+  await syncProjectMetrics(req.params.id);
 
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
   res.json({ success: true, message: 'Sublet contract updated', data: populated });
@@ -3023,6 +4284,7 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
   contract.updatedBy = req.user?._id;
   await contract.save();
   if (!isSlab) await syncSubletToBoq(contract, req.params.id);
+  await syncProjectMetrics(req.params.id);
 
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
   res.json({
@@ -3047,6 +4309,7 @@ router.post('/projects/:id/sublet-contracts/:scId/complete', asyncHandler(async 
   contract.status = 'Completed';
   contract.updatedBy = req.user?._id;
   await contract.save();
+  await syncProjectMetrics(req.params.id);
 
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
   res.json({ success: true, message: 'Sublet contract marked completed', data: populated });
@@ -3065,8 +4328,125 @@ router.delete('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, r
   contract.status = 'Cancelled';
   contract.updatedBy = req.user?._id;
   await contract.save();
+  await syncProjectMetrics(req.params.id);
 
   res.json({ success: true, message: 'Sublet contract cancelled' });
+}));
+
+// ─── SUBCONTRACTOR STATEMENT ─────────────────────────────────────────────────
+
+// GET /api/project-management/subcontractors — everyone holding (or who held) a sublet contract
+router.get('/subcontractors', asyncHandler(async (req, res) => {
+  const ids = await SubletContract.distinct('contractor', { status: { $ne: 'Cancelled' } });
+  const list = await Supplier.find({ _id: { $in: ids } }).select('name supplierId phone email').sort({ name: 1 }).lean();
+  res.json({ success: true, data: list });
+}));
+
+// GET /api/project-management/subcontractors/:supplierId/statement — contracts, IPCs and balances across projects
+router.get('/subcontractors/:supplierId/statement', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.supplierId)) return badRequest(res, 'Invalid subcontractor');
+  const supplier = await Supplier.findById(req.params.supplierId).select('name supplierId phone email address contactPerson').lean();
+  if (!supplier) return notFound(res, 'Subcontractor');
+
+  const projectPopulate = { path: 'project', select: 'name projectNumber sector parentProject', populate: { path: 'parentProject', select: 'name' } };
+  const [contracts, ipcs] = await Promise.all([
+    SubletContract.find({ contractor: supplier._id, status: { $ne: 'Cancelled' } })
+      .populate(projectPopulate)
+      .select('contractNumber title contractType status totalAmount startDate endDate project activatedAt')
+      .sort({ createdAt: 1 }).lean(),
+    ProjectInvoice.find({ contractor: supplier._id, invoiceType: 'Subcontractor_IPC' })
+      .populate(projectPopulate)
+      .populate('checkRequest', 'checkRequestNumber')
+      .select('invoiceNumber ipcNumber ipcKind approvalStatus status issueDate grossAmount retentionAmount advanceRecoveryAmount whtAmount netPayableAmount paidAmount financeBillNumber project checkRequest cancelledAt')
+      .sort({ issueDate: 1, createdAt: 1 }).lean()
+  ]);
+
+  const projectIds = [...new Set([...contracts, ...ipcs].map((r) => String(r.project?._id || r.project)).filter(Boolean))];
+  const byProject = await Promise.all(projectIds.map(async (pid) => {
+    const sample = [...contracts, ...ipcs].find((r) => String(r.project?._id || r.project) === pid)?.project;
+    return {
+      project: { _id: pid, name: sample?.name, mainProject: sample?.parentProject?.name, sector: sample?.sector },
+      ...(await subcontractorBalances(pid, supplier._id))
+    };
+  }));
+
+  const live = ipcs.filter((i) => i.status !== 'Cancelled');
+  const sum = (list, f) => round2(list.reduce((t, r) => t + (Number(r[f]) || 0), 0));
+  const approved = live.filter((i) => i.approvalStatus === 'Approved');
+  const approvedWork = approved.filter((i) => !NON_WORK_IPC_KINDS.includes(i.ipcKind));
+  const totals = {
+    contracted: sum(contracts, 'totalAmount'),
+    certifiedWork: sum(approvedWork, 'grossAmount'),
+    workInApproval: sum(live.filter((i) => i.approvalStatus !== 'Approved' && !NON_WORK_IPC_KINDS.includes(i.ipcKind)), 'grossAmount'),
+    retentionHeld: sum(byProject, 'retentionAvailable'),
+    advanceOutstanding: sum(byProject, 'advanceOutstanding'),
+    approvedPayable: sum(approved, 'netPayableAmount'),
+    paid: sum(live, 'paidAmount')
+  };
+  totals.balanceDue = Math.max(0, round2(totals.approvedPayable - totals.paid));
+
+  res.json({ success: true, data: { supplier, contracts, ipcs, byProject, totals, generatedAt: new Date() } });
+}));
+
+// ─── APPROVALS INBOX (everything waiting on someone, across all projects) ───
+
+// GET /api/project-management/approvals
+router.get('/approvals', asyncHandler(async (req, res) => {
+  const projectFields = 'name projectNumber parentProject';
+  const withProject = (q) => q
+    .populate({ path: 'project', select: projectFields, populate: { path: 'parentProject', select: 'name projectNumber' } })
+    .populate('contractor', 'name')
+    .sort({ updatedAt: -1 })
+    .limit(200)
+    .lean();
+
+  const me = req.user?._id;
+  const [myInspections, runningInspections] = await Promise.all([
+    me
+      ? InspectionReport.find({ status: 'Pending', inspectors: { $elemMatch: { user: me, status: 'Pending' } } })
+        .select('reportNumber checkRequest project inspectionDate inspectedTotal inspectors updatedAt')
+        .populate({ path: 'project', select: projectFields, populate: { path: 'parentProject', select: 'name projectNumber' } })
+        .populate({ path: 'checkRequest', select: 'checkRequestNumber title contractor', populate: { path: 'contractor', select: 'name' } })
+        .sort({ updatedAt: -1 })
+        .limit(200)
+        .lean()
+      : [],
+    InspectionReport.find({ status: 'Pending' }).distinct('checkRequest')
+  ]);
+  const inspecting = new Set(runningInspections.map(String));
+
+  const [contracts, toVerify, verified, ipcs] = await Promise.all([
+    withProject(SubletContract.find({ status: 'Draft' }).select('contractNumber title contractType totalAmount project contractor updatedAt')),
+    withProject(CheckRequest.find({ status: 'Submitted' }).select('checkRequestNumber title claimedTotal project contractor submittedAt updatedAt')),
+    withProject(CheckRequest.find({ status: 'Verified' })
+      .select('checkRequestNumber title status claimType slab linkedInvoice verifiedTotal items project contractor verifiedAt updatedAt')),
+    // IPCs waiting on the project team: never submitted, or rejected back for revision
+    withProject(ProjectInvoice.find({
+      invoiceType: 'Subcontractor_IPC',
+      status: { $nin: ['Cancelled', 'Paid', 'Partially Paid'] },
+      $or: [{ approvalStatus: { $in: ['Draft', 'Rejected'] } }, { approvalStatus: { $exists: false } }]
+    }).select('invoiceNumber ipcNumber status approvalStatus returnedFromStatus rejection netPayableAmount invoiceAmount paidAmount dueDate project contractor updatedAt'))
+  ]);
+
+  const readyForIpc = verified
+    .map(({ items, ...cr }) => ({ ...cr, billableAmount: checkRequestBillable({ ...cr, items }) }))
+    .filter((cr) => cr.billableAmount > 0);
+
+  res.json({
+    success: true,
+    data: {
+      contractsToActivate: contracts,
+      inspectionsToSign: myInspections.map((r) => ({
+        ...r,
+        contractor: r.checkRequest?.contractor,
+        signed: (r.inspectors || []).filter((i) => i.status === 'Approved').length,
+        total: (r.inspectors || []).length
+      })),
+      checkRequestsToVerify: toVerify.filter((cr) => !inspecting.has(String(cr._id))),
+      checkRequestsReadyForIpc: readyForIpc,
+      ipcsToSubmit: ipcs
+    }
+  });
 }));
 
 module.exports = router;

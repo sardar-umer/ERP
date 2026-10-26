@@ -931,6 +931,14 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('❌ Failed to start Utility Bill Overdue Cron:', error);
   }
 
+  // Project Management: daily reminders for IPCs waiting too long at an approval desk
+  try {
+    const { startIpcReminderCron } = require('./utils/projectIpcReminders');
+    startIpcReminderCron();
+  } catch (error) {
+    console.error('❌ Failed to start IPC Reminder Cron:', error);
+  }
+
   // Recovery WhatsApp: manual sends only (My Tasks). No cron or automatic follow-up.
 
   try {

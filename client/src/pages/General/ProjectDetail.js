@@ -6,16 +6,16 @@ import {
   DialogActions, DialogContent, DialogTitle, Divider, FormControl, Grid,
   IconButton, InputLabel, LinearProgress, MenuItem, Paper, Select, Skeleton,
   Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead,
-  TableRow, Tabs, TextField, Tooltip, Typography, InputAdornment, Autocomplete
+  TableRow, Tabs, TextField, Tooltip, Typography, InputAdornment
 } from '@mui/material';
 import {
   Add as AddIcon, ArrowBack as BackIcon,
-  AttachMoney as MoneyIcon, BarChart as ChartIcon,
+  BarChart as ChartIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon, Edit as EditIcon,
   Flag as FlagIcon,
   PhotoCamera as PhotoIcon, Refresh as RefreshIcon, Search as SearchIcon,
   Warning as WarnIcon, ShoppingCart as POIcon, Receipt as InvoiceIcon,
-  Visibility as ViewIcon, Engineering as ContractorIcon,
+  Visibility as ViewIcon,
   AccountTree as TreeIcon,
   FactCheck as CheckRequestIcon,
   Handshake as SubletIcon,
@@ -30,8 +30,7 @@ import {
   getProjectById,
   getBOQHeaders, createBOQHeader, updateBOQHeader, deleteBOQHeader, allocateBOQItem,
   getBOQ, addBOQItem, updateBOQItem, deleteBOQItem,
-  updateBoqDiscount, batchAssignBOQContractor, getSuppliers,
-  getExpenses, addExpense, updateExpense, deleteExpense,
+  updateBoqDiscount,
   getDPRList, submitDPR, deleteDPR,
   addMilestone, updateMilestone, deleteMilestone,
   createPOFromBOQ, getProjectPurchaseOrders,
@@ -41,6 +40,8 @@ import api from '../../services/api';
 import CheckRequestsTab from './CheckRequestsTab';
 import SubletContractsTab from './SubletContractsTab';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
+import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
+import CostReportTab from '../../components/ProjectManagement/CostReportTab';
 import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -86,9 +87,9 @@ const ALL_TABS = [
   { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'expenses', label: 'Expenses', icon: <MoneyIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'dpr', label: 'Daily Reports', icon: <PhotoIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true }
+  { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'cost', label: 'Cost Report', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: true }
 ];
 
 const getVisibleTabs = (isMain) => ALL_TABS.filter((t) => (isMain ? t.onMain : t.onSub));
@@ -153,17 +154,10 @@ const BOQTab = ({ projectId, project }) => {
   // Quantity Allocation state
   const [allocateOpen, setAllocateOpen] = useState(false);
   const [allocatingItem, setAllocatingItem] = useState(null);
-  const [allocForm, setAllocForm] = useState({ subProjectId: '', contractorId: '', allocatedQuantity: '', contractorUnitPrice: '', notes: '' });
+  const [allocForm, setAllocForm] = useState({ subProjectId: '', allocatedQuantity: '', notes: '' });
   const [allocSaving, setAllocSaving] = useState(false);
-
-  // Subcontractor & Sub-Project batch assignment state
-  const [subcontractors, setSubcontractors] = useState([]);
   const [childProjects, setChildProjects] = useState([]);
-  const [batchAssignOpen, setBatchAssignOpen] = useState(false);
-  const [batchContractorId, setBatchContractorId] = useState('');
-  const [batchSubProjectId, setBatchSubProjectId] = useState('');
-  const [batchContractorUnitPrice, setBatchContractorUnitPrice] = useState('');
-  const [batchAssignSaving, setBatchAssignSaving] = useState(false);
+
 
   const pagination = usePagination({
     defaultRowsPerPage: 25,
@@ -199,11 +193,10 @@ const BOQTab = ({ projectId, project }) => {
         ...(categoryFilter && { category: categoryFilter }),
         ...(activeBoqHeaderId && { boqHeaderId: activeBoqHeaderId })
       };
-      const [boqRes, headersRes, posRes, suppRes, projRes] = await Promise.all([
+      const [boqRes, headersRes, posRes, projRes] = await Promise.all([
         getBOQ(projectId, params),
         getBOQHeaders(projectId).catch(() => ({ data: { data: [] } })),
         getProjectPurchaseOrders(projectId).catch(() => ({ data: { data: [] } })),
-        getSuppliers().catch(() => ({ data: { data: [] } })),
         api.get('/project-management/projects', { params: { limit: 100 } }).catch(() => ({ data: { data: { projects: [] } } }))
       ]);
       setData(boqRes.data?.data ?? null);
@@ -211,7 +204,6 @@ const BOQTab = ({ projectId, project }) => {
       setWholeDiscount(String(boqRes.data?.data?.boqDiscountAmount ?? ''));
       pagination.setTotal(boqRes.data?.data?.pagination?.total || 0);
       setProjectPOs(posRes.data?.data || []);
-      setSubcontractors(suppRes.data?.data?.suppliers || suppRes.data?.data || []);
 
       const allProjects = projRes.data?.data?.projects || projRes.data?.data || [];
       const subProjs = allProjects.filter(p => String(p.parentProject?._id || p.parentProject) === String(projectId));
@@ -302,25 +294,6 @@ const BOQTab = ({ projectId, project }) => {
     } finally { setPoSaving(false); }
   };
 
-  const handleBatchAssign = async () => {
-    if (!batchContractorId && !batchSubProjectId) { setError('Please select a subcontractor or sub-project'); return; }
-    setBatchAssignSaving(true);
-    try {
-      await batchAssignBOQContractor(projectId, {
-        itemIds: Array.from(selectedItems.keys()),
-        contractorId: batchContractorId,
-        subProjectId: batchSubProjectId,
-        contractorUnitPrice: batchContractorUnitPrice
-      });
-      setSuccess(`${selectedItems.size} BOQ items assigned successfully`);
-      setBatchAssignOpen(false);
-      setSelectedItems(new Map());
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to assign contractor');
-    } finally { setBatchAssignSaving(false); }
-  };
-
   const handleCreateHeader = async () => {
     if (!headerForm.title) { setError('BOQ Document Title is required'); return; }
     setHeaderSaving(true);
@@ -339,23 +312,22 @@ const BOQTab = ({ projectId, project }) => {
     setAllocatingItem(item);
     setAllocForm({
       itemId: item._id,
-      subProjectId: item.subProject?._id || item.subProject || '',
-      contractorId: item.contractor?._id || item.contractor || '',
-      allocatedQuantity: item.estimatedQuantity || '',
-      contractorUnitPrice: item.contractorUnitPrice || item.estimatedUnitPrice || '',
+      subProjectId: '',
+      allocatedQuantity: '',
       notes: ''
     });
     setAllocateOpen(true);
   };
 
   const handleSaveAllocation = async () => {
+    if (!allocForm.subProjectId) { setError('Select the Sub Project to allocate to'); return; }
     if (!allocForm.allocatedQuantity || Number(allocForm.allocatedQuantity) <= 0) {
       setError('Allocated quantity is required'); return;
     }
     setAllocSaving(true);
     try {
       await allocateBOQItem(projectId, allocForm);
-      setSuccess('Item quantity allocated to sub-project / contractor');
+      setSuccess('Quantity allocated to Sub Project');
       setAllocateOpen(false);
       load();
     } catch (err) {
@@ -461,8 +433,8 @@ const BOQTab = ({ projectId, project }) => {
       {isSubProject && (
         <Alert severity="info" sx={{ mb: 2 }}>
           <strong>Sub-Project BOQ:</strong> Shows items created on this Sub Project and items
-          allocated from the Main Project. You can add new line items here; assign subcontractors
-          via <strong>Sublet Contracts</strong>.
+          allocated from the Main Project. Subcontractors and their rates are assigned only on the{' '}
+          <strong>Sublet Contracts</strong> tab.
         </Alert>
       )}
 
@@ -472,11 +444,6 @@ const BOQTab = ({ projectId, project }) => {
           <Stack direction="row" gap={1} flexWrap="wrap" justifyContent="flex-end">
             {selectedItems.size > 0 && (
               <>
-                {!isSubProject && (
-                  <Button size="small" startIcon={<ContractorIcon />} onClick={() => { setBatchContractorId(''); setBatchContractorUnitPrice(''); setBatchAssignOpen(true); }} variant="contained" color="secondary">
-                    Assign Subcontractor ({selectedItems.size})
-                  </Button>
-                )}
                 <Button size="small" startIcon={<POIcon />} onClick={openCreatePO} variant="outlined" color="secondary">
                   Create PO ({selectedItems.size})
                 </Button>
@@ -819,11 +786,13 @@ const BOQTab = ({ projectId, project }) => {
                   </TableCell>
                   <TableCell align="right">
                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                      <Tooltip title="Allocate Quantity to Sub-Project / Contractor">
-                        <IconButton size="small" color="secondary" onClick={() => openAllocateModal(item)}>
-                          <ContractorIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
+                      {!isSubProject && (
+                        <Tooltip title="Allocate quantity to a Sub Project">
+                          <IconButton size="small" color="secondary" onClick={() => openAllocateModal(item)}>
+                            <TreeIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       <Tooltip title="View Details">
                         <IconButton size="small" onClick={() => setViewItem(item)}>
                           <ViewIcon fontSize="small" />
@@ -1075,7 +1044,7 @@ const BOQTab = ({ projectId, project }) => {
 
       {/* Quantity Allocation Dialog */}
       <Dialog open={allocateOpen} onClose={() => setAllocateOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Allocate Quantity to Sub-Project / Subcontractor</DialogTitle>
+        <DialogTitle>Allocate Quantity to Sub Project</DialogTitle>
         <DialogContent sx={{ pt: 2 }}>
           {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
           {allocatingItem && (() => {
@@ -1162,44 +1131,24 @@ const BOQTab = ({ projectId, project }) => {
           })()}
 
           <Grid container spacing={2}>
-            {childProjects.length > 0 && (
-              <Grid item xs={12} sm={6}>
-                <FormControl fullWidth>
-                  <InputLabel>Target Sub-Project</InputLabel>
-                  <Select
-                    value={allocForm.subProjectId}
-                    label="Target Sub-Project"
-                    onChange={e => setAllocForm(p => ({ ...p, subProjectId: e.target.value }))}
-                  >
-                    <MenuItem value="">-- All / Main Project --</MenuItem>
-                    {childProjects.map(p => <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>)}
-                  </Select>
-                </FormControl>
-              </Grid>
-            )}
-            <Grid item xs={12} sm={childProjects.length > 0 ? 6 : 12}>
-              <Autocomplete
-                options={subcontractors}
-                getOptionLabel={(option) => {
-                  if (typeof option === 'string') return option;
-                  if (!option) return '';
-                  const idStr = option.supplierId ? ` (${option.supplierId})` : '';
-                  const catStr = option.vendorCategory ? ` - [${option.vendorCategory}]` : '';
-                  return `${option.name || ''}${idStr}${catStr}`;
-                }}
-                value={subcontractors.find(s => String(s._id) === String(allocForm.contractorId)) || null}
-                onChange={(event, newValue) => {
-                  setAllocForm(p => ({ ...p, contractorId: newValue ? newValue._id : '' }));
-                }}
-                isOptionEqualToValue={(option, value) => String(option._id) === String(value._id || value)}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Assigned Subcontractor"
-                    placeholder="Search subcontractor..."
-                  />
-                )}
-              />
+            <Grid item xs={12}>
+              <Alert severity="info" sx={{ mb: 0.5 }}>
+                Allocation only moves BOQ quantity to a Sub Project. The subcontractor and rate are set on that
+                Sub Project's <strong>Sublet Contracts</strong> tab.
+              </Alert>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <FormControl fullWidth required>
+                <InputLabel>Sub Project</InputLabel>
+                <Select
+                  value={allocForm.subProjectId}
+                  label="Sub Project"
+                  onChange={e => setAllocForm(p => ({ ...p, subProjectId: e.target.value }))}
+                >
+                  {!childProjects.length && <MenuItem value="" disabled>No Sub Projects under this Main Project yet</MenuItem>}
+                  {childProjects.map(p => <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>)}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
@@ -1209,15 +1158,6 @@ const BOQTab = ({ projectId, project }) => {
                 onChange={e => setAllocForm(p => ({ ...p, allocatedQuantity: e.target.value }))}
                 inputProps={{ min: 0, max: allocatingItem ? Math.max(0, (allocatingItem.estimatedQuantity || 0) - (allocatingItem.allocations || []).reduce((s, a) => s + (a.allocatedQuantity || 0), 0)) : undefined }}
                 helperText={allocatingItem ? `Max Available: ${Math.max(0, (allocatingItem.estimatedQuantity || 0) - (allocatingItem.allocations || []).reduce((s, a) => s + (a.allocatedQuantity || 0), 0)).toLocaleString()} ${allocatingItem.unit}` : ''}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth type="number"
-                label="Contractor Agreed Rate (PKR)"
-                value={allocForm.contractorUnitPrice}
-                onChange={e => setAllocForm(p => ({ ...p, contractorUnitPrice: e.target.value }))}
-                inputProps={{ min: 0 }}
               />
             </Grid>
             <Grid item xs={12}>
@@ -1233,66 +1173,6 @@ const BOQTab = ({ projectId, project }) => {
           <Button onClick={() => setAllocateOpen(false)}>Cancel</Button>
           <Button variant="contained" color="secondary" onClick={handleSaveAllocation} disabled={allocSaving}>
             {allocSaving ? 'Allocating…' : 'Save Allocation'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-
-      <Dialog open={batchAssignOpen} onClose={() => setBatchAssignOpen(false)} maxWidth="xs" fullWidth>
-        <DialogTitle>Assign Subcontractor & Sub-Project ({selectedItems.size} BOQ Items)</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Grid container spacing={2}>
-            <Grid item xs={12}>
-              <Autocomplete
-                options={subcontractors}
-                getOptionLabel={(option) => {
-                  if (typeof option === 'string') return option;
-                  if (!option) return '';
-                  const idStr = option.supplierId ? ` (${option.supplierId})` : '';
-                  const catStr = option.vendorCategory ? ` - [${option.vendorCategory}]` : '';
-                  return `${option.name || ''}${idStr}${catStr}`;
-                }}
-                value={subcontractors.find(s => String(s._id) === String(batchContractorId)) || null}
-                onChange={(event, newValue) => {
-                  setBatchContractorId(newValue ? newValue._id : '');
-                }}
-                isOptionEqualToValue={(option, value) => String(option._id) === String(value._id || value)}
-                renderInput={(params) => (
-                  <TextField
-                    {...params}
-                    label="Select Subcontractor"
-                    placeholder="Search subcontractor..."
-                  />
-                )}
-              />
-            </Grid>
-            {childProjects.length > 0 && (
-              <Grid item xs={12}>
-                <FormControl fullWidth>
-                  <InputLabel>Assign to Sub-Project</InputLabel>
-                  <Select value={batchSubProjectId} label="Assign to Sub-Project" onChange={e => setBatchSubProjectId(e.target.value)}>
-                    <MenuItem value="">-- All Sub-Projects --</MenuItem>
-                    {childProjects.map(p => <MenuItem key={p._id} value={p._id}>{p.name} ({p.projectNumber || 'Sub-Project'})</MenuItem>)}
-                  </Select>
-                </FormControl>
-              </Grid>
-            )}
-            <Grid item xs={12}>
-              <TextField
-                fullWidth
-                label="Contractor Agreed Rate (PKR) [Optional]"
-                type="number"
-                value={batchContractorUnitPrice}
-                onChange={e => setBatchContractorUnitPrice(e.target.value)}
-                helperText="Leave empty to keep existing BOQ unit price"
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setBatchAssignOpen(false)}>Cancel</Button>
-          <Button variant="contained" color="secondary" onClick={handleBatchAssign} disabled={batchAssignSaving}>
-            {batchAssignSaving ? 'Assigning…' : 'Confirm Assignment'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1596,221 +1476,6 @@ const BOQTab = ({ projectId, project }) => {
         </DialogContent>
         <DialogActions sx={{ borderTop: '1px solid', borderColor: 'divider', px: 3, py: 1.5 }}>
           <Button variant="contained" onClick={() => setViewItem(null)}>Close</Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  );
-};
-
-// ─── Expenses Tab ─────────────────────────────────────────────────────────────
-const ExpensesTab = ({ projectId }) => {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [editExpense, setEditExpense] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [form, setForm] = useState({
-    category: '', description: '', amount: '', expenseDate: dayjs().format('YYYY-MM-DD'),
-    vendor: '', invoiceNumber: '', paymentStatus: 'Pending', paymentMethod: 'Bank Transfer', notes: ''
-  });
-
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await getExpenses(projectId);
-      setData(res.data?.data || null);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to load expenses');
-    } finally { setLoading(false); }
-  }, [projectId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const openAdd = () => {
-    setEditExpense(null);
-    setForm({ category: '', description: '', amount: '', expenseDate: dayjs().format('YYYY-MM-DD'), vendor: '', invoiceNumber: '', paymentStatus: 'Pending', paymentMethod: 'Bank Transfer', notes: '' });
-    setDialogOpen(true);
-  };
-
-  const openEdit = (exp) => {
-    setEditExpense(exp);
-    setForm({
-      category: exp.category, description: exp.description,
-      amount: exp.amount, expenseDate: dayjs(exp.expenseDate).format('YYYY-MM-DD'),
-      vendor: exp.vendor || '', invoiceNumber: exp.invoiceNumber || '',
-      paymentStatus: exp.paymentStatus, paymentMethod: exp.paymentMethod || 'Bank Transfer',
-      notes: exp.notes || ''
-    });
-    setDialogOpen(true);
-  };
-
-  const handleSave = async () => {
-    if (!form.category) { setError('Category is required'); return; }
-    if (!form.description) { setError('Description is required'); return; }
-    if (!form.amount) { setError('Amount is required'); return; }
-    setSaving(true); setError('');
-    try {
-      if (editExpense) {
-        await updateExpense(projectId, editExpense._id, form);
-      } else {
-        await addExpense(projectId, form);
-      }
-      setSuccess(editExpense ? 'Expense updated' : 'Expense recorded');
-      setDialogOpen(false);
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to save expense');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (expId) => {
-    if (!window.confirm('Delete this expense?')) return;
-    try {
-      await deleteExpense(projectId, expId);
-      setSuccess('Expense deleted');
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to delete');
-    }
-  };
-
-  const set = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  if (loading) return <Skeleton height={300} />;
-
-  return (
-    <Box>
-      {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
-      {success && <Alert severity="success" onClose={() => setSuccess('')} sx={{ mb: 2 }}>{success}</Alert>}
-
-      <SectionHeader
-        title="Project Expenses"
-        action={
-          <Stack direction="row" gap={1}>
-            <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={load}>Refresh</Button>
-            <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={openAdd}>Record Expense</Button>
-          </Stack>
-        }
-      />
-
-      {/* Expenses table */}
-      {(!data?.expenses?.length) ? (
-        <EmptyState icon={MoneyIcon} text="No expenses recorded yet"
-          action={<Button variant="outlined" startIcon={<AddIcon />} onClick={openAdd}>Record First Expense</Button>} />
-      ) : (
-        <TableContainer component={Paper} variant="outlined">
-          <Table size="small">
-            <TableHead>
-              <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell><strong>Expense #</strong></TableCell>
-                <TableCell><strong>Date</strong></TableCell>
-                <TableCell><strong>Category</strong></TableCell>
-                <TableCell><strong>Description</strong></TableCell>
-                <TableCell><strong>Vendor</strong></TableCell>
-                <TableCell align="right"><strong>Amount</strong></TableCell>
-                <TableCell><strong>Payment</strong></TableCell>
-                <TableCell align="right"><strong>Actions</strong></TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {(data.expenses || []).map(exp => (
-                <TableRow key={exp._id} hover>
-                  <TableCell>
-                    <Typography variant="caption" fontFamily="monospace">{exp.expenseNumber}</Typography>
-                  </TableCell>
-                  <TableCell>{dayjs(exp.expenseDate).format('DD MMM YYYY')}</TableCell>
-                  <TableCell><Chip label={exp.category} size="small" variant="outlined" /></TableCell>
-                  <TableCell>
-                    <Typography variant="body2">{exp.description}</Typography>
-                    {exp.invoiceNumber && <Typography variant="caption" color="text.secondary">Inv: {exp.invoiceNumber}</Typography>}
-                  </TableCell>
-                  <TableCell>{exp.vendor || '—'}</TableCell>
-                  <TableCell align="right"><strong>{fmt(exp.amount)}</strong></TableCell>
-                  <TableCell>
-                    <Chip
-                      label={exp.paymentStatus}
-                      size="small"
-                      color={exp.paymentStatus === 'Paid' ? 'success' : exp.paymentStatus === 'Pending' ? 'warning' : 'default'}
-                    />
-                  </TableCell>
-                  <TableCell align="right">
-                    <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                      <IconButton size="small" onClick={() => openEdit(exp)}><EditIcon fontSize="small" /></IconButton>
-                      <IconButton size="small" color="error" onClick={() => handleDelete(exp._id)}><DeleteIcon fontSize="small" /></IconButton>
-                    </Stack>
-                  </TableCell>
-                </TableRow>
-              ))}
-              <TableRow sx={{ bgcolor: 'grey.50' }}>
-                <TableCell colSpan={5} align="right"><strong>Total</strong></TableCell>
-                <TableCell align="right">
-                  <strong>{fmt((data?.expenses || []).reduce((s, e) => s + (e.amount || 0), 0))}</strong>
-                </TableCell>
-                <TableCell colSpan={2} />
-              </TableRow>
-            </TableBody>
-          </Table>
-        </TableContainer>
-      )}
-
-      {/* Expense Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>{editExpense ? 'Edit Expense' : 'Record Expense'}</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Grid container spacing={2}>
-            <Grid item xs={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Category</InputLabel>
-                <Select value={form.category} label="Category" onChange={set('category')}>
-                  {BUDGET_CATEGORIES.map(c => <MenuItem key={c} value={c}>{c}</MenuItem>)}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth type="date" label="Date" value={form.expenseDate}
-                onChange={set('expenseDate')} InputLabelProps={{ shrink: true }} />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField fullWidth required label="Description" value={form.description} onChange={set('description')} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth required label="Amount (PKR)" type="number" value={form.amount} onChange={set('amount')} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Vendor / Contractor" value={form.vendor} onChange={set('vendor')} />
-            </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="Invoice / Ref #" value={form.invoiceNumber} onChange={set('invoiceNumber')} />
-            </Grid>
-            <Grid item xs={6}>
-              <FormControl fullWidth>
-                <InputLabel>Payment Status</InputLabel>
-                <Select value={form.paymentStatus} label="Payment Status" onChange={set('paymentStatus')}>
-                  {['Pending', 'Paid', 'Cancelled'].map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={6}>
-              <FormControl fullWidth>
-                <InputLabel>Payment Method</InputLabel>
-                <Select value={form.paymentMethod} label="Payment Method" onChange={set('paymentMethod')}>
-                  {['Cash', 'Bank Transfer', 'Cheque', 'Online'].map(m => <MenuItem key={m} value={m}>{m}</MenuItem>)}
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12}>
-              <TextField fullWidth label="Notes" value={form.notes} onChange={set('notes')} multiline rows={2} />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave} disabled={saving}>
-            {saving ? 'Saving…' : editExpense ? 'Update' : 'Record'}
-          </Button>
         </DialogActions>
       </Dialog>
     </Box>
@@ -2176,7 +1841,7 @@ const MainProjectOverview = ({ project }) => {
           <MainKpi label="Portfolio Progress" value={`${project.overallProgress || 0}%`} hint="Average of Sub Projects" accent="#0369a1" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Spent" value={fmt(spent)} hint="Recorded expenses" accent="#b45309" />
+          <MainKpi label="Spent" value={fmt(spent)} hint="Certified subcontractor IPCs" accent="#b45309" />
         </Grid>
         <Grid item xs={12} sm={6} md={3}>
           <MainKpi label="Status" value={project.status || '—'} hint={project.society || ' '} accent="#334155" />
@@ -2680,7 +2345,7 @@ const ProjectDetail = () => {
       const res = await getProjectById(id);
       const data = res.data?.data || null;
       setProject(data);
-      // Workspace shortcuts (Tasks/Expenses/…) must reopen a Sub, not the Main envelope
+      // Workspace shortcuts (Check Requests/Invoices/…) must reopen a Sub, not the Main envelope
       if (data) {
         localStorage.setItem('pmLastProjectId', data._id);
         if (data.parentProject) {
@@ -2706,6 +2371,7 @@ const ProjectDetail = () => {
   const isMainProject = project ? !project.parentProject : false;
   const visibleTabs = getVisibleTabs(isMainProject);
   const activeTab = visibleTabs[Math.min(tab, Math.max(0, visibleTabs.length - 1))] || visibleTabs[0];
+  const goToTab = (tabId) => setSearchParams({ tab: tabId }, { replace: true });
 
   useEffect(() => {
     if (!project) return;
@@ -2969,6 +2635,10 @@ const ProjectDetail = () => {
         </>
       )}
 
+      {!isMainProject && (
+        <ProjectWorkflowStrip projectId={id} activeTabId={activeTab?.id} onGoToTab={goToTab} />
+      )}
+
       {/* Tabs */}
       <Box
         sx={{
@@ -3026,11 +2696,11 @@ const ProjectDetail = () => {
         <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 } }}>
           {activeTab?.id === 'overview' && <OverviewTab project={project} onRefresh={loadProject} />}
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
-          {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} />}
-          {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} />}
-          {activeTab?.id === 'expenses' && <ExpensesTab projectId={id} project={project} />}
+          {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
+          {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'dpr' && <DPRTab projectId={id} />}
-          {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} />}
+          {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} onGoToTab={goToTab} />}
+          {activeTab?.id === 'cost' && <CostReportTab project={project} />}
         </Box>
       </Paper>
 

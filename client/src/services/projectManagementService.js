@@ -9,6 +9,12 @@ export const getProjects = (params = {}) =>
 export const getProjectStats = () =>
   api.get(`${BASE}/projects/statistics`);
 
+export const getProjectWorkflow = (id) =>
+  api.get(`${BASE}/projects/${id}/workflow`);
+
+export const getApprovalsInbox = () =>
+  api.get(`${BASE}/approvals`);
+
 export const getProjectById = (id) =>
   api.get(`${BASE}/projects/${id}`);
 
@@ -79,9 +85,6 @@ export const bulkAddBOQItems = (projectId, items) =>
 export const updateBOQItem = (projectId, itemId, data) =>
   api.put(`${BASE}/projects/${projectId}/boq/${itemId}`, data);
 
-export const batchAssignBOQContractor = (projectId, data) =>
-  api.put(`${BASE}/projects/${projectId}/boq/batch-assign-contractor`, data);
-
 export const getSuppliers = (params = {}) =>
   api.get('/suppliers', { params: { limit: 1000, ...params } });
 
@@ -103,19 +106,6 @@ export const updateTask = (projectId, taskId, data) =>
 
 export const deleteTask = (projectId, taskId) =>
   api.delete(`${BASE}/projects/${projectId}/tasks/${taskId}`);
-
-// ─── Expenses ─────────────────────────────────────────────────────────────────
-export const getExpenses = (projectId, params = {}) =>
-  api.get(`${BASE}/projects/${projectId}/expenses`, { params });
-
-export const addExpense = (projectId, data) =>
-  api.post(`${BASE}/projects/${projectId}/expenses`, data);
-
-export const updateExpense = (projectId, expenseId, data) =>
-  api.put(`${BASE}/projects/${projectId}/expenses/${expenseId}`, data);
-
-export const deleteExpense = (projectId, expenseId) =>
-  api.delete(`${BASE}/projects/${projectId}/expenses/${expenseId}`);
 
 // ─── Daily Progress Reports ───────────────────────────────────────────────────
 export const getDPRList = (projectId, params = {}) =>
@@ -203,8 +193,25 @@ export const updateCheckRequest = (projectId, crId, data) =>
 export const submitCheckRequest = (projectId, crId) =>
   api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/submit`);
 
-export const verifyCheckRequest = (projectId, crId, data) =>
-  api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/verify`, data);
+// ─── Inspection Reports (verify a Submitted Check Request) ───────────────────
+export const getInspectionReports = (projectId, params = {}) =>
+  api.get(`${BASE}/projects/${projectId}/inspection-reports`, { params });
+
+export const createInspectionReport = (projectId, crId, data) =>
+  api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/inspection-reports`, data);
+
+/** formData: decision, observations, images[] (≥3), videos[] (≥1). Videos can be large, so no short timeout. */
+export const decideInspectionReport = (projectId, irId, formData, onUploadProgress) =>
+  api.post(`${BASE}/projects/${projectId}/inspection-reports/${irId}/decision`, formData, {
+    timeout: 0,
+    onUploadProgress
+  });
+
+export const cancelInspectionReport = (projectId, irId) =>
+  api.post(`${BASE}/projects/${projectId}/inspection-reports/${irId}/cancel`);
+
+export const getUsersForAssignment = () =>
+  api.get('/auth/users', { params: { limit: 1000, status: 'active', dropdown: true } });
 
 export const rejectCheckRequest = (projectId, crId, data) =>
   api.post(`${BASE}/projects/${projectId}/check-requests/${crId}/reject`, data);
@@ -228,6 +235,24 @@ export const updateProjectInvoice = (projectId, invoiceId, data) =>
 export const deleteProjectInvoice = (projectId, invoiceId) =>
   api.delete(`${BASE}/projects/${projectId}/invoices/${invoiceId}`);
 
+export const recordInvoicePayment = (projectId, invoiceId, data) =>
+  api.post(`${BASE}/projects/${projectId}/invoices/${invoiceId}/payments`, data);
+
+export const cancelProjectInvoice = (projectId, invoiceId, reason) =>
+  api.post(`${BASE}/projects/${projectId}/invoices/${invoiceId}/cancel`, { reason });
+
+// ─── IPC approval chain (Pre-Audit → Audit Director → CEO Secretariat → CEO → Finance) ───
+export const getIpc = (ipcId) => api.get(`${BASE}/ipcs/${ipcId}`);
+export const submitIpc = (ipcId, comments) => api.post(`${BASE}/ipcs/${ipcId}/submit`, { comments });
+export const resubmitIpc = (ipcId, comments) => api.post(`${BASE}/ipcs/${ipcId}/resubmit`, { comments });
+export const reviseIpc = (projectId, invoiceId, data) =>
+  api.post(`${BASE}/projects/${projectId}/invoices/${invoiceId}/revise`, data);
+export const retryIpcFinancePosting = (ipcId) => api.post(`${BASE}/ipcs/${ipcId}/post-to-finance`);
+export const getSubcontractorBalances = (projectId, params = {}) =>
+  api.get(`${BASE}/projects/${projectId}/subcontractor-balances`, { params });
+export const createAdvanceIpc = (projectId, data) => api.post(`${BASE}/projects/${projectId}/advances`, data);
+export const createRetentionRelease = (projectId, data) => api.post(`${BASE}/projects/${projectId}/retention-releases`, data);
+
 const projectManagementService = {
   getProjects, getProjectStats, getProjectById, createProject, updateProject, cancelProject,
   getProjectDeleteImpact, deleteProjectPermanently,
@@ -240,8 +265,8 @@ const projectManagementService = {
   getSubletContracts, getSubletContractById, createSubletContract, updateSubletContract,
   activateSubletContract, completeSubletContract, cancelSubletContract,
   getCheckRequests, getCheckRequestById, createCheckRequest, updateCheckRequest,
-  submitCheckRequest, verifyCheckRequest, rejectCheckRequest, cancelCheckRequest,
-  getExpenses, addExpense, updateExpense, deleteExpense,
+  submitCheckRequest, rejectCheckRequest, cancelCheckRequest,
+  getInspectionReports, createInspectionReport, decideInspectionReport, cancelInspectionReport,
   getDPRList, getDPRById, submitDPR, deleteDPR,
   createPOFromBOQ, getProjectPurchaseOrders,
   getProjectInvoices, createProjectInvoice, generateMilestoneInvoice,

@@ -11,6 +11,7 @@ const ManualSalary = require('../models/hr/ManualSalary');
 const Indent = require('../models/general/Indent');
 const UtilityBill = require('../models/hr/UtilityBill');
 const AccountsPayable = require('../models/finance/AccountsPayable');
+const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
 const {
   isDesignatedCeoApprover,
   isCeoSecretariatPsRole,
@@ -79,6 +80,7 @@ const card = (partial) => ({
   isIndent: partial.type === 'indent',
   isUtilityBill: partial.type === 'utility_bill',
   isVendorBill: partial.type === 'vendor_bill',
+  isProjectIpc: partial.type === 'project_ipc',
   itemType: partial.itemType,
   displayRef: partial.number,
   displayDate: partial.date,
@@ -814,6 +816,35 @@ async function fetchVendorBillsForUser(user, ceoIds = []) {
     .filter(Boolean);
 }
 
+/** Project Management subcontractor IPCs forwarded by the PS: CEO acts, PS / coordinators view only. */
+async function fetchProjectIpcsForUser(user) {
+  if (!canViewCeoForwardedQueue(user)) return [];
+  const isCeo = isDesignatedCeoApprover(user);
+  const docs = await ProjectInvoice.find({ invoiceType: 'Subcontractor_IPC', approvalStatus: 'Forwarded to CEO' })
+    .populate('contractor', 'name')
+    .populate({ path: 'project', select: 'name parentProject', populate: { path: 'parentProject', select: 'name' } })
+    .sort({ updatedAt: -1 })
+    .limit(100)
+    .lean();
+  return docs.map((inv) => card({
+    id: inv._id,
+    type: 'project_ipc',
+    itemType: inv.ipcKind && inv.ipcKind !== 'Work' ? `Subcontractor ${inv.ipcKind}` : 'Subcontractor IPC',
+    number: `IPC #${inv.ipcNumber} · ${inv.invoiceNumber}`,
+    status: inv.approvalStatus,
+    date: inv.ceoForwardedAt || inv.updatedAt,
+    amount: inv.netPayableAmount || inv.invoiceAmount,
+    party: inv.contractor?.name,
+    company: null,
+    subtitle: [inv.project?.parentProject?.name, inv.project?.name].filter(Boolean).join(' / ') || 'Subcontractor IPC',
+    department: 'Project Management',
+    path: `/general/project-management/${inv.project?._id}?tab=invoices`,
+    ceoViewOnly: !isCeo,
+    canAct: isCeo,
+    raw: inv
+  }));
+}
+
 /**
  * @param {object} user - req.user
  * @returns {Promise<{ items: object[], counts: object, isDesignatedCeo: boolean }>}
@@ -843,7 +874,8 @@ async function buildExecutiveMyApprovals(user) {
     manualSalaries,
     indents,
     utilityBills,
-    vendorBills
+    vendorBills,
+    projectIpcs
   ] = await Promise.all([
     fetchPurchaseOrdersForUser(user).catch((e) => {
       console.error('[executiveMyApprovals] PO', e.message);
@@ -876,6 +908,10 @@ async function buildExecutiveMyApprovals(user) {
     fetchVendorBillsForUser(user, ceoIds).catch((e) => {
       console.error('[executiveMyApprovals] VendorBill', e.message);
       return [];
+    }),
+    fetchProjectIpcsForUser(user).catch((e) => {
+      console.error('[executiveMyApprovals] ProjectIpc', e.message);
+      return [];
     })
   ]);
 
@@ -887,7 +923,8 @@ async function buildExecutiveMyApprovals(user) {
     ...manualSalaries,
     ...indents,
     ...utilityBills,
-    ...vendorBills
+    ...vendorBills,
+    ...projectIpcs
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   const counts = {
@@ -899,6 +936,7 @@ async function buildExecutiveMyApprovals(user) {
     indent: indents.length,
     utility_bill: utilityBills.length,
     vendor_bill: vendorBills.length,
+    project_ipc: projectIpcs.length,
     total: items.length
   };
 

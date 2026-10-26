@@ -1076,17 +1076,15 @@ export const MODULES = {
         name: 'Project Management',
         path: '/general/project-management',
         subItems: [
+          // Daily work: open a project; its BOQ → Contracts → Check Requests → IPCs live in tabs there
           { name: 'Overview', path: '/general/project-management/overview' },
           { name: 'Projects', path: '/general/project-management/projects' },
+          { name: 'Approvals', path: '/general/project-management/approvals' },
+          { name: 'Subcontractor Statement', path: '/general/project-management/subcontractor-statement' },
+          // Setup / master data
           { name: 'Subcontractors', path: '/general/subcontractors' },
           { name: 'WBS Activities', path: '/general/project-management/wbs-activities' },
-          { name: 'BOQ', path: '/general/project-management/workspace/boq' },
-          { name: 'Slabs (Percentage Wise)', path: '/general/project-management/slabs' },
-          { name: 'Sublet Contracts', path: '/general/project-management/workspace/sublet-contracts' },
-          { name: 'Check Requests', path: '/general/project-management/workspace/check-requests' },
-          { name: 'Expenses', path: '/general/project-management/workspace/expenses' },
-          { name: 'Daily Reports', path: '/general/project-management/workspace/dpr' },
-          { name: 'Invoices', path: '/general/project-management/workspace/invoices' }
+          { name: 'Slab Templates', path: '/general/project-management/slabs' }
         ]
       },
       {
@@ -1520,6 +1518,8 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/general/project-management': 'project_management',
       '/general/project-management/overview': 'project_management',
       '/general/project-management/projects': 'project_management',
+      '/general/project-management/approvals': 'project_management',
+      '/general/project-management/subcontractor-statement': 'project_management',
       '/general/project-management/workspace': 'project_management',
       '/general/project-management/wbs-activities': 'project_management',
       '/general/project-management/slabs': 'project_management',

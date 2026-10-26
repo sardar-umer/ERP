@@ -80,8 +80,9 @@ const ProjectRollupService = {
       }
     }
 
-    // 3. Aggregate Actual Expenditure from Financial Documents (GRN, AP Bills, Store Issues, Project Expenses)
-    const ProjectExpense = require('../models/projectManagement/ProjectExpense');
+    // 3. Aggregate Actual Expenditure from Financial Documents (GRN, AP Bills, Store Issues, Subcontractor IPCs)
+    const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+    const ipcMatch = { project: { $in: allProjectIds }, invoiceType: 'Subcontractor_IPC', ipcKind: { $nin: ['Advance', 'Retention Release'] }, status: { $ne: 'Cancelled' } };
     const [grnAgg, apAgg, sinAgg, expAgg] = await Promise.all([
       GoodsReceive.aggregate([
         { $match: { project: { $in: allProjectIds }, status: 'Received' } },
@@ -95,9 +96,9 @@ const ProjectRollupService = {
         { $match: { project: { $in: allProjectIds }, status: 'Issued' } },
         { $group: { _id: '$project', total: { $sum: { $ifNull: ['$totalQuantity', 0] } } } }
       ]),
-      ProjectExpense.aggregate([
-        { $match: { project: { $in: allProjectIds }, paymentStatus: { $ne: 'Cancelled' } } },
-        { $group: { _id: '$project', total: { $sum: { $ifNull: ['$amount', 0] } } } }
+      ProjectInvoice.aggregate([
+        { $match: ipcMatch },
+        { $group: { _id: '$project', total: { $sum: { $ifNull: ['$grossAmount', 0] } } } }
       ])
     ]);
 
@@ -184,21 +185,16 @@ const ProjectRollupService = {
     const sCurveData = [];
     const cashFlowTrendData = [];
 
-    // Aggregate monthly expenses
-    const monthlyExpenses = await ProjectExpense.aggregate([
-      {
-        $match: {
-          project: { $in: allProjectIds },
-          paymentStatus: { $ne: 'Cancelled' }
-        }
-      },
+    // Aggregate monthly IPC value (the only money path for project costs)
+    const monthlyExpenses = await ProjectInvoice.aggregate([
+      { $match: ipcMatch },
       {
         $group: {
           _id: {
-            year: { $year: '$expenseDate' },
-            month: { $month: '$expenseDate' }
+            year: { $year: '$issueDate' },
+            month: { $month: '$issueDate' }
           },
-          totalAmount: { $sum: '$amount' }
+          totalAmount: { $sum: { $ifNull: ['$grossAmount', 0] } }
         }
       }
     ]);

@@ -83,6 +83,8 @@ const constructionProjectSchema = new mongoose.Schema({
 
   // Location — optionally linked to existing Taj property
   linkedProperty: { type: mongoose.Schema.Types.ObjectId, ref: 'TajProperty', default: null },
+  /** Finance company the project's costs post to (set on the Main Project; Sub Projects inherit) */
+  companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlacementCompany', default: null },
   society: { type: String, trim: true },
   sector: { type: String, trim: true },
   plotNumber: { type: String, trim: true },

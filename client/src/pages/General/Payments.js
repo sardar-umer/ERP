@@ -79,6 +79,7 @@ import ComparativeStatementView from '../../components/Procurement/ComparativeSt
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { WorkflowAuditFeedbackPanel } from '../../components/Admin/workflowAuditReturn';
 import { formatDateTime } from '../../utils/dateUtils';
+import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 
@@ -120,6 +121,8 @@ const Payments = () => {
   const [viewDialog, setViewDialog] = useState({ open: false, settlement: null, isPurchaseOrder: false, isCashApproval: false, quotations: [], caLinkedDocs: [], poQuotations: [], poGrns: [], poLinkedDocs: [], poAuditTab: 0 });
   const [imageViewer, setImageViewer] = useState({ open: false, imageUrl: '', imageName: '', isBlob: false });
   const [approveDialog, setApproveDialog] = useState({ open: false, settlement: null });
+  // Project Management subcontractor IPC opened for review
+  const [ipcReviewId, setIpcReviewId] = useState(null);
   const [rejectDialog, setRejectDialog] = useState({ open: false, settlement: null });
   const [returnDialog, setReturnDialog] = useState({ open: false, settlement: null });
   const [workflowHistoryDialog, setWorkflowHistoryDialog] = useState({ open: false, settlement: null });
@@ -194,10 +197,11 @@ const Payments = () => {
       };
 
       // Fetch payment settlements, purchase orders, and cash approvals for CEO Secretariat in parallel
-      const [settlementsRes, poRes, caRes] = await Promise.all([
+      const [settlementsRes, poRes, caRes, ipcRes] = await Promise.all([
         paymentSettlementService.getPaymentSettlements(params),
         api.get('/procurement/purchase-orders/ceo-secretariat').catch(() => ({ data: { data: [] } })),
-        api.get('/cash-approvals/ceo-secretariat').catch(() => ({ data: { data: [] } }))
+        api.get('/cash-approvals/ceo-secretariat').catch(() => ({ data: { data: [] } })),
+        api.get('/project-management/ipcs/ceo-secretariat').catch(() => ({ data: { data: [] } }))
       ]);
       let allSettlements = settlementsRes.data?.settlements || [];
       const poList = poRes.data?.data || [];
@@ -228,7 +232,22 @@ const Payments = () => {
         fromDepartment: ca.originatingModule === 'general' ? 'General' : 'Procurement',
         ...ca
       }));
-      allSettlements = [...allSettlements, ...poFormatted, ...caFormatted];
+      // Project Management subcontractor IPCs (audit-approved → PS forwards → CEO)
+      const ipcFormatted = (ipcRes.data?.data || []).map((ipc) => ({
+        ...ipc,
+        _id: ipc._id,
+        workflowStatus: ipc.approvalStatus,
+        isProjectIpc: true,
+        itemType: 'Subcontractor IPC',
+        referenceNumber: `IPC #${ipc.ipcNumber} · ${ipc.invoiceNumber}`,
+        date: ipc.auditApprovedAt || ipc.updatedAt,
+        toWhomPaid: ipc.contractor?.name,
+        forWhat: [ipc.project?.parentProject?.name, ipc.project?.name].filter(Boolean).join(' / ') || 'Subcontractor IPC',
+        amount: ipc.netPayableAmount || ipc.invoiceAmount,
+        grandTotal: ipc.netPayableAmount || ipc.invoiceAmount,
+        fromDepartment: 'Project Management'
+      }));
+      allSettlements = [...allSettlements, ...poFormatted, ...caFormatted, ...ipcFormatted];
       
       // Client-side filtering based on tab with proper status categorization
       // Document Flow Logic:
@@ -263,6 +282,7 @@ const Payments = () => {
         // Approved — workflow docs use "Approved (from …)"; cash approvals use Pending Finance+ after CEO sign-off
         filteredSettlements = allSettlements.filter((s) => {
           const status = s.workflowStatus || '';
+          if (s.isProjectIpc) return status === 'Approved';
           if (s.isCashApproval) {
             return [
               'Pending Finance',
@@ -286,6 +306,7 @@ const Payments = () => {
         // Must be "Rejected (from Send to CEO Office)" or "Rejected (from Forwarded to CEO)" - not rejected from other departments
         filteredSettlements = allSettlements.filter(s => {
           const status = s.workflowStatus || '';
+          if (s.isProjectIpc) return status === 'Rejected' && ['Send to CEO Office', 'Forwarded to CEO'].includes(s.returnedFromStatus);
           // Only show if it's rejected from Send to CEO Office or Forwarded to CEO
           return status === 'Rejected (from Send to CEO Office)' || 
                  status === 'Rejected (from Forwarded to CEO)' ||
@@ -324,7 +345,9 @@ const Payments = () => {
         ? 'Purchase Order'
         : isCashApproval
           ? 'Cash Approval'
-          : doc.itemType || 'Payment Settlement'
+          : doc.isProjectIpc
+            ? 'Subcontractor IPC'
+            : doc.itemType || 'Payment Settlement'
     };
   };
 
@@ -348,6 +371,33 @@ const Payments = () => {
     setReturnObservations([{ observation: '', severity: 'medium' }]);
   };
 
+  /** Project Management IPC actions on this desk: PS forwards / rejects; CEO approves / rejects (returns = reject to initiator) */
+  const handleIpcAction = async (doc, kind, comments, observations) => {
+    const isCeoStage = doc.workflowStatus === 'Forwarded to CEO';
+    const url = kind === 'approve'
+      ? (isCeoStage ? 'ceo-approve' : 'forward-to-ceo')
+      : (isCeoStage ? 'ceo-reject' : 'ceo-secretariat-reject');
+    try {
+      setActionLoading(true);
+      setError(null);
+      const res = await api.put(`/project-management/ipcs/${doc._id}/${url}`, {
+        comments,
+        rejectionComments: comments,
+        digitalSignature: getAutoDigitalSignature(),
+        observations: observations && observations.length ? observations : undefined
+      });
+      toast.success(res.data?.message || 'IPC updated');
+      fetchSettlements();
+      return true;
+    } catch (error) {
+      setError(error.response?.data?.message || 'Failed to process IPC');
+      toast.error(error.response?.data?.message || 'Failed to process IPC');
+      return false;
+    } finally {
+      setActionLoading(false);
+    }
+  };
+
   const handleForward = async () => {
     if (!approvalAgree) {
       toast.error('Please agree to terms');
@@ -360,6 +410,15 @@ const Payments = () => {
     const effectiveSignature = getAutoDigitalSignature();
     if (isForwardedToCeo && !isCashApproval && !effectiveSignature) {
       toast.error('No digital signature on your profile. Please add one in Profile settings.');
+      return;
+    }
+
+    if (approveDialog.settlement?.isProjectIpc) {
+      if (await handleIpcAction(approveDialog.settlement, 'approve', approvalComments)) {
+        setApproveDialog({ open: false, settlement: null });
+        setApprovalComments('');
+        setApprovalAgree(false);
+      }
       return;
     }
 
@@ -482,6 +541,16 @@ const Payments = () => {
 
     const isForwardedToCeo = rejectDialog.settlement?.workflowStatus === 'Forwarded to CEO';
 
+    if (rejectDialog.settlement?.isProjectIpc) {
+      if (await handleIpcAction(rejectDialog.settlement, 'reject', rejectionComments, observations)) {
+        setRejectDialog({ open: false, settlement: null });
+        setRejectionComments('');
+        setRejectionAgree(false);
+        setRejectObservations([{ observation: '', severity: 'medium' }]);
+      }
+      return;
+    }
+
     if (rejectDialog.settlement?.isPurchaseOrder) {
       try {
         setActionLoading(true);
@@ -582,6 +651,17 @@ const Payments = () => {
       }));
 
     const isForwardedToCeo = returnDialog.settlement?.workflowStatus === 'Forwarded to CEO';
+
+    // IPCs have one way back: rejected to the Project Management initiator, who revises and resubmits
+    if (returnDialog.settlement?.isProjectIpc) {
+      if (await handleIpcAction(returnDialog.settlement, 'reject', returnComments, observations)) {
+        setReturnDialog({ open: false, settlement: null });
+        setReturnComments('');
+        setReturnAgree(false);
+        setReturnObservations([{ observation: '', severity: 'medium' }]);
+      }
+      return;
+    }
 
     if (returnDialog.settlement?.isPurchaseOrder) {
       try {
@@ -1623,6 +1703,10 @@ const Payments = () => {
                                                   <IconButton
                                                     size="small"
                                                     onClick={async () => {
+                                                      if (settlement.isProjectIpc) {
+                                                        setIpcReviewId(settlement._id);
+                                                        return;
+                                                      }
                                                       if (settlement.isPurchaseOrder) {
                                                         try {
                                                           const r = await api.get(`/procurement/purchase-orders/${settlement._id}`);
@@ -3353,6 +3437,7 @@ const Payments = () => {
           />
         </Box>
       </Dialog>
+      <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
     </Box>
   );
 };

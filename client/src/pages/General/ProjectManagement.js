@@ -2,7 +2,7 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { useNavigate } from 'react-router-dom';
 import {
   Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
-  DialogActions, DialogContent, DialogTitle, Divider, FormControl, Grid,
+  DialogActions, DialogContent, DialogTitle, Divider, FormControl, FormHelperText, Grid,
   IconButton, InputLabel, LinearProgress, MenuItem, Paper, Select,
   Skeleton, Stack, Table, TableBody, TableCell, TableContainer, TableHead,
   TableRow, TextField, Tooltip, Typography
@@ -25,6 +25,7 @@ import {
 import MasterExecutiveControlTower from '../../components/ProjectManagement/MasterExecutiveControlTower';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import { useAuth } from '../../contexts/AuthContext';
+import api from '../../services/api';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
@@ -132,8 +133,15 @@ const ProjectFormDialog = ({
   const [form, setForm] = useState(defaultForm);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [companies, setCompanies] = useState([]);
 
   const mainProjects = allProjects.filter((p) => getHierarchyLevel(p) === 'main');
+
+  // Finance company (chart of accounts) the Main Project's IPCs post to
+  useEffect(() => {
+    if (!open || companies.length) return;
+    api.get('/indents/companies').then((res) => setCompanies(res.data?.data || [])).catch(() => setCompanies([]));
+  }, [open, companies.length]);
   const sectorOptions = SECTORS_BY_TYPE[form.projectType] || [];
 
   useEffect(() => {
@@ -157,7 +165,8 @@ const ProjectFormDialog = ({
         startDate: editing.startDate ? dayjs(editing.startDate).format('YYYY-MM-DD') : '',
         expectedEndDate: editing.expectedEndDate ? dayjs(editing.expectedEndDate).format('YYYY-MM-DD') : '',
         notes: editing.notes || '',
-        status: editing.status || 'Draft'
+        status: editing.status || 'Draft',
+        companyId: editing.companyId?._id || editing.companyId || ''
       });
     } else {
       const level = defaultLevel === 'sub' ? 'sub' : 'main';
@@ -227,6 +236,7 @@ const ProjectFormDialog = ({
         isMasterProject: isMain,
         parentProject: isMain ? null : form.parentProject
       };
+      if (isMain) payload.companyId = form.companyId || null;
       // Project type and street / side belong to Sub Projects only (Main is a simple portfolio container)
       if (!isMain) {
         payload.projectType = form.projectType || 'INFRASTRUCTURE DEVELOPMENT';
@@ -318,6 +328,19 @@ const ProjectFormDialog = ({
               placeholder={form.hierarchyLevel === 'main' ? 'e.g. Taj Residencia' : 'e.g. Gardenia / Boulevard Tower / 5 Marla'}
             />
           </Grid>
+
+          {form.hierarchyLevel === 'main' && (
+            <Grid item xs={12}>
+              <FormControl fullWidth>
+                <InputLabel>Finance Company</InputLabel>
+                <Select value={form.companyId || ''} label="Finance Company" onChange={set('companyId')}>
+                  <MenuItem value=""><em>Not set</em></MenuItem>
+                  {companies.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>)}
+                </Select>
+                <FormHelperText>Approved subcontractor IPCs of all its Sub Projects post to this company's accounts</FormHelperText>
+              </FormControl>
+            </Grid>
+          )}
 
           {form.hierarchyLevel === 'sub' && (
             <Grid item xs={12} md={4}>

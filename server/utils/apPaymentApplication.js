@@ -9,6 +9,7 @@ const Employee = require('../models/hr/Employee');
 const ApPaymentApplication = require('../models/finance/ApPaymentApplication');
 const FinanceHelper = require('./financeHelper');
 const { syncLinkedUtilityBillsFromApPayment } = require('./utilityBillFinance');
+const { syncIpcFromApPayment } = require('./projectIpcFinance');
 const {
   getRequiredFinanceAuthoritySlots,
   matchUserToFinanceSlots
@@ -209,6 +210,11 @@ const finalizeApplication = async (app, userId) => {
       await syncLinkedUtilityBillsFromApPayment(bill, userId);
     } catch (syncErr) {
       console.error('[apPaymentApplication] Admin utility bill sync failed:', syncErr.message);
+    }
+    try {
+      await syncIpcFromApPayment(bill);
+    } catch (syncErr) {
+      console.error('[apPaymentApplication] Project IPC sync failed:', syncErr.message);
     }
   }
 

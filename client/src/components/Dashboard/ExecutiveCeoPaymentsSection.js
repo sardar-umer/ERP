@@ -71,6 +71,7 @@ import { formatDate, formatDateTime } from '../../utils/dateUtils';
 import toast from 'react-hot-toast';
 import WorkflowHistoryDialog from '../WorkflowHistoryDialog';
 import { DigitalSignatureImage } from '../common/DigitalSignatureImage';
+import IpcReviewDialog from '../ProjectManagement/IpcReviewDialog';
 import CashApprovalDetailTabsView from '../Procurement/CashApprovalDetailTabsView';
 import CashApprovalGeneralDetailShell from '../CashApprovals/CashApprovalGeneralDetailShell';
 import { isGeneralModuleCashApproval } from '../CashApprovals/cashApprovalGeneralDocumentUtils';
@@ -143,6 +144,8 @@ const ExecutiveCeoPaymentsSection = () => {
   });
 
   const [approveDialog, setApproveDialog] = useState({ open: false, settlement: null });
+  // Project Management subcontractor IPC opened for review
+  const [ipcReviewId, setIpcReviewId] = useState(null);
   const [rejectDialog, setRejectDialog] = useState({ open: false, settlement: null });
   const [returnDialog, setReturnDialog] = useState({ open: false, settlement: null });
   const [workflowHistoryDialog, setWorkflowHistoryDialog] = useState({ open: false, settlement: null });
@@ -203,6 +206,7 @@ const ExecutiveCeoPaymentsSection = () => {
           isManualSalary: Boolean(item.isManualSalary),
           isIndent: Boolean(item.isIndent),
           isUtilityBill: Boolean(item.isUtilityBill),
+          isProjectIpc: Boolean(item.isProjectIpc),
           isVendorBill: Boolean(item.isVendorBill),
           itemType: item.itemType || 'Document',
           typeLabel: item.itemType || 'Document',
@@ -382,6 +386,10 @@ const ExecutiveCeoPaymentsSection = () => {
 
   // Full Audit / View Opener (identical to Payments.js)
   const openView = async (settlement) => {
+    if (settlement.isProjectIpc) {
+      setIpcReviewId(settlement._id);
+      return;
+    }
     if (settlement.isPurchaseOrder) {
       const baseFlags = {
         isPurchaseOrder: true,
@@ -739,13 +747,18 @@ const ExecutiveCeoPaymentsSection = () => {
       Boolean(flags.isVendorBill) ||
       Boolean(doc.isVendorBill) ||
       doc.itemType === 'Vendor Bill';
+    const isProjectIpc =
+      Boolean(flags.isProjectIpc) ||
+      Boolean(doc.isProjectIpc) ||
+      doc.itemType === 'Subcontractor IPC';
     const isPaymentSettlement =
       Boolean(flags.isPaymentSettlement) ||
       Boolean(doc.isPaymentSettlement) ||
-      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill);
+      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill && !isProjectIpc);
 
     return {
       ...doc,
+      isProjectIpc,
       isPurchaseOrder,
       isCashApproval,
       isOnboarding,
@@ -890,7 +903,13 @@ const ExecutiveCeoPaymentsSection = () => {
 
     setActionLoading(true);
     try {
-      if (item.isPurchaseOrder) {
+      if (item.isProjectIpc) {
+        const res = await api.put(`/project-management/ipcs/${item._id}/ceo-approve`, {
+          comments: approvalComments,
+          digitalSignature: effectiveSig
+        });
+        toast.success(res.data?.message || `IPC ${item.displayRef} approved`);
+      } else if (item.isPurchaseOrder) {
         if (ceoStep) {
         await api.put(`/procurement/purchase-orders/${item._id}/ceo-approve`, {
           approvalComments,
@@ -986,7 +1005,14 @@ const ExecutiveCeoPaymentsSection = () => {
     setActionLoading(true);
     try {
       const validObs = rejectObservations.filter((o) => o.observation.trim());
-      if (item.isPurchaseOrder) {
+      if (item.isProjectIpc) {
+        await api.put(`/project-management/ipcs/${item._id}/ceo-reject`, {
+          comments: rejectionComments,
+          rejectionComments,
+          observations: validObs
+        });
+        toast.success(`IPC ${item.displayRef} rejected — sent back to Project Management`);
+      } else if (item.isPurchaseOrder) {
         if (ceoStep) {
         await api.put(`/procurement/purchase-orders/${item._id}/ceo-reject`, {
           comments: rejectionComments,
@@ -1079,7 +1105,13 @@ const ExecutiveCeoPaymentsSection = () => {
 
     setActionLoading(true);
     try {
-      if (item.isPurchaseOrder) {
+      if (item.isProjectIpc) {
+        await api.put(`/project-management/ipcs/${item._id}/ceo-return`, {
+          comments: returnComments,
+          returnComments,
+          observations: validObs
+        });
+      } else if (item.isPurchaseOrder) {
         await api.put(`/procurement/purchase-orders/${item._id}/ceo-return`, {
           comments: returnComments,
           returnComments,
@@ -3704,6 +3736,7 @@ const ExecutiveCeoPaymentsSection = () => {
           }
         />
       )}
+      <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
     </Card>
   );
 };

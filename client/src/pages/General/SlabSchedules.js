@@ -154,7 +154,7 @@ const SlabSchedules = () => {
     <Box sx={{ p: 3 }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={2} sx={{ mb: 2 }}>
         <Box>
-          <Typography variant="h5" fontWeight={700}>Slabs (Percentage Wise)</Typography>
+          <Typography variant="h5" fontWeight={700}>Slab Templates</Typography>
           <Typography variant="body2" color="text.secondary">
             Standard payment stages per Project Type. Each slab is a % of the contract value and covers a set of WBS activities.
           </Typography>
