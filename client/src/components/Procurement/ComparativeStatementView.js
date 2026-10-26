@@ -23,7 +23,7 @@ import StoreVettingNotice from './StoreVettingNotice';
 import { comparativeAuthoritySelectionLocked } from '../../utils/comparativeStatementAuthority';
 import {
   getQuoteItemForIndentItem as matchQuoteItemForIndentItem,
-  getQuoteLineAmount,
+  getQuoteLineGrossAmount,
   getComparativeIndentItems,
   getComparativeQuoteVisibleTotal,
   getComparativeQuoteGrandTotal,
@@ -332,7 +332,7 @@ const ComparativeStatementView = ({
                           {quotations.map((quote, quoteIdx) => {
                             const quoteItem = getQuoteItemForIndentItem(quote, item, itemIndex);
                             const isNotQuoted = !quoteItem || isBlankQuoteItem(quoteItem);
-                            const itemTotal = !isNotQuoted ? getQuoteLineAmount(quoteItem) : 0;
+                            const itemTotal = !isNotQuoted ? getQuoteLineGrossAmount(quoteItem) : 0;
                             const isAssignedToThis = vendorAssignments[itemIndex] === quote._id;
                             const cellBg = isAssignedToThis ? '#c8e6c9' : undefined;
                             const canAssign = !isAlreadyOrdered && !isNotQuoted && !readOnly && onCreateSplitPOs;

@@ -26,6 +26,16 @@ export const getQuoteLineAmount = (quoteItem) => {
   return baseTotal - discount + ((baseTotal - discount) * taxRate) / 100;
 };
 
+/**
+ * Line amount before the line discount, for the CS grid. The CS shows
+ * TOTAL → Discount → Grand Total, so lines must not already be net of discount
+ * (otherwise the discount is deducted twice).
+ */
+export const getQuoteLineGrossAmount = (quoteItem) => {
+  if (!quoteItem || isBlankQuoteItem(quoteItem)) return 0;
+  return getQuoteLineAmount(quoteItem) + (Number(quoteItem.discount) || 0);
+};
+
 const pickNonBlank = (match) => {
   if (!match || isBlankQuoteItem(match)) return null;
   return match;
@@ -271,12 +281,12 @@ export const getComparativeIndentItems = (indentItems = [], quotations = [], sel
 };
 
 /**
- * Sum of line amounts for one quotation on the CS.
+ * Sum of pre-discount line amounts for one quotation on the CS.
  * Prefer the quotation's own non-blank lines so the column total equals the quote.
  * Fall back to matched indent rows, then stored subtotal/total.
  */
 export const getComparativeQuoteVisibleTotal = (quote, indentItems = [], quotations = []) => {
-  const lineSum = (quote?.items || []).reduce((sum, qi) => sum + getQuoteLineAmount(qi), 0);
+  const lineSum = (quote?.items || []).reduce((sum, qi) => sum + getQuoteLineGrossAmount(qi), 0);
   if (lineSum > 0) return lineSum;
 
   const visibleTotal = (indentItems || []).reduce((sum, item, itemIndex) => {
@@ -286,7 +296,7 @@ export const getComparativeQuoteVisibleTotal = (quote, indentItems = [], quotati
     if (!isQuoted) return sum;
     const quoteItem = getQuoteItemForIndentItem(quote, item, itemIndex, indentItems);
     if (!quoteItem) return sum;
-    return sum + getQuoteLineAmount(quoteItem);
+    return sum + getQuoteLineGrossAmount(quoteItem);
   }, 0);
 
   if (visibleTotal > 0) return visibleTotal;
