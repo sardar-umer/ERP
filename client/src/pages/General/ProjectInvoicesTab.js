@@ -22,6 +22,9 @@ import ClientBillingLines from '../../components/ProjectManagement/ClientBilling
 import IpcApprovalTrail, { IPC_APPROVAL_COLOR, ipcStageText } from '../../components/ProjectManagement/IpcApprovalTrail';
 
 const isIpc = (inv) => inv?.invoiceType === 'Subcontractor_IPC';
+/** Documents that travel the approval chain: every IPC, and client invoices raised since the chain existed */
+const inChain = (inv) => isIpc(inv)
+  || (inv?.invoiceType === 'Client_Invoice' && (inv.status === 'Draft' || (inv.approvalStatus && inv.approvalStatus !== 'Draft')));
 const isNonWorkIpc = (inv) => isIpc(inv) && ['Advance', 'Retention Release'].includes(inv.ipcKind);
 const ipcKindLabel = (inv) => (inv.ipcKind === 'Advance' ? 'Advance' : inv.ipcKind === 'Retention Release' ? 'Retention Release' : 'Subcontractor IPC');
 /** IPC is with the project team: never submitted, or rejected back */
@@ -97,7 +100,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
 
   useEffect(() => {
     setViewIpcFull(null);
-    if (!viewIpcDialog || !isIpc(viewIpcDialog)) return;
+    if (!viewIpcDialog || !inChain(viewIpcDialog)) return;
     getIpc(viewIpcDialog._id).then((res) => setViewIpcFull(res.data?.data || null)).catch(() => {});
   }, [viewIpcDialog]);
 
@@ -328,8 +331,11 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
         return;
       }
     } else if (form.invoiceType === 'Client_Invoice' && form.clientMode === 'verified' && !editInvoice) {
-      if (!form.clientLines.some((l) => Number(l.quantity) > 0)) {
-        setError('Tick the verified work to bill and enter quantities'); return;
+      if (!form.clientLines.some((l) => Number(l.quantity) > 0 || Number(l.amount) > 0)) {
+        setError('Tick the verified work to bill and enter quantities / amounts'); return;
+      }
+      if (form.clientLines.some((l) => l.amount !== undefined && !(Number(l.amount) > 0))) {
+        setError('Enter the client amount for each ticked slab stage'); return;
       }
     } else {
       if (!form.invoiceAmount || Number(form.invoiceAmount) <= 0) {
@@ -345,7 +351,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
         items: form.ipcItems.filter(i => Number(i.currentQuantity) > 0),
         invoiceAmount: form.invoiceType === 'Subcontractor_IPC' && grossAmt > 0 ? netPayableAmt : Number(form.invoiceAmount),
         clientLines: form.invoiceType === 'Client_Invoice' && form.clientMode === 'verified'
-          ? form.clientLines.filter((l) => Number(l.quantity) > 0)
+          ? form.clientLines.filter((l) => Number(l.quantity) > 0 || Number(l.amount) > 0)
           : undefined
       };
 
@@ -407,7 +413,8 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
   };
 
   const handleSubmitIpc = async (inv) => {
-    if (!window.confirm(`Submit IPC #${inv.ipcNumber} (${fmt(inv.netPayableAmount)}) for approval?\n\nIt goes to Pre-Audit → Audit Director → CEO Secretariat → CEO → Finance, and can't be edited unless it is rejected.`)) return;
+    const label = isIpc(inv) ? `IPC #${inv.ipcNumber}` : `client invoice ${inv.invoiceNumber}`;
+    if (!window.confirm(`Submit ${label} (${fmt(inv.netPayableAmount || inv.invoiceAmount)}) for approval?\n\nIt goes to Pre-Audit → Audit Director → CEO Secretariat → CEO, and reaches Finance only after the CEO approves it. It can't be edited unless it is rejected.`)) return;
     try {
       const res = await submitIpc(inv._id);
       setSuccess(res.data?.message || 'IPC submitted');
@@ -418,7 +425,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
   };
 
   const handleResubmitIpc = async (inv) => {
-    const comments = window.prompt(`Resubmit IPC #${inv.ipcNumber} to ${ipcStageText(inv).replace('Rejected by ', '')}.\n\nYour response to the rejection / what you changed:`);
+    const comments = window.prompt(`Resubmit ${isIpc(inv) ? `IPC #${inv.ipcNumber}` : `invoice ${inv.invoiceNumber}`} to ${ipcStageText(inv).replace('Rejected by ', '')}.\n\nYour response to the rejection / what you changed:`);
     if (comments === null) return;
     if (!comments.trim()) { setError('Write your response before resubmitting'); return; }
     try {
@@ -621,7 +628,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                     )}
                   </TableCell>
                   <TableCell align="center">
-                    {isIpc(inv) && inv.status !== 'Cancelled' ? (
+                    {inChain(inv) && inv.status !== 'Cancelled' ? (
                       <Stack alignItems="center" spacing={0.5}>
                         <Chip size="small" label={ipcStageText(inv)} color={IPC_APPROVAL_COLOR[inv.approvalStatus || 'Draft'] || 'default'} />
                         {['Paid', 'Partially Paid'].includes(inv.status) && (
@@ -639,48 +646,48 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                   </TableCell>
                   <TableCell align="right">
                     <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                      {(inv.invoiceType === 'Subcontractor_IPC' || inv.items?.length > 0) && (
+                      {(inChain(inv) || inv.items?.length > 0) && (
                         <Tooltip title="View Detailed IPC Bill Statement">
                           <IconButton size="small" onClick={() => setViewIpcDialog(inv)} color="info">
                             <ViewIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       )}
-                      {isIpc(inv) && !['Cancelled', 'Paid', 'Partially Paid'].includes(inv.status) && (inv.approvalStatus || 'Draft') === 'Draft' && (
+                      {inChain(inv) && !['Cancelled', 'Paid', 'Partially Paid'].includes(inv.status) && (inv.approvalStatus || 'Draft') === 'Draft' && (
                         <Tooltip title="Submit for approval (Pre-Audit)">
                           <IconButton size="small" color="primary" onClick={() => handleSubmitIpc(inv)}><SendIcon fontSize="small" /></IconButton>
                         </Tooltip>
                       )}
-                      {isIpc(inv) && inv.approvalStatus === 'Rejected' && inv.status !== 'Cancelled' && (
+                      {inChain(inv) && inv.approvalStatus === 'Rejected' && inv.status !== 'Cancelled' && (
                         <Tooltip title="Resubmit to the desk that rejected it">
                           <IconButton size="small" color="primary" onClick={() => handleResubmitIpc(inv)}><SendIcon fontSize="small" /></IconButton>
                         </Tooltip>
                       )}
-                      {!isIpc(inv) && ['Draft', 'Sent', 'Partially Paid'].includes(inv.status) && (
+                      {!inChain(inv) && !inv.financeArId && ['Sent', 'Partially Paid'].includes(inv.status) && (
                         <Tooltip title="Record payment">
                           <IconButton size="small" color="success" onClick={() => openMarkPaid(inv)}>
                             <PaidIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       )}
-                      {!isIpc(inv) && inv.status === 'Draft' && (
+                      {inv.invoiceType === 'General' && inv.status === 'Draft' && (
                         <Tooltip title="Mark Sent">
                           <IconButton size="small" color="info" onClick={() => handleMarkSent(inv)}>
                             <SendIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       )}
-                      {inv.status !== 'Cancelled' && (!isIpc(inv) || ipcEditable(inv)) && (
+                      {inv.status !== 'Cancelled' && (!inChain(inv) || ipcEditable(inv)) && (
                         <Tooltip title={isIpc(inv) ? 'Revise' : 'Edit'}>
                           <IconButton size="small" onClick={() => openEdit(inv)}><EditIcon fontSize="small" /></IconButton>
                         </Tooltip>
                       )}
-                      {inv.status !== 'Cancelled' && !(Number(inv.paidAmount) > 0) && (!isIpc(inv) || ipcEditable(inv)) && (
+                      {inv.status !== 'Cancelled' && !(Number(inv.paidAmount) > 0) && (!inChain(inv) || ipcEditable(inv) || (!isIpc(inv) && inv.approvalStatus === 'Approved')) && (
                         <Tooltip title="Cancel (frees the verified work to rebill)">
                           <IconButton size="small" color="warning" onClick={() => handleCancelInvoice(inv)}><CancelInvoiceIcon fontSize="small" /></IconButton>
                         </Tooltip>
                       )}
-                      {inv.status === 'Draft' && !(Number(inv.paidAmount) > 0) && (!isIpc(inv) || (inv.approvalStatus || 'Draft') === 'Draft') && (
+                      {inv.status === 'Draft' && !(Number(inv.paidAmount) > 0) && (!inChain(inv) || (inv.approvalStatus || 'Draft') === 'Draft') && (
                         <Tooltip title="Delete draft">
                           <IconButton size="small" color="error" onClick={() => handleDelete(inv._id)}><DeleteIcon fontSize="small" /></IconButton>
                         </Tooltip>
@@ -1070,11 +1077,11 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                 </Table>
               </>
             )}
-            {isIpc(viewIpcDialog) && (
+            {inChain(viewIpcDialog) && (
               <Box sx={{ mt: 3 }}>
                 <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>Approval</Typography>
                 {viewIpcFull ? <IpcApprovalTrail ipc={viewIpcFull} /> : <Skeleton height={80} />}
-                {viewIpcFull?.approvalStatus === 'Approved' && !viewIpcFull.financeApBillId && (
+                {viewIpcFull?.approvalStatus === 'Approved' && !(viewIpcFull.financeApBillId || viewIpcFull.financeArId) && (
                   <Button size="small" variant="outlined" sx={{ mt: 1 }} onClick={handleRetryFinance}>Retry posting to Finance</Button>
                 )}
               </Box>

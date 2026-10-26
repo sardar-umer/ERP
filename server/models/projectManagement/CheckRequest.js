@@ -130,6 +130,10 @@ const checkRequestSchema = new mongoose.Schema(
     rejectedAt: { type: Date },
     rejectedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 
+    /** Slab claims: amount already billed to the client for this stage (billed once) */
+    clientBilledAmount: { type: Number, default: 0, min: 0 },
+    clientInvoice: { type: mongoose.Schema.Types.ObjectId, ref: 'ProjectInvoice', default: null },
+
     linkedInvoice: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'ProjectInvoice',

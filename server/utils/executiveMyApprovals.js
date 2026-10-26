@@ -820,7 +820,7 @@ async function fetchVendorBillsForUser(user, ceoIds = []) {
 async function fetchProjectIpcsForUser(user) {
   if (!canViewCeoForwardedQueue(user)) return [];
   const isCeo = isDesignatedCeoApprover(user);
-  const docs = await ProjectInvoice.find({ invoiceType: 'Subcontractor_IPC', approvalStatus: 'Forwarded to CEO' })
+  const docs = await ProjectInvoice.find({ invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] }, approvalStatus: 'Forwarded to CEO' })
     .populate('contractor', 'name')
     .populate({ path: 'project', select: 'name parentProject', populate: { path: 'parentProject', select: 'name' } })
     .sort({ updatedAt: -1 })
@@ -829,12 +829,13 @@ async function fetchProjectIpcsForUser(user) {
   return docs.map((inv) => card({
     id: inv._id,
     type: 'project_ipc',
-    itemType: inv.ipcKind && inv.ipcKind !== 'Work' ? `Subcontractor ${inv.ipcKind}` : 'Subcontractor IPC',
-    number: `IPC #${inv.ipcNumber} · ${inv.invoiceNumber}`,
+    itemType: inv.invoiceType === 'Client_Invoice' ? 'Client Invoice'
+      : inv.ipcKind && inv.ipcKind !== 'Work' ? `Subcontractor ${inv.ipcKind}` : 'Subcontractor IPC',
+    number: inv.invoiceType === 'Client_Invoice' ? inv.invoiceNumber : `IPC #${inv.ipcNumber} · ${inv.invoiceNumber}`,
     status: inv.approvalStatus,
     date: inv.ceoForwardedAt || inv.updatedAt,
     amount: inv.netPayableAmount || inv.invoiceAmount,
-    party: inv.contractor?.name,
+    party: inv.invoiceType === 'Client_Invoice' ? inv.clientName : inv.contractor?.name,
     company: null,
     subtitle: [inv.project?.parentProject?.name, inv.project?.name].filter(Boolean).join(' / ') || 'Subcontractor IPC',
     department: 'Project Management',

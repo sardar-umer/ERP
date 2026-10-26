@@ -83,6 +83,7 @@ const emptyForm = {
   contractType: 'BOQ',
   lines: [],
   contractValue: '',
+  clientValue: '', // slab-wise: what the client pays for this scope (client invoices bill clientValue × slab %)
   slabScheduleId: '',
   slabs: []
 };
@@ -195,6 +196,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       contractType: contractTypeOf(row),
       lines: buildLinesFromBoq(selectedMap),
       contractValue: contractTypeOf(row) === 'Slab' ? row.totalAmount || '' : '',
+      clientValue: contractTypeOf(row) === 'Slab' ? row.clientValue || '' : '',
       slabScheduleId: row.slabSchedule?._id || row.slabSchedule || '',
       slabs: toEditorSlabs(row.slabs)
     });
@@ -252,6 +254,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       if (form.slabs.some((sl) => !String(sl.name).trim())) return fail('Every slab needs a name');
       if (Math.abs(slabsTotalPercent(form.slabs) - 100) >= 0.001) return fail('Slab percentages must total 100%');
       payload.contractValue = Number(form.contractValue);
+      payload.clientValue = Number(form.clientValue) || 0;
       payload.slabSchedule = form.slabScheduleId || null;
       payload.slabs = form.slabs.map((sl) => ({
         name: String(sl.name).trim(),
@@ -725,6 +728,20 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                           value={form.contractValue}
                           onChange={(e) => setForm((f) => ({ ...f, contractValue: e.target.value }))}
                           inputProps={{ min: 0, step: 'any' }}
+                        />
+                      </Grid>
+                      <Grid item xs={12} md={6}>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          type="number"
+                          label="Client value (PKR) — optional"
+                          value={form.clientValue}
+                          onChange={(e) => setForm((f) => ({ ...f, clientValue: e.target.value }))}
+                          inputProps={{ min: 0, step: 'any' }}
+                          helperText={Number(form.clientValue) > 0 && Number(form.contractValue) > 0
+                            ? `What the client pays for this scope · margin ${Math.round(((Number(form.clientValue) - Number(form.contractValue)) / Number(form.clientValue)) * 100)}%`
+                            : 'What the client pays for this scope — each verified slab is billed to the client at this × slab %'}
                         />
                       </Grid>
                     </Grid>

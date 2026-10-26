@@ -469,7 +469,7 @@ router.get('/',
     try {
       const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
       const ipcQuery = {
-        invoiceType: 'Subcontractor_IPC',
+        invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] },
         $or: [
           { approvalStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO', 'Approved'] } },
           { approvalStatus: 'Rejected', returnedFromStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director'] } }
@@ -500,12 +500,14 @@ router.get('/',
         workflowDocs.push({
           _id: doc._id,
           documentNumber: doc.invoiceNumber,
-          title: `${doc.ipcKind && doc.ipcKind !== 'Work' ? `Subcontractor ${doc.ipcKind}` : 'Subcontractor IPC'} #${doc.ipcNumber}: ${doc.invoiceNumber}`,
-          description: `${doc.contractor?.name || 'Subcontractor'} — ${projectLabel}${doc.description ? ` — ${doc.description}` : ''}`,
+          title: doc.invoiceType === 'Client_Invoice'
+            ? `Client Invoice: ${doc.invoiceNumber}`
+            : `${doc.ipcKind && doc.ipcKind !== 'Work' ? `Subcontractor ${doc.ipcKind}` : 'Subcontractor IPC'} #${doc.ipcNumber}: ${doc.invoiceNumber}`,
+          description: `${doc.invoiceType === 'Client_Invoice' ? `Client: ${doc.clientName || '—'}` : doc.contractor?.name || 'Subcontractor'} — ${projectLabel}${doc.description ? ` — ${doc.description}` : ''}`,
           sourceModule: 'project_management',
           sourceDepartmentName: 'Project Management',
           sourceDepartment: null,
-          documentType: 'Subcontractor IPC',
+          documentType: doc.invoiceType === 'Client_Invoice' ? 'Client Invoice' : 'Subcontractor IPC',
           documentDate: doc.issueDate || doc.createdAt,
           amount: doc.netPayableAmount || doc.invoiceAmount || 0,
           referenceNumber: doc.invoiceNumber,
@@ -1216,7 +1218,7 @@ router.put('/:id/forward',
     // Project Management IPC: Pending Audit -> Forwarded to Audit Director
     {
       const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
-      const ipc = await ProjectInvoice.findOne({ _id: req.params.id, invoiceType: 'Subcontractor_IPC' }).catch(() => null);
+      const ipc = await ProjectInvoice.findOne({ _id: req.params.id, invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] } }).catch(() => null);
       if (ipc) {
         if (ipc.approvalStatus === 'Forwarded to Audit Director') {
           return res.status(400).json({ success: false, message: 'Document is already forwarded to Audit Director' });

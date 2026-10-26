@@ -39,7 +39,11 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
     <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
       <DialogTitle>
         <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
-          <span>Subcontractor IPC {ipc ? `#${ipc.ipcNumber} · ${ipc.invoiceNumber}` : ''}</span>
+          <span>
+            {ipc?.invoiceType === 'Client_Invoice'
+              ? `Client Invoice ${ipc.invoiceNumber}`
+              : `Subcontractor ${ipc?.ipcKind && ipc.ipcKind !== 'Work' ? ipc.ipcKind : 'IPC'} ${ipc ? `#${ipc.ipcNumber} · ${ipc.invoiceNumber}` : ''}`}
+          </span>
           {ipc && <Chip label={ipcStageText(ipc)} color={IPC_APPROVAL_COLOR[ipc.approvalStatus || 'Draft'] || 'default'} />}
         </Stack>
       </DialogTitle>
@@ -53,7 +57,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
                 {field('Main Project', project?.parentProject?.name)}
                 {field('Sub Project', project?.name)}
                 {field('Sector', [project?.sector, project?.society].filter(Boolean).join(' · '))}
-                {field('Subcontractor', ipc.contractor?.name)}
+                {ipc.invoiceType === 'Client_Invoice' ? field('Client', ipc.clientName) : field('Subcontractor', ipc.contractor?.name)}
                 {field('Check Request', ipc.checkRequest ? `${ipc.checkRequest.checkRequestNumber} — ${ipc.checkRequest.title}` : '')}
                 {field('Verified by', ipc.checkRequest?.verifiedBy)}
                 {field('Issue date', ipc.issueDate ? dayjs(ipc.issueDate).format('DD MMM YYYY') : '')}
@@ -111,7 +115,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
               ))}
               <Divider sx={{ my: 1 }} />
               <Stack direction="row" justifyContent="space-between">
-                <Typography variant="subtitle1" fontWeight={800}>Net payable to subcontractor</Typography>
+                <Typography variant="subtitle1" fontWeight={800}>{ipc.invoiceType === 'Client_Invoice' ? 'Receivable from client' : 'Net payable to subcontractor'}</Typography>
                 <Typography variant="subtitle1" fontWeight={800} color="success.main">{fmt(ipc.netPayableAmount || ipc.invoiceAmount)}</Typography>
               </Stack>
               {ipc.description && <Typography variant="caption" color="text.secondary">{ipc.description}</Typography>}

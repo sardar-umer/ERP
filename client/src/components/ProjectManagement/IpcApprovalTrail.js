@@ -29,7 +29,10 @@ export const ipcStageText = (inv) => {
     const from = IPC_STAGES.find((s) => s.status === inv.returnedFromStatus)?.label;
     return `Rejected${from ? ` by ${from}` : ''}`;
   }
-  if (st === 'Approved') return inv.financeApBillId ? `Approved · in Finance (${inv.financeBillNumber})` : 'Approved · Finance posting pending';
+  if (st === 'Approved') {
+    const ref = inv.invoiceType === 'Client_Invoice' ? inv.financeArNumber : inv.financeBillNumber;
+    return ref ? `Approved · in Finance (${ref})` : 'Approved · Finance posting pending';
+  }
   if (st === 'Pending Audit' && inv.preAuditInitialApprovedAt) return 'Pre-Audit approved · to forward';
   return IPC_STAGES.find((s) => s.status === st)?.label ? `With ${IPC_STAGES.find((s) => s.status === st).label}` : st;
 };
@@ -65,13 +68,19 @@ export default function IpcApprovalTrail({ ipc }) {
         </Alert>
       )}
 
-      {st === 'Approved' && (
-        <Alert severity={ipc.financeApBillId ? 'success' : 'warning'} sx={{ mb: 1.5 }}>
-          {ipc.financeApBillId
-            ? <>Posted to Finance as Accounts Payable bill <strong>{ipc.financeBillNumber}</strong>{ipc.financePostedAt ? ` on ${dayjs(ipc.financePostedAt).format('DD MMM YYYY')}` : ''}. Finance pays it through its normal payment process.</>
-            : <>CEO approved, but posting to Finance needs attention: {ipc.financePostingError || 'pending'}</>}
-        </Alert>
-      )}
+      {st === 'Approved' && (() => {
+        const isClient = ipc.invoiceType === 'Client_Invoice';
+        const posted = isClient ? ipc.financeArId : ipc.financeApBillId;
+        return (
+          <Alert severity={posted ? 'success' : 'warning'} sx={{ mb: 1.5 }}>
+            {posted
+              ? isClient
+                ? <>Posted to Finance as Accounts Receivable invoice <strong>{ipc.financeArNumber}</strong>{ipc.financePostedAt ? ` on ${dayjs(ipc.financePostedAt).format('DD MMM YYYY')}` : ''}. Finance records the client's receipts against it.</>
+                : <>Posted to Finance as Accounts Payable bill <strong>{ipc.financeBillNumber}</strong>{ipc.financePostedAt ? ` on ${dayjs(ipc.financePostedAt).format('DD MMM YYYY')}` : ''}. Finance pays it through its normal payment process.</>
+              : <>CEO approved, but posting to Finance needs attention: {ipc.financePostingError || 'pending'}</>}
+          </Alert>
+        );
+      })()}
 
       {(ipc.observations || []).length > 0 && (
         <Box sx={{ mb: 1.5 }}>

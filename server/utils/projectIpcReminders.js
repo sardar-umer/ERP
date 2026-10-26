@@ -48,10 +48,10 @@ const deskVisits = (inv) => {
 /** Average days per desk (completed visits in the window) + IPCs waiting now, longest first */
 const buildDeskReport = async ({ sinceDays = 180 } = {}) => {
   const since = new Date(Date.now() - sinceDays * DAY);
-  const ipcs = await ProjectInvoice.find({ invoiceType: 'Subcontractor_IPC', createdAt: { $gte: since } })
+  const ipcs = await ProjectInvoice.find({ invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] }, createdAt: { $gte: since } })
     .populate('contractor', 'name')
     .populate({ path: 'project', select: 'name parentProject', populate: { path: 'parentProject', select: 'name' } })
-    .select('invoiceNumber ipcNumber ipcKind approvalStatus status netPayableAmount workflowHistory createdAt submittedAt updatedAt project contractor')
+    .select('invoiceNumber invoiceType clientName ipcNumber ipcKind approvalStatus status netPayableAmount invoiceAmount workflowHistory createdAt submittedAt updatedAt project contractor')
     .lean();
 
   const totals = new Map(DESKS.map((d) => [d.status, { days: 0, count: 0, max: 0 }]));
@@ -71,10 +71,10 @@ const buildDeskReport = async ({ sinceDays = 180 } = {}) => {
         _id: inv._id,
         invoiceNumber: inv.invoiceNumber,
         ipcNumber: inv.ipcNumber,
-        ipcKind: inv.ipcKind || 'Work',
-        contractor: inv.contractor?.name,
+        ipcKind: inv.invoiceType === 'Client_Invoice' ? 'Client Invoice' : inv.ipcKind || 'Work',
+        contractor: inv.invoiceType === 'Client_Invoice' ? `Client: ${inv.clientName || '—'}` : inv.contractor?.name,
         project: inv.project,
-        netPayableAmount: inv.netPayableAmount,
+        netPayableAmount: inv.netPayableAmount || inv.invoiceAmount,
         approvalStatus: inv.approvalStatus || 'Draft',
         desk: DESKS.find((d) => d.status === (inv.approvalStatus || 'Draft'))?.label || inv.approvalStatus,
         since,
@@ -110,7 +110,7 @@ const runIpcReminderSweep = async () => {
     const threshold = reminderDays() * DAY;
     const now = Date.now();
     const open = await ProjectInvoice.find({
-      invoiceType: 'Subcontractor_IPC',
+      invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] },
       status: { $ne: 'Cancelled' },
       approvalStatus: { $in: DESKS.map((d) => d.status) },
       $or: [{ lastReminderAt: null }, { lastReminderAt: { $lt: new Date(now - DAY + 60 * 60 * 1000) } }]

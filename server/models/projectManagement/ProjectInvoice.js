@@ -37,8 +37,13 @@ const projectInvoiceSchema = new mongoose.Schema({
     checkRequest: { type: mongoose.Schema.Types.ObjectId, ref: 'CheckRequest' },
     crItem: { type: mongoose.Schema.Types.ObjectId },
     quantity: { type: Number, default: 0 },
+    /** Slab stage billed to the client (quantity unused): the client amount for that stage */
+    slabAmount: { type: Number, default: 0 },
     costAmount: { type: Number, default: 0 }
   }],
+  /** Client invoices: Finance Accounts Receivable entry (posted when the invoice is sent) */
+  financeArId: { type: mongoose.Schema.Types.ObjectId, ref: 'AccountsReceivable', default: null },
+  financeArNumber: { type: String, trim: true, default: '' },
   subletContract: { type: mongoose.Schema.Types.ObjectId, ref: 'SubletContract', default: null },
   /** Advance only: % of each later Work IPC's gross recovered against this advance */
   advanceRecoveryPercent: { type: Number, default: 0, min: 0, max: 100 },

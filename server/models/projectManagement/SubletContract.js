@@ -110,6 +110,8 @@ const subletContractSchema = new mongoose.Schema(
     },
 
     totalAmount: { type: Number, default: 0, min: 0 },
+    /** Slab-wise only: what the client pays for this contract's scope — a verified slab bills the client clientValue × slab % */
+    clientValue: { type: Number, default: 0, min: 0 },
 
     startDate: { type: Date },
     endDate: { type: Date },

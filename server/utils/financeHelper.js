@@ -1296,6 +1296,12 @@ const FinanceHelper = {
     for (const invoice of touched.values()) {
       FinanceHelper._syncARAmountPaid(invoice);
       await invoice.save();
+      // Project Management client invoices mirror receipts recorded here
+      try {
+        await require('./projectClientInvoiceFinance').syncClientInvoiceFromAr(invoice);
+      } catch (syncErr) {
+        console.error('[recordARPaymentBatch] client invoice sync failed:', syncErr.message);
+      }
     }
 
     return {
