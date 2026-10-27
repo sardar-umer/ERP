@@ -50,6 +50,22 @@ const purchaseOrderSchema = new mongoose.Schema({
     ref: 'CostCenter',
     default: null
   },
+  // Re-issue chain: a rejected PO is closed and replaced by a new PO (revisedFrom → old, supersededBy → new)
+  revisedFrom: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder',
+    default: null
+  },
+  supersededBy: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PurchaseOrder',
+    default: null
+  },
+  // Why the rejected PO was replaced (required for both copy re-issue and release for re-sourcing)
+  replacementJustification: { type: String, trim: true, default: '' },
+  // Release for re-sourcing: CS + quotation reopened so a new CS/PO can be made for this requisition
+  resourcingReleasedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  resourcingReleasedAt: { type: Date, default: null },
   auditApprovedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

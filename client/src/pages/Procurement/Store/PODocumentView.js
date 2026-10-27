@@ -462,7 +462,7 @@ const PODocumentView = ({ data }) => {
                   return (
                     <TableRow key={row.key}>
                       <TableCell sx={{ fontWeight: 800 }}>{row.label}</TableCell>
-                      <TableCell>{row.fallback || (authorityUser ? approverLabel(authorityUser) : '—')}</TableCell>
+                      <TableCell>{authorityApproval?.approver && typeof authorityApproval.approver === 'object' ? (approverLabel(authorityApproval.approver) || row.fallback || '—') : (row.fallback || (authorityUser ? approverLabel(authorityUser) : '—'))}</TableCell>
                       <TableCell align="center">
                         {isApprovedRow && signatureUser?.digitalSignature ? (
                           <Box

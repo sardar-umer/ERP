@@ -96,11 +96,16 @@ const getRequiredAuthoritySlots = async (indentId, approvalAuthorities = {}, cre
 const matchUserToAuthoritySlots = (requiredSlots, user) => {
   const uid = String(user?.id || user?._id || '').trim();
   const tokens = getUserIdentityTokensForAuthority(user);
-  return requiredSlots.filter((slot) => {
+  // Exact identity (user id / full name / email / employee ID) wins. Substring matching is only a fallback,
+  // otherwise "Muhammad Ali" would also match a "Muhammad Ali Raza" slot and sign both authorities.
+  const exact = requiredSlots.filter((slot) => {
     if (slot.userId && uid && slot.userId === uid) return true;
-    if (slot.textToken && tokens.some((token) => tokenMatchesAuthorityText(token, slot.textToken))) return true;
-    return false;
+    return Boolean(slot.textToken && tokens.some((token) => normalizeToken(token) === normalizeToken(slot.textToken)));
   });
+  if (exact.length) return exact;
+  return requiredSlots.filter((slot) =>
+    Boolean(slot.textToken && tokens.some((token) => tokenMatchesAuthorityText(token, slot.textToken)))
+  );
 };
 
 const getApprovedAuthorityKeys = (authorityApprovals) => new Set(

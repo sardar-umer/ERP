@@ -334,8 +334,10 @@ const getRequiredAuthoritySlots = async (indentId, approvalAuthorities = {}) => 
     : null;
   const csa = indent?.comparativeStatementApprovals || {};
   return AUTHORITY_SLOT_CONFIG.map((slot) => {
-    const userId = String(csa?.[slot.indentUserField] || '').trim();
     const textToken = normalizeToken(approvalAuthorities?.[slot.key]);
+    // The name assigned on the cash approval wins; the CS user is only a fallback for unassigned slots,
+    // otherwise a CS approver could also sign a slot assigned to someone else.
+    const userId = textToken ? '' : String(csa?.[slot.indentUserField] || '').trim();
     if (!userId && !textToken) return null;
     return { ...slot, userId: userId || '', textToken: textToken || '' };
   }).filter(Boolean);
@@ -343,6 +345,7 @@ const getRequiredAuthoritySlots = async (indentId, approvalAuthorities = {}) => 
 const matchUserToAuthoritySlots = (requiredSlots, user) => {
   const uid = String(user?.id || user?._id || '').trim();
   const tokens = getUserIdentityTokens(user);
+  // Exact identity only (user id / full name / email / employee ID) so one approval signs only its own slot(s)
   return requiredSlots.filter((slot) => {
     if (slot.userId && uid && slot.userId === uid) return true;
     if (slot.textToken && tokens.includes(slot.textToken)) return true;

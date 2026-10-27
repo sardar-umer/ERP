@@ -352,11 +352,16 @@ const getRequiredAuthoritySlots = async (indentId, approvalAuthorities = {}, cre
 const matchUserToAuthoritySlots = (requiredSlots, user) => {
   const uid = String(user?.id || user?._id || '').trim();
   const tokens = getUserIdentityTokens(user);
-  return requiredSlots.filter((slot) => {
+  // Exact identity (user id / full name / email / employee ID) wins. Substring matching is only a fallback,
+  // otherwise "Muhammad Ali" would also match a "Muhammad Ali Raza" slot and sign both authorities.
+  const exact = requiredSlots.filter((slot) => {
     if (slot.userId && uid && slot.userId === uid) return true;
-    if (slot.textToken && tokens.some((token) => tokenMatchesAuthorityText(token, slot.textToken))) return true;
-    return false;
+    return Boolean(slot.textToken && tokens.some((token) => normalizeToken(token) === normalizeToken(slot.textToken)));
   });
+  if (exact.length) return exact;
+  return requiredSlots.filter((slot) =>
+    Boolean(slot.textToken && tokens.some((token) => tokenMatchesAuthorityText(token, slot.textToken)))
+  );
 };
 
 const getAssignedIndentIdsForUser = async (userId) => {
@@ -1155,6 +1160,8 @@ router.get('/purchase-orders',
         .populate('createdBy', 'firstName lastName email')
         .populate('approvedBy', 'firstName lastName')
         .populate('costCenter', 'code name department')
+        .populate('revisedFrom', 'orderNumber replacementJustification')
+        .populate('supersededBy', 'orderNumber')
         .sort(sortOptions)
         .limit(limit * 1)
         .skip((page - 1) * limit)
@@ -1346,6 +1353,8 @@ router.get('/purchase-orders/:id',
       .populate('companyId', 'name code symbol')
       .populate(purchaseOrderIndentPopulate)
       .populate('quotation', 'quotationNumber quotationDate')
+      .populate('revisedFrom', 'orderNumber status replacementJustification')
+      .populate('supersededBy', 'orderNumber status')
       .populate('createdBy', 'firstName lastName email digitalSignature')
       .populate('approvedBy', 'firstName lastName email digitalSignature')
       .populate('authorityApprovals.approver', 'firstName lastName email employeeId digitalSignature')
@@ -1504,6 +1513,37 @@ router.post('/purchase-orders', [
 
   const bodyData = { ...req.body };
   if (bodyData.costCenter === '') bodyData.costCenter = null;
+  delete bodyData.supersededBy;
+  const replacementJustification = String(bodyData.replacementJustification || '').trim();
+  delete bodyData.replacementJustification;
+  delete bodyData.resourcingReleasedBy;
+  delete bodyData.resourcingReleasedAt;
+
+  // Re-issue from a rejected PO: the old PO stays closed as Rejected and links to the new one
+  let sourcePO = null;
+  if (bodyData.revisedFrom) {
+    sourcePO = await PurchaseOrder.findById(bodyData.revisedFrom);
+    if (!sourcePO) {
+      return res.status(404).json({ success: false, message: 'Source (rejected) purchase order not found' });
+    }
+    if (sourcePO.status !== 'Rejected') {
+      return res.status(400).json({ success: false, message: 'A new PO can only be created from a rejected purchase order' });
+    }
+    if (sourcePO.supersededBy) {
+      return res.status(400).json({ success: false, message: 'A new purchase order has already been created from this rejected PO' });
+    }
+    if (sourcePO.resourcingReleasedAt) {
+      return res.status(400).json({ success: false, message: 'This rejected PO was released for re-sourcing; create the new PO from the new Comparative Statement' });
+    }
+    if (!replacementJustification) {
+      return res.status(400).json({ success: false, message: 'Justification is required to replace a rejected purchase order' });
+    }
+    if (!bodyData.indent && sourcePO.indent) bodyData.indent = sourcePO.indent;
+    if (!bodyData.quotation && sourcePO.quotation) bodyData.quotation = sourcePO.quotation;
+    if (!bodyData.companyId && sourcePO.companyId) bodyData.companyId = sourcePO.companyId;
+  } else {
+    delete bodyData.revisedFrom;
+  }
 
   const purchaseOrder = new PurchaseOrder({
     ...bodyData,
@@ -1551,8 +1591,27 @@ router.post('/purchase-orders', [
   }
 
   await purchaseOrder.save();
-  pushPOWorkflowHistory(purchaseOrder, '—', 'Pending Approval', req.user.id, 'Created in Procurement and submitted for authority approval', 'Procurement');
+  pushPOWorkflowHistory(
+    purchaseOrder,
+    '—',
+    'Pending Approval',
+    req.user.id,
+    sourcePO
+      ? `Re-issued from rejected PO ${sourcePO.orderNumber} and submitted for authority approval | Justification: ${replacementJustification}`
+      : 'Created in Procurement and submitted for authority approval',
+    'Procurement'
+  );
   await purchaseOrder.save();
+
+  if (sourcePO) {
+    sourcePO.supersededBy = purchaseOrder._id;
+    sourcePO.replacementJustification = replacementJustification;
+    sourcePO.updatedBy = req.user.id;
+    pushPOWorkflowHistory(sourcePO, 'Rejected', 'Rejected', req.user.id, `Closed — replaced by new PO ${purchaseOrder.orderNumber} | Justification: ${replacementJustification}`, 'Procurement');
+    await sourcePO.save();
+  } else {
+    await linkReplacementForReleasedPOs(purchaseOrder, req.user.id);
+  }
 
   if (purchaseOrder.indent) {
     try {
@@ -1611,6 +1670,13 @@ router.put('/purchase-orders/:id', [
   }
 
   const isResubmissionFromReject = purchaseOrder.status === 'Rejected';
+
+  if (isResubmissionFromReject && isClosedRejectedPO(purchaseOrder)) {
+    return res.status(400).json({
+      success: false,
+      message: 'This rejected PO has been closed (replaced or released for re-sourcing) and can no longer be resubmitted'
+    });
+  }
 
   if (isResubmissionFromReject) {
     // Only allow updating rejection answers and documents
@@ -1924,6 +1990,61 @@ function pushPOWorkflowHistory(po, fromStatus, toStatus, userId, comments, modul
   });
 }
 
+// A rejected PO is "closed" once it has been replaced or released for re-sourcing; it can't be resubmitted after that
+function isClosedRejectedPO(po) {
+  return Boolean(po && po.status === 'Rejected' && (po.supersededBy || po.resourcingReleasedAt));
+}
+
+/**
+ * After a new PO is created for a requisition, link it as the replacement of any rejected PO on the same
+ * requisition that was released for re-sourcing and shares at least one item with it.
+ */
+async function linkReplacementForReleasedPOs(newPO, userId) {
+  if (!newPO?.indent) return;
+  const released = await PurchaseOrder.find({
+    indent: newPO.indent,
+    _id: { $ne: newPO._id },
+    status: 'Rejected',
+    resourcingReleasedAt: { $ne: null },
+    $or: [{ supersededBy: null }, { supersededBy: { $exists: false } }]
+  });
+  if (!released.length) return;
+  const norm = (d) => String(d || '').trim().toLowerCase();
+  const newDescs = new Set((newPO.items || []).map((it) => norm(it.description)));
+  const matched = released.filter((old) => (old.items || []).some((it) => newDescs.has(norm(it.description))));
+  for (const old of matched) {
+    old.supersededBy = newPO._id;
+    old.updatedBy = userId;
+    pushPOWorkflowHistory(old, 'Rejected', 'Rejected', userId, `Closed — replaced by new PO ${newPO.orderNumber}${old.replacementJustification ? ` | Justification: ${old.replacementJustification}` : ''}`, 'Procurement');
+    await old.save();
+  }
+  if (matched.length && !newPO.revisedFrom) {
+    newPO.revisedFrom = matched[0]._id;
+    pushPOWorkflowHistory(newPO, newPO.status, newPO.status, userId, `Replaces rejected PO ${matched.map((o) => o.orderNumber).join(', ')} (re-sourced via new Comparative Statement)`, 'Procurement');
+    await newPO.save();
+  }
+}
+
+/**
+ * A PO on the requisition blocks shortlisting/finalizing another quotation unless it is Cancelled, or Rejected
+ * and closed (released for re-sourcing / replaced). An open rejected PO still blocks, since it could be resubmitted.
+ */
+async function findBlockingPOForQuotation(filter) {
+  const pos = await PurchaseOrder.find({ ...filter, status: { $ne: 'Cancelled' } })
+    .select('orderNumber status supersededBy resourcingReleasedAt')
+    .lean();
+  const active = pos.find((po) => po.status !== 'Rejected');
+  if (active) return active;
+  return pos.find((po) => !isClosedRejectedPO(po)) || null;
+}
+
+function blockingPOMessage(prefix, po) {
+  if (po.status === 'Rejected') {
+    return `${prefix}: Purchase Order ${po.orderNumber} for this requisition was rejected but is still open. In Purchase Orders, use "Release for re-sourcing" on ${po.orderNumber} (with justification) to reopen the Comparative Statement, then shortlist/finalize again.`;
+  }
+  return `${prefix}: A Purchase Order (${po.orderNumber}) has already been created for this requisition.`;
+}
+
 function upsertPOAuthorityApproval(po, { key, label, approverId, approvedAt = new Date(), comments = '' }) {
   if (!po || !key || !approverId) return;
   po.authorityApprovals = Array.isArray(po.authorityApprovals) ? po.authorityApprovals : [];
@@ -2180,6 +2301,115 @@ function buildPOChangeSummary(currentItems, snapshot) {
 // @route   PUT /api/procurement/purchase-orders/:id/send-to-audit
 // @desc    Send purchase order to audit module (status -> Pending Audit)
 // @access  Private (Procurement and Admin)
+// @route   PUT /api/procurement/purchase-orders/:id/release-for-resourcing
+// @desc    Close a rejected PO and reopen its Comparative Statement + quotation so a new CS and PO can be made.
+//          Body: { justification }. The next PO created for the same requisition items is linked as its replacement.
+// @access  Private (assigned procurement user / assignment manager)
+router.put('/purchase-orders/:id/release-for-resourcing',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const justification = String(req.body?.justification || '').trim();
+    if (!justification) {
+      return res.status(400).json({ success: false, message: 'Justification is required' });
+    }
+    const purchaseOrder = await PurchaseOrder.findById(req.params.id);
+    if (!purchaseOrder) {
+      return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    }
+    if (purchaseOrder.status !== 'Rejected') {
+      return res.status(400).json({ success: false, message: 'Only rejected purchase orders can be released for re-sourcing' });
+    }
+    if (isClosedRejectedPO(purchaseOrder)) {
+      return res.status(400).json({ success: false, message: 'This rejected PO has already been replaced or released for re-sourcing' });
+    }
+
+    const indent = purchaseOrder.indent ? await Indent.findById(purchaseOrder.indent) : null;
+    if (indent && !canOperateAssignedProcurementRequisition(req.user, indent)) {
+      return res.status(403).json({
+        success: false,
+        message: 'Only the assigned procurement user or an assignment manager can release this PO for re-sourcing.'
+      });
+    }
+
+    // 1. Reopen the quotation the PO came from
+    const quotation = purchaseOrder.quotation ? await Quotation.findById(purchaseOrder.quotation) : null;
+    if (quotation && ['Finalized', 'Shortlisted'].includes(quotation.status)) {
+      quotation.status = 'Received';
+      quotation.updatedBy = req.user.id;
+      await quotation.save();
+    }
+
+    // 2. Reopen the Comparative Statement approval for that lot (approvers kept, their decisions cleared)
+    if (indent) {
+      const lotNumber = quotation?.lotNumber || 'A';
+      const resetApproval = (ca) => {
+        if (!ca) return '';
+        const prev = ca.status || 'not_configured';
+        (ca.approvers || []).forEach((step) => {
+          step.status = 'pending';
+          step.actedAt = null;
+          step.comment = '';
+        });
+        ca.status = (ca.approvers || []).length > 0 ? 'draft' : 'not_configured';
+        ca.submittedBy = null;
+        ca.submittedAt = null;
+        ca.rejectedBy = null;
+        ca.rejectedAt = null;
+        ca.rejectionObservation = '';
+        return prev;
+      };
+      const lotCa = Array.isArray(indent.comparativeApprovals)
+        ? indent.comparativeApprovals.find((a) => (a.lotNumber || 'A') === lotNumber)
+        : null;
+      const previousCsStatus = resetApproval(lotCa || indent.comparativeApproval);
+      if (lotCa) indent.comparativeApproval = lotCa;
+      indent.markModified('comparativeApprovals');
+      indent.markModified('comparativeApproval');
+
+      // Drop saved split assignments that point at the reopened quotation
+      if (quotation && indent.splitPOAssignments && typeof indent.splitPOAssignments === 'object') {
+        const next = { ...indent.splitPOAssignments };
+        Object.keys(next).forEach((k) => {
+          if (String(next[k]) === String(quotation._id)) delete next[k];
+        });
+        indent.splitPOAssignments = Object.keys(next).length ? next : undefined;
+        indent.markModified('splitPOAssignments');
+      }
+
+      indent.updatedBy = req.user.id;
+      pushIndentWorkflowHistory(indent, {
+        fromStatus: `Comparative Approval: ${previousCsStatus}`,
+        toStatus: `Comparative Approval: ${lotCa?.status || indent.comparativeApproval?.status || 'draft'}`,
+        changedBy: req.user.id,
+        comments: `Comparative Statement (Lot ${lotNumber}) reopened — PO ${purchaseOrder.orderNumber} rejected and released for re-sourcing. Justification: ${justification}`,
+        module: 'Procurement'
+      });
+      await indent.save();
+    }
+
+    // 3. Close the rejected PO
+    purchaseOrder.resourcingReleasedBy = req.user.id;
+    purchaseOrder.resourcingReleasedAt = new Date();
+    purchaseOrder.replacementJustification = justification;
+    purchaseOrder.updatedBy = req.user.id;
+    pushPOWorkflowHistory(
+      purchaseOrder,
+      'Rejected',
+      'Rejected',
+      req.user.id,
+      `Released for re-sourcing — Comparative Statement${quotation ? ` and quotation ${quotation.quotationNumber}` : ''} reopened | Justification: ${justification}`,
+      'Procurement'
+    );
+    await purchaseOrder.save(); // post-save hook recounts requisition ordered quantities
+
+    res.json({
+      success: true,
+      message: `PO ${purchaseOrder.orderNumber} closed. Comparative Statement${quotation ? ` and quotation ${quotation.quotationNumber}` : ''} reopened — prepare a new CS and create the new PO.`,
+      data: purchaseOrder
+    });
+  })
+);
+
 router.put('/purchase-orders/:id/send-to-audit',
   authorize('super_admin', 'admin', 'procurement_manager'),
   asyncHandler(async (req, res) => {
@@ -2191,6 +2421,12 @@ router.put('/purchase-orders/:id/send-to-audit',
       return res.status(400).json({
         success: false,
         message: 'Only Draft, Returned from Audit, Returned from CEO Secretariat, Returned from Finance, or Rejected purchase orders can be sent to audit'
+      });
+    }
+    if (isClosedRejectedPO(purchaseOrder)) {
+      return res.status(400).json({
+        success: false,
+        message: 'This rejected PO has been closed (replaced or released for re-sourcing) and can no longer be resubmitted'
       });
     }
     
@@ -7594,14 +7830,11 @@ router.post('/quotations', [
       });
     }
 
-    const existingPO = await PurchaseOrder.findOne({
-      indent: req.body.indent,
-      status: { $ne: 'Cancelled' }
-    });
+    const existingPO = await findBlockingPOForQuotation({ indent: req.body.indent });
     if (existingPO) {
       return res.status(400).json({
         success: false,
-        message: `Cannot create quotation as ${req.body.status.toLowerCase()}: A Purchase Order (${existingPO.poNumber}) has already been created for this requisition.`
+        message: blockingPOMessage(`Cannot create quotation as ${req.body.status.toLowerCase()}`, existingPO)
       });
     }
   }
@@ -7703,15 +7936,14 @@ router.put('/quotations/:id', [
         const lotQuotes = await Quotation.find({ indent: indentId, lotNumber: quotation.lotNumber || 'A' }).select('_id');
         const lotQuoteIds = lotQuotes.map(q => q._id);
 
-        const existingPO = await PurchaseOrder.findOne({
+        const existingPO = await findBlockingPOForQuotation({
           indent: indentId,
-          quotation: { $in: lotQuoteIds, $ne: quotation._id },
-          status: { $ne: 'Cancelled' }
+          quotation: { $in: lotQuoteIds, $ne: quotation._id }
         });
         if (existingPO) {
           return res.status(400).json({
             success: false,
-            message: `Cannot mark quotation as ${req.body.status.toLowerCase()}: A Purchase Order (${existingPO.poNumber}) has already been created for this requisition.`
+            message: blockingPOMessage(`Cannot mark quotation as ${req.body.status.toLowerCase()}`, existingPO)
           });
         }
       } else {
@@ -7878,7 +8110,7 @@ router.delete('/quotations/:id',
     if (existingPO) {
       return res.status(400).json({
         success: false,
-        message: `Cannot delete quotation: linked to Purchase Order ${existingPO.poNumber}`
+        message: `Cannot delete quotation: linked to Purchase Order ${existingPO.orderNumber}`
       });
     }
 
@@ -7958,6 +8190,7 @@ router.post('/quotations/:id/create-po',
     });
 
     await purchaseOrder.save();
+    await linkReplacementForReleasedPOs(purchaseOrder, req.user.id);
 
     // Trigger indent fulfillment update
     if (purchaseOrder.indent) {
@@ -8119,6 +8352,7 @@ router.post('/quotations/by-indent/:indentId/create-split-pos',
       await purchaseOrder.save();
       pushPOWorkflowHistory(purchaseOrder, '—', 'Draft', req.user.id, `Created from CS split for Indent ${indent.indentNumber}`, 'Procurement');
       await purchaseOrder.save();
+      await linkReplacementForReleasedPOs(purchaseOrder, req.user.id);
 
       const populated = await PurchaseOrder.findById(purchaseOrder._id)
         .populate('vendor', 'name email phone')
@@ -8243,6 +8477,7 @@ router.post('/quotations/by-indent/:indentId/create-split-pos-from-saved',
       await purchaseOrder.save();
       pushPOWorkflowHistory(purchaseOrder, '—', 'Draft', req.user.id, `Created from Quotations split for Indent ${indent.indentNumber}`, 'Procurement');
       await purchaseOrder.save();
+      await linkReplacementForReleasedPOs(purchaseOrder, req.user.id);
 
       const populated = await PurchaseOrder.findById(purchaseOrder._id)
         .populate('vendor', 'name email phone')

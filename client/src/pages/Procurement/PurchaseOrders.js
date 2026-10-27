@@ -48,7 +48,8 @@ import {
   Refresh as RefreshIcon,
   Send as SendIcon,
   Print as PrintIcon,
-  History as HistoryIcon
+  History as HistoryIcon,
+  LockOpen as ReleaseIcon
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../../services/api';
@@ -199,11 +200,12 @@ const PurchaseOrders = () => {
   const [priorityFilter, setPriorityFilter] = useState('');
   
   // Dialog states (quotationId set when creating PO from Quotations page)
-  const [formDialog, setFormDialog] = useState({ open: false, mode: 'create', data: null, quotationId: null });
+  const [formDialog, setFormDialog] = useState({ open: false, mode: 'create', data: null, quotationId: null, revisedFromPO: null });
   const [viewDialog, setViewDialog] = useState({ open: false, data: null, attachedGrns: [], quotations: [], poDetailTab: 0 });
   const [workflowHistoryDialog, setWorkflowHistoryDialog] = useState({ open: false, document: null });
   const [deleteDialog, setDeleteDialog] = useState({ open: false, id: null });
   const [rejectDialog, setRejectDialog] = useState({ open: false, order: null });
+  const [releaseDialog, setReleaseDialog] = useState({ open: false, order: null, justification: '', saving: false });
   const [rejectionComments, setRejectionComments] = useState('');
   const [rejectObservations, setRejectObservations] = useState([{ observation: '', severity: 'medium' }]);
   const [rejectingOrder, setRejectingOrder] = useState(false);
@@ -477,6 +479,22 @@ const PurchaseOrders = () => {
     setFormDialog({ open: true, mode: 'create', data: null, quotationId: null });
   };
 
+  const handleReleaseForResourcing = async () => {
+    const { order, justification } = releaseDialog;
+    if (!order || !justification.trim()) return;
+    try {
+      setReleaseDialog((d) => ({ ...d, saving: true }));
+      const res = await api.put(`/procurement/purchase-orders/${order._id}/release-for-resourcing`, { justification: justification.trim() });
+      setSuccess(res.data?.message || 'PO released for re-sourcing');
+      setReleaseDialog({ open: false, order: null, justification: '', saving: false });
+      loadPurchaseOrders();
+      loadStatistics();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to release PO for re-sourcing');
+      setReleaseDialog((d) => ({ ...d, saving: false }));
+    }
+  };
+
   const handleEdit = async (order) => {
     try {
       // Fetch full PO data with populated fields (especially audit rejection fields)
@@ -653,6 +671,16 @@ const PurchaseOrders = () => {
       if (formDialog.mode === 'create' && formDialog.quotationId) {
         payload.quotation = formDialog.quotationId;
       }
+      if (formDialog.mode === 'create' && formDialog.revisedFromPO?._id) {
+        if (!String(payload.replacementJustification || '').trim()) {
+          setError('Justification is required to replace a rejected purchase order.');
+          setLoading(false);
+          return;
+        }
+        payload.revisedFrom = formDialog.revisedFromPO._id;
+      } else {
+        delete payload.replacementJustification;
+      }
 
       // Validate items have descriptions and quantity
       const validItems = (payload.items || []).filter(item => item.description && item.description.trim() !== '' && (Number(item.quantity) || 0) > 0);
@@ -683,7 +711,11 @@ const PurchaseOrders = () => {
 
       if (formDialog.mode === 'create') {
         await api.post('/procurement/purchase-orders', payload);
-        setSuccess('Purchase order created successfully');
+        setSuccess(
+          formDialog.revisedFromPO
+            ? `New purchase order created; rejected PO ${formDialog.revisedFromPO.orderNumber} is now closed`
+            : 'Purchase order created successfully'
+        );
       } else {
         await api.put(`/procurement/purchase-orders/${formDialog.data._id}`, payload);
         setSuccess(
@@ -695,7 +727,7 @@ const PurchaseOrders = () => {
         );
       }
       
-      setFormDialog({ open: false, mode: 'create', data: null, quotationId: null });
+      setFormDialog({ open: false, mode: 'create', data: null, quotationId: null, revisedFromPO: null });
       setObservationAnswers({}); // Clear observation answers
       loadPurchaseOrders();
       loadStatistics();
@@ -1181,6 +1213,29 @@ const PurchaseOrders = () => {
                         color={getStatusColor(order.status)}
                         size="small"
                       />
+                      {order.supersededBy ? (
+                        <Typography variant="caption" display="block" color="text.secondary">
+                          Closed — replaced by {order.supersededBy.orderNumber || 'new PO'}
+                        </Typography>
+                      ) : order.resourcingReleasedAt && (
+                        <Typography variant="caption" display="block" color="warning.main">
+                          Closed — released for re-sourcing, awaiting new PO
+                        </Typography>
+                      )}
+                      {order.status === 'Rejected' && order.replacementJustification && (
+                        <Tooltip title={order.replacementJustification}>
+                          <Typography variant="caption" display="block" color="text.secondary" noWrap sx={{ maxWidth: 220 }}>
+                            Justification: {order.replacementJustification}
+                          </Typography>
+                        </Tooltip>
+                      )}
+                      {order.revisedFrom && (
+                        <Tooltip title={order.revisedFrom.replacementJustification ? `Justification: ${order.revisedFrom.replacementJustification}` : ''}>
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            Replaces {order.revisedFrom.orderNumber || 'rejected PO'}
+                          </Typography>
+                        </Tooltip>
+                      )}
                     </TableCell>
                     <TableCell>
                       {(() => {
@@ -1209,10 +1264,17 @@ const PurchaseOrders = () => {
                           <ViewIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      {(order.status === 'Draft' || order.status === 'Returned from Audit' || order.status === 'Returned from CEO Secretariat' || order.status === 'Returned from Finance' || order.status === 'Rejected') && (
+                      {(order.status === 'Draft' || order.status === 'Returned from Audit' || order.status === 'Returned from CEO Secretariat' || order.status === 'Returned from Finance') && (
                         <Tooltip title="Edit">
                           <IconButton size="small" onClick={() => handleEdit(order)}>
                             <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      {order.status === 'Rejected' && !order.supersededBy && !order.resourcingReleasedAt && (
+                        <Tooltip title="Release for re-sourcing (reopen Comparative Statement & quotation)">
+                          <IconButton size="small" color="warning" onClick={() => setReleaseDialog({ open: true, order, justification: '', saving: false })}>
+                            <ReleaseIcon fontSize="small" />
                           </IconButton>
                         </Tooltip>
                       )}
@@ -1290,16 +1352,25 @@ const PurchaseOrders = () => {
       <Dialog 
         open={formDialog.open} 
         onClose={() => {
-          setFormDialog({ open: false, mode: 'create', data: null, quotationId: null });
+          setFormDialog({ open: false, mode: 'create', data: null, quotationId: null, revisedFromPO: null });
           setObservationAnswers({}); // Clear observation answers
         }}
         maxWidth="md"
         fullWidth
       >
         <DialogTitle>
-          {formDialog.mode === 'create' ? 'Create Purchase Order' : 'Edit Purchase Order'}
+          {formDialog.mode === 'create'
+            ? (formDialog.revisedFromPO ? `Create New PO (replacing rejected ${formDialog.revisedFromPO.orderNumber})` : 'Create Purchase Order')
+            : 'Edit Purchase Order'}
         </DialogTitle>
         <DialogContent>
+          {formDialog.mode === 'create' && formDialog.revisedFromPO && (
+            <Alert severity="info" sx={{ mt: 1 }}>
+              Prefilled from rejected PO <strong>{formDialog.revisedFromPO.orderNumber}</strong>
+              {formDialog.revisedFromPO.rejectReason ? ` — rejection: ${formDialog.revisedFromPO.rejectReason}` : ''}.
+              {' '}Change vendor, quantities or prices as needed. The new PO goes through the full approval chain and the rejected PO will be closed.
+            </Alert>
+          )}
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12} md={6}>
               <TextField
@@ -1778,6 +1849,20 @@ const PurchaseOrders = () => {
                 disabled={formDialog.mode === 'edit' && formDialog.data?.status === 'Rejected'}
               />
             </Grid>
+            {formDialog.mode === 'create' && formDialog.revisedFromPO && (
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  required
+                  multiline
+                  rows={2}
+                  label={`Justification for replacing ${formDialog.revisedFromPO.orderNumber}`}
+                  value={formData.replacementJustification || ''}
+                  onChange={(e) => setFormData({ ...formData, replacementJustification: e.target.value })}
+                  helperText="Shown on the rejected PO's status and in its history"
+                />
+              </Grid>
+            )}
             <Grid item xs={12}>
               <TextField
                 fullWidth
@@ -1871,7 +1956,7 @@ const PurchaseOrders = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => {
-            setFormDialog({ open: false, mode: 'create', data: null, quotationId: null });
+            setFormDialog({ open: false, mode: 'create', data: null, quotationId: null, revisedFromPO: null });
             setObservationAnswers({}); // Clear observation answers
           }}>
             Cancel
@@ -2016,6 +2101,21 @@ const PurchaseOrders = () => {
                 >
                   Purchase Order
                 </Typography>
+
+                {(viewDialog.data.supersededBy || viewDialog.data.resourcingReleasedAt || viewDialog.data.revisedFrom) && (
+                  <Alert severity={viewDialog.data.revisedFrom && !viewDialog.data.supersededBy && !viewDialog.data.resourcingReleasedAt ? 'info' : 'warning'} sx={{ mb: 2, '@media print': { display: 'none' } }}>
+                    {viewDialog.data.supersededBy
+                      ? <>This PO is closed — replaced by <strong>{viewDialog.data.supersededBy.orderNumber}</strong>.</>
+                      : viewDialog.data.resourcingReleasedAt
+                        ? <>This PO is closed — released for re-sourcing on {formatDate(viewDialog.data.resourcingReleasedAt)}; Comparative Statement and quotation reopened.</>
+                        : <>This PO replaces rejected PO <strong>{viewDialog.data.revisedFrom.orderNumber}</strong>.</>}
+                    {(viewDialog.data.replacementJustification || viewDialog.data.revisedFrom?.replacementJustification) && (
+                      <Typography variant="body2" sx={{ mt: 0.5 }}>
+                        <strong>Justification:</strong> {viewDialog.data.replacementJustification || viewDialog.data.revisedFrom?.replacementJustification}
+                      </Typography>
+                    )}
+                  </Alert>
+                )}
 
                 {/* Rejection Observations - Show if status is Rejected */}
                 {viewDialog.data.status === 'Rejected' && (
@@ -2461,7 +2561,7 @@ const PurchaseOrders = () => {
                               return (
                                 <TableRow key={row.key}>
                                   <TableCell sx={{ fontWeight: 800 }}>{row.label}</TableCell>
-                                  <TableCell>{row.fallback || (authorityUser ? approverLabel(authorityUser) : '—')}</TableCell>
+                                  <TableCell>{authorityApproval?.approver && typeof authorityApproval.approver === 'object' ? (approverLabel(authorityApproval.approver) || row.fallback || '—') : (row.fallback || (authorityUser ? approverLabel(authorityUser) : '—'))}</TableCell>
                                   <TableCell align="center">
                                     {isApprovedRow && signatureUser?.digitalSignature ? (
                                       <Box sx={{ maxHeight: 24, display: 'flex', justifyContent: 'center', '& img': { maxHeight: 24, width: 'auto', objectFit: 'contain' }, '@media print': { maxHeight: 28, '& img': { maxHeight: 28 } } }}>
@@ -2876,6 +2976,43 @@ const PurchaseOrders = () => {
         <DialogActions>
           <Button onClick={() => setDeleteDialog({ open: false, id: null })}>Cancel</Button>
           <Button color="error" variant="contained" onClick={confirmDelete}>Delete</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Release rejected PO for re-sourcing */}
+      <Dialog
+        open={releaseDialog.open}
+        onClose={() => !releaseDialog.saving && setReleaseDialog({ open: false, order: null, justification: '', saving: false })}
+        maxWidth="sm"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 'bold' }}>Release {releaseDialog.order?.orderNumber} for re-sourcing</DialogTitle>
+        <DialogContent dividers>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            This closes the rejected PO permanently, reopens its Comparative Statement for approval and moves its quotation back to Received,
+            so you can collect / negotiate quotations, approve a new Comparative Statement and create a new PO. The new PO will be linked as its replacement.
+          </Alert>
+          <TextField
+            fullWidth
+            required
+            multiline
+            rows={3}
+            label="Justification"
+            value={releaseDialog.justification}
+            onChange={(e) => setReleaseDialog((d) => ({ ...d, justification: e.target.value }))}
+            placeholder="e.g. Vendor rate not acceptable to CEO; re-sourcing from other vendors"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={releaseDialog.saving} onClick={() => setReleaseDialog({ open: false, order: null, justification: '', saving: false })}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disabled={releaseDialog.saving || !releaseDialog.justification.trim()}
+            onClick={handleReleaseForResourcing}
+          >
+            {releaseDialog.saving ? 'Releasing...' : 'Release for re-sourcing'}
+          </Button>
         </DialogActions>
       </Dialog>
 
