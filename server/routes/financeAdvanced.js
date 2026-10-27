@@ -2458,6 +2458,21 @@ router.post('/accounts-receivable',
       createdBy: req.user._id
     });
 
+    // createARFromInvoice keeps only name / email / id — store the rest of the customer block too
+    const c = req.body.customer || {};
+    const customerExtras = {};
+    if (c.phone) customerExtras['customer.phone'] = String(c.phone).trim();
+    if (c.address) {
+      customerExtras['customer.address'] = typeof c.address === 'string'
+        ? { street: c.address.trim() }
+        : { street: c.address.street || '', city: c.address.city || '', state: c.address.state || '', zipCode: c.address.zipCode || '', country: c.address.country || '' };
+    }
+    ['ntn', 'strn', 'cnic'].forEach((k) => { if (c[k]) customerExtras[`customer.${k}`] = String(c[k]).trim(); });
+    if (Object.keys(customerExtras).length) {
+      await AccountsReceivable.updateOne({ _id: arEntry._id }, { $set: customerExtras });
+      Object.entries(customerExtras).forEach(([path, value]) => arEntry.set(path, value));
+    }
+
     await arEntry.populate('costCenter', 'name code');
 
     res.status(201).json({
@@ -2508,6 +2523,9 @@ router.put('/accounts-receivable/:id',
       if (c.name != null) invoice.customer.name = String(c.name).trim();
       if (c.email !== undefined) invoice.customer.email = c.email ? String(c.email).trim() : '';
       if (c.phone !== undefined) invoice.customer.phone = c.phone ? String(c.phone).trim() : '';
+      ['ntn', 'strn', 'cnic'].forEach((k) => {
+        if (c[k] !== undefined) invoice.customer[k] = c[k] ? String(c[k]).trim() : '';
+      });
       if (c.customerId !== undefined && c.customerId !== null && c.customerId !== '') {
         invoice.customer.customerId = c.customerId;
       }
@@ -2572,9 +2590,22 @@ router.get('/accounts-receivable/:id',
     await doc.populate([
       { path: 'costCenter', select: 'name code' },
       { path: 'companyId', select: 'name companyCode website contactInfo' },
-      { path: 'lineItems.account', select: 'name accountNumber type category' }
+      { path: 'lineItems.account', select: 'name accountNumber type category' },
+      { path: 'createdBy', select: 'firstName lastName email digitalSignature' }
     ]);
     const invoice = doc.toObject ? doc.toObject() : doc;
+    // Older invoices didn't copy NTN / STRN / CNIC / address — fill the gaps from the customer record
+    const custId = invoice.customer?.customerId;
+    if (custId && mongoose.Types.ObjectId.isValid(String(custId))
+      && ['ntn', 'strn', 'cnic'].some((k) => !invoice.customer?.[k])) {
+      const master = await SalesCustomer.findById(custId).select('ntn strn cnic address phone').lean();
+      if (master) {
+        invoice.customer = { ...invoice.customer };
+        ['ntn', 'strn', 'cnic', 'phone'].forEach((k) => { if (!invoice.customer[k] && master[k]) invoice.customer[k] = master[k]; });
+        const hasAddress = invoice.customer.address && Object.values(invoice.customer.address).some(Boolean);
+        if (!hasAddress && master.address) invoice.customer.address = { ...master.address, zipCode: master.address.postalCode };
+      }
+    }
 
     res.json({
       success: true,
@@ -6851,6 +6882,7 @@ router.get('/vendors/:supplierId/trial-balance/voucher/:journalEntryId',
 router.get('/vendors/:supplierId',
   authorize('super_admin', 'admin', 'finance_manager', 'procurement_manager'),
   asyncHandler(async (req, res) => {
+    const { getBillPayState } = require('../utils/apBillPayState');
     res.set('Cache-Control', 'no-store');
     const mongoose = require('mongoose');
     const { supplierId } = req.params;
@@ -6917,7 +6949,11 @@ router.get('/vendors/:supplierId',
           advanceApplied: b.advanceApplied,
           balanceDue: b.balanceDue ?? Math.round((b.totalAmount - (b.amountPaid || 0) - (b.advanceApplied || 0)) * 100) / 100,
           status: b.status,
-          referenceType: b.referenceType
+          approvalStatus: b.approvalStatus,
+          isAdvanceBill: Boolean(b.isAdvanceBill),
+          referenceType: b.referenceType,
+          // Same pay rule as Vendor Bills / Payables (at Finance, no payment already covering it)
+          ...(({ canPay, reason, pending }) => ({ canPay, payBlockedReason: reason, paymentPending: pending }))(getBillPayState(b))
         })),
         advances: advances.map((a) => ({
           _id: a._id,
@@ -6926,7 +6962,9 @@ router.get('/vendors/:supplierId',
           balance: Math.round(((a.amount || 0) - (a.appliedAmount || 0)) * 100) / 100,
           paymentDate: a.paymentDate,
           reference: a.reference,
-          status: a.status
+          status: a.status,
+          journalEntryId: a.journalEntryId || null,
+          voucherWorkflowStatus: a.voucherWorkflowStatus || 'immediate'
         })),
         journalEntries: journalEntries.map((je) => ({
           _id: je._id,
@@ -7726,6 +7764,28 @@ router.post('/customers',
       message: 'Customer created successfully',
       data: customer
     });
+  })
+);
+
+// @route   PUT /api/finance/customers/:customerId — edit a Finance customer (contact, address, NTN / STRN / CNIC)
+router.put('/customers/:customerId',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  [
+    body('name').optional().notEmpty().withMessage('Customer name cannot be empty'),
+    body('email').optional({ checkFalsy: true }).isEmail().withMessage('Email must be valid')
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, message: errors.array()[0]?.msg || 'Validation failed', errors: errors.array() });
+    }
+    const allowed = ['name', 'company', 'email', 'phone', 'type', 'status', 'industry', 'website', 'address', 'notes', 'ntn', 'strn', 'cnic'];
+    const update = {};
+    allowed.forEach((k) => { if (req.body[k] !== undefined) update[k] = req.body[k]; });
+    if (update.email === '') update.email = undefined;
+    const customer = await SalesCustomer.findByIdAndUpdate(req.params.customerId, update, { new: true, runValidators: true });
+    if (!customer) return res.status(404).json({ success: false, message: 'Customer not found' });
+    res.json({ success: true, message: 'Customer updated successfully', data: customer });
   })
 );
 
@@ -12109,6 +12169,29 @@ router.get('/payables-hub',
       buildHubWarnings().catch(() => ({ postingExceptions: 0, companiesWithoutFiscalPeriods: [] }))
     ]);
     res.json({ success: true, data: { ...hub, warnings } });
+  })
+);
+
+// GET /api/finance/payables-hub/document/:kind/:id — one payable (bill | cash-approval | po) with lines, totals,
+// payments made and accounting entries, for the hub's document page
+router.get('/payables-hub/document/:kind/:id',
+  authorize('super_admin', 'admin', 'finance_manager', 'accounts_officer', 'finance_controller'),
+  asyncHandler(async (req, res) => {
+    const { buildPayableDocument } = require('../utils/payablesDocument');
+    const doc = await buildPayableDocument(req.params.kind, req.params.id);
+    if (!doc) return res.status(404).json({ success: false, message: 'Document not found' });
+    res.json({ success: true, data: doc });
+  })
+);
+
+// GET /api/finance/payables-hub/payment/:journalEntryId — a payment (its voucher) with what it paid and its entry
+router.get('/payables-hub/payment/:journalEntryId',
+  authorize('super_admin', 'admin', 'finance_manager', 'accounts_officer', 'finance_controller'),
+  asyncHandler(async (req, res) => {
+    const { buildPaymentDetail } = require('../utils/payablesDocument');
+    const payment = await buildPaymentDetail(req.params.journalEntryId);
+    if (!payment) return res.status(404).json({ success: false, message: 'Payment not found' });
+    res.json({ success: true, data: payment });
   })
 );
 

@@ -38,6 +38,10 @@ const salesCustomerSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  // Tax / identity numbers printed on sales tax invoices
+  ntn: { type: String, trim: true, default: '' },
+  strn: { type: String, trim: true, default: '' },
+  cnic: { type: String, trim: true, default: '' },
   address: {
     street: String,
     city: String,

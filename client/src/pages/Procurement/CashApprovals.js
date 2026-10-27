@@ -157,13 +157,13 @@ const EMPTY_FORM = {
  */
 const EMBED_FINANCE_ACTIONS = ['create-voucher', 'finance-approve', 'issue-advance', 'settle-payment'];
 
-const CashApprovalsPage = ({ embedCaId = null, onEmbedClose = null } = {}) => {
+const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClose = null } = {}) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isFinanceModule = Boolean(embedCaId) || location.pathname.startsWith('/finance/cash-approvals');
+  const isFinanceModule = Boolean(embedCaId || embedViewCaId) || location.pathname.startsWith('/finance/cash-approvals');
 
   const [approvalAuthority, setApprovalAuthority] = useState({
     preparedBy: '',
@@ -1016,7 +1016,8 @@ const CashApprovalsPage = ({ embedCaId = null, onEmbedClose = null } = {}) => {
     );
     const hasPendingFinanceAuthorityDecision = financeMySlots.some((k) => !financeDecidedKeys.has(k));
     const isProcurement = isAdmin || role === 'procurement_manager' || hasModuleAccess('procurement');
-    const isFinance = isAdmin || role === 'finance_manager' || hasModuleAccess('finance');
+    // Same as the server's hasFinanceAccess: developer / higher_management act as Finance on cash approvals
+    const isFinance = isAdmin || ['finance_manager', 'developer', 'higher_management'].includes(role) || hasModuleAccess('finance');
     const isCeoSecretariat = isAdmin || role === 'hr_manager' || role === 'higher_management' || hasModuleAccess('hr') || hasModuleAccess('general');
     const isCeo = isAdmin || role === 'higher_management' || hasModuleAccess('general');
     const actions = [];
@@ -1149,6 +1150,22 @@ const CashApprovalsPage = ({ embedCaId = null, onEmbedClose = null } = {}) => {
       if (onEmbedClose) onEmbedClose();
     }
   }, [embedDialogOpen, embedCaId, onEmbedClose]);
+  // Opened from the Payables hub to view a cash approval: show its view dialog, report back when it closes
+  const embedViewShownRef = useRef(false);
+  useEffect(() => {
+    if (!embedViewCaId) return;
+    embedViewShownRef.current = false;
+    handleView({ _id: embedViewCaId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedViewCaId]);
+  useEffect(() => {
+    if (!embedViewCaId) return;
+    if (viewDialog.open) embedViewShownRef.current = true;
+    else if (embedViewShownRef.current) {
+      embedViewShownRef.current = false;
+      if (onEmbedClose) onEmbedClose();
+    }
+  }, [viewDialog.open, embedViewCaId, onEmbedClose]);
   // The page's own message banners are hidden when embedded; show them as toasts instead
   useEffect(() => { if (embedCaId && success) toast.success(success); }, [embedCaId, success]);
   useEffect(() => { if (embedCaId && error) toast.error(error); }, [embedCaId, error]);

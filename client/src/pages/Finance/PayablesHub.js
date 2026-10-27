@@ -11,6 +11,7 @@ import {
   Close as CloseIcon,
   OpenInNew as OpenIcon,
   Payments as PayIcon,
+  Print as PrintIcon,
   Refresh as RefreshIcon,
   Savings as AdvanceIcon,
   WarningAmber as WarnIcon
@@ -20,6 +21,8 @@ import toast from 'react-hot-toast';
 import api from '../../services/api';
 import AccountsPayable from './AccountsPayable';
 import VendorAdvance from './VendorAdvance';
+import PODocumentView from '../Procurement/Store/PODocumentView';
+import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 
 const CashApprovals = lazy(() => import('../Procurement/CashApprovals'));
 
@@ -56,7 +59,7 @@ const Kpi = ({ label, value, color, hint, onClick }) => (
 );
 
 /**
- * Vendor Payments (new) — everything the company owes, from every module, paid from one screen like QuickBooks.
+ * Payables — Bills, POs & Cash Approvals: everything the company owes, from every module, paid from one screen like QuickBooks.
  * Each Pay button opens the existing payment window for that item (Vendor Bills payment dialog, the Cash Approval
  * Finance step, Vendor Advance), so authorities, WHT, intercompany and vouchers work exactly as on those pages.
  * Payroll stays on its own queue.
@@ -79,6 +82,8 @@ export default function PayablesHub() {
   const [payBillId, setPayBillId] = useState(null);
   const [caId, setCaId] = useState(null);
   const [advanceDialog, setAdvanceDialog] = useState({ open: false, prefill: null });
+  // PO printable view opened from a row's payee
+  const [poView, setPoView] = useState({ open: false, data: null, loading: false });
 
   const load = useCallback(async () => {
     try {
@@ -149,6 +154,34 @@ export default function PayablesHub() {
   const closeCaStep = useCallback(() => { setCaId(null); load(); }, [load]);
   const closeAdvance = () => { setAdvanceDialog({ open: false, prefill: null }); load(); };
 
+  const openPoView = async (id) => {
+    setPoView({ open: true, data: null, loading: true });
+    try {
+      const res = await api.get(`/procurement/purchase-orders/${id}`);
+      setPoView({ open: true, data: res.data?.data || null, loading: false });
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not load the purchase order');
+      setPoView({ open: false, data: null, loading: false });
+    }
+  };
+
+  // Document number → the document page (details, payments, accounting entry, Pay)
+  const DOC_KIND = { ap: 'bill', ca: 'cash-approval', po: 'po' };
+  const openDocument = (r) => {
+    const kind = DOC_KIND[r.key.split(':')[0]];
+    if (kind) navigate(`/finance/payables-hub/document/${kind}/${r.id}`);
+    else navigate(r.link);
+  };
+
+  // Payee → the document's printable view (new tab, so the list keeps its filters)
+  const openPrintable = (r) => {
+    const id = String(r.id);
+    if (r.key.startsWith('ap:')) window.open(`/finance/bill-print/${id}`, '_blank', 'noopener');
+    else if (r.key.startsWith('ca:')) window.open(`/procurement/cash-approvals/${id}/print`, '_blank', 'noopener');
+    else if (r.key.startsWith('po:')) openPoView(id);
+    else navigate(r.link);
+  };
+
   const runAction = (r) => {
     if (r.action === 'pay_bill') setPayBillId(String(r.id));
     else if (r.action === 'cash_approval') setCaId(String(r.id));
@@ -206,8 +239,7 @@ export default function PayablesHub() {
       <Stack direction={{ xs: 'column', lg: 'row' }} justifyContent="space-between" alignItems={{ lg: 'center' }} gap={2} sx={{ mb: 2 }}>
         <Box>
           <Stack direction="row" alignItems="center" gap={1}>
-            <Typography variant="h5" fontWeight={700}>Vendor Payments</Typography>
-            <Chip size="small" color="secondary" label="New" />
+            <Typography variant="h5" fontWeight={700}>Payables — Bills, POs &amp; Cash Approvals</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary">
             Every bill and payment owed — vendor bills, purchases, IPCs, utilities, cash approvals and advances — paid from one place
@@ -339,7 +371,13 @@ export default function PayablesHub() {
                   return (
                     <TableRow key={r.key} hover sx={{ bgcolor: r.overdue ? 'rgba(211,47,47,0.04)' : undefined }}>
                       <TableCell>
-                        <Typography variant="body2" fontWeight={600}>{r.number}</Typography>
+                        <Tooltip title="View document">
+                          <Typography component="button" type="button" variant="body2" fontWeight={600} color="primary"
+                            onClick={() => openDocument(r)}
+                            sx={{ font: 'inherit', fontWeight: 600, p: 0, border: 0, bgcolor: 'transparent', cursor: 'pointer', textAlign: 'left', '&:hover': { textDecoration: 'underline' } }}>
+                            {r.number}
+                          </Typography>
+                        </Tooltip>
                         <Stack direction="row" gap={0.5} flexWrap="wrap" sx={{ mt: 0.25 }}>
                           {(r.trail || []).filter((t) => t.number !== r.number).map((t) => (
                             <Chip key={`${t.type}-${t.number}`} size="small" variant="outlined" label={`${t.type} ${t.number}`} sx={{ height: 18, fontSize: '0.65rem' }} />
@@ -348,7 +386,13 @@ export default function PayablesHub() {
                         {r.note && <Typography variant="caption" color="text.secondary" display="block">{r.note}</Typography>}
                       </TableCell>
                       <TableCell>
-                        <Typography variant="body2">{r.party}</Typography>
+                        <Tooltip title="Open printable view">
+                          <Typography component="button" type="button" variant="body2" color="primary"
+                            onClick={() => openPrintable(r)}
+                            sx={{ font: 'inherit', p: 0, border: 0, bgcolor: 'transparent', cursor: 'pointer', textAlign: 'left', display: 'block', '&:hover': { textDecoration: 'underline' } }}>
+                            {r.party}
+                          </Typography>
+                        </Tooltip>
                         {(r.company || r.project) && <Typography variant="caption" color="text.secondary">{[r.company, r.project].filter(Boolean).join(' · ')}</Typography>}
                       </TableCell>
                       <TableCell><Chip size="small" label={r.sourceLabel} variant="outlined" /></TableCell>
@@ -416,6 +460,32 @@ export default function PayablesHub() {
           )}
         </DialogContent>
       </Dialog>
+
+      <Dialog open={poView.open} onClose={() => setPoView({ open: false, data: null, loading: false })} maxWidth={false} fullWidth
+        className="payables-po-print"
+        PaperProps={{ sx: { width: '90%', maxWidth: '210mm', maxHeight: '95vh', m: 2 } }}>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1, borderBottom: 1, borderColor: 'divider' }}>
+          <Box component="span" sx={{ flex: 1 }}>Purchase Order {poView.data?.orderNumber || ''}</Box>
+          <Button size="small" variant="outlined" startIcon={<PrintIcon />} disabled={!poView.data} onClick={() => printPoFitToOneA4()}>Print</Button>
+          <IconButton onClick={() => setPoView({ open: false, data: null, loading: false })} size="small"><CloseIcon /></IconButton>
+        </DialogTitle>
+        <DialogContent sx={{ p: 0 }}>
+          {poView.loading ? <Box sx={{ p: 3 }}><Skeleton height={400} /></Box> : <PODocumentView data={poView.data} />}
+        </DialogContent>
+      </Dialog>
+      {poView.open && (
+        <Box component="style" dangerouslySetInnerHTML={{ __html: `
+          @media print {
+            body * { visibility: hidden; }
+            .payables-po-print .po-print-page, .payables-po-print .po-print-page * { visibility: visible; }
+            .payables-po-print .MuiDialog-container { position: absolute !important; inset: 0 !important; display: block !important; }
+            .payables-po-print .MuiDialog-paper { box-shadow: none !important; margin: 0 !important; max-width: 100% !important; width: 100% !important; max-height: none !important; overflow: visible !important; }
+            .payables-po-print .MuiDialogContent-root { overflow: visible !important; padding: 0 !important; }
+            .payables-po-print .MuiDialogTitle-root, .MuiBackdrop-root { display: none !important; }
+            ${PO_A4_ONE_PAGE_PRINT_CSS}
+          }
+        ` }} />
+      )}
 
       <Dialog open={exceptionsOpen} onClose={() => setExceptionsOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Documents not in the ledger</DialogTitle>

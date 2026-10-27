@@ -14,7 +14,9 @@ const ApPaymentApplication = require('../models/finance/ApPaymentApplication');
 const CashApproval = require('../models/procurement/CashApproval');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const GoodsReceive = require('../models/procurement/GoodsReceive');
-const FinanceHelper = require('./financeHelper');
+const { getBillPayState, getPoAdvancePayState } = require('./apBillPayState');
+const VendorAdvance = require('../models/finance/VendorAdvance');
+const { vendorAdvancesLinkedToPurchaseOrderFilter } = require('./fullAdvancePoGate');
 
 const DAY = 24 * 60 * 60 * 1000;
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
@@ -59,7 +61,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       status: { $ne: 'cancelled' },
       $or: [{ status: { $ne: 'paid' } }, { updatedAt: { $gte: paidSince } }]
     }))
-      .select('billNumber vendor vendorInvoiceNumber billDate dueDate totalAmount duePaymentAmount amountPaid advanceApplied status approvalStatus referenceType referenceId linkedGRNs companyId project notes updatedAt isAdvanceBill')
+      .select('billNumber vendor vendorInvoiceNumber billDate dueDate totalAmount duePaymentAmount amountPaid advanceApplied paymentPending advancePending status approvalStatus referenceType referenceId linkedGRNs companyId project notes updatedAt isAdvanceBill')
       .populate('companyId', 'name')
       .sort({ dueDate: 1 })
       .limit(2000)
@@ -74,7 +76,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       .limit(500)
       .lean(),
     PurchaseOrder.find(scoped({ status: 'Pending Finance' }))
-      .select('orderNumber vendor totalAmount orderDate expectedDeliveryDate companyId')
+      .select('orderNumber vendor totalAmount orderDate expectedDeliveryDate companyId status paymentTerms')
       .populate('vendor', 'name').populate('companyId', 'name')
       .limit(500)
       .lean(),
@@ -109,14 +111,16 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
 
   bills.forEach((b) => {
     const src = b.isAdvanceBill ? { key: 'vendor_bill', label: 'Advance bill' } : (AP_SOURCE[b.referenceType] || AP_SOURCE.manual);
-    const payable = round2(FinanceHelper.getAPPayableBase(b));
-    const paid = round2((Number(b.amountPaid) || 0) + (Number(b.advanceApplied) || 0));
-    const balance = round2(payable - paid);
-    const approving = inApproval.get(String(b._id)) || 0;
+    // Same pay rule as Vendor Bills: at Finance, and something left after payments already created
+    const payState = getBillPayState(b);
+    const payable = payState.payable;
+    const paid = payState.settled;
+    const balance = payState.balance;
+    const approving = Math.max(payState.pending, inApproval.get(String(b._id)) || 0);
     const stage = balance <= 0.01 ? 'paid'
-      : AP_AWAITING_APPROVAL.includes(b.status) || b.approvalStatus === 'Submitted' ? 'awaiting_approval'
-        : approving > 0 ? 'in_payment_approval'
-          : 'ready_to_pay';
+      : AP_AWAITING_APPROVAL.includes(b.status) || ['Submitted', 'Rejected'].includes(b.approvalStatus) ? 'awaiting_approval'
+        : payState.canPay ? 'ready_to_pay'
+          : 'in_payment_approval';
     const grnDoc = b.referenceType === 'grn' ? grnById.get(String(b.referenceId)) : null;
     const linkedGrns = (b.linkedGRNs || []).map((g) => grnById.get(String(g.grn || g.grnId || g))).filter(Boolean);
     const trail = [
@@ -186,7 +190,21 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
     }));
   });
 
+  // PO advances: same queue as Vendor Advance (full-advance terms, balance left after advances already recorded)
+  const poAdvanceRows = poAdvances.length
+    ? await VendorAdvance.find({ ...vendorAdvancesLinkedToPurchaseOrderFilter(null), referenceId: { $in: poAdvances.flatMap((p) => [p._id, String(p._id)]) } })
+      .select('referenceId amount voucherWorkflowStatus').lean()
+    : [];
+  const advancesByPo = new Map();
+  poAdvanceRows.forEach((a) => {
+    const k = String(a.referenceId);
+    if (!advancesByPo.has(k)) advancesByPo.set(k, []);
+    advancesByPo.get(k).push(a);
+  });
   poAdvances.forEach((po) => {
+    const st = getPoAdvancePayState(po, advancesByPo.get(String(po._id)) || []);
+    if (st.reason === 'PO is not on advance payment terms') return;
+    if (st.remaining <= 0.009 && st.pending <= 0.009) return;
     rows.push(row({
       key: `po:${po._id}`,
       id: po._id,
@@ -199,12 +217,14 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       companyId: po.companyId?._id || po.companyId || null,
       date: po.orderDate,
       dueDate: po.expectedDeliveryDate || null,
-      amount: Number(po.totalAmount) || 0,
-      paid: 0,
-      stage: 'ready_to_pay',
-      note: 'CEO-approved PO on advance terms — pay the vendor advance',
+      amount: st.total,
+      paid: st.paid,
+      balance: round2(st.total - st.paid),
+      inApprovalAmount: st.pending,
+      stage: st.canPay ? 'ready_to_pay' : 'in_payment_approval',
+      note: st.canPay ? `CEO-approved PO on advance terms — ${st.committed > 0 ? `${round2(st.remaining)} advance still due` : 'pay the vendor advance'}` : st.reason,
       payableInHub: false,
-      action: 'po_advance',
+      action: st.canPay ? 'po_advance' : null,
       trail: [{ type: 'PO', number: po.orderNumber }],
       link: '/finance/vendor-advance'
     }));

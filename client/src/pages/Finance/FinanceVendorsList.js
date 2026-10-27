@@ -24,15 +24,24 @@ import {
   Select,
   MenuItem,
   Tabs,
-  Tab
+  Tab,
+  Tooltip,
+  Link
 } from '@mui/material';
 import {
   ArrowBack as BackIcon,
   Store as VendorIcon,
   Person as PersonIcon,
   Search as SearchIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Payments as PayIcon,
+  Visibility as ViewIcon,
+  CallMerge as ApplyIcon
 } from '@mui/icons-material';
+import { useNavigate } from 'react-router-dom';
+import { useAuth } from '../../contexts/AuthContext';
+import { isRouteAccessible } from '../../utils/permissions';
+import AccountsPayable from './AccountsPayable';
 import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
@@ -41,6 +50,9 @@ import EmployeeTrialBalancePanel from './EmployeeTrialBalancePanel';
 
 const fmt = (n) =>
   Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+
+// The server decides (same rule as Vendor Bills): at Finance, and no payment already created for the balance
+const isBillPayable = (b) => Boolean(b.canPay);
 
 const STATUS_COLOR = {
   paid: 'success',
@@ -54,6 +66,14 @@ const STATUS_COLOR = {
 };
 
 export default function FinanceVendorsList() {
+  const navigate = useNavigate();
+  const { user } = useAuth();
+  // Same RBAC check the router uses: paying needs Vendor Bills access, viewing needs the Payables pages
+  const canAccess = (path) => Boolean(user) && isRouteAccessible(user.role, path, user.subRoles, user.roleRef, user.roles);
+  const canPay = canAccess('/finance/accounts-payable');
+  const canOpenDocPage = canAccess('/finance/payables-hub');
+  // Bill payment window (the same one Vendor Bills uses), mounted hidden with its dialog on top
+  const [payBillId, setPayBillId] = useState(null);
   const [listTab, setListTab] = useState(0);
   const [vendors, setVendors] = useState([]);
   const [employees, setEmployees] = useState([]);
@@ -146,6 +166,23 @@ export default function FinanceVendorsList() {
       setDetailLoading(false);
     }
   };
+
+  // Reload the open vendor after a payment without changing the tab
+  const reloadVendorDetail = useCallback(async () => {
+    if (!selected?._id) return;
+    try {
+      const res = await api.get(`/finance/vendors/${selected._id}`, { headers: { 'Cache-Control': 'no-cache' }, params: { _: Date.now() } });
+      setDetail(res.data?.data || null);
+    } catch (e) {
+      setError(e.response?.data?.message || 'Failed to reload vendor finance details');
+    }
+  }, [selected]);
+  const closeBillPayment = useCallback(() => { setPayBillId(null); reloadVendorDetail(); }, [reloadVendorDetail]);
+  const openBillPage = (billId) => navigate(`/finance/payables-hub/document/bill/${billId}`);
+  // Oldest payable bill first: the payment window loads all of this vendor's open bills and unused advances
+  const firstPayableBill = () => [...(detail?.bills || [])]
+    .filter(isBillPayable)
+    .sort((a, b) => new Date(a.dueDate || a.billDate || 0) - new Date(b.dueDate || b.billDate || 0))[0] || null;
 
   const openEmployee = async (employee) => {
     setSelectedEmployee(employee);
@@ -378,9 +415,25 @@ export default function FinanceVendorsList() {
             </Typography>
           </Box>
           <Chip label={supplier.status || 'Active'} color={supplier.status === 'Active' ? 'success' : 'default'} size="small" />
+          {canPay && detail && (
+            <Tooltip title={firstPayableBill() ? 'Opens the bill payment window with all of this vendor’s open bills — pay several and apply unused advances' : 'No approved bills with a balance to pay'}>
+              <span style={{ marginLeft: 'auto' }}>
+                <Button variant="contained" startIcon={<PayIcon />} disabled={!firstPayableBill()}
+                  onClick={() => setPayBillId(String(firstPayableBill()._id))}>
+                  Pay bills
+                </Button>
+              </span>
+            </Tooltip>
+          )}
         </Stack>
 
         {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
+
+        {payBillId && (
+          <Box sx={{ display: 'none' }}>
+            <AccountsPayable embedPayBillId={payBillId} onEmbedClose={closeBillPayment} />
+          </Box>
+        )}
 
         {detailLoading ? (
           <CircularProgress />
@@ -426,12 +479,19 @@ export default function FinanceVendorsList() {
                       <TableCell align="right"><b>Paid</b></TableCell>
                       <TableCell align="right"><b>Balance</b></TableCell>
                       <TableCell><b>Status</b></TableCell>
+                      <TableCell align="right"><b>Actions</b></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {(detail?.bills || []).map((b) => (
                       <TableRow key={b._id} hover>
-                        <TableCell>{b.billNumber || '—'}</TableCell>
+                        <TableCell>
+                          {canOpenDocPage ? (
+                            <Link component="button" type="button" underline="hover" fontWeight={600} onClick={() => openBillPage(b._id)}>
+                              {b.billNumber || '—'}
+                            </Link>
+                          ) : (b.billNumber || '—')}
+                        </TableCell>
                         <TableCell>{b.billDate ? new Date(b.billDate).toLocaleDateString() : '—'}</TableCell>
                         <TableCell>{b.dueDate ? new Date(b.dueDate).toLocaleDateString() : '—'}</TableCell>
                         <TableCell align="right">{fmt(b.totalAmount)}</TableCell>
@@ -440,11 +500,29 @@ export default function FinanceVendorsList() {
                         <TableCell>
                           <Chip label={b.status} size="small" color={STATUS_COLOR[b.status] || 'default'} />
                         </TableCell>
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          {canOpenDocPage && (
+                            <Tooltip title="View bill — details, payments and accounting entry">
+                              <Button size="small" startIcon={<ViewIcon fontSize="small" />} onClick={() => openBillPage(b._id)}>View</Button>
+                            </Tooltip>
+                          )}
+                          {canPay && isBillPayable(b) && (
+                            <Button size="small" variant="contained" startIcon={<PayIcon fontSize="small" />} sx={{ ml: 1 }}
+                              onClick={() => setPayBillId(String(b._id))}>
+                              Pay
+                            </Button>
+                          )}
+                          {canPay && !isBillPayable(b) && b.payBlockedReason && b.payBlockedReason !== 'Fully paid' && (
+                            <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                              {b.payBlockedReason}
+                            </Typography>
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                     {(detail?.bills || []).length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                        <TableCell colSpan={8} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                           No accounts payable bills for this vendor yet.
                         </TableCell>
                       </TableRow>
@@ -465,6 +543,7 @@ export default function FinanceVendorsList() {
                       <TableCell align="right"><b>Applied</b></TableCell>
                       <TableCell align="right"><b>Balance</b></TableCell>
                       <TableCell><b>Status</b></TableCell>
+                      <TableCell align="right"><b>Actions</b></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -476,11 +555,34 @@ export default function FinanceVendorsList() {
                         <TableCell align="right">{fmt(a.appliedAmount)}</TableCell>
                         <TableCell align="right">{fmt(a.balance)}</TableCell>
                         <TableCell><Chip label={a.status || '—'} size="small" /></TableCell>
+                        <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                          {canOpenDocPage && a.journalEntryId && (
+                            <Tooltip title="View the advance payment — voucher, bank and accounting entry">
+                              <Button size="small" startIcon={<ViewIcon fontSize="small" />}
+                                onClick={() => navigate(`/finance/payables-hub/payment/${a.journalEntryId}`)}>
+                                View
+                              </Button>
+                            </Tooltip>
+                          )}
+                          {canPay && Number(a.balance) > 0.01 && a.voucherWorkflowStatus !== 'pending_authority' && a.voucherWorkflowStatus !== 'rejected' && (
+                            <Tooltip title={firstPayableBill()
+                              ? 'Opens the bill payment window for this vendor — enter the amount to adjust from unused advances against each bill'
+                              : 'No approved bill with a balance to adjust this advance against'}>
+                              <span>
+                                <Button size="small" variant="outlined" startIcon={<ApplyIcon fontSize="small" />} sx={{ ml: 1 }}
+                                  disabled={!firstPayableBill()}
+                                  onClick={() => setPayBillId(String(firstPayableBill()._id))}>
+                                  Adjust against bill
+                                </Button>
+                              </span>
+                            </Tooltip>
+                          )}
+                        </TableCell>
                       </TableRow>
                     ))}
                     {(detail?.advances || []).length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>
+                        <TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>
                           No vendor advances recorded.
                         </TableCell>
                       </TableRow>

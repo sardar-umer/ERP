@@ -63,6 +63,99 @@ const resolveCompanyName = (entry, linkedDocs, companies) => {
   return '—';
 };
 
+const personName = (p) => {
+  if (!p || typeof p !== 'object') return '';
+  return p.name || [p.firstName, p.lastName].filter(Boolean).join(' ').trim() || p.payeeName || '';
+};
+const accountText = (a) => (a && typeof a === 'object'
+  ? `${a.name || ''}${a.accountNumber ? ` (${a.accountNumber})` : ''}`.trim()
+  : '');
+const METHOD_TEXT = {
+  cash: 'Cash', check: 'Cheque', cheque: 'Cheque', bank_transfer: 'Bank transfer', bank: 'Bank transfer',
+  credit_card: 'Credit card', ach: 'ACH', other: 'Other'
+};
+const methodText = (m) => METHOD_TEXT[m] || (m ? String(m).replace(/_/g, ' ') : '');
+
+/**
+ * Key facts for the voucher header: who was paid (vendor / employee), cost center, project, department, bank,
+ * method / cheque, documents it settles, amount, status and preparer — from the voucher and its linked document.
+ */
+const resolveVoucherHeaderDetails = (entry, { apPaymentApp, vendorAdvanceDoc, cashApproval, linkedPo, payrollPeriodPaymentApp, manualSalaryPaymentApp }) => {
+  if (!entry) return [];
+  const lines = entry.lines || [];
+
+  // Payee
+  let payee = '';
+  let payeeType = '';
+  const appBills = (apPaymentApp?.bills || []).map((b) => b.billId).filter((b) => b && typeof b === 'object');
+  const appBill = appBills[0] || (typeof apPaymentApp?.accountsPayableId === 'object' ? apPaymentApp.accountsPayableId : null);
+  if (vendorAdvanceDoc?.vendor?.name) { payee = vendorAdvanceDoc.vendor.name; payeeType = 'Vendor'; }
+  else if (appBill?.vendor?.name) { payee = appBill.vendor.name; payeeType = 'Vendor'; }
+  else if (cashApproval && (cashApproval.advanceToName || cashApproval.vendor)) {
+    payee = cashApproval.advanceToName || personName(cashApproval.vendor);
+    payeeType = cashApproval.advanceToName ? 'Employee' : 'Vendor';
+  } else if (payrollPeriodPaymentApp || manualSalaryPaymentApp) {
+    const n = payrollPeriodPaymentApp?.employeeCount ?? manualSalaryPaymentApp?.employeeCount;
+    payee = n != null ? `Payroll — ${n} employees` : 'Payroll';
+    payeeType = 'Employees';
+  }
+  if (!payee) {
+    const partyLine = lines.find((l) => l.party && personName(l.party));
+    if (partyLine) { payee = personName(partyLine.party); payeeType = partyLine.partyType || ''; }
+  }
+
+  // Cost center / project / department
+  const lineCostCenters = [...new Set(lines.map((l) => personName(l.costCenter) || '').filter(Boolean))];
+  const costCenter = entry.costCenter?.name
+    ? `${entry.costCenter.name}${entry.costCenter.code ? ` (${entry.costCenter.code})` : ''}`
+    : (lineCostCenters.join(', ') || personName(vendorAdvanceDoc?.costCenter));
+  const project = entry.project?.name || entry.customProject || '';
+  const department = (entry.department && typeof entry.department === 'object' ? entry.department.name : entry.department)
+    || cashApproval?.requestingDepartment || '';
+
+  // Bank / cash paid from: the linked document's bank, else the asset account credited
+  const bankFromDoc = accountText(vendorAdvanceDoc?.bankAccountId) || accountText(apPaymentApp?.paymentMeta?.bankAccountId)
+    || accountText(cashApproval?.advanceBankAccount);
+  const creditedAssets = lines
+    .filter((l) => Number(l.credit) > 0 && String(l.account?.type || '').toLowerCase() === 'asset')
+    .map((l) => accountText(l.account));
+  const paidFrom = bankFromDoc || [...new Set(creditedAssets)].join(', ');
+
+  const method = methodText(apPaymentApp?.paymentMeta?.paymentMethod || vendorAdvanceDoc?.paymentMethod || cashApproval?.advancePaymentMethod);
+  const reference = [
+    apPaymentApp?.paymentMeta?.reference,
+    vendorAdvanceDoc?.chequeNumber && `Cheque ${vendorAdvanceDoc.chequeNumber}`,
+    vendorAdvanceDoc?.reference,
+    cashApproval?.signedCheckNumber && `Cheque ${cashApproval.signedCheckNumber}`
+  ].filter(Boolean).join(' · ');
+
+  // Documents this voucher is against
+  const against = [
+    ...appBills.map((b) => `Bill ${b.billNumber}`),
+    ...(appBills.length === 0 && appBill?.billNumber ? [`Bill ${appBill.billNumber}`] : []),
+    ...(linkedPo?.orderNumber ? [`PO ${linkedPo.orderNumber}`] : []),
+    ...(cashApproval?.caNumber ? [`CA ${cashApproval.caNumber}`] : [])
+  ];
+
+  const workflow = apPaymentApp?.workflowStatus || vendorAdvanceDoc?.voucherWorkflowStatus;
+  const WORKFLOW_TEXT = { pending_authority: 'awaiting finance authorities', fully_approved: 'all authorities approved', rejected: 'rejected' };
+  const status = [String(entry.status || '').replace(/^\w/, (c) => c.toUpperCase()), WORKFLOW_TEXT[workflow]].filter(Boolean).join(' — ');
+
+  return [
+    { label: payeeType ? `Payee (${payeeType})` : 'Payee', value: payee || '—' },
+    { label: 'Cost Center', value: costCenter || '—' },
+    ...(project ? [{ label: 'Project', value: project }] : []),
+    ...(department ? [{ label: 'Department', value: department }] : []),
+    ...(paidFrom ? [{ label: 'Paid From', value: paidFrom }] : []),
+    ...(method || reference ? [{ label: 'Method / Ref.', value: [method, reference].filter(Boolean).join(' · ') }] : []),
+    ...(against.length ? [{ label: 'Against', value: against.join(', ') }] : []),
+    { label: 'Amount', value: formatPKR(entry.totalDebits || 0) },
+    { label: 'Status', value: status || '—' },
+    { label: 'Prepared By', value: personName(entry.createdBy) || (entry.isAutoGenerated ? 'System' : '—') },
+    ...(entry.description ? [{ label: 'Narration', value: entry.description, wide: true }] : [])
+  ];
+};
+
 const resolveVoucherTitle = (entry) => {
   const series = String(entry?.voucherSeries || '').trim().toUpperCase();
   if (series && VOUCHER_SERIES_TITLES[series]) return VOUCHER_SERIES_TITLES[series];
@@ -384,6 +477,10 @@ const VoucherView = () => {
     () => resolveCompanyName(entry, { payrollPeriodPaymentApp, manualSalaryPaymentApp, apPaymentApp, vendorAdvanceDoc }, companies),
     [entry, payrollPeriodPaymentApp, manualSalaryPaymentApp, apPaymentApp, vendorAdvanceDoc, companies]
   );
+  const headerDetails = useMemo(
+    () => resolveVoucherHeaderDetails(entry, { apPaymentApp, vendorAdvanceDoc, cashApproval, linkedPo, payrollPeriodPaymentApp, manualSalaryPaymentApp }),
+    [entry, apPaymentApp, vendorAdvanceDoc, cashApproval, linkedPo, payrollPeriodPaymentApp, manualSalaryPaymentApp]
+  );
   const monthName = useMemo(() => {
     if (!entry?.date) return '—';
     return new Date(entry.date).toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
@@ -504,19 +601,36 @@ const VoucherView = () => {
             {isPayrollBpv && payrollEmployeeCount != null ? (
               <Typography variant="body2"><strong>Employees:</strong> {payrollEmployeeCount}</Typography>
             ) : null}
-            {vendorAdvanceDoc ? (
-              <Typography variant="body2">
-                <strong>Pay from account:</strong>{' '}
-                {vendorAdvanceDoc.bankAccountId?.name
-                  ? `${vendorAdvanceDoc.bankAccountId.name}${
-                    vendorAdvanceDoc.bankAccountId.accountNumber
-                      ? ` (${vendorAdvanceDoc.bankAccountId.accountNumber})`
-                      : ''
-                  }`
-                  : '—'}
-              </Typography>
-            ) : null}
           </Box>
+        </Box>
+
+        {/* Key details: payee, cost center, project, bank, documents, amount, status */}
+        <Box
+          sx={{
+            mb: 1.5,
+            p: 1.25,
+            border: '1px solid #eee',
+            borderRadius: 1,
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, minmax(0, 1fr))' },
+            columnGap: 2,
+            rowGap: 1,
+            '@media print': { p: '6px 10px', gridTemplateColumns: 'repeat(4, minmax(0, 1fr))', rowGap: '4px' }
+          }}
+        >
+          {headerDetails.map((d) => (
+            <Box key={d.label} sx={{ minWidth: 0, gridColumn: d.wide ? '1 / -1' : undefined }}>
+              <Typography
+                variant="caption"
+                sx={{ display: 'block', color: 'text.secondary', textTransform: 'uppercase', letterSpacing: 0.5, fontWeight: 600, fontSize: '10px !important' }}
+              >
+                {d.label}
+              </Typography>
+              <Typography variant="body2" sx={{ fontWeight: d.label.startsWith('Payee') || d.label === 'Amount' ? 700 : 400, wordBreak: 'break-word' }}>
+                {d.value}
+              </Typography>
+            </Box>
+          ))}
         </Box>
 
         <Typography variant="subtitle1" fontWeight={700} sx={{ mb: 0.5, fontSize: '13px' }}>

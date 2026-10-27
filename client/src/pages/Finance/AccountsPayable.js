@@ -23,6 +23,7 @@ import {
   Avatar,
   Grid,
   TextField,
+  CircularProgress,
   FormControl,
   InputLabel,
   Select,
@@ -173,10 +174,14 @@ const matchesFuzzyToken = (token, corpus, words) => {
 };
 
 /**
- * `embedPayBillId` (Vendor Payments hub): mount hidden and open this page's own Bill Payment dialog for that bill;
- * `onEmbedClose` runs when the dialog closes. Without the props the page works as before.
+ * `embedPayBillId` (Payables hub): mount hidden and open this page's own Bill Payment dialog for that bill;
+ * `embedViewBillId`: same, but open the bill's view dialog. `onEmbedClose` runs when the dialog closes.
+ * Without the props the page works as before.
  */
-const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) => {
+/** sessionStorage key for the Vendor Bills list position (page, page size, filters, scroll) */
+const AP_LIST_STATE_KEY = 'vendorBills.listState';
+
+const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbedClose = null } = {}) => {
   const { selectedCompanyId, companies: financeCompanies } = useFinanceCompany();
   const [payingCompanyId, setPayingCompanyId] = useState('');
   const { user: currentUser } = useAuth();
@@ -208,6 +213,38 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
     return true;
   };
 
+  /** Same rule as the Pay icon in the bill list: at Finance and something left after payments already created. */
+  const canPayBillNow = (bill) => Boolean(bill)
+    && bill.status !== 'paid'
+    && getOutstanding(bill) > 0
+    && bill.status !== 'draft'
+    && !['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'Returned from Finance', 'cancelled'].includes(bill.status)
+    && bill.approvalStatus !== 'Submitted'
+    && bill.approvalStatus !== 'Rejected';
+
+  // Print a bill straight to the browser's print preview: the bill print page loads in a hidden frame and prints
+  // itself, so there is no extra screen in between. The frame is removed after printing.
+  const printBillDirect = (billId) => {
+    if (!billId) return;
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1100px;height:1400px;border:0;';
+    frame.src = `/finance/bill-print/${billId}?autoprint=1`;
+    const cleanup = () => { if (frame.parentNode) frame.parentNode.removeChild(frame); };
+    frame.onload = () => {
+      try { frame.contentWindow.addEventListener('afterprint', () => setTimeout(cleanup, 500)); } catch { /* ignore */ }
+    };
+    setTimeout(cleanup, 10 * 60 * 1000);
+    document.body.appendChild(frame);
+  };
+
+  // Pay from the bill details: the payment window opens on top. When this page is only hosting the details
+  // (opened from Payables), keep the details open so the host page isn't closed with it.
+  const payFromBillDetails = (bill) => {
+    if (!embedViewBillId) setViewDialogOpen(false);
+    handleOpenPayment(bill);
+  };
+
   /** Finance may return an approved unpaid bill to initiator (approval chain stays intact). */
   const canFinanceReturnBill = (bill) => {
     if (!bill) return false;
@@ -220,6 +257,12 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
   const isBillInitiator = (bill) => {
     const creatorId = String(bill?.createdBy?._id || bill?.createdBy || '');
     return Boolean(preparerUserId && creatorId && preparerUserId === creatorId);
+  };
+
+  const getBillCreatorName = (bill) => {
+    const c = bill?.createdBy;
+    if (!c || typeof c !== 'object') return '';
+    return [c.firstName, c.lastName].filter(Boolean).join(' ').trim() || c.email || '';
   };
 
   const canResubmitToFinance = (bill) => {
@@ -245,22 +288,34 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
     }
   };
 
-  const handleFinanceReturnBill = async (bill) => {
+  // Finance "Reject": returns the bill to its initiator with a reason (department approvals stay intact)
+  const [financeRejectDialog, setFinanceRejectDialog] = useState({ open: false, bill: null, reason: '', saving: false });
+  const handleFinanceReturnBill = (bill) => {
     const target = bill || selectedBill;
     if (!target?._id) return;
-    const reason = window.prompt('Reason for returning this bill to the initiator');
-    if (!reason || !String(reason).trim()) return;
+    setFinanceRejectDialog({ open: true, bill: target, reason: '', saving: false });
+  };
+  const closeFinanceRejectDialog = () => {
+    if (!financeRejectDialog.saving) setFinanceRejectDialog({ open: false, bill: null, reason: '', saving: false });
+  };
+  const submitFinanceReject = async () => {
+    const target = financeRejectDialog.bill;
+    const reason = financeRejectDialog.reason.trim();
+    if (!target?._id || !reason) return;
     try {
+      setFinanceRejectDialog((d) => ({ ...d, saving: true }));
       const res = await api.post(`/finance/accounts-payable/${target._id}/finance-return`, {
-        rejectionReason: String(reason).trim()
+        rejectionReason: reason
       });
       toast.success(res.data?.message || 'Bill returned to initiator');
       if (selectedBill?._id === target._id && res.data?.data) {
         setSelectedBill(res.data.data);
       }
+      setFinanceRejectDialog({ open: false, bill: null, reason: '', saving: false });
       fetchAccountsPayable();
     } catch (err) {
       toast.error(err.response?.data?.message || 'Failed to return bill');
+      setFinanceRejectDialog((d) => ({ ...d, saving: false }));
     }
   };
 
@@ -482,7 +537,14 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
   });
   // ?search=<bill no.> (e.g. from the Payables Hub) opens the list on that bill, any status / date
   const linkedSearch = new URLSearchParams(window.location.search).get('search') || '';
-  const [filters, setFilters] = useState({
+  // Remember page, page size, filters and scroll for this browser tab, so coming back from a voucher, edit or
+  // print screen lands where you were. Not for copies of this page embedded in other screens, or ?search links.
+  const rememberListState = !embedPayBillId && !embedViewBillId && !linkedSearch;
+  const [savedListState] = useState(() => {
+    if (!rememberListState) return null;
+    try { return JSON.parse(sessionStorage.getItem(AP_LIST_STATE_KEY) || 'null'); } catch { return null; }
+  });
+  const [filters, setFilters] = useState(() => savedListState?.filters || {
     status: linkedSearch ? '' : 'unpaid',
     vendor: '',
     startDate: linkedSearch ? '2000-01-01' : new Date(new Date().getFullYear(), 6, 1).toISOString().split('T')[0],
@@ -490,16 +552,16 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
     search: linkedSearch,
     billType: ''
   });
-  const [searchInput, setSearchInput] = useState(linkedSearch);
-  const [vendorInput, setVendorInput] = useState('');
+  const [searchInput, setSearchInput] = useState(savedListState?.filters?.search ?? linkedSearch);
+  const [vendorInput, setVendorInput] = useState(savedListState?.filters?.vendor || '');
+  const filtersRef = useRef(filters);
+  filtersRef.current = filters;
 
-  // Debounce search input into filters.search
+  // Debounce search input into filters.search (back to page 1 only when the search actually changed)
   useEffect(() => {
     const timer = setTimeout(() => {
-      setFilters((prev) => {
-        if (prev.search === searchInput) return prev;
-        return { ...prev, search: searchInput };
-      });
+      if (filtersRef.current.search === searchInput) return;
+      setFilters((prev) => ({ ...prev, search: searchInput }));
       setPagination((prev) => ({ ...prev, currentPage: 1 }));
     }, 350);
     return () => clearTimeout(timer);
@@ -508,10 +570,8 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
   // Debounce vendor input into filters.vendor
   useEffect(() => {
     const timer = setTimeout(() => {
-      setFilters((prev) => {
-        if (prev.vendor === vendorInput) return prev;
-        return { ...prev, vendor: vendorInput };
-      });
+      if (filtersRef.current.vendor === vendorInput) return;
+      setFilters((prev) => ({ ...prev, vendor: vendorInput }));
       setPagination((prev) => ({ ...prev, currentPage: 1 }));
     }, 350);
     return () => clearTimeout(timer);
@@ -688,11 +748,42 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
     });
   }, [bills, searchInput, getBillSearchCorpus]);
   const [pagination, setPagination] = useState({
-    currentPage: 1,
+    currentPage: savedListState?.currentPage || 1,
     totalPages: 1,
     totalCount: 0,
-    limit: 100
+    limit: savedListState?.limit || 100
   });
+
+  // Save page / filters as they change, and the scroll position while scrolling
+  const scrollYRef = useRef(savedListState?.scrollY || 0);
+  const scrollRestoredRef = useRef(!savedListState?.scrollY);
+  useEffect(() => {
+    if (!rememberListState) return;
+    try {
+      sessionStorage.setItem(AP_LIST_STATE_KEY, JSON.stringify({
+        filters, currentPage: pagination.currentPage, limit: pagination.limit, scrollY: scrollYRef.current
+      }));
+    } catch { /* storage unavailable */ }
+  }, [rememberListState, filters, pagination.currentPage, pagination.limit]);
+  useEffect(() => {
+    if (!rememberListState) return undefined;
+    let frame = null;
+    const onScroll = () => {
+      if (frame) return;
+      frame = requestAnimationFrame(() => {
+        frame = null;
+        // Don't overwrite the saved spot before it has been restored
+        if (!scrollRestoredRef.current) return;
+        scrollYRef.current = window.scrollY;
+        try {
+          const saved = JSON.parse(sessionStorage.getItem(AP_LIST_STATE_KEY) || '{}');
+          sessionStorage.setItem(AP_LIST_STATE_KEY, JSON.stringify({ ...saved, scrollY: window.scrollY }));
+        } catch { /* storage unavailable */ }
+      });
+    };
+    window.addEventListener('scroll', onScroll, { passive: true });
+    return () => { window.removeEventListener('scroll', onScroll); if (frame) cancelAnimationFrame(frame); };
+  }, [rememberListState]);
   const [summary, setSummary] = useState({
     totalOutstanding: 0,
     totalOverdue: 0,
@@ -1271,6 +1362,23 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
     }
   }, [paymentDialogOpen, embedPayBillId, onEmbedClose]);
 
+  // Opened from the Payables hub to view a bill: show its view dialog, report back when it closes
+  const embedViewShownRef = useRef(false);
+  useEffect(() => {
+    if (!embedViewBillId) return;
+    embedViewShownRef.current = false;
+    handleViewBill({ _id: embedViewBillId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedViewBillId]);
+  useEffect(() => {
+    if (!embedViewBillId) return;
+    if (viewDialogOpen) embedViewShownRef.current = true;
+    else if (embedViewShownRef.current) {
+      embedViewShownRef.current = false;
+      if (onEmbedClose) onEmbedClose();
+    }
+  }, [viewDialogOpen, embedViewBillId, onEmbedClose]);
+
   const employeeAdvanceApplyTotals = useMemo(() => {
     const totalCaUsage = Math.round(
       payeeCashApprovals.reduce((s, ca) => s + (Number(caApplyAmounts[ca.cashApprovalId]) || 0), 0) * 100
@@ -1698,6 +1806,16 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
   const toggleExpandRow = (billId) => {
     setExpandedRows((prev) => ({ ...prev, [billId]: !prev[billId] }));
   };
+
+  // Back on the remembered page: once its bills are drawn, scroll to where you were
+  useEffect(() => {
+    if (scrollRestoredRef.current || initialLoading || loading) return undefined;
+    const timer = setTimeout(() => {
+      window.scrollTo(0, scrollYRef.current);
+      scrollRestoredRef.current = true;
+    }, 50);
+    return () => clearTimeout(timer);
+  }, [initialLoading, loading, bills]);
 
   if (initialLoading) {
     return (
@@ -2456,13 +2574,37 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
             </Typography>
           </Box>
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            {canFinanceReturnBill(selectedBill) && (
+              <Tooltip title="Return this bill to the initiator for correction — department approvals stay intact">
+                <Button
+                  variant="outlined"
+                  color="error"
+                  size="small"
+                  startIcon={<UndoIcon />}
+                  onClick={() => handleFinanceReturnBill(selectedBill)}
+                >
+                  Reject
+                </Button>
+              </Tooltip>
+            )}
+            {canPayBillNow(selectedBill) && (
+              <Button
+                variant="contained"
+                color="success"
+                size="small"
+                startIcon={<PaymentIcon />}
+                onClick={() => payFromBillDetails(selectedBill)}
+              >
+                Pay
+              </Button>
+            )}
             {selectedBill && (
               <Button
                 variant="outlined"
                 color="primary"
                 size="small"
                 startIcon={<PrintIcon />}
-                onClick={() => navigate(`/finance/bill-print/${selectedBill._id}`)}
+                onClick={() => printBillDirect(selectedBill._id)}
               >
                 Print
               </Button>
@@ -2590,18 +2732,6 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
                         {getPendingCoaDeptStep(selectedBill)?.roleLabel
                           ? ` (${getPendingCoaDeptStep(selectedBill).roleLabel})`
                           : ''} for this Chart of Accounts bill.
-                      </Alert>
-                    )}
-
-                    {canFinanceReturnBill(selectedBill) && (
-                      <Alert severity="warning" sx={{ mb: 2 }}
-                        action={
-                          <Button color="error" size="small" variant="contained" onClick={() => handleFinanceReturnBill(selectedBill)}>
-                            Reject to Initiator
-                          </Button>
-                        }
-                      >
-                        Return this bill to the initiator for correction. Department approval authorities stay intact — after edit &amp; resubmit it comes straight back to Finance.
                       </Alert>
                     )}
 
@@ -3479,18 +3609,51 @@ const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) =>
                 See Workflow History
               </Button>
             )}
-            {selectedBill && (
-              <Button
-                variant="contained"
-                color="primary"
-                startIcon={<PrintIcon />}
-                onClick={() => navigate(`/finance/bill-print/${selectedBill._id}`)}
-              >
-                Print / Download Bill
-              </Button>
+            {selectedBill && !canPayBillNow(selectedBill) && getSettlementPending(selectedBill) > 0 && selectedBill.status !== 'paid' && (
+              <Typography variant="body2" color="text.secondary" sx={{ alignSelf: 'center' }}>
+                Payment already created — waiting for finance authorities
+              </Typography>
             )}
           </Box>
           <Button onClick={() => setViewDialogOpen(false)} variant="outlined">Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Finance reject — return the bill to its initiator */}
+      <Dialog open={financeRejectDialog.open} onClose={closeFinanceRejectDialog} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+          <UndoIcon color="error" />
+          Reject bill {financeRejectDialog.bill?.billNumber || ''}
+        </DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            The bill goes back to <strong>{getBillCreatorName(financeRejectDialog.bill) || 'its initiator'}</strong> for correction.
+            Department approvals stay intact — once they edit and resubmit, it comes straight back to Finance.
+          </Typography>
+          <TextField
+            autoFocus
+            fullWidth
+            required
+            multiline
+            minRows={3}
+            label="Reason for rejection"
+            placeholder="e.g. Vendor invoice amount does not match the GRN; attach the corrected invoice"
+            value={financeRejectDialog.reason}
+            onChange={(e) => setFinanceRejectDialog((d) => ({ ...d, reason: e.target.value }))}
+            helperText="Shown to the initiator and kept in the bill's workflow history"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={closeFinanceRejectDialog} disabled={financeRejectDialog.saving}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="error"
+            startIcon={financeRejectDialog.saving ? <CircularProgress size={16} color="inherit" /> : <UndoIcon />}
+            disabled={financeRejectDialog.saving || !financeRejectDialog.reason.trim()}
+            onClick={submitFinanceReject}
+          >
+            Reject bill
+          </Button>
         </DialogActions>
       </Dialog>
 

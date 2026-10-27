@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import {
   Box,
   Typography,
@@ -78,6 +78,24 @@ const getFinancialYearStartYmd = (date = new Date()) => {
 };
 
 const isValidYmd = (v) => /^\d{4}-\d{2}-\d{2}$/.test(String(v || ''));
+
+/** Month filter: "Last 12 months" + each of the last 12 calendar months (current month first) */
+const buildMonthOptions = (today = new Date()) => {
+  const opts = [];
+  const yearAgo = new Date(today.getFullYear(), today.getMonth() - 11, 1);
+  opts.push({ key: 'last12', label: 'Last 12 months', start: toYmd(yearAgo), end: toYmd(today) });
+  for (let i = 0; i < 12; i += 1) {
+    const first = new Date(today.getFullYear(), today.getMonth() - i, 1);
+    const last = i === 0 ? today : new Date(first.getFullYear(), first.getMonth() + 1, 0);
+    opts.push({
+      key: toYmd(first).slice(0, 7),
+      label: first.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' }) + (i === 0 ? ' (this month)' : ''),
+      start: toYmd(first),
+      end: toYmd(last)
+    });
+  }
+  return opts;
+};
 
 const AccountsReceivable = () => {
   const { selectedCompanyId } = useFinanceCompany();
@@ -223,6 +241,33 @@ const AccountsReceivable = () => {
     if (filters.startDate === start && filters.endDate === end) return;
     setFilters((prev) => ({ ...prev, startDate: start, endDate: end }));
     setPagination((p) => (p.currentPage === 1 ? p : { ...p, currentPage: 1 }));
+  };
+
+  // Customer name → the invoice's print preview directly: the invoice print page loads in a hidden frame and
+  // prints itself, so there's no extra screen in between. The frame is removed after printing.
+  const printInvoiceDirect = (invoiceId) => {
+    if (!invoiceId) return;
+    const frame = document.createElement('iframe');
+    frame.setAttribute('aria-hidden', 'true');
+    frame.style.cssText = 'position:fixed;left:-10000px;top:0;width:1100px;height:1400px;border:0;';
+    frame.src = `/finance/invoice-print/${invoiceId}?autoprint=1`;
+    const cleanup = () => { if (frame.parentNode) frame.parentNode.removeChild(frame); };
+    frame.onload = () => {
+      try { frame.contentWindow.addEventListener('afterprint', () => setTimeout(cleanup, 500)); } catch { /* ignore */ }
+    };
+    setTimeout(cleanup, 10 * 60 * 1000);
+    document.body.appendChild(frame);
+    toast.success('Opening print preview…', { duration: 1500 });
+  };
+
+  const monthOptions = useMemo(() => buildMonthOptions(), []);
+  const selectedMonthKey = monthOptions.find((o) => o.start === filters.startDate && o.end === filters.endDate)?.key || '';
+  const handleMonthChange = (event) => {
+    const opt = monthOptions.find((o) => o.key === event.target.value);
+    if (!opt) return;
+    setStartDateInput(opt.start);
+    setEndDateInput(opt.end);
+    applyDateFilters(opt.start, opt.end);
   };
 
   const handleDateInputChange = (field) => (event) => {
@@ -640,6 +685,24 @@ const AccountsReceivable = () => {
         {/* Filters */}
         <Grid container spacing={2}>
           <Grid item xs={12} md={2}>
+            <FormControl fullWidth size="small">
+              <InputLabel shrink>Month</InputLabel>
+              <Select
+                value={selectedMonthKey}
+                onChange={handleMonthChange}
+                label="Month"
+                displayEmpty
+                notched
+                renderValue={(v) => (v ? monthOptions.find((o) => o.key === v)?.label : 'Custom dates')}
+              >
+                {monthOptions.map((o, i) => [
+                  <MenuItem key={o.key} value={o.key}>{o.label}</MenuItem>,
+                  i === 0 ? <Divider key="divider" /> : null
+                ])}
+              </Select>
+            </FormControl>
+          </Grid>
+          <Grid item xs={12} md={2}>
             <TextField
               fullWidth
               type="date"
@@ -682,7 +745,7 @@ const AccountsReceivable = () => {
               </Select>
             </FormControl>
           </Grid>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={2}>
             <TextField
               fullWidth
               label="Customer"
@@ -692,7 +755,7 @@ const AccountsReceivable = () => {
               size="small"
             />
           </Grid>
-          <Grid item xs={12} md={3}>
+          <Grid item xs={12} md={2}>
             <TextField
               fullWidth
               label="Search"
@@ -834,9 +897,21 @@ const AccountsReceivable = () => {
                       </TableCell>
                       <TableCell>
                         <Box>
-                          <Typography variant="body2" sx={{ fontWeight: 'bold' }}>
-                            {invoice.customer?.name || invoice.customerName || 'Unknown Customer'}
-                          </Typography>
+                          <Tooltip title="Print invoice">
+                            <Typography
+                              component="button"
+                              type="button"
+                              variant="body2"
+                              onClick={() => printInvoiceDirect(invoice._id)}
+                              sx={{
+                                font: 'inherit', fontWeight: 'bold', p: 0, border: 0, bgcolor: 'transparent',
+                                color: 'primary.main', cursor: 'pointer', textAlign: 'left',
+                                '&:hover': { textDecoration: 'underline' }
+                              }}
+                            >
+                              {invoice.customer?.name || invoice.customerName || 'Unknown Customer'}
+                            </Typography>
+                          </Tooltip>
                           <Typography variant="caption" color="textSecondary">
                             {invoice.customer?.email || invoice.customerEmail || ''}
                           </Typography>

@@ -1,19 +1,32 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
-import {
-  Box, Typography, Button, CircularProgress, Alert, Divider,
-  Table, TableBody, TableCell, TableHead, TableRow, Chip
-} from '@mui/material';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import { Box, Typography, Button, CircularProgress, Alert } from '@mui/material';
 import { Print as PrintIcon, ArrowBack as BackIcon, Download as DownloadIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
 import { useFinanceCompany } from '../../context/FinanceCompanyContext';
+import { useAuth } from '../../contexts/AuthContext';
+import { numberToWords } from '../../utils/numberToWords';
+import { getImageUrl } from '../../utils/imageService';
 
 const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
 
-const STATUS_COLOR = { draft: 'default', pending: 'warning', approved: 'info', paid: 'success', partial: 'warning', overdue: 'error' };
+const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const fmtNum = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+const fmtQty = (n) => Number(n || 0).toLocaleString('en-PK', { maximumFractionDigits: 3 });
+const fmtShortDate = (d) => (d ? new Date(d).toLocaleDateString('en-GB') : '');
+const fmtDateTime = (d) => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
+const personName = (u) => (u && typeof u === 'object' ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || '' : '');
+const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
+const formatAddress = (a) => {
+  if (!a) return '';
+  if (typeof a === 'string') return a;
+  return [a.street, a.city, a.state, a.zipCode, a.country].filter(Boolean).join(', ');
+};
+const STATUS_LABEL = { draft: 'DRAFT', pending: 'UNPAID', sent: 'UNPAID', approved: 'APPROVED', paid: 'PAID', partial: 'PARTIALLY PAID', overdue: 'OVERDUE', cancelled: 'CANCELLED' };
+const PAYMENT_TERMS = { net_15: 'Net 15 days', net_30: 'Net 30 days', net_45: 'Net 45 days', net_60: 'Net 60 days', due_on_receipt: 'Due on receipt', cash: 'Cash', credit: 'Credit' };
 
 const DEFAULT_COMPANY = {
   name: 'SGC International',
@@ -51,6 +64,8 @@ const resolveCompanyLetterhead = (invoiceCompany, selectedCompany, profile = {})
 
   return {
     name: pickStr(invCo?.name, selCo?.name, profile.name, DEFAULT_COMPANY.name),
+    legalName: invCo || selCo ? '' : pickStr(profile.legalName),
+    email: pickStr(invContact.email, selContact.email, profile.email),
     phone: pickStr(invContact.phone, selContact.phone, profile.phone),
     address: pickStr(invContact.address, selContact.address, profile.address),
     city: pickStr(profile.city),
@@ -58,7 +73,11 @@ const resolveCompanyLetterhead = (invoiceCompany, selectedCompany, profile = {})
     ntn: pickStr(profile.ntn),
     strn: pickStr(profile.strn),
     logoUrl: pickStr(profile.logoUrl),
-    invoiceFooter: pickStr(profile.invoiceFooter)
+    invoiceFooter: pickStr(profile.invoiceFooter),
+    bankName: pickStr(profile.bankName),
+    bankBranchName: pickStr(profile.bankBranchName),
+    bankAccount: pickStr(profile.bankAccount),
+    bankIBAN: pickStr(profile.bankIBAN)
   };
 };
 
@@ -67,6 +86,10 @@ export default function InvoicePrint() {
   const navigate = useNavigate();
   const printRef = useRef();
   const { selectedCompany, companies } = useFinanceCompany();
+  const { user } = useAuth();
+  // ?autoprint=1: opened in a hidden frame from AR Invoices — open the print preview as soon as it is drawn
+  const [searchParams] = useSearchParams();
+  const autoPrint = searchParams.get('autoprint') === '1';
 
   const [invoice, setInvoice] = useState(null);
   const [profile, setProfile] = useState({});
@@ -102,6 +125,19 @@ export default function InvoicePrint() {
     () => resolveCompanyLetterhead(invoiceCompany, selectedCompany, profile),
     [invoiceCompany, selectedCompany, profile]
   );
+
+  useEffect(() => {
+    if (!autoPrint || loading || !invoice) return undefined;
+    const timer = setTimeout(async () => {
+      const images = Array.from(document.images || []).filter((img) => !img.complete);
+      await Promise.all(images.map((img) => new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      })));
+      window.print();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [autoPrint, loading, invoice]);
 
   const handleDownloadPDF = () => {
     if (!invoice) return;
@@ -219,7 +255,60 @@ export default function InvoicePrint() {
   if (error)   return <Box p={3}><Alert severity="error">{error}</Alert></Box>;
   if (!invoice) return null;
 
-  const balance = invoice.balanceDue ?? (invoice.totalAmount - (invoice.amountPaid || invoice.paidAmount || 0));
+  const paid = Number(invoice.amountPaid || invoice.paidAmount || 0);
+  const balance = invoice.balanceDue ?? (invoice.totalAmount - paid);
+  const lines = (invoice.lineItems || []).map((it) => {
+    const qty = Number(it.quantity) || 1;
+    const rate = Number(it.unitPrice) || 0;
+    const gross = round2(qty * rate) || round2(it.amount);
+    const tax = round2(it.taxAmount ?? (gross * (Number(it.taxRate) || 0)) / 100);
+    return {
+      description: it.description || it.itemName || '—',
+      account: it.account && typeof it.account === 'object' ? it.account.name : '',
+      qty,
+      rate,
+      gross,
+      taxRate: Number(it.taxRate) || 0,
+      tax,
+      net: round2(gross + tax)
+    };
+  });
+  const totalQty = lines.reduce((t, l) => t + l.qty, 0);
+  const totalGross = lines.length ? round2(lines.reduce((t, l) => t + l.gross, 0)) : round2(invoice.subtotal || invoice.totalAmount);
+  const totalTax = lines.length ? round2(lines.reduce((t, l) => t + l.tax, 0)) : round2(invoice.taxAmount);
+  const netTotal = round2(invoice.totalAmount ?? totalGross + totalTax);
+  const hasTax = totalTax > 0;
+  const customer = invoice.customer || {};
+  const customerAddress = formatAddress(customer.address);
+  const costCenter = invoice.costCenter
+    ? (typeof invoice.costCenter === 'object'
+      ? [invoice.costCenter.code, invoice.costCenter.name].filter(Boolean).join(' — ')
+      : String(invoice.costCenter))
+    : '';
+  const createdByName = personName(invoice.createdBy);
+  const printedBy = personName(user);
+  const statusLabel = STATUS_LABEL[invoice.status] || String(invoice.status || '').toUpperCase();
+  const leftInfo = [
+    ['Invoice # :', invoice.invoiceNumber, true],
+    ['Customer :', customer.name || invoice.customerName || '—', true],
+    ['Address :', customerAddress],
+    ['Phone :', customer.phone],
+    ['Email :', customer.email],
+    ['Department :', invoice.department],
+    ['CNIC :', customer.cnic]
+  ].filter(([, v]) => v);
+  const rightInfo = [
+    ['Invoice Date :', fmtShortDate(invoice.invoiceDate), true],
+    ['Due Date :', fmtShortDate(invoice.dueDate)],
+    ['NTN :', customer.ntn],
+    ['STRN :', customer.strn],
+    ['Payment :', PAYMENT_TERMS[invoice.paymentTerms] || invoice.paymentTerms],
+    ['Cost Center :', costCenter],
+    ['Reference :', invoice.referenceNumber]
+  ].filter(([, v]) => v);
+  const cellSx = { border: '1px solid #111', px: 0.75, py: 0.6, fontSize: 12, color: '#111', lineHeight: 1.3 };
+  const headSx = { ...cellSx, fontWeight: 700, textAlign: 'center', bgcolor: '#fff' };
+  const num = { textAlign: 'right', fontVariantNumeric: 'tabular-nums', whiteSpace: 'nowrap' };
 
   return (
     <Box>
@@ -234,158 +323,165 @@ export default function InvoicePrint() {
 
       {/* Invoice document */}
       <Box ref={printRef} sx={{
-        maxWidth: 820, mx: 'auto', p: 5, bgcolor: 'white',
-        '@media print': { maxWidth: '100%', p: 3, margin: 0 }
+        maxWidth: '210mm', mx: 'auto', my: 2, p: '12mm 12mm 10mm', bgcolor: 'white', color: '#111',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.08)', fontFamily: '"Calibri", "Segoe UI", Arial, sans-serif',
+        '@media print': { maxWidth: '100%', m: 0, p: '6mm 8mm', boxShadow: 'none' }
       }}>
-        {/* Header — company from invoice finance company (dynamic) */}
-        <Box display="flex" justifyContent="space-between" alignItems="flex-start" mb={3}>
+        {/* Letterhead: logo · company · printed info */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '120px 1fr 160px', alignItems: 'center', gap: 2 }}>
           <Box>
-            {company.logoUrl && <Box component="img" src={company.logoUrl} alt="Logo" sx={{ height: 48, mb: 0.5, display: 'block' }} />}
-            <Typography variant="h4" fontWeight={900} color="primary.main">
-              {company.name}
-            </Typography>
-            {company.address && (
-              <Typography variant="body2" color="text.secondary">
-                {company.address}{company.city ? `, ${company.city}` : ''}
-              </Typography>
-            )}
-            {company.phone && <Typography variant="body2" color="text.secondary">{company.phone}</Typography>}
-            <Typography variant="body2" color="text.secondary">www.sgc.com</Typography>
-            {company.ntn && (
-              <Typography variant="body2" color="text.secondary" fontWeight={600}>NTN: {company.ntn}</Typography>
-            )}
-            {company.strn && (
-              <Typography variant="body2" color="text.secondary" fontWeight={600}>STRN: {company.strn}</Typography>
+            {company.logoUrl ? (
+              <Box component="img" src={company.logoUrl} alt={company.name} sx={{ maxWidth: 120, maxHeight: 90, objectFit: 'contain' }} />
+            ) : (
+              <Box sx={{ width: 72, height: 72, borderRadius: '50%', border: '2px solid #1e3a5f', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: 24, color: '#1e3a5f' }}>
+                {initials(company.name)}
+              </Box>
             )}
           </Box>
-          <Box textAlign="right">
-            <Typography variant="h5" fontWeight={800} color="text.primary">INVOICE</Typography>
-            <Typography variant="h6" color="primary.main">{invoice.invoiceNumber}</Typography>
-            <Chip label={invoice.status?.toUpperCase()} size="small" color={STATUS_COLOR[invoice.status] || 'default'} sx={{ mt: 0.5 }} />
+          <Box sx={{ textAlign: 'center' }}>
+            <Typography sx={{ fontSize: 24, fontWeight: 800, lineHeight: 1.2 }}>{company.legalName || company.name}</Typography>
+            {(company.address || company.city) && (
+              <Typography sx={{ fontSize: 13 }}>{[company.address, company.city].filter(Boolean).join(', ')}</Typography>
+            )}
+            {(company.phone || company.email) && (
+              <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
+                {[company.phone && `PH : ${company.phone}`, company.email].filter(Boolean).join('  ·  ')}
+              </Typography>
+            )}
+            {(company.ntn || company.strn) && (
+              <Typography sx={{ fontSize: 13, fontWeight: 700 }}>
+                {[company.ntn && `NTN: ${company.ntn}`, company.strn && `STRN: ${company.strn}`].filter(Boolean).join('  ')}
+              </Typography>
+            )}
+          </Box>
+          <Box sx={{ fontSize: 11.5, lineHeight: 1.6 }}>
+            <div>Printed: {fmtDateTime(new Date())}</div>
+            {printedBy && <div>By: {printedBy}</div>}
+            {createdByName && <div>Prepared by: {createdByName}</div>}
           </Box>
         </Box>
 
-        <Divider sx={{ mb: 3 }} />
+        {/* Title + status */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr auto 1fr', alignItems: 'center', mt: 2, mb: 2 }}>
+          <span />
+          <Box sx={{ border: '1.5px solid #111', px: 6, py: 0.75 }}>
+            <Typography sx={{ fontSize: 18, fontWeight: 700 }}>{hasTax ? 'Sales Tax / Sales Invoice' : 'Sales Invoice'}</Typography>
+          </Box>
+          <Box sx={{ justifySelf: 'end', border: '1.5px solid #111', borderRadius: 1, px: 2, py: 0.5, fontWeight: 700, fontSize: 13, letterSpacing: 0.5 }}>
+            {statusLabel}
+          </Box>
+        </Box>
 
-        {/* Bill To / Invoice Info */}
-        <Box display="flex" justifyContent="space-between" mb={4}>
-          <Box>
-            <Typography variant="overline" color="text.disabled" fontWeight={700}>Bill To</Typography>
-            <Typography variant="h6" fontWeight={700}>{invoice.customer?.name || '—'}</Typography>
-            {invoice.customer?.email    && <Typography variant="body2" color="text.secondary">{invoice.customer.email}</Typography>}
-            {invoice.customer?.phone    && <Typography variant="body2" color="text.secondary">{invoice.customer.phone}</Typography>}
-            {invoice.customer?.address  && <Typography variant="body2" color="text.secondary">{invoice.customer.address}</Typography>}
-          </Box>
-          <Box textAlign="right">
-            <Typography variant="overline" color="text.disabled" fontWeight={700}>Invoice Details</Typography>
-            <Table size="small" sx={{ mt: 0.5 }}>
-              <TableBody>
-                {[
-                  ['Invoice Date', fmtDate(invoice.invoiceDate)],
-                  ['Due Date', fmtDate(invoice.dueDate)],
-                  ['Department', invoice.department || '—'],
-                  [
-                    'Cost Center',
-                    invoice.costCenter
-                      ? (typeof invoice.costCenter === 'object'
-                        ? [invoice.costCenter.code, invoice.costCenter.name].filter(Boolean).join(' — ') || '—'
-                        : String(invoice.costCenter))
-                      : '—'
-                  ],
-                  ['Reference', invoice.referenceNumber || '—'],
-                ].map(([k, v]) => (
-                  <TableRow key={k} sx={{ '& td': { border: 'none', py: 0.25, px: 0.5 } }}>
-                    <TableCell sx={{ color: 'text.secondary', fontSize: 12, textAlign: 'right' }}>{k}:</TableCell>
-                    <TableCell sx={{ fontWeight: 600, fontSize: 12, textAlign: 'right' }}>{v}</TableCell>
-                  </TableRow>
+        {/* Invoice / customer details */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', columnGap: 4, mb: 1.5 }}>
+          {[leftInfo, rightInfo].map((rows, col) => (
+            <Box key={col} component="table" sx={{ borderCollapse: 'collapse', fontSize: 13.5, alignSelf: 'start' }}>
+              <tbody>
+                {rows.map(([label, value, strong]) => (
+                  <tr key={label}>
+                    <Box component="td" sx={{ fontWeight: 700, pr: 2, py: 0.35, verticalAlign: 'top', whiteSpace: 'nowrap' }}>{label}</Box>
+                    <Box component="td" sx={{ py: 0.35, verticalAlign: 'top', fontWeight: strong ? 700 : 400, textDecoration: strong ? 'underline' : 'none' }}>{value}</Box>
+                  </tr>
                 ))}
-              </TableBody>
-            </Table>
-          </Box>
+              </tbody>
+            </Box>
+          ))}
         </Box>
 
         {/* Line items */}
-        {invoice.lineItems?.length > 0 ? (
-          <Table size="small" sx={{ mb: 3, border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
-            <TableHead>
-              <TableRow sx={{ bgcolor: 'primary.main' }}>
-                {['#', 'Description', 'Qty', 'Unit Price', 'Tax', 'Amount'].map(h => (
-                  <TableCell key={h} sx={{ color: 'white', fontWeight: 700, fontSize: 12, py: 1 }}>{h}</TableCell>
-                ))}
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              {invoice.lineItems.map((it, i) => (
-                <TableRow key={i} sx={{ '&:nth-of-type(even)': { bgcolor: 'grey.50' } }}>
-                  <TableCell sx={{ fontSize: 12 }}>{i + 1}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>{it.description || it.itemName}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>{it.quantity || 1}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>{fmt(it.unitPrice || 0)}</TableCell>
-                  <TableCell sx={{ fontSize: 12 }}>{it.taxRate ? `${it.taxRate}%` : '—'}</TableCell>
-                  <TableCell sx={{ fontSize: 12, fontWeight: 600 }}>{fmt(it.amount || 0)}</TableCell>
-                </TableRow>
-              ))}
-            </TableBody>
-          </Table>
-        ) : (
-          <Table size="small" sx={{ mb: 3, border: '1px solid', borderColor: 'divider' }}>
-            <TableHead>
-              <TableRow sx={{ bgcolor: 'primary.main' }}>
-                <TableCell sx={{ color: 'white', fontWeight: 700 }}>Description</TableCell>
-                <TableCell sx={{ color: 'white', fontWeight: 700, textAlign: 'right' }}>Amount</TableCell>
-              </TableRow>
-            </TableHead>
-            <TableBody>
-              <TableRow>
-                <TableCell>Invoice Amount</TableCell>
-                <TableCell sx={{ textAlign: 'right', fontWeight: 600 }}>{fmt(invoice.totalAmount)}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
-        )}
-
-        {/* Totals */}
-        <Box display="flex" justifyContent="flex-end" mb={3}>
-          <Table size="small" sx={{ maxWidth: 320, border: '1px solid', borderColor: 'divider' }}>
-            <TableBody>
-              {invoice.subtotal && (
-                <TableRow><TableCell>Subtotal</TableCell><TableCell sx={{ textAlign: 'right' }}>{fmt(invoice.subtotal)}</TableCell></TableRow>
-              )}
-              {invoice.taxAmount > 0 && (
-                <TableRow><TableCell>Tax</TableCell><TableCell sx={{ textAlign: 'right' }}>{fmt(invoice.taxAmount)}</TableCell></TableRow>
-              )}
-              <TableRow sx={{ bgcolor: 'primary.50' }}>
-                <TableCell sx={{ fontWeight: 800 }}>Total</TableCell>
-                <TableCell sx={{ textAlign: 'right', fontWeight: 800, color: 'primary.main' }}>{fmt(invoice.totalAmount)}</TableCell>
-              </TableRow>
-              <TableRow>
-                <TableCell sx={{ color: 'text.secondary' }}>Amount Paid</TableCell>
-                <TableCell sx={{ textAlign: 'right', color: 'text.secondary' }}>{fmt(invoice.amountPaid || invoice.paidAmount || 0)}</TableCell>
-              </TableRow>
-              <TableRow sx={{ bgcolor: balance > 0 ? 'error.50' : 'success.50' }}>
-                <TableCell sx={{ fontWeight: 800 }}>Balance Due</TableCell>
-                <TableCell sx={{ textAlign: 'right', fontWeight: 800, color: balance > 0 ? 'error.main' : 'success.main' }}>{fmt(balance)}</TableCell>
-              </TableRow>
-            </TableBody>
-          </Table>
+        <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse', borderTop: '2px solid #111', borderBottom: '2px solid #111' }}>
+          <thead>
+            <tr>
+              <Box component="th" sx={{ ...headSx, width: 36 }}>Sr.<br />No</Box>
+              <Box component="th" sx={{ ...headSx, textAlign: 'left' }}>Description</Box>
+              <Box component="th" sx={{ ...headSx, width: 55 }}>Qty.</Box>
+              <Box component="th" sx={{ ...headSx, width: 85 }}>Rate</Box>
+              <Box component="th" sx={{ ...headSx, width: 95 }}>Gross</Box>
+              {hasTax && <Box component="th" sx={{ ...headSx, width: 50 }}>Tax %</Box>}
+              {hasTax && <Box component="th" sx={{ ...headSx, width: 85 }}>Sales<br />Tax</Box>}
+              <Box component="th" sx={{ ...headSx, width: 100 }}>Net<br />Amount</Box>
+            </tr>
+          </thead>
+          <tbody>
+            {(lines.length ? lines : [{ description: 'Invoice amount', qty: 1, rate: netTotal, gross: netTotal, taxRate: 0, tax: 0, net: netTotal }]).map((l, i) => (
+              <tr key={i}>
+                <Box component="td" sx={{ ...cellSx, textAlign: 'center', borderTop: 0, borderBottom: '1px dotted #999' }}>{i + 1}</Box>
+                <Box component="td" sx={{ ...cellSx, borderTop: 0, borderBottom: '1px dotted #999' }}>
+                  {l.description}
+                  {l.account && l.account !== l.description && <Box component="span" sx={{ color: '#555' }}> · {l.account}</Box>}
+                </Box>
+                <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{fmtQty(l.qty)}</Box>
+                <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{fmtNum(l.rate)}</Box>
+                <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{fmtNum(l.gross)}</Box>
+                {hasTax && <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{l.taxRate ? `${l.taxRate}` : '-'}</Box>}
+                {hasTax && <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{l.tax ? fmtNum(l.tax) : '-'}</Box>}
+                <Box component="td" sx={{ ...cellSx, ...num, borderTop: 0, borderBottom: '1px dotted #999' }}>{fmtNum(l.net)}</Box>
+              </tr>
+            ))}
+            <tr>
+              <Box component="td" colSpan={2} sx={{ ...cellSx, fontWeight: 700, textAlign: 'center', borderTop: '2px solid #111' }}>GRAND TOTAL :</Box>
+              <Box component="td" sx={{ ...cellSx, ...num, fontWeight: 700, borderTop: '2px solid #111' }}>{lines.length ? fmtQty(totalQty) : '-'}</Box>
+              <Box component="td" sx={{ ...cellSx, borderTop: '2px solid #111' }} />
+              <Box component="td" sx={{ ...cellSx, ...num, fontWeight: 700, borderTop: '2px solid #111' }}>{fmtNum(totalGross)}</Box>
+              {hasTax && <Box component="td" sx={{ ...cellSx, borderTop: '2px solid #111' }} />}
+              {hasTax && <Box component="td" sx={{ ...cellSx, ...num, fontWeight: 700, borderTop: '2px solid #111' }}>{fmtNum(totalTax)}</Box>}
+              <Box component="td" sx={{ ...cellSx, ...num, fontWeight: 700, borderTop: '2px solid #111' }}>{fmtNum(netTotal)}</Box>
+            </tr>
+          </tbody>
         </Box>
 
-        {/* Notes */}
-        {invoice.notes && (
-          <Box sx={{ bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider', borderRadius: 1, p: 2, mb: 3 }}>
-            <Typography variant="overline" color="text.disabled" fontWeight={700}>Notes</Typography>
-            <Typography variant="body2">{invoice.notes}</Typography>
+        {/* Amount in words + totals */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1.35fr 1fr', columnGap: 3, mt: 3 }}>
+          <Box>
+            <Typography sx={{ fontSize: 13.5, borderBottom: '1.5px solid #111', pb: 0.5 }}>
+              Amount in Word : <strong>{numberToWords(netTotal)}</strong>
+            </Typography>
+            {invoice.notes && (
+              <Typography sx={{ fontSize: 12, mt: 1.5, whiteSpace: 'pre-wrap' }}>
+                <strong>Notes:</strong> {invoice.notes}
+              </Typography>
+            )}
+            {company.bankName && (
+              <Typography sx={{ fontSize: 12, mt: 1.5, lineHeight: 1.5 }}>
+                <strong>Bank details:</strong> {company.bankName}
+                {company.bankBranchName ? `, ${company.bankBranchName}` : ''}
+                {company.bankAccount ? ` · A/C ${company.bankAccount}` : ''}
+                {company.bankIBAN ? ` · IBAN ${company.bankIBAN}` : ''}
+              </Typography>
+            )}
+            {company.invoiceFooter && (
+              <Typography sx={{ fontSize: 11.5, mt: 1.5, color: '#333', textAlign: 'justify', whiteSpace: 'pre-wrap' }}>
+                {company.invoiceFooter}
+              </Typography>
+            )}
           </Box>
-        )}
+          <Box component="table" sx={{ borderCollapse: 'collapse', fontSize: 14, alignSelf: 'start', width: '100%' }}>
+            <tbody>
+              {[
+                ['Total Amount :', totalGross],
+                ...(hasTax ? [['Sales Tax :', totalTax]] : []),
+                ['Net Total', netTotal, true],
+                ...(paid > 0 ? [['Amount Received :', paid], ['Balance Due', balance, true]] : [])
+              ].map(([label, value, strong], i, all) => (
+                <tr key={label}>
+                  <Box component="td" sx={{ fontWeight: 700, py: 0.75, pl: 1, borderRight: '1.5px solid #111', borderTop: strong ? '1.5px solid #111' : 0, borderBottom: i === all.length - 1 ? 0 : undefined }}>{label}</Box>
+                  <Box component="td" sx={{ ...num, py: 0.75, pr: 1, fontWeight: strong ? 800 : 400, borderTop: strong ? '1.5px solid #111' : 0 }}>{fmtNum(value)}</Box>
+                </tr>
+              ))}
+            </tbody>
+          </Box>
+        </Box>
 
-        <Divider sx={{ mb: 2 }} />
-        <Box textAlign="center">
-          <Typography variant="caption" color="text.secondary" display="block">
-            {company.invoiceFooter || `Thank you for your business — ${company.name}`}
-          </Typography>
-          <Typography variant="body2" fontWeight={700} color="primary.main" sx={{ mt: 0.5 }}>
-            www.sgc.com
-          </Typography>
+        {/* Signatures */}
+        <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, mt: 7, alignItems: 'end' }}>
+          <Box sx={{ borderTop: '1.5px solid #111', pt: 0.75, textAlign: 'center', fontSize: 13 }}>Customer signature / stamp</Box>
+          <Box sx={{ textAlign: 'center' }}>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, mb: 1 }}>{company.legalName || company.name}</Typography>
+            {invoice.createdBy?.digitalSignature && (
+              <Box component="img" src={getImageUrl(invoice.createdBy.digitalSignature)} alt="Signature" sx={{ maxHeight: 48, maxWidth: 160, objectFit: 'contain', mb: 0.5 }} />
+            )}
+            <Box sx={{ borderTop: '1.5px solid #111', pt: 0.75, fontSize: 13 }}>For {company.legalName || company.name}</Box>
+          </Box>
         </Box>
       </Box>
     </Box>

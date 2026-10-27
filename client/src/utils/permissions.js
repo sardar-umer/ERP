@@ -631,7 +631,7 @@ export const MODULES = {
         name: 'Vendors',
         path: '/finance/accounts-payable',
         subItems: [
-          { name: 'Vendor Payments (New)', path: '/finance/payables-hub'        },
+          { name: 'Payables – Bills, POs & Cash Approvals', path: '/finance/payables-hub' },
           { name: 'Payroll (Finance)',     path: '/finance/payroll-queue'        },
           { name: 'Vendor List',          path: '/finance/vendors'              },
           { name: 'Vendor Bills',         path: '/finance/accounts-payable'     },

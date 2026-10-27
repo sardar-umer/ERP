@@ -356,6 +356,8 @@ const TajUtilitiesReconciliation = lazy(() => import('./pages/Finance/TajUtiliti
 // Printing / PDF & Excel Export Heavy Pages
 const InvoicePrint = lazy(() => import('./pages/Finance/InvoicePrint'));
 const BillPrint = lazy(() => import('./pages/Finance/BillPrint'));
+const PayablesDocument = lazy(() => import('./pages/Finance/payables/PayablesDocument'));
+const PayablesPayment = lazy(() => import('./pages/Finance/payables/PayablesPayment'));
 const ComparativePL = lazy(() => import('./pages/Finance/ComparativePL'));
 const CostCenterPL = lazy(() => import('./pages/Finance/CostCenterPL'));
 
@@ -1319,9 +1321,12 @@ function App() {
                     <Route path="/finance/bill-to-receive" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BillToReceive /></ProtectedRoute>} />
                     <Route path="/finance/billed-not-received" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BilledNotReceived /></ProtectedRoute>} />
                     <Route path="/finance/invoice-print/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><InvoicePrint /></ProtectedRoute>} />
-                    <Route path="/finance/bill-print/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BillPrint /></ProtectedRoute>} />
+                    <Route path="/finance/bill-print/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager", "accounts_officer", "finance_controller"]}><BillPrint /></ProtectedRoute>} />
+                    <Route path="/procurement/cash-approvals/:id/print" element={<ProtectedRoute><Suspense fallback={lazyPageFallback}><CashApprovalDocumentView /></Suspense></ProtectedRoute>} />
                     <Route path="/finance/recurring-journals" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><RecurringJournals /></ProtectedRoute>} />
                     <Route path="/finance/payables-hub" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager", "accounts_officer", "finance_controller"]}><PayablesHub /></ProtectedRoute>} />
+                    <Route path="/finance/payables-hub/document/:kind/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager", "accounts_officer", "finance_controller"]}><Suspense fallback={lazyPageFallback}><PayablesDocument /></Suspense></ProtectedRoute>} />
+                    <Route path="/finance/payables-hub/payment/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager", "accounts_officer", "finance_controller"]}><Suspense fallback={lazyPageFallback}><PayablesPayment /></Suspense></ProtectedRoute>} />
                     <Route path="/finance/batch-payment" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BatchPayment /></ProtectedRoute>} />
                     <Route path="/finance/company-profile" element={<ProtectedRoute requiredRole={["super_admin", "admin"]}><CompanyProfile /></ProtectedRoute>} />
                     <Route path="/finance/companies" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><FinanceCompanies /></ProtectedRoute>} />

@@ -1,5 +1,6 @@
-import React, { useState, useEffect } from 'react';
-import { useParams, useNavigate } from 'react-router-dom';
+import React, { useState, useEffect, useCallback } from 'react';
+import { useParams, useNavigate, useSearchParams } from 'react-router-dom';
+import BillAttachmentPages from '../../components/Finance/BillAttachmentPages';
 import {
   Box, Typography, Button, CircularProgress, Alert, Paper,
   Table, TableBody, TableCell, TableHead, TableRow, Chip
@@ -34,6 +35,12 @@ const STATUS_COLOR = {
 export default function BillPrint() {
   const { id } = useParams();
   const navigate = useNavigate();
+  // ?autoprint=1: opened in a hidden frame by Vendor Bills — open the print preview as soon as the bill is drawn
+  const [searchParams] = useSearchParams();
+  const autoPrint = searchParams.get('autoprint') === '1';
+  // PDF attachments are drawn before printing; automatic print waits for them
+  const [attachmentsReady, setAttachmentsReady] = useState(false);
+  const markAttachmentsReady = useCallback(() => setAttachmentsReady(true), []);
 
   const [bill, setBill] = useState(null);
   const [loading, setLoading] = useState(true);
@@ -51,6 +58,20 @@ export default function BillPrint() {
       }
     })();
   }, [id]);
+
+  useEffect(() => {
+    if (!autoPrint || loading || (bill?.attachments?.length && !attachmentsReady)) return undefined;
+    // Wait for signatures / logos so they appear in the preview
+    const timer = setTimeout(async () => {
+      const images = Array.from(document.images || []).filter((img) => !img.complete);
+      await Promise.all(images.map((img) => new Promise((resolve) => {
+        img.addEventListener('load', resolve, { once: true });
+        img.addEventListener('error', resolve, { once: true });
+      })));
+      window.print();
+    }, 300);
+    return () => clearTimeout(timer);
+  }, [autoPrint, loading, bill, attachmentsReady]);
 
   if (loading) return <Box display="flex" justifyContent="center" py={10}><CircularProgress /></Box>;
   if (error) return <Box p={3}><Alert severity="error">{error}</Alert></Box>;
@@ -323,7 +344,8 @@ export default function BillPrint() {
         </Box>
       </Box>
 
-      {/* Main Printable Document */}
+      {/* Main Printable Document — bill first, then each attachment on its own page */}
+      <Box className="print-content">
       <Paper
         sx={{
           p: { xs: 3, sm: 4 },
@@ -343,7 +365,7 @@ export default function BillPrint() {
             breakInside: 'avoid'
           }
         }}
-        className="print-content"
+        className="bill-print-page"
       >
         {/* Document Header */}
         <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2.5, pb: 2, borderBottom: '2px solid #1e293b' }}>
@@ -457,6 +479,10 @@ export default function BillPrint() {
           </Table>
         </Box>
       </Paper>
+
+      {/* Attachments, each on its own printed page */}
+      <BillAttachmentPages attachments={bill.attachments || []} onReady={markAttachmentsReady} />
+      </Box>
 
       {/* Global CSS for Print Media */}
       <style>{`

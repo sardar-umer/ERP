@@ -33,7 +33,11 @@ const accountsReceivableSchema = new mongoose.Schema({
     customerId: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Customer' // If you have a separate Customer model
-    }
+    },
+    // Copied from the customer when the invoice is made (printed on the sales tax invoice)
+    ntn: { type: String, trim: true, default: '' },
+    strn: { type: String, trim: true, default: '' },
+    cnic: { type: String, trim: true, default: '' }
   },
   // Invoice details
   invoiceNumber: {

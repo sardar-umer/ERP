@@ -86,6 +86,9 @@ const StandardCustomerInvoiceForm = () => {
   const [customerEmail, setCustomerEmail] = useState('');
   const [customerPhone, setCustomerPhone] = useState('');
   const [customerAddress, setCustomerAddress] = useState('');
+  // Tax / identity numbers, copied from the customer and printed on the sales tax invoice
+  const [customerTaxIds, setCustomerTaxIds] = useState({ ntn: '', strn: '', cnic: '' });
+  const taxIdsOf = (c) => ({ ntn: c?.ntn || '', strn: c?.strn || '', cnic: c?.cnic || '' });
   const [invoiceNumber, setInvoiceNumber] = useState('');
   const [invoiceDate, setInvoiceDate] = useState(new Date().toISOString().split('T')[0]);
   const [dueDate, setDueDate] = useState('');
@@ -101,6 +104,26 @@ const StandardCustomerInvoiceForm = () => {
   const [accounts, setAccounts] = useState([]);
   const [departments, setDepartments] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
+  // "+ Add new cost center" from the dropdown
+  const [newCostCenter, setNewCostCenter] = useState({ open: false, name: '', description: '', saving: false });
+  const saveNewCostCenter = async () => {
+    const name = newCostCenter.name.trim();
+    if (!name) return;
+    try {
+      setNewCostCenter((d) => ({ ...d, saving: true }));
+      const res = await api.post('/finance/cost-centers', { name, description: newCostCenter.description.trim() });
+      const created = res.data?.data;
+      if (created?._id) {
+        setCostCenters((prev) => [...prev, created]);
+        setCostCenter(created._id);
+      }
+      toast.success(`Cost center "${name}" added`);
+      setNewCostCenter({ open: false, name: '', description: '', saving: false });
+    } catch (err) {
+      toast.error(err.response?.data?.message || err.response?.data?.errors?.[0]?.msg || 'Could not add cost center');
+      setNewCostCenter((d) => ({ ...d, saving: false }));
+    }
+  };
   const [companiesList, setCompaniesList] = useState([]);
   const [selectedCompany, setSelectedCompany] = useState(null);
   const [customers, setCustomers] = useState([]);
@@ -235,6 +258,7 @@ const StandardCustomerInvoiceForm = () => {
         setCustomerName(inv.customer?.name || inv.customerName || '');
         setCustomerEmail(inv.customer?.email || inv.customerEmail || '');
         setCustomerPhone(inv.customer?.phone || '');
+        setCustomerTaxIds(taxIdsOf(inv.customer));
         setCustomerAddress(
           typeof inv.customer?.address === 'string'
             ? inv.customer.address
@@ -380,7 +404,7 @@ const StandardCustomerInvoiceForm = () => {
 
   // Quick Add Customer Dialog Handlers
   const handleOpenAddCustomer = () => {
-    setNewCustomerForm({ name: '', email: '', phone: '', street: '' });
+    setNewCustomerForm({ name: '', email: '', phone: '', street: '', ntn: '', strn: '', cnic: '' });
     setNewCustomerDialog(true);
   };
 
@@ -397,6 +421,9 @@ const StandardCustomerInvoiceForm = () => {
         email: newCustomerForm.email,
         phone: newCustomerForm.phone,
         address: newCustomerForm.street ? { street: newCustomerForm.street } : undefined,
+        ntn: (newCustomerForm.ntn || '').trim(),
+        strn: (newCustomerForm.strn || '').trim(),
+        cnic: (newCustomerForm.cnic || '').trim(),
         type: 'corporate',
         status: 'active'
       };
@@ -410,6 +437,7 @@ const StandardCustomerInvoiceForm = () => {
         setCustomerEmail(created.email || '');
         setCustomerPhone(created.phone || '');
         setCustomerAddress(created.address?.street || '');
+        setCustomerTaxIds(taxIdsOf(created));
         setNewCustomerDialog(false);
       }
     } catch (err) {
@@ -426,12 +454,14 @@ const StandardCustomerInvoiceForm = () => {
       setCustomerEmail(val.email || '');
       setCustomerPhone(val.phone || '');
       setCustomerAddress(val.address?.street || '');
+      setCustomerTaxIds(taxIdsOf(val));
     } else {
       setSelectedCustomer(null);
       setCustomerName('');
       setCustomerEmail('');
       setCustomerPhone('');
       setCustomerAddress('');
+      setCustomerTaxIds({ ntn: '', strn: '', cnic: '' });
     }
   };
 
@@ -473,7 +503,10 @@ const StandardCustomerInvoiceForm = () => {
           name: customerName.trim(),
           email: customerEmail.trim() || '',
           phone: customerPhone.trim() || '',
-          address: { street: customerAddress.trim() || '' }
+          address: { street: customerAddress.trim() || '' },
+          ntn: customerTaxIds.ntn.trim(),
+          strn: customerTaxIds.strn.trim(),
+          cnic: customerTaxIds.cnic.trim()
         },
         invoiceNumber: invoiceNumber.trim(),
         invoiceDate,
@@ -612,6 +645,21 @@ const StandardCustomerInvoiceForm = () => {
                       />
                     )}
                   />
+                  {selectedCustomer && (
+                    <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+                      {[['ntn', 'NTN'], ['strn', 'STRN'], ['cnic', 'CNIC']].map(([key, label]) => (
+                        <TextField
+                          key={key}
+                          fullWidth
+                          size="small"
+                          label={`Customer ${label}`}
+                          value={customerTaxIds[key]}
+                          onChange={(e) => setCustomerTaxIds((prev) => ({ ...prev, [key]: e.target.value }))}
+                          helperText={key === 'ntn' ? 'From the customer — edit for this invoice if needed' : ' '}
+                        />
+                      ))}
+                    </Stack>
+                  )}
               </Stack>
             </Grid>
 
@@ -716,11 +764,17 @@ const StandardCustomerInvoiceForm = () => {
                     label="Cost Center"
                     size="small"
                     value={costCenter}
-                    onChange={(e) => setCostCenter(e.target.value)}
+                    onChange={(e) => {
+                      if (e.target.value === '__add_new__') {
+                        setNewCostCenter({ open: true, name: '', description: '', saving: false });
+                        return;
+                      }
+                      setCostCenter(e.target.value);
+                    }}
                     error={!costCenter && Boolean(error)}
                     helperText={
                       costCenters.filter((cc) => cc.isActive !== false).length === 0
-                        ? 'No cost centers found — add one under Finance → Setup → Cost Centers'
+                        ? 'No cost centers yet — use "Add new cost center" in this list'
                         : 'Required'
                     }
                   >
@@ -732,7 +786,60 @@ const StandardCustomerInvoiceForm = () => {
                         {cc.code ? `${cc.code} — ${cc.name}` : cc.name}
                       </MenuItem>
                     ))}
+                    <Divider />
+                    <MenuItem value="__add_new__" sx={{ color: 'primary.main', fontWeight: 600 }}>
+                      <AddIcon fontSize="small" sx={{ mr: 1 }} /> Add new cost center
+                    </MenuItem>
                   </TextField>
+                  <Dialog
+                    open={newCostCenter.open}
+                    onClose={() => !newCostCenter.saving && setNewCostCenter({ open: false, name: '', description: '', saving: false })}
+                    maxWidth="xs"
+                    fullWidth
+                  >
+                    <DialogTitle>Add cost center</DialogTitle>
+                    <DialogContent dividers>
+                      <TextField
+                        autoFocus
+                        fullWidth
+                        required
+                        size="small"
+                        label="Name"
+                        value={newCostCenter.name}
+                        onChange={(e) => setNewCostCenter((d) => ({ ...d, name: e.target.value }))}
+                        onKeyDown={(e) => { if (e.key === 'Enter') saveNewCostCenter(); }}
+                        sx={{ mb: 2 }}
+                      />
+                      <TextField
+                        fullWidth
+                        multiline
+                        minRows={2}
+                        size="small"
+                        label="Description (optional)"
+                        value={newCostCenter.description}
+                        onChange={(e) => setNewCostCenter((d) => ({ ...d, description: e.target.value }))}
+                      />
+                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                        Added to the current finance company and selected on this invoice.
+                      </Typography>
+                    </DialogContent>
+                    <DialogActions>
+                      <Button
+                        disabled={newCostCenter.saving}
+                        onClick={() => setNewCostCenter({ open: false, name: '', description: '', saving: false })}
+                      >
+                        Cancel
+                      </Button>
+                      <Button
+                        variant="contained"
+                        startIcon={newCostCenter.saving ? <CircularProgress size={16} color="inherit" /> : <AddIcon />}
+                        disabled={newCostCenter.saving || !newCostCenter.name.trim()}
+                        onClick={saveNewCostCenter}
+                      >
+                        Add
+                      </Button>
+                    </DialogActions>
+                  </Dialog>
                 </Grid>
               </Grid>
             </Grid>
@@ -1062,6 +1169,18 @@ const StandardCustomerInvoiceForm = () => {
               value={newCustomerForm.street}
               onChange={(e) => setNewCustomerForm((p) => ({ ...p, street: e.target.value }))}
             />
+            <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1.5}>
+              {[['ntn', 'NTN'], ['strn', 'STRN'], ['cnic', 'CNIC']].map(([key, label]) => (
+                <TextField
+                  key={key}
+                  label={label}
+                  fullWidth
+                  size="small"
+                  value={newCustomerForm[key] || ''}
+                  onChange={(e) => setNewCustomerForm((p) => ({ ...p, [key]: e.target.value }))}
+                />
+              ))}
+            </Stack>
           </Stack>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>

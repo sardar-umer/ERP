@@ -184,7 +184,8 @@ const hasModuleAccess = (roleDoc, moduleKey) => {
 
 const hasFinanceAccess = (user) => {
   if (!user) return false;
-  if (['super_admin', 'admin', 'finance_manager'].includes(user.role)) return true;
+  // developer / higher_management act as Finance on cash approvals (they can open every other finance screen too)
+  if (['super_admin', 'admin', 'finance_manager', 'developer', 'higher_management'].includes(user.role)) return true;
   if (hasModuleAccess(user.roleRef, 'finance')) return true;
   if (Array.isArray(user.roles) && user.roles.some((r) => hasModuleAccess(r, 'finance'))) return true;
   return false;

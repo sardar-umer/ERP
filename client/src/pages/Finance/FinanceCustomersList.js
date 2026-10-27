@@ -24,6 +24,7 @@ import {
   Select,
   MenuItem,
   Tabs,
+  Divider,
   Tab,
   Dialog,
   DialogTitle,
@@ -35,6 +36,7 @@ import {
   People as CustomerIcon,
   Search as SearchIcon,
   Refresh as RefreshIcon,
+  Edit as EditIcon,
   Add as AddIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
@@ -64,8 +66,31 @@ const emptyForm = {
   status: 'active',
   type: 'corporate',
   industry: '',
-  website: ''
+  website: '',
+  ntn: '',
+  strn: '',
+  cnic: '',
+  street: '',
+  city: ''
 };
+
+/** Customer record → form values (address flattened to street / city) */
+const toForm = (c = {}) => ({
+  ...emptyForm,
+  name: c.name || '',
+  company: c.company || '',
+  email: c.email || '',
+  phone: c.phone || '',
+  status: c.status || 'active',
+  type: c.type || 'corporate',
+  industry: c.industry || '',
+  website: c.website || '',
+  ntn: c.ntn || '',
+  strn: c.strn || '',
+  cnic: c.cnic || '',
+  street: c.address?.street || '',
+  city: c.address?.city || ''
+});
 
 export default function FinanceCustomersList() {
   const [customers, setCustomers] = useState([]);
@@ -80,6 +105,8 @@ export default function FinanceCustomersList() {
   const [searchDebounced, setSearchDebounced] = useState('');
   const [statusFilter, setStatusFilter] = useState('active');
   const [dialogOpen, setDialogOpen] = useState(false);
+  // null = creating; customer id = editing that customer
+  const [editingId, setEditingId] = useState(null);
   const [saving, setSaving] = useState(false);
   const [formData, setFormData] = useState(emptyForm);
   const [statementFilters, setStatementFilters] = useState({ fromDate: '', toDate: '' });
@@ -169,21 +196,43 @@ export default function FinanceCustomersList() {
     try {
       setSaving(true);
       setError('');
-      const payload = { ...formData };
-      if (!payload.email) delete payload.email;
-      const res = await api.post('/finance/customers', payload);
+      const { street, city, ...rest } = formData;
+      const payload = { ...rest };
+      if (!payload.email && !editingId) delete payload.email;
+      if (street || city || editingId) {
+        const prevAddress = (detail?.customer || selected)?.address || {};
+        payload.address = { ...(editingId ? prevAddress : {}), street: street.trim(), city: city.trim() };
+      }
+      const res = editingId
+        ? await api.put(`/finance/customers/${editingId}`, payload)
+        : await api.post('/finance/customers', payload);
       if (res.data?.success) {
-        setSuccess('Customer created successfully');
+        setSuccess(editingId ? 'Customer updated successfully' : 'Customer created successfully');
         setDialogOpen(false);
         setFormData(emptyForm);
         await loadCustomers();
-        if (res.data.data?._id) openCustomer(res.data.data);
+        const saved = res.data.data;
+        if (editingId && saved) {
+          // Keep the open profile and its tab; just refresh the customer details shown
+          setSelected((prev) => ({ ...prev, ...saved }));
+          setDetail((prev) => (prev ? { ...prev, customer: { ...(prev.customer || {}), ...saved } } : prev));
+        } else if (saved?._id) {
+          openCustomer(saved);
+        }
+        setEditingId(null);
       }
     } catch (e) {
-      setError(e.response?.data?.message || 'Failed to create customer');
+      setError(e.response?.data?.message || (editingId ? 'Failed to update customer' : 'Failed to create customer'));
     } finally {
       setSaving(false);
     }
+  };
+
+  const openEditCustomer = (customer) => {
+    setEditingId(customer._id);
+    setFormData(toForm(customer));
+    setError('');
+    setDialogOpen(true);
   };
 
   const filteredInvoices = (detail?.invoices || []).filter((inv) => {
@@ -204,6 +253,148 @@ export default function FinanceCustomersList() {
     return true;
   });
 
+  const customerDialog = (
+  <Dialog open={dialogOpen} onClose={() => { if (!saving) { setDialogOpen(false); setEditingId(null); } }} maxWidth="sm" fullWidth>
+    <DialogTitle>{editingId ? 'Edit Customer' : 'Create Customer'}</DialogTitle>
+    <DialogContent dividers>
+      <Grid container spacing={2} sx={{ mt: 0.5 }}>
+        <Grid item xs={12}>
+          <TextField
+            label="Name"
+            required
+            fullWidth
+            size="small"
+            value={formData.name}
+            onChange={(e) => setFormData((f) => ({ ...f, name: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <TextField
+            label="Company"
+            fullWidth
+            size="small"
+            value={formData.company}
+            onChange={(e) => setFormData((f) => ({ ...f, company: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <FormControl fullWidth size="small">
+            <InputLabel>Type</InputLabel>
+            <Select
+              label="Type"
+              value={formData.type}
+              onChange={(e) => setFormData((f) => ({ ...f, type: e.target.value }))}
+            >
+              <MenuItem value="corporate">Corporate</MenuItem>
+              <MenuItem value="individual">Individual</MenuItem>
+            </Select>
+          </FormControl>
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <TextField
+            label="Email"
+            fullWidth
+            size="small"
+            value={formData.email}
+            onChange={(e) => setFormData((f) => ({ ...f, email: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <TextField
+            label="Phone"
+            fullWidth
+            size="small"
+            value={formData.phone}
+            onChange={(e) => setFormData((f) => ({ ...f, phone: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <FormControl fullWidth size="small">
+            <InputLabel>Status</InputLabel>
+            <Select
+              label="Status"
+              value={formData.status}
+              onChange={(e) => setFormData((f) => ({ ...f, status: e.target.value }))}
+            >
+              <MenuItem value="active">Active</MenuItem>
+              <MenuItem value="prospect">Prospect</MenuItem>
+              <MenuItem value="inactive">Inactive</MenuItem>
+            </Select>
+          </FormControl>
+        </Grid>
+        <Grid item xs={12} sm={6}>
+          <TextField
+            label="Industry"
+            fullWidth
+            size="small"
+            value={formData.industry}
+            onChange={(e) => setFormData((f) => ({ ...f, industry: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12}>
+          <Divider textAlign="left" sx={{ my: 0.5 }}>
+            <Typography variant="caption" color="text.secondary">Tax &amp; identity (printed on sales tax invoices)</Typography>
+          </Divider>
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <TextField
+            label="NTN"
+            fullWidth
+            size="small"
+            value={formData.ntn}
+            onChange={(e) => setFormData((f) => ({ ...f, ntn: e.target.value }))}
+            placeholder="e.g. 2771961-8"
+          />
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <TextField
+            label="STRN"
+            fullWidth
+            size="small"
+            value={formData.strn}
+            onChange={(e) => setFormData((f) => ({ ...f, strn: e.target.value }))}
+            placeholder="e.g. 26002771961-15"
+          />
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <TextField
+            label="CNIC"
+            fullWidth
+            size="small"
+            value={formData.cnic}
+            onChange={(e) => setFormData((f) => ({ ...f, cnic: e.target.value }))}
+            placeholder="e.g. 61101-7626230-9"
+          />
+        </Grid>
+        <Grid item xs={12} sm={8}>
+          <TextField
+            label="Street address"
+            fullWidth
+            size="small"
+            value={formData.street}
+            onChange={(e) => setFormData((f) => ({ ...f, street: e.target.value }))}
+          />
+        </Grid>
+        <Grid item xs={12} sm={4}>
+          <TextField
+            label="City"
+            fullWidth
+            size="small"
+            value={formData.city}
+            onChange={(e) => setFormData((f) => ({ ...f, city: e.target.value }))}
+          />
+        </Grid>
+      </Grid>
+    </DialogContent>
+    <DialogActions>
+      <Button onClick={() => { setDialogOpen(false); setEditingId(null); }} disabled={saving}>Cancel</Button>
+      <Button variant="contained" onClick={handleCreate} disabled={saving}>
+        {saving ? 'Saving…' : editingId ? 'Save' : 'Create'}
+      </Button>
+    </DialogActions>
+  </Dialog>
+  );
+
   if (selected) {
     const customer = detail?.customer || selected;
     const summary = detail?.summary || selected.finance || {};
@@ -220,6 +411,7 @@ export default function FinanceCustomersList() {
         >
           Back to Customers
         </Button>
+        {customerDialog}
 
         <Stack direction="row" alignItems="center" gap={2} mb={2} flexWrap="wrap">
           <Avatar sx={{ bgcolor: 'primary.main' }}>{(customer.name || 'C').charAt(0).toUpperCase()}</Avatar>
@@ -234,7 +426,15 @@ export default function FinanceCustomersList() {
             color={STATUS_COLOR[customer.status] || 'default'}
             size="small"
           />
+          <Button variant="outlined" size="small" startIcon={<EditIcon />} onClick={() => openEditCustomer(customer)} sx={{ ml: 'auto' }}>
+            Edit customer
+          </Button>
         </Stack>
+        {(customer.ntn || customer.strn || customer.cnic) && (
+          <Typography variant="body2" color="text.secondary" sx={{ mt: -1, mb: 2 }}>
+            {[customer.ntn && `NTN: ${customer.ntn}`, customer.strn && `STRN: ${customer.strn}`, customer.cnic && `CNIC: ${customer.cnic}`].filter(Boolean).join('  ·  ')}
+          </Typography>
+        )}
 
         {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
 
@@ -689,6 +889,18 @@ export default function FinanceCustomersList() {
                       <Typography>{customer.company || '—'}</Typography>
                     </Grid>
                     <Grid item xs={12} md={6}>
+                      <Typography variant="caption" color="text.secondary">NTN</Typography>
+                      <Typography>{customer.ntn || '—'}</Typography>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="caption" color="text.secondary">STRN</Typography>
+                      <Typography>{customer.strn || '—'}</Typography>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
+                      <Typography variant="caption" color="text.secondary">CNIC</Typography>
+                      <Typography>{customer.cnic || '—'}</Typography>
+                    </Grid>
+                    <Grid item xs={12} md={6}>
                       <Typography variant="caption" color="text.secondary">Type</Typography>
                       <Typography>{customer.type || '—'}</Typography>
                     </Grid>
@@ -743,6 +955,7 @@ export default function FinanceCustomersList() {
             startIcon={<AddIcon />}
             size="small"
             onClick={() => {
+              setEditingId(null);
               setFormData(emptyForm);
               setDialogOpen(true);
               setError('');
@@ -843,92 +1056,7 @@ export default function FinanceCustomersList() {
         </TableContainer>
       )}
 
-      <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} maxWidth="sm" fullWidth>
-        <DialogTitle>Create Customer</DialogTitle>
-        <DialogContent dividers>
-          <Grid container spacing={2} sx={{ mt: 0.5 }}>
-            <Grid item xs={12}>
-              <TextField
-                label="Name"
-                required
-                fullWidth
-                size="small"
-                value={formData.name}
-                onChange={(e) => setFormData((f) => ({ ...f, name: e.target.value }))}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Company"
-                fullWidth
-                size="small"
-                value={formData.company}
-                onChange={(e) => setFormData((f) => ({ ...f, company: e.target.value }))}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Type</InputLabel>
-                <Select
-                  label="Type"
-                  value={formData.type}
-                  onChange={(e) => setFormData((f) => ({ ...f, type: e.target.value }))}
-                >
-                  <MenuItem value="corporate">Corporate</MenuItem>
-                  <MenuItem value="individual">Individual</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Email"
-                fullWidth
-                size="small"
-                value={formData.email}
-                onChange={(e) => setFormData((f) => ({ ...f, email: e.target.value }))}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Phone"
-                fullWidth
-                size="small"
-                value={formData.phone}
-                onChange={(e) => setFormData((f) => ({ ...f, phone: e.target.value }))}
-              />
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <FormControl fullWidth size="small">
-                <InputLabel>Status</InputLabel>
-                <Select
-                  label="Status"
-                  value={formData.status}
-                  onChange={(e) => setFormData((f) => ({ ...f, status: e.target.value }))}
-                >
-                  <MenuItem value="active">Active</MenuItem>
-                  <MenuItem value="prospect">Prospect</MenuItem>
-                  <MenuItem value="inactive">Inactive</MenuItem>
-                </Select>
-              </FormControl>
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                label="Industry"
-                fullWidth
-                size="small"
-                value={formData.industry}
-                onChange={(e) => setFormData((f) => ({ ...f, industry: e.target.value }))}
-              />
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)} disabled={saving}>Cancel</Button>
-          <Button variant="contained" onClick={handleCreate} disabled={saving}>
-            {saving ? 'Saving…' : 'Create'}
-          </Button>
-        </DialogActions>
-      </Dialog>
+      {customerDialog}
     </Box>
   );
 }
