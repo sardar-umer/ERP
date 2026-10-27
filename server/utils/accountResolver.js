@@ -73,16 +73,72 @@ const getAccountByCode = async (companyId, accountCode) => {
   });
 };
 
+/**
+ * What each system account must look like. Account numbers are per company and do not always mean the same thing
+ * (e.g. 1110 is "Security Deposits" in one chart), so a number match is only trusted when type + name fit;
+ * otherwise the company's correctly named account is used, and if there is none the caller gets null (no silent
+ * posting to a wrong account). `check` validates a number match; `find` locates the right account by name.
+ */
+const SYSTEM_ACCOUNT_RULES = {
+  CASH: { type: 'Asset', check: /cash|petty/i, find: /^cash|cash in hand|petty cash/i },
+  BANK: { type: 'Asset', check: /bank/i, find: /bank/i },
+  RECEIVABLE: { type: 'Asset', check: /receivable|debtor/i, find: /accounts? receivable|trade debtors?/i },
+  VENDOR_ADVANCE: { type: 'Asset', check: /advance|prepay/i, find: /advances? to (suppliers?|vendors?|contractors?)|supplier advance|vendor advance/i },
+  STAFF_ADVANCE: { type: 'Asset', check: /advance|staff|imprest/i, find: /(staff|employee|cash) advance|advances? to (staff|employees)/i },
+  EMPLOYEE_LOAN: { type: 'Asset', check: /loan|advance/i, find: /employee loan|staff loan|loans? to employees/i },
+  INVENTORY: { type: 'Asset', check: /inventory|stock/i, find: /inventory|stock valuation|stock in hand/i },
+  PAYABLE: { type: 'Liability', check: /payable|creditor/i, find: /^accounts? payable|trade creditors?/i },
+  WHT_PAYABLE: { type: 'Liability', check: /wht|withholding|tax/i, find: /wht|withholding/i },
+  GRNI: { type: 'Liability', check: /received|grni|accrued/i, find: /goods received not invoiced|\bgrni\b/i },
+  GRNI_ALT: { type: 'Liability', check: /received|grni|accrued/i, find: /goods received not invoiced|\bgrni\b/i },
+  SALARIES_PAYABLE: { type: 'Liability', check: /salar|wage|payroll/i, find: /salar(y|ies) payable|wages payable|payroll payable/i },
+  REVENUE_CAM: { type: 'Revenue', check: /cam|maintenance/i, find: /cam revenue|maintenance (charges|revenue)/i },
+  REVENUE_ELECTRICITY: { type: 'Revenue', check: /electric/i, find: /electricity revenue/i },
+  REVENUE_RENT: { type: 'Revenue', check: /rent/i, find: /rent(al)? (revenue|income)/i },
+  COGS: { type: 'Expense', check: /cost of|cogs|goods sold/i, find: /cost of (goods|sales)|cogs/i },
+  EXPENSE_GENERAL: { type: 'Expense', check: /.*/, find: /general expense/i },
+  EXPENSE_SALARIES: { type: 'Expense', check: /salar|wage/i, find: /salar(y|ies) expense|wages expense/i },
+  UTILITIES: { type: 'Expense', check: /utilit|electric/i, find: /utilit/i }
+};
+
+const fitsRule = (account, rule) => !rule || (account && account.type === rule.type && rule.check.test(account.name || ''));
+
+const findByRule = async (companyId, rule) => {
+  const cid = await normalizeCompanyObjectId(companyId);
+  if (!cid || !rule) return null;
+  return Account.findOne({ companyId: cid, isActive: true, type: rule.type, name: rule.find }).sort({ accountNumber: 1 });
+};
+
 const resolveSystemAccount = async (companyId, accountNumber) => {
   const number = String(accountNumber || '').trim();
   if (!number) return null;
 
   const code = ACCOUNT_NUMBER_TO_CODE[number];
+  const rule = code ? SYSTEM_ACCOUNT_RULES[code] : null;
   if (code) {
-    const byCode = await getAccountByCode(companyId, code);
-    if (byCode) return byCode;
+    // Codes were stamped on some charts by number, so a code match is checked too; with several accounts
+    // carrying the same code, the one whose type + name fit wins
+    const cid = await normalizeCompanyObjectId(companyId);
+    const coded = cid
+      ? await Account.find({ companyId: cid, accountCode: code, isActive: true }).sort({ accountNumber: 1 })
+      : [];
+    const fit = coded.find((a) => fitsRule(a, rule));
+    if (fit) return fit;
+    if (!cid) {
+      const globalByCode = await getAccountByCode(null, code);
+      if (fitsRule(globalByCode, rule)) return globalByCode;
+    }
   }
-  return getAccountByNumber(companyId, number);
+  const byNumber = await getAccountByNumber(companyId, number);
+  if (fitsRule(byNumber, rule)) return byNumber;
+
+  // The number means something else in this company's chart: use its correctly named account instead
+  const byName = await findByRule(companyId, rule);
+  if (byName) return byName;
+  if (byNumber) {
+    console.warn(`[accountResolver] ${number} in company ${companyId} is "${byNumber.name}" (${byNumber.type}) — not a ${code} account; nothing posted to it`);
+  }
+  return null;
 };
 
 const mapAccountToCompany = async (companyId, accountDocOrId) => {
@@ -123,5 +179,6 @@ module.exports = {
   getAccountByNumber,
   getAccountByCode,
   resolveSystemAccount,
-  mapAccountToCompany
+  mapAccountToCompany,
+  SYSTEM_ACCOUNT_RULES
 };

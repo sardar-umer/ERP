@@ -107,21 +107,6 @@ export const updateTask = (projectId, taskId, data) =>
 export const deleteTask = (projectId, taskId) =>
   api.delete(`${BASE}/projects/${projectId}/tasks/${taskId}`);
 
-// ─── Daily Progress Reports ───────────────────────────────────────────────────
-export const getDPRList = (projectId, params = {}) =>
-  api.get(`${BASE}/projects/${projectId}/dpr`, { params });
-
-export const getDPRById = (projectId, dprId) =>
-  api.get(`${BASE}/projects/${projectId}/dpr/${dprId}`);
-
-export const submitDPR = (projectId, formData) =>
-  api.post(`${BASE}/projects/${projectId}/dpr`, formData, {
-    headers: { 'Content-Type': 'multipart/form-data' }
-  });
-
-export const deleteDPR = (projectId, dprId) =>
-  api.delete(`${BASE}/projects/${projectId}/dpr/${dprId}`);
-
 // ─── Procurement (BOQ → Purchase Order) ───────────────────────────────────────
 export const createPOFromBOQ = (projectId, data) =>
   api.post(`${BASE}/projects/${projectId}/boq/create-po`, data);
@@ -267,7 +252,6 @@ const projectManagementService = {
   getCheckRequests, getCheckRequestById, createCheckRequest, updateCheckRequest,
   submitCheckRequest, rejectCheckRequest, cancelCheckRequest,
   getInspectionReports, createInspectionReport, decideInspectionReport, cancelInspectionReport,
-  getDPRList, getDPRById, submitDPR, deleteDPR,
   createPOFromBOQ, getProjectPurchaseOrders,
   getProjectInvoices, createProjectInvoice, generateMilestoneInvoice,
   updateProjectInvoice, deleteProjectInvoice

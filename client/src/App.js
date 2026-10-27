@@ -90,6 +90,7 @@ import BillToReceive from './pages/Finance/BillToReceive';
 import BilledNotReceived from './pages/Finance/BilledNotReceived';
 import RecurringJournals from './pages/Finance/RecurringJournals';
 import BatchPayment from './pages/Finance/BatchPayment';
+import PayablesHub from './pages/Finance/PayablesHub';
 import CompanyProfile from './pages/Finance/CompanyProfile';
 import FinanceCompanies from './pages/Finance/FinanceCompanies';
 import BudgetList from './pages/Finance/BudgetList';
@@ -1320,6 +1321,7 @@ function App() {
                     <Route path="/finance/invoice-print/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><InvoicePrint /></ProtectedRoute>} />
                     <Route path="/finance/bill-print/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BillPrint /></ProtectedRoute>} />
                     <Route path="/finance/recurring-journals" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><RecurringJournals /></ProtectedRoute>} />
+                    <Route path="/finance/payables-hub" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager", "accounts_officer", "finance_controller"]}><PayablesHub /></ProtectedRoute>} />
                     <Route path="/finance/batch-payment" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BatchPayment /></ProtectedRoute>} />
                     <Route path="/finance/company-profile" element={<ProtectedRoute requiredRole={["super_admin", "admin"]}><CompanyProfile /></ProtectedRoute>} />
                     <Route path="/finance/companies" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><FinanceCompanies /></ProtectedRoute>} />

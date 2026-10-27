@@ -2,8 +2,6 @@ import React, { useState, useEffect, useCallback, useMemo, useRef } from 'react'
 import {
   Box,
   Typography,
-  Card,
-  CardContent,
   Grid,
   TextField,
   Button,
@@ -26,9 +24,6 @@ import {
   Tooltip,
   IconButton,
   Divider,
-  Accordion,
-  AccordionSummary,
-  AccordionDetails,
   DialogActions,
   Checkbox,
   FormControlLabel
@@ -42,7 +37,6 @@ import CloseIcon from '@mui/icons-material/Close';
 import AddIcon from '@mui/icons-material/Add';
 import DeleteIcon from '@mui/icons-material/Delete';
 import CopyIcon from '@mui/icons-material/ContentCopy';
-import ExpandMoreIcon from '@mui/icons-material/ExpandMore';
 import WarningIcon from '@mui/icons-material/Warning';
 import Dialog from '@mui/material/Dialog';
 import DialogTitle from '@mui/material/DialogTitle';
@@ -95,7 +89,12 @@ function getVoucherIssuanceChip(a) {
   return { label: 'Posted', color: 'success' };
 }
 
-const VendorAdvance = () => {
+/**
+ * `embedPrefill` (Vendor Payments hub): { companyId, vendorId, vendorName, po: { _id, orderNumber, totalAmount } } —
+ * selects the company, vendor and PO (with its remaining advance) on open. `onEmbedSubmitted` runs after an advance is
+ * recorded. Without the props the page works as before.
+ */
+const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) => {
   const [vendors, setVendors] = useState([]);
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [loadingVendors, setLoadingVendors] = useState(true);
@@ -118,7 +117,8 @@ const VendorAdvance = () => {
 
   // Category details (Expense & Chart of Accounts categories)
   const [categoryLines, setCategoryLines] = useState([emptyCategoryLine(), emptyCategoryLine()]);
-  const [categoryAccordionOpen, setCategoryAccordionOpen] = useState(true);
+  const [pageTab, setPageTab] = useState('new');
+  const [vendorOpenAdvance, setVendorOpenAdvance] = useState(null);
   const [accounts, setAccounts] = useState([]);
   const [projectsList, setProjectsList] = useState([]);
 
@@ -163,7 +163,7 @@ const VendorAdvance = () => {
   const [ensuringVoucherId, setEnsuringVoucherId] = useState(null);
   const [removingAdvanceId, setRemovingAdvanceId] = useState(null);
   const [cleaningOrphans, setCleaningOrphans] = useState(false);
-  const { selectedCompanyId, companies } = useFinanceCompany();
+  const { selectedCompanyId, companies, setSelectedCompanyId } = useFinanceCompany();
   const [payingCompanyId, setPayingCompanyId] = useState('');
 
   const isRealCompanyId = useCallback((id) => {
@@ -732,6 +732,30 @@ const VendorAdvance = () => {
     });
   }, [highlightPoId, advances, loadingAdvances]);
 
+  // Unused advances already with the chosen vendor (shown under the payee, like QuickBooks' open balance)
+  useEffect(() => {
+    setVendorOpenAdvance(null);
+    if (!selectedVendor?._id) return;
+    api.get('/finance/accounts-payable/vendor-advance-balance', { params: { vendorId: selectedVendor._id } })
+      .then((res) => setVendorOpenAdvance(Number(res.data?.data?.totalOpen) || 0))
+      .catch(() => setVendorOpenAdvance(null));
+  }, [selectedVendor?._id]);
+
+  const resetAdvanceForm = () => {
+    setForm({
+      amount: '',
+      paymentMethod: 'bank_transfer',
+      bankAccountId: '',
+      chequeNumber: '',
+      reference: '',
+      paymentDate: new Date().toISOString().split('T')[0],
+      costCenter: ''
+    });
+    setCategoryLines([emptyCategoryLine(), emptyCategoryLine()]);
+    setSelectedPo(null);
+    setFinAuth({ accountsManagerUser: null, financeControllerUser: null });
+  };
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!selectedVendor) {
@@ -807,6 +831,7 @@ const VendorAdvance = () => {
       const res = await api.post('/finance/accounts-payable/advance-payment', body);
       if (res.data?.success) {
         toast.success(res.data.message || 'Vendor advance recorded');
+        if (onEmbedSubmitted) onEmbedSubmitted();
         setForm({
           amount: '',
           paymentMethod: 'bank_transfer',
@@ -858,9 +883,35 @@ const VendorAdvance = () => {
       ...f,
       reference: ''
     }));
+    setPageTab('new');
     window.scrollTo({ top: 0, behavior: 'smooth' });
     toast.success('Vendor and amount filled — select Chart of Accounts category and submit when ready.');
   };
+
+  // Opened from the Vendor Payments hub: company first (changing it clears the form), then vendor / PO
+  const embedPrefillDoneRef = useRef(false);
+  useEffect(() => {
+    if (!embedPrefill || embedPrefillDoneRef.current || loadingVendors) return;
+    if (embedPrefill.companyId && String(selectedCompanyId) !== String(embedPrefill.companyId)) {
+      setSelectedCompanyId(String(embedPrefill.companyId));
+      return;
+    }
+    embedPrefillDoneRef.current = true;
+    const vendor = { _id: embedPrefill.vendorId, name: embedPrefill.vendorName || 'Vendor', email: '' };
+    if (embedPrefill.po?._id && embedPrefill.vendorId) {
+      api.get(`/finance/vendor-advances/po/${embedPrefill.po._id}/pending-voucher`)
+        .then((res) => Number(res.data?.data?.remaining))
+        .catch(() => NaN)
+        .then((remaining) => preparePaymentFromQueue({
+          ...embedPrefill.po,
+          vendor,
+          remainingAdvanceDue: Number.isFinite(remaining) ? remaining : Number(embedPrefill.po.totalAmount) || 0
+        }));
+    } else if (embedPrefill.vendorId) {
+      setSelectedVendor(vendors.find((v) => String(v._id) === String(embedPrefill.vendorId)) || vendor);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedPrefill, loadingVendors, selectedCompanyId]);
 
   const showRelatedAdvanceInHistory = (row) => {
     const vid = row.vendor?._id;
@@ -872,6 +923,7 @@ const VendorAdvance = () => {
       email: row.vendor?.email || ''
     };
     setSelectedVendor(vendorObj);
+    setPageTab('history');
     setHighlightPoId(String(row._id));
   };
 
@@ -942,8 +994,7 @@ const VendorAdvance = () => {
         <FinanceCompanySelector minWidth={280} showHelper={false} allowAll={true} />
       </Box>
       <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-        Record prepayment to a supplier. Company filter = PO / advance company (e.g. Taj). Optional Paying company = where cash leaves (e.g. Sardar).
-        Category COA posts on the original company; bank posts on the paying company. Apply the advance later on Accounts Payable when the bill is created.
+        Pay a supplier before the bill — with or without a PO. Company filter = PO / advance company; Paying company = where cash leaves, if different.
       </Typography>
 
       {companyBlockedForPayment ? (
@@ -954,131 +1005,19 @@ const VendorAdvance = () => {
         </Alert>
       ) : null}
 
-      <Paper variant="outlined" sx={{ p: 2, mb: 2, bgcolor: 'action.hover' }}>
-        <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
-          <AssignmentTurnedInIcon color="warning" fontSize="small" />
-          Awaiting vendor advance payment
-        </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
-          Purchase orders in <strong>Pending Finance</strong> with <strong>Full Advance</strong> (or advance) terms that still need an advance posted.
-          Use <strong>Prepare payment</strong> to fill the form below. If an advance is already in <strong>voucher approval</strong> for that PO, action is disabled until it is completed or rejected.
-        </Typography>
-        {loadingQueue ? (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            <CircularProgress size={20} />
-            <Typography variant="body2" color="text.secondary">Loading queue…</Typography>
-          </Box>
-        ) : poQueue.length === 0 ? (
-          <Typography variant="body2" color="text.secondary">
-            No POs are waiting for vendor advance right now.
-          </Typography>
-        ) : (
-          <TableContainer>
-            <Table size="small">
-              <TableHead>
-                <TableRow sx={{ bgcolor: 'background.paper' }}>
-                  <TableCell><b>PO</b></TableCell>
-                  <TableCell><b>Company</b></TableCell>
-                  <TableCell><b>Vendor</b></TableCell>
-                  <TableCell><b>Terms</b></TableCell>
-                  <TableCell align="right"><b>PO total</b></TableCell>
-                  <TableCell align="right"><b>Already recorded</b></TableCell>
-                  <TableCell align="right"><b>Still due</b></TableCell>
-                  <TableCell><b>Voucher</b></TableCell>
-                  <TableCell><b>Actions</b></TableCell>
-                </TableRow>
-              </TableHead>
-              <TableBody>
-                {poQueue.map((row) => (
-                  <TableRow key={row._id} hover>
-                    <TableCell>{row.orderNumber || row._id}</TableCell>
-                    <TableCell>{row.company || '—'}</TableCell>
-                    <TableCell>
-                      {row.vendor?.name || '—'}
-                      {row.vendor?.email ? (
-                        <Typography variant="caption" display="block" color="text.secondary">
-                          {row.vendor.email}
-                        </Typography>
-                      ) : null}
-                    </TableCell>
-                    <TableCell>{row.paymentTerms || '—'}</TableCell>
-                    <TableCell align="right">{formatPKR(row.totalAmount || 0)}</TableCell>
-                    <TableCell align="right">{formatPKR(row.advanceRecordedAmount || 0)}</TableCell>
-                    <TableCell align="right">
-                      <Chip label={formatPKR(row.remainingAdvanceDue || 0)} size="small" color="warning" />
-                    </TableCell>
-                    <TableCell>
-                      {row.hasPendingVoucherApproval ? (
-                        <Chip size="small" color="info" label="Awaiting signatures" />
-                      ) : (
-                        <Typography variant="caption" color="text.secondary">—</Typography>
-                      )}
-                    </TableCell>
-                    <TableCell>
-                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
-                        <Button
-                          size="small"
-                          variant="outlined"
-                          color="info"
-                          startIcon={<VisibilityIcon />}
-                          onClick={() => handleViewPoDetails(row)}
-                        >
-                          View Docs
-                        </Button>
-                        <Tooltip title="Show related advance in history below">
-                          <IconButton
-                            size="small"
-                            color="primary"
-                            aria-label="Show related advance in history"
-                            onClick={() => showRelatedAdvanceInHistory(row)}
-                          >
-                            <ArticleOutlinedIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title={`Pay the remaining ${formatPKR(row.remainingAdvanceDue || 0)}`}>
-                          <span>
-                            <Button
-                              size="small"
-                              variant="contained"
-                              color="warning"
-                              onClick={() => preparePaymentFromQueue(row)}
-                            >
-                              {Number(row.advanceRecordedAmount) > 0 ? 'Pay remaining' : 'Prepare payment'}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </Box>
-                    </TableCell>
-                  </TableRow>
-                ))}
-              </TableBody>
-            </Table>
-            <TablePagination
-              component="div"
-              count={queueTotalCount}
-              page={queuePage}
-              onPageChange={(_, newPage) => setQueuePage(newPage)}
-              rowsPerPage={queueRowsPerPage}
-              onRowsPerPageChange={(e) => {
-                setQueueRowsPerPage(parseInt(e.target.value, 10));
-                setQueuePage(0);
-              }}
-              rowsPerPageOptions={[50, 100, 250, 500]}
-              labelRowsPerPage="Rows per page:"
-            />
-          </TableContainer>
-        )}
-      </Paper>
+      <Tabs value={pageTab} onChange={(_, v) => setPageTab(v)} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }}>
+        <Tab value="new" label="New advance" sx={{ textTransform: 'none' }} />
+        <Tab value="queue" label={`PO advances due${queueTotalCount ? ` (${queueTotalCount})` : ''}`} sx={{ textTransform: 'none' }} />
+        <Tab value="history" label="Advance history" sx={{ textTransform: 'none' }} />
+      </Tabs>
 
-      <Card variant="outlined">
-        <CardContent>
-          <Alert severity="info" sx={{ mb: 2 }}>
-            This matches Flow 2 step 2 (payment before GRN). Amount posts to account <strong>1110</strong> Advance to suppliers until
-            you apply it to a bill on <strong>Finance → Vendors → Vendor Bills</strong>.
-          </Alert>
-          <Box component="form" onSubmit={handleSubmit}>
-            <Grid container spacing={2}>
-              <Grid item xs={12} md={6}>
+      {pageTab === 'new' && (
+      <Paper variant="outlined" sx={{ borderRadius: 2, overflow: 'hidden' }}>
+        <Box component="form" onSubmit={handleSubmit}>
+          {/* QuickBooks-style header: payee and pay-from account on the left, the amount large on the right */}
+          <Box sx={{ p: 2.5, bgcolor: 'grey.50', borderBottom: 1, borderColor: 'divider' }}>
+            <Grid container spacing={2} alignItems="flex-start">
+              <Grid item xs={12} md={4}>
                 <Autocomplete
                   loading={loadingVendors}
                   options={vendorOptions}
@@ -1110,9 +1049,13 @@ const VendorAdvance = () => {
                     <TextField {...params} label="Vendor *" required placeholder="Search vendor" />
                   )}
                 />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <Autocomplete
+                {selectedVendor?._id && vendorOpenAdvance != null ? (
+                  <Typography variant="caption" color="success.main" sx={{ display: 'block', mt: 0.5 }}>
+                    Unused advances with this vendor: <strong>{formatPKR(vendorOpenAdvance)}</strong>
+                  </Typography>
+                ) : null}
+                <Box sx={{ mt: 2 }}>
+                  <Autocomplete
                   loading={loadingPos}
                   options={purchaseOrders}
                   disabled={!selectedVendor}
@@ -1125,6 +1068,100 @@ const VendorAdvance = () => {
                     <TextField {...params} label="Link to PO (optional)" placeholder="Select PO" />
                   )}
                 />
+                </Box>
+              </Grid>
+              <Grid item xs={12} md={4}>
+                <FormControl fullWidth size="small" required disabled={bankAccounts.length === 0}>
+                  <InputLabel id="vendor-advance-pay-from-label">
+                    Pay from account{isIntercompanyAdvance ? ` (${payingCompanyName})` : ''}
+                  </InputLabel>
+                  <Select
+                    labelId="vendor-advance-pay-from-label"
+                    value={form.bankAccountId}
+                    label={`Pay from account${isIntercompanyAdvance ? ` (${payingCompanyName})` : ''}`}
+                    onChange={(e) => setForm((f) => ({ ...f, bankAccountId: e.target.value }))}
+                  >
+                    {bankAccounts.map((item) => {
+                      const account = item?.account || item;
+                      const depth = item?.depth || 0;
+                      return (
+                        <MenuItem key={account._id} value={account._id}>
+                          {formatPayFromAccountLabel(account, depth)}
+                        </MenuItem>
+                      );
+                    })}
+                  </Select>
+                </FormControl>
+                {bankAccounts.length === 0 ? (
+                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
+                    No suitable pay-from accounts found for {payingCompanyName}. Add Cash/Bank accounts in that company&apos;s Chart of Accounts.
+                  </Typography>
+                ) : null}
+              </Grid>
+              <Grid item xs={12} md={4} sx={{ textAlign: { xs: 'left', md: 'right' } }}>
+                <Typography variant="overline" color="text.secondary">Amount</Typography>
+                <Typography variant="h4" fontWeight={800} color="primary.main">{formatPKR(categoryTotal)}</Typography>
+              </Grid>
+            </Grid>
+          </Box>
+
+          <Box sx={{ p: 2.5 }}>
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6} md={3}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Payment date"
+                  type="date"
+                  value={form.paymentDate}
+                  onChange={(e) => setForm((f) => ({ ...f, paymentDate: e.target.value }))}
+                  InputLabelProps={{ shrink: true }}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Payment method</InputLabel>
+                  <Select
+                    value={form.paymentMethod}
+                    label="Payment method"
+                    onChange={(e) => setForm((f) => ({ ...f, paymentMethod: e.target.value }))}
+                  >
+                    <MenuItem value="bank_transfer">Bank transfer</MenuItem>
+                    <MenuItem value="cash">Cash</MenuItem>
+                    <MenuItem value="check">Cheque</MenuItem>
+                    <MenuItem value="other">Other</MenuItem>
+                  </Select>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <TextField
+                  fullWidth
+                  size="small"
+                  label="Cheque / ref no."
+                  value={form.chequeNumber}
+                  onChange={(e) => setForm((f) => ({ ...f, chequeNumber: e.target.value }))}
+                  placeholder="Unique Cheque / TT / Ref #"
+                />
+              </Grid>
+              <Grid item xs={12} sm={6} md={3}>
+                <FormControl fullWidth size="small">
+                  <InputLabel>Paying company</InputLabel>
+                  <Select
+                    value={payingCompanyId}
+                    label="Paying company"
+                    onChange={(e) => {
+                      setPayingCompanyId(e.target.value);
+                      setForm((f) => ({ ...f, bankAccountId: '' }));
+                    }}
+                  >
+                    <MenuItem value=""><em>Same as company filter ({originalCompanyName})</em></MenuItem>
+                    {companies.map((c) => (
+                      <MenuItem key={String(c._id)} value={String(c._id)}>
+                        {c.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
               </Grid>
               {selectedPo?._id && poPendingVoucher.loading ? (
                 <Grid item xs={12}>
@@ -1157,28 +1194,6 @@ const VendorAdvance = () => {
                   </Alert>
                 </Grid>
               ) : null}
-
-              <Grid item xs={12} md={3}>
-                <FormControl fullWidth size="small">
-                  <InputLabel>Paying company</InputLabel>
-                  <Select
-                    value={payingCompanyId}
-                    label="Paying company"
-                    onChange={(e) => {
-                      setPayingCompanyId(e.target.value);
-                      setForm((f) => ({ ...f, bankAccountId: '' }));
-                    }}
-                  >
-                    <MenuItem value=""><em>Same as company filter ({originalCompanyName})</em></MenuItem>
-                    {companies.map((c) => (
-                      <MenuItem key={String(c._id)} value={String(c._id)}>
-                        {c.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-
               {isIntercompanyAdvance ? (
                 <Grid item xs={12}>
                   <Alert severity="info">
@@ -1190,116 +1205,15 @@ const VendorAdvance = () => {
                   </Alert>
                 </Grid>
               ) : null}
+            </Grid>
 
-              <Grid item xs={12} md={3}>
-                <FormControl fullWidth size="small">
-                  <InputLabel>Payment method</InputLabel>
-                  <Select
-                    value={form.paymentMethod}
-                    label="Payment method"
-                    onChange={(e) => setForm((f) => ({ ...f, paymentMethod: e.target.value }))}
-                  >
-                    <MenuItem value="bank_transfer">Bank transfer</MenuItem>
-                    <MenuItem value="cash">Cash</MenuItem>
-                    <MenuItem value="check">Cheque</MenuItem>
-                    <MenuItem value="other">Other</MenuItem>
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} md={3}>
-                <FormControl fullWidth size="small" required disabled={bankAccounts.length === 0}>
-                  <InputLabel id="vendor-advance-pay-from-label">
-                    Pay from account{isIntercompanyAdvance ? ` (${payingCompanyName})` : ''}
-                  </InputLabel>
-                  <Select
-                    labelId="vendor-advance-pay-from-label"
-                    value={form.bankAccountId}
-                    label={`Pay from account${isIntercompanyAdvance ? ` (${payingCompanyName})` : ''}`}
-                    onChange={(e) => setForm((f) => ({ ...f, bankAccountId: e.target.value }))}
-                  >
-                    {bankAccounts.map((item) => {
-                      const account = item?.account || item;
-                      const depth = item?.depth || 0;
-                      return (
-                        <MenuItem key={account._id} value={account._id}>
-                          {formatPayFromAccountLabel(account, depth)}
-                        </MenuItem>
-                      );
-                    })}
-                  </Select>
-                </FormControl>
-                {bankAccounts.length === 0 ? (
-                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5 }}>
-                    No suitable pay-from accounts found for {payingCompanyName}. Add Cash/Bank accounts in that company&apos;s Chart of Accounts.
-                  </Typography>
-                ) : null}
-              </Grid>
-              <Grid item xs={12} md={4}>
-                <TextField
-                  fullWidth
-                  label="Payment date"
-                  type="date"
-                  value={form.paymentDate}
-                  onChange={(e) => setForm((f) => ({ ...f, paymentDate: e.target.value }))}
-                  InputLabelProps={{ shrink: true }}
-                />
-              </Grid>
-              <Grid item xs={12} md={8}>
-                <FormControl fullWidth>
-                  <InputLabel id="vendor-advance-cost-center-label">Cost Center (Optional)</InputLabel>
-                  <Select
-                    labelId="vendor-advance-cost-center-label"
-                    value={form.costCenter}
-                    label="Cost Center (Optional)"
-                    onChange={(e) => setForm((f) => ({ ...f, costCenter: e.target.value }))}
-                  >
-                    <MenuItem value="">None</MenuItem>
-                    {costCenters.filter((cc) => cc.isActive).map((cc) => (
-                      <MenuItem key={cc._id} value={cc._id}>
-                        {cc.code ? `${cc.code} — ${cc.name}` : cc.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Cheque Number"
-                  value={form.chequeNumber}
-                  onChange={(e) => setForm((f) => ({ ...f, chequeNumber: e.target.value }))}
-                  placeholder="Unique Cheque / TT / Ref #"
-                />
-              </Grid>
-              <Grid item xs={12} md={6}>
-                <TextField
-                  fullWidth
-                  label="Reference / narration"
-                  value={form.reference}
-                  onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))}
-                  placeholder="Narration / notes or leave blank to auto-generate"
-                />
-              </Grid>
-
-              {/* Collapsible Section: Category Details (Chart of Accounts) */}
-              <Grid item xs={12}>
-                <Divider sx={{ my: 1 }} />
-                <Accordion
-                  expanded={categoryAccordionOpen}
-                  onChange={(_, expanded) => setCategoryAccordionOpen(expanded)}
-                  elevation={0}
-                  sx={{ border: '1px solid', borderColor: 'divider', borderRadius: '8px !important', mb: 1 }}
-                >
-                  <AccordionSummary expandIcon={<ExpandMoreIcon />}>
-                    <Typography variant="subtitle1" fontWeight={700} sx={{ display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-                      <span>Category details</span>
-                      <Chip label={`${categoryLines.filter((l) => Number(l.amount) > 0).length} lines`} size="small" variant="outlined" />
-                      <Typography variant="body2" color="text.secondary" sx={{ ml: 1 }}>
-                        (COA of {originalCompanyName} — e.g. Advance to Suppliers)
-                      </Typography>
-                    </Typography>
-                  </AccordionSummary>
-                  <AccordionDetails sx={{ p: 0 }}>
+            <Typography variant="subtitle1" fontWeight={700} sx={{ mt: 3, mb: 1 }}>
+              Category details{' '}
+              <Typography component="span" variant="body2" color="text.secondary">
+                (Chart of Accounts of {originalCompanyName} — normally Advance to Suppliers)
+              </Typography>
+            </Typography>
+            <Paper variant="outlined" sx={{ overflow: 'hidden' }}>
                     <TableContainer>
                       <Table size="small">
                         <TableHead sx={{ backgroundColor: 'action.hover' }}>
@@ -1447,18 +1361,65 @@ const VendorAdvance = () => {
                         </Button>
                       </Box>
                       <Typography variant="subtitle1" sx={{ fontWeight: 700, color: 'primary.main', fontSize: '1rem' }}>
-                        Total Advance: {formatPKR(categoryTotal)}
+                        Total: {formatPKR(categoryTotal)}
                       </Typography>
                     </Box>
-                  </AccordionDetails>
-                </Accordion>
-              </Grid>
+            </Paper>
 
-              <Grid item xs={12}>
-                <Typography variant="subtitle2" sx={{ mb: 1.5 }}>
-                  Finance voucher signatures (required)
-                </Typography>
+            <Grid container spacing={2} sx={{ mt: 1 }}>
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  multiline
+                  minRows={2}
+                  label="Memo"
+                  value={form.reference}
+                  onChange={(e) => setForm((f) => ({ ...f, reference: e.target.value }))}
+                  placeholder="Narration / notes or leave blank to auto-generate"
+                />
+                <Box sx={{ mt: 2 }}>
+                  <FormControl fullWidth size="small">
+                  <InputLabel id="vendor-advance-cost-center-label">Cost Center (Optional)</InputLabel>
+                  <Select
+                    labelId="vendor-advance-cost-center-label"
+                    value={form.costCenter}
+                    label="Cost Center (Optional)"
+                    onChange={(e) => setForm((f) => ({ ...f, costCenter: e.target.value }))}
+                  >
+                    <MenuItem value="">None</MenuItem>
+                    {costCenters.filter((cc) => cc.isActive).map((cc) => (
+                      <MenuItem key={cc._id} value={cc._id}>
+                        {cc.code ? `${cc.code} — ${cc.name}` : cc.name}
+                      </MenuItem>
+                    ))}
+                  </Select>
+                </FormControl>
+                </Box>
               </Grid>
+              <Grid item xs={12} md={6}>
+                <Box sx={{ ml: { md: 'auto' }, maxWidth: 360, p: 2, bgcolor: 'grey.50', borderRadius: 1 }}>
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography variant="body2" color="text.secondary">Subtotal</Typography>
+                    <Typography variant="body2">{formatPKR(categoryTotal)}</Typography>
+                  </Stack>
+                  <Divider sx={{ my: 1 }} />
+                  <Stack direction="row" justifyContent="space-between">
+                    <Typography variant="subtitle1" fontWeight={800}>Total advance</Typography>
+                    <Typography variant="subtitle1" fontWeight={800}>{formatPKR(categoryTotal)}</Typography>
+                  </Stack>
+                  {selectedPo?._id && poPendingVoucher.remaining != null && poPendingVoucher.poTotal > 0 ? (
+                    <Typography variant="caption" color="text.secondary">
+                      PO {selectedPo.orderNumber} still due after this: {formatPKR(Math.max(0, poPendingVoucher.remaining - categoryTotal))}
+                    </Typography>
+                  ) : null}
+                </Box>
+              </Grid>
+            </Grid>
+
+            <Typography variant="subtitle2" sx={{ mt: 3, mb: 1.5 }}>
+              Finance voucher signatures (required)
+            </Typography>
+            <Grid container spacing={2}>
               <Grid item xs={12} md={6}>
                 <Autocomplete
                   options={approverPool}
@@ -1477,42 +1438,169 @@ const VendorAdvance = () => {
                   renderInput={(params) => <TextField {...params} label="GM Finance *" size="small" required />}
                 />
               </Grid>
-              <Grid item xs={12}>
-                <Tooltip title={recordAdvanceDisabledReason || ''}>
-                  <span>
-                    <Button
-                      type="submit"
-                      variant="contained"
-                      disabled={recordAdvanceDisabled}
-                      size="large"
-                    >
-                      {submitting ? 'Posting…' : 'Record vendor advance'}
-                    </Button>
-                  </span>
-                </Tooltip>
-                {recordAdvanceDisabledReason ? (
-                  <Typography variant="caption" color="error" sx={{ display: 'block', mt: 1 }}>
-                    {recordAdvanceDisabledReason}
-                  </Typography>
-                ) : null}
-              </Grid>
             </Grid>
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 2 }}>
+              The advance is applied when you pay this vendor&apos;s bill (Vendor Bills or Vendor Payments → Pay) — any balance is paid then.
+            </Typography>
           </Box>
-        </CardContent>
-      </Card>
 
-      <Paper variant="outlined" sx={{ p: 2, mt: 2, bgcolor: 'grey.50' }}>
-        <Typography variant="subtitle2" gutterBottom>
-          Next steps (Flow 2)
+          {/* Save bar */}
+          <Box
+            sx={{
+              position: 'sticky',
+              bottom: 0,
+              zIndex: 2,
+              px: 2.5,
+              py: 1.5,
+              borderTop: 1,
+              borderColor: 'divider',
+              bgcolor: 'background.paper',
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              gap: 2,
+              flexWrap: 'wrap'
+            }}
+          >
+            <Button color="inherit" onClick={resetAdvanceForm} disabled={submitting}>Clear</Button>
+            <Stack direction="row" alignItems="center" gap={2}>
+              {recordAdvanceDisabledReason ? (
+                <Typography variant="caption" color="error">{recordAdvanceDisabledReason}</Typography>
+              ) : null}
+              <Tooltip title={recordAdvanceDisabledReason || ''}>
+                <span>
+                  <Button type="submit" variant="contained" color="success" disabled={recordAdvanceDisabled} size="large">
+                    {submitting ? 'Posting…' : 'Save advance'}
+                  </Button>
+                </span>
+              </Tooltip>
+            </Stack>
+          </Box>
+        </Box>
+      </Paper>
+      )}
+
+      {pageTab === 'queue' && (
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Typography variant="h6" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1 }}>
+          <AssignmentTurnedInIcon color="warning" fontSize="small" />
+          Awaiting vendor advance payment
         </Typography>
-        <Typography variant="body2" component="ul" sx={{ m: 0, pl: 2 }}>
-          <li>GRN in Procurement → Store → GRN</li>
-          <li>Create vendor bill from GRN: Procurement → Vendor Bills</li>
-          <li>Open the bill in Finance → Vendor Bills → View details → apply advance and pay any remainder</li>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Purchase orders in <strong>Pending Finance</strong> with <strong>Full Advance</strong> (or advance) terms that still need an advance posted.
+          Use <strong>Prepare payment</strong> to fill the New advance form. If an advance is already in <strong>voucher approval</strong> for that PO, action is disabled until it is completed or rejected.
         </Typography>
+        {loadingQueue ? (
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+            <CircularProgress size={20} />
+            <Typography variant="body2" color="text.secondary">Loading queue…</Typography>
+          </Box>
+        ) : poQueue.length === 0 ? (
+          <Typography variant="body2" color="text.secondary">
+            No POs are waiting for vendor advance right now.
+          </Typography>
+        ) : (
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: 'background.paper' }}>
+                  <TableCell><b>PO</b></TableCell>
+                  <TableCell><b>Company</b></TableCell>
+                  <TableCell><b>Vendor</b></TableCell>
+                  <TableCell><b>Terms</b></TableCell>
+                  <TableCell align="right"><b>PO total</b></TableCell>
+                  <TableCell align="right"><b>Already recorded</b></TableCell>
+                  <TableCell align="right"><b>Still due</b></TableCell>
+                  <TableCell><b>Voucher</b></TableCell>
+                  <TableCell><b>Actions</b></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {poQueue.map((row) => (
+                  <TableRow key={row._id} hover>
+                    <TableCell>{row.orderNumber || row._id}</TableCell>
+                    <TableCell>{row.company || '—'}</TableCell>
+                    <TableCell>
+                      {row.vendor?.name || '—'}
+                      {row.vendor?.email ? (
+                        <Typography variant="caption" display="block" color="text.secondary">
+                          {row.vendor.email}
+                        </Typography>
+                      ) : null}
+                    </TableCell>
+                    <TableCell>{row.paymentTerms || '—'}</TableCell>
+                    <TableCell align="right">{formatPKR(row.totalAmount || 0)}</TableCell>
+                    <TableCell align="right">{formatPKR(row.advanceRecordedAmount || 0)}</TableCell>
+                    <TableCell align="right">
+                      <Chip label={formatPKR(row.remainingAdvanceDue || 0)} size="small" color="warning" />
+                    </TableCell>
+                    <TableCell>
+                      {row.hasPendingVoucherApproval ? (
+                        <Chip size="small" color="info" label="Awaiting signatures" />
+                      ) : (
+                        <Typography variant="caption" color="text.secondary">—</Typography>
+                      )}
+                    </TableCell>
+                    <TableCell>
+                      <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, flexWrap: 'wrap' }}>
+                        <Button
+                          size="small"
+                          variant="outlined"
+                          color="info"
+                          startIcon={<VisibilityIcon />}
+                          onClick={() => handleViewPoDetails(row)}
+                        >
+                          View Docs
+                        </Button>
+                        <Tooltip title="Show related advance in Advance history">
+                          <IconButton
+                            size="small"
+                            color="primary"
+                            aria-label="Show related advance in history"
+                            onClick={() => showRelatedAdvanceInHistory(row)}
+                          >
+                            <ArticleOutlinedIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                        <Tooltip title={`Pay the remaining ${formatPKR(row.remainingAdvanceDue || 0)}`}>
+                          <span>
+                            <Button
+                              size="small"
+                              variant="contained"
+                              color="warning"
+                              onClick={() => preparePaymentFromQueue(row)}
+                            >
+                              {Number(row.advanceRecordedAmount) > 0 ? 'Pay remaining' : 'Prepare payment'}
+                            </Button>
+                          </span>
+                        </Tooltip>
+                      </Box>
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+            <TablePagination
+              component="div"
+              count={queueTotalCount}
+              page={queuePage}
+              onPageChange={(_, newPage) => setQueuePage(newPage)}
+              rowsPerPage={queueRowsPerPage}
+              onRowsPerPageChange={(e) => {
+                setQueueRowsPerPage(parseInt(e.target.value, 10));
+                setQueuePage(0);
+              }}
+              rowsPerPageOptions={[50, 100, 250, 500]}
+              labelRowsPerPage="Rows per page:"
+            />
+          </TableContainer>
+        )}
       </Paper>
 
-      <Box ref={advanceHistorySectionRef} sx={{ mt: 3 }}>
+      )}
+
+      {pageTab === 'history' && (
+      <Box ref={advanceHistorySectionRef}>
         <Box sx={{ mb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap' }}>
           <Typography variant="h6" sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
             Advance history (partial payments)
@@ -1702,6 +1790,8 @@ const VendorAdvance = () => {
           </TableContainer>
         )}
       </Box>
+
+      )}
 
       {/* Related PO Documents Dialog (Reusing existing Indent, PO, CS, Quotation, GRN & Attachment components) */}
       <Dialog

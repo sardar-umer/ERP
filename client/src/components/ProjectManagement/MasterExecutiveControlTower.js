@@ -330,7 +330,7 @@ export default function MasterExecutiveControlTower({ masterProjectId, onClose }
       {data.groundPhotoStream?.length > 0 && (
         <Paper variant="outlined" sx={{ p: 2.5, mb: 3, borderRadius: 2 }}>
           <Typography variant="subtitle1" fontWeight={600} gutterBottom sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-            📷 Ground Visual Verification Stream (Geotagged DPR Photos)
+            📷 Ground Visual Verification Stream (Inspection Report Photos)
           </Typography>
           <Divider sx={{ my: 1.5 }} />
           <Grid container spacing={2}>
@@ -580,7 +580,7 @@ export default function MasterExecutiveControlTower({ masterProjectId, onClose }
           <Box
             component="img"
             src={getImageUrl(selectedPhoto)}
-            alt="DPR Full Preview"
+            alt="Inspection photo preview"
             sx={{ maxWidth: '100%', maxHeight: '85vh', display: 'block', objectFit: 'contain' }}
           />
         </DialogContent>

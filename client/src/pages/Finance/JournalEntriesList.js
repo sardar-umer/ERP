@@ -410,9 +410,9 @@ const JournalEntriesList = () => {
                     </TableCell>
                     <TableCell>
                       <Chip 
-                        label={entry.status?.toUpperCase() || 'DRAFT'} 
+                        label={entry.isReversed ? 'REVERSED' : entry.status?.toUpperCase() || 'DRAFT'} 
                         size="small" 
-                        color={getStatusColor(entry.status)}
+                        color={getStatusColor(entry.isReversed ? 'reversed' : entry.status)}
                       />
                     </TableCell>
                     <TableCell>

@@ -170,6 +170,19 @@ const goodsIssueSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  /** Finance outcome per issued line (DR COGS / CR Inventory); failed / skipped lines show in Finance for retry */
+  financePosting: [{
+    _id: false,
+    inventoryItem: { type: mongoose.Schema.Types.ObjectId, ref: 'Inventory' },
+    itemName: { type: String, trim: true },
+    qty: { type: Number, default: 0 },
+    status: { type: String, enum: ['posted', 'skipped', 'failed'] },
+    reason: { type: String, trim: true, default: '' },
+    journalEntry: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' },
+    amount: { type: Number, default: 0 },
+    at: { type: Date, default: Date.now }
+  }],
+  financePostingStatus: { type: String, enum: ['posted', 'partial', 'failed', 'not_posted', ''], default: '', index: true },
   notes: {
     type: String,
     trim: true
@@ -253,6 +266,11 @@ goodsIssueSchema.post('save', async function(doc) {
       return defaultStoreForOut;
     };
 
+    // Lines already posted to Finance on an earlier save are never posted twice
+    const postedBefore = new Map((doc.financePosting || [])
+      .filter((r) => r.status === 'posted').map((r) => [String(r.inventoryItem), r]));
+    const financeResults = [];
+
     for (const item of doc.items) {
       const qty = qtyToDeduct(item);
       if (qty <= 0) continue;
@@ -266,16 +284,26 @@ goodsIssueSchema.post('save', async function(doc) {
             doc.issuedBy
           );
 
-          // Auto-post COGS journal if the item has finance accounts configured
-          if (inventory.cogsAccount && inventory.inventoryAccount) {
-            await FinanceHelper.postSINJournal({
+          // COGS journal: always attempted (category / global accounts may apply); the outcome is recorded
+          const earlier = postedBefore.get(String(inventory._id));
+          const posting = earlier
+            ? { status: 'posted', journalEntry: earlier.journalEntry, amount: earlier.amount }
+            : await FinanceHelper.postSINJournal({
               inventoryItem: inventory,
               sinDoc: doc,
               qty,
               createdBy: doc.issuedBy,
               companyId: doc.companyId
             });
-          }
+          financeResults.push({
+            inventoryItem: inventory._id,
+            itemName: inventory.name,
+            qty,
+            status: posting?.status || 'failed',
+            reason: posting?.reason || '',
+            journalEntry: posting?.journalEntry,
+            amount: posting?.amount || 0
+          });
 
           const invStoreId = inventory.store?._id || inventory.store;
           let txStoreId = item.subStore?._id || item.subStore || storeId || invStoreId;
@@ -321,7 +349,17 @@ goodsIssueSchema.post('save', async function(doc) {
         }
       } catch (error) {
         console.error(`Error updating inventory for item ${item.itemCode}:`, error.message);
+        financeResults.push({ inventoryItem: item.inventoryItem, itemName: item.itemName, qty, status: 'failed', reason: error.message });
       }
+    }
+
+    if (financeResults.length) {
+      const posted = financeResults.filter((r) => r.status === 'posted').length;
+      const financePostingStatus = posted === financeResults.length ? 'posted' : posted ? 'partial'
+        : financeResults.some((r) => r.status === 'failed') ? 'failed' : 'not_posted';
+      // updateOne (not save) so this hook does not run again
+      await doc.constructor.updateOne({ _id: doc._id }, { $set: { financePosting: financeResults, financePostingStatus } })
+        .catch((e) => console.error('GoodsIssue finance outcome not recorded:', e.message));
     }
   }
 });

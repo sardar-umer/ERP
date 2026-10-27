@@ -313,6 +313,10 @@ journalEntrySchema.virtual('formattedTotalCredits').get(function() {
 // Pre-save middleware to calculate totals and validate
 journalEntrySchema.pre('save', async function(next) {
   try {
+    // Account balances move only when an entry BECOMES posted — re-saving a posted entry (clearance,
+    // attachments, reference edits, reversal flag) must not count it again
+    this.$locals.applyBalance = this.status === 'posted' && (this.isNew || this.isModified('status'));
+
     // Calculate totals
     this.totalDebits = this.lines.reduce((sum, line) => sum + line.debit, 0);
     this.totalCredits = this.lines.reduce((sum, line) => sum + line.credit, 0);
@@ -387,7 +391,7 @@ journalEntrySchema.pre('save', async function(next) {
 // Post-save middleware to update account balances when posted
 journalEntrySchema.post('save', async function(doc, next) {
   try {
-    if (doc.status === 'posted') {
+    if (doc.status === 'posted' && doc.$locals?.applyBalance) {
       const Account = mongoose.model('Account');
       
       for (let line of doc.lines) {
@@ -477,6 +481,10 @@ journalEntrySchema.methods.post = async function(postingUser) {
     throw new Error('Entry must be balanced before posting');
   }
 
+  // Manual / approved vouchers obey the same fiscal-period rules as automatic postings
+  require('./FiscalPeriod');
+  await mongoose.model('FiscalPeriod').validatePostingDate(this.date || new Date(), this.companyId || null);
+
   this.status = 'posted';
   this.postedBy = postingUser;
   this.postedDate = new Date();
@@ -512,8 +520,9 @@ journalEntrySchema.methods.reverse = async function(reversalUser, reversalReason
 
   await reversalEntry.post(reversalUser);
   
-  // Mark original entry as reversed
-  this.status = 'reversed';
+  // Original stays posted (flagged + linked) so original + reversal net to zero in every report
+  this.isReversed = true;
+  this.reversalEntry = reversalEntry._id;
   this.reversedBy = reversalEntry._id;
   await this.save();
 

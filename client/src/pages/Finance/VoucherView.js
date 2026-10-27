@@ -421,7 +421,7 @@ const VoucherView = () => {
           Back
         </Button>
         <Box sx={{ display: 'flex', gap: 1.5 }}>
-          {entry.status !== 'reversed' && (
+          {entry.status !== 'reversed' && !entry.isReversed && (
             <Button
               variant="outlined"
               color="primary"

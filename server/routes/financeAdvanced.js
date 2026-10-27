@@ -2858,9 +2858,30 @@ router.put('/accounts-payable/:id',
       delete req.body.status;
     }
 
+    const wasAdvanceBill = Boolean(bill.isAdvanceBill);
     Object.assign(bill, req.body);
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'companyId')) {
       bill.companyId = req.body.companyId || null;
+    }
+    // Advance bills stay advance bills, and their lines stay on the Vendor Advance account
+    bill.isAdvanceBill = wasAdvanceBill;
+    if (wasAdvanceBill && Array.isArray(bill.lineItems) && bill.lineItems.length) {
+      try {
+        bill.lineItems = await FinanceHelper.advanceBillLineItems(bill.lineItems, co(bill));
+      } catch (advErr) {
+        return res.status(advErr.statusCode || 400).json({ success: false, message: advErr.message });
+      }
+    }
+    try {
+      await FinanceHelper.assertUniqueVendorInvoice({
+        companyId: bill.companyId,
+        vendorId: bill.vendor?.vendorId,
+        vendorName: bill.vendor?.name,
+        vendorInvoiceNumber: bill.vendorInvoiceNumber,
+        excludeId: bill._id
+      });
+    } catch (dupErr) {
+      return res.status(400).json({ success: false, message: dupErr.message });
     }
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'company')) {
       bill.company = req.body.company || '';
@@ -4955,6 +4976,15 @@ router.post('/accounts-payable',
     }));
 
     const company = await resolveCompanyForFinanceRoute(req);
+    const isAdvanceBill = req.body.isAdvanceBill === true || req.body.isAdvanceBill === 'true';
+    if (isAdvanceBill) {
+      try {
+        const forced = await FinanceHelper.advanceBillLineItems(lineItems, company._id);
+        lineItems.splice(0, lineItems.length, ...forced);
+      } catch (advErr) {
+        return res.status(advErr.statusCode || 400).json({ success: false, message: advErr.message });
+      }
+    }
     const apEntry = await FinanceHelper.createAPFromBill({
       companyId: company._id,
       company: req.body.company || '',
@@ -4989,6 +5019,10 @@ router.post('/accounts-payable',
       }],
       createdBy: req.user._id
     });
+    if (isAdvanceBill) {
+      await AccountsPayable.updateOne({ _id: apEntry._id }, { $set: { isAdvanceBill: true } });
+      apEntry.isAdvanceBill = true;
+    }
 
     notifyChatApprovers(approverIds, {
       docType: 'Chart of Accounts Bill',
@@ -5394,21 +5428,32 @@ router.delete('/accounts-payable/:id',
     if (bill.amountPaid > 0 || (bill.payments && bill.payments.length > 0)) {
       return res.status(400).json({
         success: false,
-        message: 'Cannot delete a bill that has recorded payments. Please void/remove payments first.'
+        message: 'Cannot void a bill that has recorded payments. Please void/remove payments first.'
+      });
+    }
+    if (bill.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: `Bill ${bill.billNumber} is already voided` });
+    }
+    if (bill.referenceType === 'project_ipc') {
+      return res.status(400).json({
+        success: false,
+        message: 'This bill is a CEO-approved Project Management IPC — it cannot be voided from Finance'
       });
     }
 
-    // Clean up Journal Entries associated with this bill
-    try {
-      await JournalEntry.deleteMany({
-        $or: [
-          { referenceId: bill._id },
-          { 'sourceDocument.id': bill._id },
-          { narration: { $regex: bill.billNumber, $options: 'i' } }
-        ]
-      });
-    } catch (jErr) {
-      console.warn('Could not clean up journal entries for deleted bill', jErr);
+    // Void, don't delete: reverse every posted journal of THIS bill (matched by reference id only), drop unposted drafts
+    const linked = await JournalEntry.find({ referenceId: bill._id, referenceType: { $ne: 'payment' } });
+    const reversals = [];
+    for (const je of linked) {
+      if (je.status === 'posted' && !je.isReversed) {
+        const rev = await FinanceHelper.reverseJournalEntry(je, {
+          reason: `Void of bill ${bill.billNumber}${req.body?.reason ? ` — ${req.body.reason}` : ''}`,
+          createdBy: req.user.id
+        });
+        reversals.push(rev.entryNumber || String(rev._id));
+      } else if (je.status === 'draft') {
+        await JournalEntry.deleteOne({ _id: je._id, status: 'draft' });
+      }
     }
 
     // If linked to utility bill, remove or update
@@ -5422,11 +5467,16 @@ router.delete('/accounts-payable/:id',
       }
     }
 
-    await AccountsPayable.findByIdAndDelete(req.params.id);
+    bill.status = 'cancelled';
+    bill.voidedAt = new Date();
+    bill.voidedBy = req.user.id;
+    bill.voidReason = String(req.body?.reason || req.query?.reason || '').trim();
+    await bill.save();
 
     res.json({
       success: true,
-      message: `Bill ${bill.billNumber} deleted successfully`
+      message: `Bill ${bill.billNumber} voided${reversals.length ? ` — journal reversed (${reversals.join(', ')})` : ''}`,
+      data: { billId: bill._id, reversals }
     });
   })
 );
@@ -9622,36 +9672,8 @@ router.post('/journal-entries/:id/reverse',
     }
 
     const { date, reason } = req.body;
-    const reversalDate = date ? new Date(date) : new Date();
-
-    // Mirror lines: swap debit ↔ credit
-    const reversalLines = original.lines.map(line => ({
-      account: line.account._id || line.account,
-      description: `Reversal: ${line.description || ''}`,
-      debit: line.credit,
-      credit: line.debit,
-      department: line.department,
-      costCenter: line.costCenter
-    }));
-
-    const reversalEntry = await FinanceHelper.createAndPostJournalEntry(withCompany({
-      date: reversalDate,
-      reference: `REV-${original.entryNumber}`,
-      description: reason || `Reversal of ${original.entryNumber}`,
-      department: original.department,
-      module: original.module,
-      referenceId: original._id,
-      referenceType: original.referenceType,
-      journalCode: 'GEN',
-      createdBy: req.user.id,
-      lines: reversalLines
-    }, original.companyId || companyId));
-
-    // Mark original as reversed
-    original.isReversed = true;
-    original.reversalEntry = reversalEntry._id;
-    original.status = 'reversed';
-    await original.save();
+    if (!original.companyId && companyId) original.companyId = companyId;
+    const reversalEntry = await FinanceHelper.reverseJournalEntry(original, { reason, createdBy: req.user.id, date });
 
     res.json({
       success: true,
@@ -12071,6 +12093,108 @@ router.put('/banking-setup',
     ).lean();
 
     res.json({ success: true, message: 'Banking setup updated successfully for all companies', data: setup });
+  })
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// PAYABLES HUB — everything the company owes, from every module, in one list
+// ═════════════════════════════════════════════════════════════════════════════
+router.get('/payables-hub',
+  authorize('super_admin', 'admin', 'finance_manager', 'accounts_officer', 'finance_controller'),
+  asyncHandler(async (req, res) => {
+    const { buildPayablesHub, buildHubWarnings } = require('../utils/payablesHub');
+    const paidDays = Math.min(365, Math.max(7, Number(req.query.paidDays) || 60));
+    const [hub, warnings] = await Promise.all([
+      buildPayablesHub({ companyId: req.query.companyId || null, paidDays }),
+      buildHubWarnings().catch(() => ({ postingExceptions: 0, companiesWithoutFiscalPeriods: [] }))
+    ]);
+    res.json({ success: true, data: { ...hub, warnings } });
+  })
+);
+
+// ═════════════════════════════════════════════════════════════════════════════
+// POSTING EXCEPTIONS — documents whose ledger entry is missing (never silent)
+// ═════════════════════════════════════════════════════════════════════════════
+
+// GET /api/finance/posting-exceptions — store issues not (fully) posted, approved PM documents not posted
+router.get('/posting-exceptions',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const GoodsIssue = require('../models/procurement/GoodsIssue');
+    const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+    const since = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+    const [sins, pmDocs] = await Promise.all([
+      GoodsIssue.find({ financePostingStatus: { $in: ['failed', 'partial', 'not_posted'] }, issueDate: { $gte: since } })
+        .select('issueNumber sinNumber issueDate financePosting financePostingStatus companyId costCenterName departmentName')
+        .sort({ issueDate: -1 }).limit(300).lean(),
+      ProjectInvoice.find({
+        approvalStatus: 'Approved',
+        status: { $ne: 'Cancelled' },
+        $or: [
+          { invoiceType: 'Subcontractor_IPC', financeApBillId: null },
+          { invoiceType: 'Client_Invoice', financeArId: null }
+        ]
+      }).populate('contractor', 'name').populate('project', 'name')
+        .select('invoiceNumber invoiceType ipcKind clientName contractor project grossAmount netPayableAmount invoiceAmount financePostingError ceoApprovedAt')
+        .sort({ ceoApprovedAt: -1 }).limit(300).lean()
+    ]);
+    const items = [
+      ...sins.map((s) => ({
+        kind: 'store_issue',
+        id: s._id,
+        number: s.issueNumber || s.sinNumber,
+        date: s.issueDate,
+        party: s.departmentName || s.costCenterName || '',
+        amount: (s.financePosting || []).filter((r) => r.status !== 'posted').reduce((t, r) => t + (Number(r.amount) || 0), 0),
+        status: s.financePostingStatus,
+        reasons: [...new Set((s.financePosting || []).filter((r) => r.status !== 'posted').map((r) => `${r.itemName || 'Item'}: ${r.reason || r.status}`))],
+        retryUrl: `/api/finance/posting-exceptions/store-issue/${s._id}/retry`
+      })),
+      ...pmDocs.map((d) => ({
+        kind: d.invoiceType === 'Client_Invoice' ? 'client_invoice' : 'subcontractor_ipc',
+        id: d._id,
+        number: d.invoiceNumber,
+        date: d.ceoApprovedAt,
+        party: d.invoiceType === 'Client_Invoice' ? d.clientName : d.contractor?.name,
+        project: d.project?.name,
+        amount: d.netPayableAmount || d.invoiceAmount || d.grossAmount,
+        status: 'not_posted',
+        reasons: [d.financePostingError || 'Approved but not posted to Finance'],
+        retryUrl: `/api/project-management/ipcs/${d._id}/post-to-finance`
+      }))
+    ];
+    res.json({ success: true, data: items });
+  })
+);
+
+// POST /api/finance/posting-exceptions/store-issue/:id/retry — post the store-issue lines that are still missing
+router.post('/posting-exceptions/store-issue/:id/retry',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const GoodsIssue = require('../models/procurement/GoodsIssue');
+    const Inventory = mongoose.model('Inventory');
+    const sin = await GoodsIssue.findById(req.params.id);
+    if (!sin) return res.status(404).json({ success: false, message: 'Store issue not found' });
+    const results = [];
+    for (const row of sin.financePosting || []) {
+      if (row.status === 'posted') { results.push(row.toObject ? row.toObject() : row); continue; }
+      const inventory = await Inventory.findById(row.inventoryItem);
+      const outcome = inventory
+        ? await FinanceHelper.postSINJournal({ inventoryItem: inventory, sinDoc: sin, qty: row.qty, createdBy: req.user.id, companyId: sin.companyId })
+        : { status: 'failed', reason: 'Inventory item no longer exists' };
+      results.push({ ...(row.toObject ? row.toObject() : row), status: outcome.status, reason: outcome.reason || '', journalEntry: outcome.journalEntry, amount: outcome.amount || row.amount, at: new Date() });
+    }
+    const posted = results.filter((r) => r.status === 'posted').length;
+    const financePostingStatus = posted === results.length ? 'posted' : posted ? 'partial'
+      : results.some((r) => r.status === 'failed') ? 'failed' : 'not_posted';
+    await GoodsIssue.updateOne({ _id: sin._id }, { $set: { financePosting: results, financePostingStatus } });
+    res.status(financePostingStatus === 'posted' ? 200 : 400).json({
+      success: financePostingStatus === 'posted',
+      message: financePostingStatus === 'posted'
+        ? `Store issue ${sin.issueNumber || ''} posted to Finance`
+        : `Still not fully posted: ${results.filter((r) => r.status !== 'posted').map((r) => `${r.itemName}: ${r.reason}`).join('; ')}`,
+      data: { financePostingStatus, financePosting: results }
+    });
   })
 );
 

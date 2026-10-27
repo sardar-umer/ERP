@@ -428,6 +428,132 @@ const FinanceHelper = {
    * Validates that the posting date falls within an open fiscal period (if periods are defined).
    * Attaches journal (folder) if provided or resolved from journalCode.
    */
+  /**
+   * Refuse a second live bill for the same vendor invoice (same company, same vendor, same invoice no.).
+   * Vendor is matched by vendorId when known, otherwise by name. Blank invoice numbers are not checked.
+   */
+  /**
+   * Advance / deposit bill lines all debit the company's Vendor Advance account — the account the advance is
+   * credited from when it is applied to the real bill — whatever category was picked.
+   */
+  advanceBillLineItems: async (lineItems, companyId) => {
+    const advAccount = await acct(companyId).resolve(FinanceHelper.ACCOUNTS.VENDOR_ADVANCE);
+    if (!advAccount) {
+      const err = new Error('This company has no Vendor Advance (Advance to Suppliers) account in its Chart of Accounts — add one before entering an advance bill');
+      err.statusCode = 400;
+      throw err;
+    }
+    return (lineItems || []).map((li) => {
+      const plain = typeof li?.toObject === 'function' ? li.toObject() : { ...li };
+      return { ...plain, account: advAccount._id, accountNumber: advAccount.accountNumber || '' };
+    });
+  },
+
+  /**
+   * A payment of an advance bill (final authority approval) becomes an open vendor advance for the paid amount.
+   * The bill journal (DR Vendor Advance / CR AP) and the payment (DR AP / CR Bank) already moved the money, so the
+   * advance carries the payment voucher as its journal and never posts one of its own.
+   */
+  createAdvanceFromAdvanceBillPayment: async ({ bill, amount, journalEntry, meta = {}, createdBy }) => {
+    const value = Math.round((Number(amount) || 0) * 100) / 100;
+    if (!bill?.isAdvanceBill || value <= 0) return null;
+    const methods = ['cash', 'check', 'cheque', 'credit_card', 'bank_transfer', 'bank', 'ach', 'other'];
+    const advAccount = await acct(co(bill)).resolve(FinanceHelper.ACCOUNTS.VENDOR_ADVANCE);
+    const advance = await VendorAdvance.create({
+      vendor: {
+        name: bill.vendor?.name || 'Vendor',
+        email: bill.vendor?.email || '',
+        vendorId: bill.vendor?.vendorId || null
+      },
+      amount: value,
+      categoryLines: [{
+        account: advAccount?._id,
+        accountNumber: advAccount?.accountNumber || '',
+        description: `Advance paid via bill ${bill.billNumber}`,
+        amount: value,
+        project: bill.project || ''
+      }],
+      paymentMethod: methods.includes(meta.paymentMethod) ? meta.paymentMethod : 'other',
+      bankAccountId: meta.bankAccountId || null,
+      reference: `${bill.billNumber}${meta.reference ? ` — ${meta.reference}` : ''}`,
+      paymentDate: journalEntry?.date || new Date(),
+      department: bill.department || 'finance',
+      module: bill.module || 'finance',
+      referenceType: 'advance_bill',
+      referenceId: bill._id,
+      journalEntryId: journalEntry?._id || null,
+      voucherWorkflowStatus: 'fully_approved',
+      status: 'open',
+      createdBy: createdBy || bill.createdBy,
+      companyId: co(bill),
+      payingCompanyId: meta.payingCompanyId || null
+    });
+    if (!Array.isArray(bill.generatedAdvances)) bill.generatedAdvances = [];
+    bill.generatedAdvances.push({ vendorAdvance: advance._id, amount: value, createdAt: new Date() });
+    return advance;
+  },
+
+  assertUniqueVendorInvoice: async ({ companyId = null, vendorId = null, vendorName = '', vendorInvoiceNumber = '', excludeId = null } = {}) => {
+    const invoiceNo = String(vendorInvoiceNumber || '').trim();
+    if (!invoiceNo) return;
+    const escape = (v) => v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+    const vendorMatch = vendorId
+      ? { 'vendor.vendorId': vendorId }
+      : { 'vendor.name': { $regex: `^${escape(String(vendorName || '').trim())}$`, $options: 'i' } };
+    const dup = await AccountsPayable.findOne({
+      ...vendorMatch,
+      ...(companyId ? { companyId } : {}),
+      vendorInvoiceNumber: { $regex: `^${escape(invoiceNo)}$`, $options: 'i' },
+      status: { $ne: 'cancelled' },
+      ...(excludeId ? { _id: { $ne: excludeId } } : {})
+    }).select('billNumber').lean();
+    if (dup) {
+      const err = new Error(`Vendor invoice "${invoiceNo}" is already entered as bill ${dup.billNumber} — duplicate bills are not allowed`);
+      err.statusCode = 400;
+      throw err;
+    }
+  },
+
+  /**
+   * Reverse a posted journal entry with a mirror entry (debit ↔ credit) and mark the original reversed.
+   * Posted entries are never deleted — this keeps the ledger, balances and audit trail consistent.
+   */
+  reverseJournalEntry: async (entryOrId, { reason = '', createdBy, date } = {}) => {
+    const original = entryOrId && entryOrId.lines
+      ? entryOrId
+      : await JournalEntry.findById(entryOrId);
+    if (!original) throw new Error('Journal entry not found');
+    if (original.status !== 'posted') throw new Error('Only posted entries can be reversed');
+    if (original.isReversed) throw new Error(`Entry ${original.entryNumber || original._id} has already been reversed`);
+
+    const reversal = await FinanceHelper.createAndPostJournalEntry(withCompany({
+      date: date ? new Date(date) : new Date(),
+      reference: `REV-${original.entryNumber || original.reference || original._id}`,
+      description: reason || `Reversal of ${original.entryNumber || original.reference}`,
+      department: original.department,
+      module: original.module,
+      referenceId: original._id,
+      referenceType: original.referenceType,
+      journalCode: 'GEN',
+      createdBy,
+      lines: original.lines.map((line) => ({
+        account: line.account?._id || line.account,
+        description: `Reversal: ${line.description || ''}`.slice(0, 200),
+        debit: line.credit,
+        credit: line.debit,
+        department: line.department,
+        costCenter: line.costCenter
+      }))
+    }, original.companyId || null));
+
+    // The original stays POSTED (flagged + linked): reports count posted entries, so original + mirror net to zero.
+    // Marking it 'reversed' would drop it from every report and leave only the negative mirror.
+    original.isReversed = true;
+    original.reversalEntry = reversal._id;
+    await original.save();
+    return reversal;
+  },
+
   createAndPostJournalEntry: async (data) => {
     try {
       // Validate fiscal period (lenient: skips if no periods configured)
@@ -559,6 +685,22 @@ const FinanceHelper = {
       // Check if AR already exists (e.g. orphaned from deleted invoice - avoid E11000 duplicate key)
       let arEntry = await AccountsReceivable.findOne({ invoiceNumber });
       if (arEntry) {
+        // Re-used invoice number: update it, and post the DIFFERENCE so the AR sub-ledger and GL stay equal
+        const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+        if (arEntry.status === 'cancelled') {
+          const err = new Error(`Invoice number ${invoiceNumber} belongs to a cancelled invoice — use a new number`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const newAmount = r2(amount);
+        if (newAmount < r2(arEntry.amountPaid) - 0.009) {
+          const err = new Error(`Invoice ${invoiceNumber} has ${arEntry.amountPaid} received — its amount cannot go below that`);
+          err.statusCode = 400;
+          throw err;
+        }
+        const postedJe = await JournalEntry.findOne({ referenceId: arEntry._id, referenceType: 'invoice', status: 'posted' }).sort({ createdAt: 1 }).lean();
+        const alreadyInGl = postedJe ? r2(arEntry.totalAmount) : 0;
+
         arEntry.customer = { name: customerName, email: customerEmail, customerId: customerId };
         arEntry.invoiceDate = invoiceDate || new Date();
         arEntry.dueDate = dueDate;
@@ -570,7 +712,40 @@ const FinanceHelper = {
         if (companyId && !arEntry.companyId) arEntry.companyId = companyId;
         if (createdBy) arEntry.updatedBy = createdBy;
         await arEntry.save();
-        return arEntry; // Skip GL posting - existing entry already has it
+
+        const diff = r2(newAmount - alreadyInGl);
+        if (Math.abs(diff) > 0.009) {
+          const A2 = acct(companyId || arEntry.companyId);
+          const arAcc = postedJe?.lines?.find((l) => Number(l.debit) > 0)?.account
+            || (await A2.resolve(FinanceHelper.ACCOUNTS.RECEIVABLE))?._id;
+          const revAcc = postedJe?.lines?.find((l) => Number(l.credit) > 0)?.account
+            || (await A2.resolve(options.revenueAccountNum || '4001'))?._id
+            || (await A2.resolve('4000'))?._id;
+          if (!arAcc || !revAcc) {
+            const err = new Error('Receivable / revenue account missing — invoice amount changed but could not be posted');
+            err.statusCode = 400;
+            throw err;
+          }
+          const up = diff > 0;
+          await FinanceHelper.createAndPostJournalEntry(withCompany({
+            date: new Date(),
+            reference: `${invoiceNumber}-ADJ`,
+            description: postedJe
+              ? `AR adjustment: ${invoiceNumber} ${r2(alreadyInGl)} → ${newAmount}`
+              : `AR Invoice: ${invoiceNumber} for ${customerName} (journal was missing)`,
+            department,
+            costCenter,
+            module,
+            referenceId: arEntry._id,
+            referenceType: 'invoice',
+            createdBy,
+            lines: [
+              { account: arAcc, description: `Receivable from ${customerName}`, debit: up ? diff : 0, credit: up ? 0 : -diff, department },
+              { account: revAcc, description: `Revenue — ${invoiceNumber}`, debit: up ? 0 : -diff, credit: up ? diff : 0, department }
+            ]
+          }, companyId || arEntry.companyId));
+        }
+        return arEntry;
       }
 
       arEntry = new AccountsReceivable({
@@ -745,6 +920,10 @@ const FinanceHelper = {
         ? optsLineItems
         : [{ description: lineDescription || `Amount as per approved document`, quantity: 1, unitPrice: amount }];
 
+      await FinanceHelper.assertUniqueVendorInvoice({
+        companyId, vendorId, vendorName, vendorInvoiceNumber
+      });
+
       apEntry = new AccountsPayable({
         companyId: companyId || undefined,
         company: options.company || '',
@@ -781,6 +960,12 @@ const FinanceHelper = {
       }
 
       const apAccount = await A.resolve(FinanceHelper.ACCOUNTS.PAYABLE);
+      // A bill without its journal would put the AP sub-ledger out of step with the GL — refuse instead
+      if (!apAccount) {
+        const err = new Error('No Accounts Payable account on this company\'s chart of accounts — bill not created');
+        err.statusCode = 400;
+        throw err;
+      }
 
       if (apAccount) {
         // ─── CORRECT ODOO-STYLE AP JOURNAL ────────────────────────────────────────
@@ -800,9 +985,23 @@ const FinanceHelper = {
         }
         if (!debitAccount && debitAccountNumber) {
           debitAccount = await A.resolve(String(debitAccountNumber));
+          // An explicitly requested expense account must exist — never park the cost in General Expenses silently
+          if (!debitAccount && !(Array.isArray(expenseJournalLines) && expenseJournalLines.length)) {
+            const err = new Error(`Account ${debitAccountNumber} is not on this company's chart of accounts — bill not created`);
+            err.statusCode = 400;
+            throw err;
+          }
         }
-        if (!debitAccount) {
+        if (!debitAccount && !isGrnBacked && !debitAccountNumber) {
           debitAccount = await A.resolve(FinanceHelper.ACCOUNTS.EXPENSE_GENERAL);
+        }
+        if (!debitAccount && isGrnBacked) {
+          debitAccount = await A.resolve(FinanceHelper.ACCOUNTS.GRNI);
+        }
+        if (!debitAccount && isGrnBacked) {
+          const err = new Error('No GRNI (Goods Received Not Invoiced) account for this company — bill not created');
+          err.statusCode = 400;
+          throw err;
         }
 
         if (debitAccount || (Array.isArray(expenseJournalLines) && expenseJournalLines.length > 0)) {
@@ -2501,6 +2700,7 @@ const FinanceHelper = {
     const ApPayment = require('./apPaymentApplication');
     const bill = await AccountsPayable.findById(billId);
     if (!bill) throw new Error('Bill not found');
+    if (bill.isAdvanceBill) throw new Error(`${bill.billNumber} is an advance bill — pay it from the bank; advances are applied to the vendor's real bill`);
 
     let remainingBill = FinanceHelper.getAPOutstanding(bill);
     if (remainingBill <= 0) return { bill, applied: 0, pending: 0, adjustments: [], applications: [] };
@@ -2962,10 +3162,15 @@ const FinanceHelper = {
    * Uses Weighted Average Cost for the issued qty.
    * Safe to call – silently skips if accounts cannot be resolved or amount is zero.
    */
+  /**
+   * DR COGS / CR Inventory for one store-issue line.
+   * Returns { status: 'posted' | 'skipped' | 'failed', reason?, journalEntry?, amount? } — the caller records it,
+   * so a store issue never silently leaves stock without a ledger entry.
+   */
   postSINJournal: async ({ inventoryItem, sinDoc, qty, createdBy, companyId }) => {
     try {
       const qty_ = Number(qty) || 0;
-      if (qty_ <= 0) return;
+      if (qty_ <= 0) return { status: 'skipped', reason: 'Zero quantity' };
 
       const cid = await resolveDocumentCompanyId({
         companyId,
@@ -2976,7 +3181,7 @@ const FinanceHelper = {
       const { inventoryAccountId, cogsAccountId } = await FinanceHelper.resolveInventoryAccounts(inventoryItem, cid);
       if (!cogsAccountId || !inventoryAccountId) {
         console.warn(`[SIN Journal] Skipped – no COGS/inventory accounts for item: ${inventoryItem.name || inventoryItem._id}`);
-        return;
+        return { status: 'skipped', reason: 'Item has no COGS / inventory accounts for this company' };
       }
 
       // Use WAC (averageCost) first; fall back to unitPrice for newly created items
@@ -2986,11 +3191,11 @@ const FinanceHelper = {
       const amount = Math.round(qty_ * unitCost * 100) / 100;
       if (amount <= 0) {
         console.warn(`[SIN Journal] Skipped ${inventoryItem.name || inventoryItem._id}: unitCost is 0`);
-        return;
+        return { status: 'skipped', reason: 'Item has no cost (average cost and unit price are 0)' };
       }
 
       const referenceNumber = sinDoc.issueNumber || sinDoc.sinNumber || sinDoc._id?.toString() || 'SIN';
-      await FinanceHelper.createAndPostJournalEntry(
+      const je = await FinanceHelper.createAndPostJournalEntry(
         withVoucherNarration(withCompany({
           date: sinDoc.issueDate || new Date(),
           reference: referenceNumber,
@@ -3020,8 +3225,10 @@ const FinanceHelper = {
       );
 
       console.log(`[SIN Journal] Posted: DR COGS ${amount} / CR Inventory ${amount} for ${inventoryItem.name}`);
+      return { status: 'posted', journalEntry: je?._id, amount };
     } catch (err) {
       console.error('❌ FinanceHelper.postSINJournal error:', err.message);
+      return { status: 'failed', reason: err.message };
     }
   },
 

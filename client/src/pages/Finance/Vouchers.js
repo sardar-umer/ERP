@@ -73,7 +73,8 @@ const formatDateForPrint = (date) => {
 
 /** User-facing voucher status (journal status + signed / clearance workflow + bill payment status). */
 function getVoucherStatusDisplay(row) {
-  const journalStatus = String(row?.status || '').toLowerCase();
+  // A reversed entry stays 'posted' (so reports net to zero) and carries isReversed
+  const journalStatus = row?.isReversed ? 'reversed' : String(row?.status || '').toLowerCase();
   const refType = String(row?.referenceType || '').toLowerCase();
 
   // For BILL vouchers, display the settlement/payment status (Paid, Partial, Unpaid)

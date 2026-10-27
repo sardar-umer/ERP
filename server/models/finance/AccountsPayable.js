@@ -226,6 +226,20 @@ const accountsPayableSchema = new mongoose.Schema({
     ],
     default: 'draft'
   },
+  /** Voiding keeps the bill for the audit trail; its posted journals are reversed, never deleted */
+  voidedAt: { type: Date },
+  voidedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  voidReason: { type: String, trim: true, default: '' },
+  /**
+   * Advance / deposit bill: posts DR Vendor Advance / CR AP. Each payment of it creates a VendorAdvance
+   * (linked to the payment voucher) that is applied to the vendor's real bill later.
+   */
+  isAdvanceBill: { type: Boolean, default: false, index: true },
+  generatedAdvances: [{
+    vendorAdvance: { type: mongoose.Schema.Types.ObjectId, ref: 'VendorAdvance' },
+    amount: { type: Number, default: 0 },
+    createdAt: { type: Date, default: Date.now }
+  }],
   // Department integration
   department: {
     type: String,
@@ -627,9 +641,11 @@ accountsPayableSchema.pre('save', function(next) {
     this.totalAmount = this.subtotal + this.taxAmount - this.discountAmount;
   }
 
-  // Update status based on balance and approval
+  // Update status based on balance and approval (a cancelled / voided bill stays cancelled)
   const settled = (this.amountPaid || 0) + (this.advanceApplied || 0);
-  if (this.balanceDue <= 0 && settled > 0) {
+  if (this.status === 'cancelled') {
+    // no status recalculation
+  } else if (this.balanceDue <= 0 && settled > 0) {
     this.status = settled < this.totalAmount ? 'partial' : 'paid';
   } else if (this.isOverdue) {
     this.status = 'overdue';

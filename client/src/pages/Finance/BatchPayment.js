@@ -48,7 +48,13 @@ export default function BatchPayment() {
         ? billPayload
         : (billPayload?.bills || billRes.data?.bills || []);
       const unpaid = billList.filter(b => b.status !== 'paid' && ((b.outstandingAmount ?? (b.totalAmount - (b.amountPaid || 0) - (b.advanceApplied || 0))) > 0.01));
-      setBills(unpaid);
+      // ?bills=id,id (from the Payables Hub): pre-select them, loading any not in the recent list
+      const wanted = (new URLSearchParams(window.location.search).get('bills') || '').split(',').filter(Boolean);
+      const missing = wanted.filter((id) => !unpaid.some((b) => String(b._id) === id));
+      const extra = (await Promise.all(missing.map((id) => api.get(`/finance/accounts-payable/${id}`).then((r) => r.data?.data).catch(() => null))))
+        .filter((b) => b && b.status !== 'paid' && b.status !== 'cancelled');
+      setBills([...unpaid, ...extra]);
+      if (wanted.length) setSelected(new Set(wanted.filter((id) => [...unpaid, ...extra].some((b) => String(b._id) === id))));
       const bankPayload = bankRes.data?.data;
       const accountList = Array.isArray(bankPayload)
         ? bankPayload

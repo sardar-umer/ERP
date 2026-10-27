@@ -40,14 +40,6 @@ const router = express.Router();
 const uploadDir = path.join(__dirname, '../uploads/project-management');
 if (!fs.existsSync(uploadDir)) fs.mkdirSync(uploadDir, { recursive: true });
 
-const storage = multer.diskStorage({
-  destination: (req, file, cb) => cb(null, uploadDir),
-  filename: (req, file, cb) => {
-    const ext = path.extname(file.originalname);
-    cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${ext}`);
-  }
-});
-const upload = multer({ storage, limits: { fileSize: 20 * 1024 * 1024 } });
 
 // Inspection evidence: photos + site videos, kept apart from other PM uploads
 const INSPECTION_MIN_IMAGES = 3;
@@ -866,6 +858,7 @@ const PROJECT_CHILD_MODELS = [
   ['inspectionReports', InspectionReport],
   ['invoices', ProjectInvoice],
   ['expenses', ProjectExpense],
+  // Daily reports were retired; old ones are still removed with their project
   ['dailyReports', DailyProgressReport],
   ['wbsRows', ProjectTask]
 ];
@@ -1712,108 +1705,6 @@ router.delete('/slab-schedules/:scheduleId', asyncHandler(async (req, res) => {
   await schedule.deleteOne();
   res.json({ success: true, message: 'Slab schedule deleted' });
 }));
-
-// ─── DAILY PROGRESS REPORTS ──────────────────────────────────────────────────
-
-// GET /api/project-management/projects/:id/dpr
-router.get('/projects/:id/dpr', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const { page = 1, limit = 20 } = req.query;
-  const skip = (Number(page) - 1) * Number(limit);
-
-  const [reports, total] = await Promise.all([
-    DailyProgressReport.find({ project: req.params.id })
-      .populate('submittedBy', 'firstName lastName')
-      .sort({ reportDate: -1 })
-      .skip(skip)
-      .limit(Number(limit))
-      .lean(),
-    DailyProgressReport.countDocuments({ project: req.params.id })
-  ]);
-
-  res.json({
-    success: true,
-    data: { reports, pagination: { total, page: Number(page), limit: Number(limit) } }
-  });
-}));
-
-// GET /api/project-management/projects/:id/dpr/:dprId — single DPR
-router.get('/projects/:id/dpr/:dprId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.dprId)) return badRequest(res, 'Invalid ID');
-
-  const report = await DailyProgressReport.findOne({ _id: req.params.dprId, project: req.params.id })
-    .populate('submittedBy', 'firstName lastName')
-    .populate('workDone.task', 'title level')
-    .lean();
-
-  if (!report) return notFound(res, 'DPR');
-  res.json({ success: true, data: report });
-}));
-
-// POST /api/project-management/projects/:id/dpr — submit DPR with optional photo uploads
-router.post('/projects/:id/dpr', upload.array('photos', 20), asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const {
-    reportDate, weather, temperature,
-    workforceCivil, workforceElectrical, workforcePlumbing, workforceSupervisors,
-    summary, nextDayPlan
-  } = req.body;
-
-  if (!reportDate) return badRequest(res, 'Report date is required');
-
-  // Parse JSON arrays from multipart form
-  const parseField = (field) => {
-    try { return typeof field === 'string' ? JSON.parse(field) : field || []; }
-    catch { return []; }
-  };
-
-  const workDone = parseField(req.body.workDone);
-  const materialsUsed = parseField(req.body.materialsUsed);
-  const issues = parseField(req.body.issues);
-
-  // Build photos array from uploaded files
-  const photos = (req.files || []).map((f, idx) => ({
-    url: `/uploads/project-management/${f.filename}`,
-    caption: (parseField(req.body.photoCaptions))[idx] || '',
-    uploadedAt: new Date()
-  }));
-
-  const report = await DailyProgressReport.create({
-    project: req.params.id,
-    reportDate: new Date(reportDate),
-    weather, temperature,
-    workforceCivil: Number(workforceCivil) || 0,
-    workforceElectrical: Number(workforceElectrical) || 0,
-    workforcePlumbing: Number(workforcePlumbing) || 0,
-    workforceSupervisors: Number(workforceSupervisors) || 0,
-    workDone, materialsUsed, issues, photos,
-    summary, nextDayPlan,
-    submittedBy: req.user?._id,
-    createdBy: req.user?._id
-  });
-
-  res.status(201).json({ success: true, message: 'DPR submitted successfully', data: report });
-}));
-
-// DELETE /api/project-management/projects/:id/dpr/:dprId
-router.delete('/projects/:id/dpr/:dprId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.dprId)) return badRequest(res, 'Invalid ID');
-
-  const report = await DailyProgressReport.findOneAndDelete({ _id: req.params.dprId, project: req.params.id });
-  if (!report) return notFound(res, 'DPR');
-
-  // Clean up uploaded photos
-  report.photos?.forEach(p => {
-    const filePath = path.join(__dirname, '..', p.url);
-    if (fs.existsSync(filePath)) fs.unlink(filePath, () => {});
-  });
-
-  res.json({ success: true, message: 'DPR deleted' });
-}));
-
-// ─── BOQ → PURCHASE ORDER ─────────────────────────────────────────────────────
 
 // POST /api/project-management/projects/:id/boq/create-po
 // Creates a PurchaseOrder from selected BOQ items, updates BOQ item tracked quantities

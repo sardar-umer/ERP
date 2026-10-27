@@ -631,6 +631,7 @@ export const MODULES = {
         name: 'Vendors',
         path: '/finance/accounts-payable',
         subItems: [
+          { name: 'Vendor Payments (New)', path: '/finance/payables-hub'        },
           { name: 'Payroll (Finance)',     path: '/finance/payroll-queue'        },
           { name: 'Vendor List',          path: '/finance/vendors'              },
           { name: 'Vendor Bills',         path: '/finance/accounts-payable'     },
@@ -1157,6 +1158,7 @@ const CATALOG_PATH_OVERRIDES = {
   '/finance/vendor-advance': 'accounts_payable',
   '/finance/cash-approvals': 'accounts_payable',
   '/finance/utility-bills': 'accounts_payable',
+  '/finance/payables-hub': 'accounts_payable',
   '/finance/batch-payment': 'accounts_payable',
   '/finance/vendor-payments': 'accounts_payable',
   '/finance/vendor-refunds': 'accounts_payable',

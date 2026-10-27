@@ -200,6 +200,9 @@ const finalizeApplication = async (app, userId) => {
         allocations: normalizedAllocations
       });
       bill.amountPaid = round2((Number(bill.amountPaid) || 0) + amount);
+      if (bill.isAdvanceBill) {
+        await FinanceHelper.createAdvanceFromAdvanceBillPayment({ bill, amount, journalEntry: je, meta, createdBy: app.createdBy });
+      }
     }
 
     await releaseBillPending(bill, amount, app.sourceType);

@@ -289,6 +289,7 @@ const Sidebar = () => {
       '/finance/opening-balances': 'opening_balances',
       '/finance/year-end-closing': 'year_end_closing',
       '/finance/recurring-journals': 'recurring_journals',
+      '/finance/payables-hub':           'accounts_payable',
       '/finance/batch-payment':           'batch_payment',
       '/finance/company-profile':         'company_profile',
       '/finance/companies':               'finance_companies',

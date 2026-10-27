@@ -149,32 +149,33 @@ const ProjectRollupService = {
     const cpi = Number((earnedValue / actualCostForEvm).toFixed(2)); // Cost Performance Index
     const spi = Number(((masterOverallProgress || 1) / 50).toFixed(2)); // Schedule Performance Index (normalized vs 50% midpoint benchmark)
 
-    // 7. Fetch Ground Visual Proof Stream (Latest Geotagged Photos from DPRs)
-    const DailyProgressReport = require('../models/projectManagement/DailyProgressReport');
-    const dprsWithPhotos = await DailyProgressReport.find({
+    // 7. Ground visual proof: latest site photos inspectors attached to inspection reports
+    const InspectionReport = require('../models/projectManagement/InspectionReport');
+    const inspections = await InspectionReport.find({
       project: { $in: allProjectIds },
-      'photos.0': { $exists: true }
+      'inspectors.attachments.0': { $exists: true }
     })
-      .select('reportNumber reportDate summary photos project')
+      .select('reportNumber inspectionDate location inspectors project')
       .populate('project', 'name projectNumber')
-      .sort({ reportDate: -1 })
+      .sort({ inspectionDate: -1 })
       .limit(10)
       .lean();
 
     const groundPhotoStream = [];
-    dprsWithPhotos.forEach((dpr) => {
-      (dpr.photos || []).forEach((p) => {
-        groundPhotoStream.push({
-          url: p.url,
-          caption: p.caption || dpr.summary || 'Site Progress Photo',
-          latitude: p.latitude,
-          longitude: p.longitude,
-          isVerifiedLocation: p.isVerifiedLocation || Boolean(p.latitude),
-          uploadedAt: p.uploadedAt || dpr.reportDate,
-          projectName: dpr.project?.name || 'Sub-Unit'
+    inspections.forEach((ir) => {
+      (ir.inspectors || []).forEach((insp) => {
+        (insp.attachments || []).filter((a) => a.kind === 'image').forEach((a) => {
+          groundPhotoStream.push({
+            url: a.url,
+            caption: `${ir.reportNumber} — ${insp.name || 'Inspector'}${ir.location ? ` · ${ir.location}` : ''}`,
+            isVerifiedLocation: false,
+            uploadedAt: insp.actedAt || ir.inspectionDate,
+            projectName: ir.project?.name || 'Sub-Unit'
+          });
         });
       });
     });
+    groundPhotoStream.splice(24);
 
     const costVariance = (grandActualCost || expTotalSpent) - grandEstimatedBudget;
     const costHealthStatus = costVariance > 0 ? 'Over Budget' : 'Under Budget';

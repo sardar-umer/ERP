@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -172,7 +172,11 @@ const matchesFuzzyToken = (token, corpus, words) => {
   return false;
 };
 
-const AccountsPayable = () => {
+/**
+ * `embedPayBillId` (Vendor Payments hub): mount hidden and open this page's own Bill Payment dialog for that bill;
+ * `onEmbedClose` runs when the dialog closes. Without the props the page works as before.
+ */
+const AccountsPayable = ({ embedPayBillId = null, onEmbedClose = null } = {}) => {
   const { selectedCompanyId, companies: financeCompanies } = useFinanceCompany();
   const [payingCompanyId, setPayingCompanyId] = useState('');
   const { user: currentUser } = useAuth();
@@ -404,10 +408,12 @@ const AccountsPayable = () => {
   });
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [billToDelete, setBillToDelete] = useState(null);
+  const [voidReason, setVoidReason] = useState('');
   const [deletingBill, setDeletingBill] = useState(false);
 
   const handleOpenDelete = (bill) => {
     setBillToDelete(bill);
+    setVoidReason('');
     setDeleteDialogOpen(true);
   };
 
@@ -415,15 +421,20 @@ const AccountsPayable = () => {
     if (!billToDelete) return;
     try {
       setDeletingBill(true);
-      const res = await api.delete(`/finance/accounts-payable/${billToDelete._id}`);
+      if (!voidReason.trim()) {
+        toast.error('Give a reason for voiding the bill');
+        return;
+      }
+      // Voids the bill: kept for the audit trail, its posted journal reversed (never deleted)
+      const res = await api.delete(`/finance/accounts-payable/${billToDelete._id}`, { data: { reason: voidReason.trim() } });
       if (res.data?.success || res.status === 200) {
-        toast.success(`✓ Bill ${billToDelete.billNumber} deleted successfully`);
+        toast.success(res.data?.message || `✓ Bill ${billToDelete.billNumber} voided`);
         setDeleteDialogOpen(false);
         setBillToDelete(null);
         fetchAccountsPayable();
       }
     } catch (err) {
-      toast.error(err.response?.data?.message || 'Failed to delete bill');
+      toast.error(err.response?.data?.message || 'Failed to void bill');
     } finally {
       setDeletingBill(false);
     }
@@ -469,15 +480,17 @@ const AccountsPayable = () => {
     accountsManagerUser: null,
     financeControllerUser: null
   });
+  // ?search=<bill no.> (e.g. from the Payables Hub) opens the list on that bill, any status / date
+  const linkedSearch = new URLSearchParams(window.location.search).get('search') || '';
   const [filters, setFilters] = useState({
-    status: 'unpaid',
+    status: linkedSearch ? '' : 'unpaid',
     vendor: '',
-    startDate: new Date(new Date().getFullYear(), 6, 1).toISOString().split('T')[0],
+    startDate: linkedSearch ? '2000-01-01' : new Date(new Date().getFullYear(), 6, 1).toISOString().split('T')[0],
     endDate: new Date().toISOString().split('T')[0],
-    search: '',
+    search: linkedSearch,
     billType: ''
   });
-  const [searchInput, setSearchInput] = useState('');
+  const [searchInput, setSearchInput] = useState(linkedSearch);
   const [vendorInput, setVendorInput] = useState('');
 
   // Debounce search input into filters.search
@@ -505,6 +518,11 @@ const AccountsPayable = () => {
   }, [vendorInput]);
 
   const getBillTypeBadge = (bill) => {
+    if (bill.isAdvanceBill) {
+      return (
+        <Chip label="Advance bill" size="small" color="warning" variant="outlined" sx={{ fontWeight: 600, fontSize: '0.72rem' }} />
+      );
+    }
     if (bill.referenceType === 'utility_bill' || bill.module === 'taj_utilities') {
       return (
         <Chip
@@ -884,8 +902,8 @@ const AccountsPayable = () => {
     } catch (_) {
       /* ignore */
     }
-    setUtilityDueWarningOpen(true);
-  }, [summary.dueUtilityWarnings, selectedCompanyId]);
+    if (!embedPayBillId) setUtilityDueWarningOpen(true);
+  }, [summary.dueUtilityWarnings, selectedCompanyId, embedPayBillId]);
 
   const dismissUtilityDueWarning = () => {
     if (selectedCompanyId) {
@@ -992,7 +1010,8 @@ const AccountsPayable = () => {
           company: b.company || 'Unassigned',
           outstanding,
           payAmount: isSelected ? outstanding : 0,
-          advanceApplyAmount: 0
+          advanceApplyAmount: 0,
+          isAdvanceBill: Boolean(b.isAdvanceBill)
         };
       })
       .filter((r) => r.outstanding > 0);
@@ -1235,6 +1254,23 @@ const AccountsPayable = () => {
     }
   };
 
+  // Opened from the Vendor Payments hub: show the payment dialog for that bill, report back when it closes
+  const embedDialogShownRef = useRef(false);
+  useEffect(() => {
+    if (!embedPayBillId) return;
+    embedDialogShownRef.current = false;
+    handleOpenPayment({ _id: embedPayBillId });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedPayBillId]);
+  useEffect(() => {
+    if (!embedPayBillId) return;
+    if (paymentDialogOpen) embedDialogShownRef.current = true;
+    else if (embedDialogShownRef.current) {
+      embedDialogShownRef.current = false;
+      if (onEmbedClose) onEmbedClose();
+    }
+  }, [paymentDialogOpen, embedPayBillId, onEmbedClose]);
+
   const employeeAdvanceApplyTotals = useMemo(() => {
     const totalCaUsage = Math.round(
       payeeCashApprovals.reduce((s, ca) => s + (Number(caApplyAmounts[ca.cashApprovalId]) || 0), 0) * 100
@@ -1331,7 +1367,55 @@ const AccountsPayable = () => {
     }
   };
 
+  // Vendor payee: deduct open vendor advances from bills (draft adjustment voucher, signed by the same authorities)
+  const vendorAdvanceOpenTotal = roundPay2(payeeVendorAdvances.reduce((s, a) => s + (Number(a.open) || 0), 0));
+  const vendorAdvanceApplyOn = payeeType === 'vendor' && vendorAdvanceOpenTotal > 0;
+  const vendorAdvanceApplyRows = vendorAdvanceApplyOn
+    ? outstandingTransactions.filter((r) => !r.isAdvanceBill && (Number(r.advanceApplyAmount) || 0) > 0)
+    : [];
+  const vendorAdvanceApplyTotal = roundPay2(vendorAdvanceApplyRows.reduce((s, r) => s + (Number(r.advanceApplyAmount) || 0), 0));
+
+  const handleApplyVendorAdvanceToBills = async () => {
+    if (!vendorAdvanceApplyRows.length) {
+      toast.error('Enter "Apply from advance" on at least one bill');
+      return;
+    }
+    if (vendorAdvanceApplyTotal > vendorAdvanceOpenTotal + 0.009) {
+      toast.error(`Total to apply (${formatPKR(vendorAdvanceApplyTotal)}) is more than the open advances (${formatPKR(vendorAdvanceOpenTotal)})`);
+      return;
+    }
+    const finAuthErr = validateFinanceAuthoritySelection(billPaymentFinAuth);
+    if (finAuthErr) {
+      toast.error(finAuthErr);
+      return;
+    }
+    const financeApprovalAuthorities = buildFinanceApprovalAuthoritiesPayload(billPaymentFinAuth, preparerUserId);
+    setProcessingCaApply(true);
+    let done = 0;
+    try {
+      for (const row of vendorAdvanceApplyRows) {
+        await api.post(`/finance/accounts-payable/${row.billId}/apply-advance`, {
+          source: 'vendor',
+          amount: roundPay2(row.advanceApplyAmount),
+          financeApprovalAuthorities
+        });
+        done += 1;
+      }
+      toast.success(`Advance applied to ${done} bill(s) — pending finance signatures`);
+    } catch (error) {
+      toast.error(`${done ? `${done} bill(s) done; ` : ''}${error.response?.data?.message || 'Failed to apply advance'}`);
+    } finally {
+      setProcessingCaApply(false);
+      await refreshPaymentDialogData();
+      fetchAccountsPayable();
+    }
+  };
+
   const handleRecordPayment = async () => {
+    if (vendorAdvanceApplyRows.length) {
+      toast.error('Click "Apply advances to bills" first, or clear the "Apply from advance" amounts');
+      return;
+    }
     if (paymentData.amount <= 0) {
       toast.error('Payment amount must be greater than zero');
       return;
@@ -2232,7 +2316,7 @@ const AccountsPayable = () => {
                                 </IconButton>
                               </span>
                             </Tooltip>
-                            <Tooltip title={bill.amountPaid > 0 ? 'Cannot delete bill with recorded payments' : 'Delete Bill'}>
+                            <Tooltip title={bill.amountPaid > 0 ? 'Cannot void a bill with recorded payments' : 'Void Bill (reverses its journal)'}>
                               <span>
                                 <IconButton
                                   size="small"
@@ -3683,7 +3767,7 @@ const AccountsPayable = () => {
                         <TableCell>Due Date</TableCell>
                         <TableCell align="right">Original Amount</TableCell>
                         <TableCell align="right">Open Balance</TableCell>
-                        {payeeType === 'employee' && (
+                        {(payeeType === 'employee' || vendorAdvanceApplyOn) && (
                           <TableCell align="right" sx={{ minWidth: 140 }}>Apply from advance</TableCell>
                         )}
                         <TableCell align="right" sx={{ minWidth: 140 }}>
@@ -3715,7 +3799,10 @@ const AccountsPayable = () => {
                                 }}
                               />
                             </TableCell>
-                            <TableCell sx={{ fontWeight: isChecked ? 600 : 400 }}>{row.billNumber}</TableCell>
+                            <TableCell sx={{ fontWeight: isChecked ? 600 : 400 }}>
+                              {row.billNumber}
+                              {row.isAdvanceBill && <Chip label="Advance bill" size="small" color="warning" variant="outlined" sx={{ ml: 0.75, height: 18, fontSize: '0.65rem' }} />}
+                            </TableCell>
                           <TableCell>{formatDate(row.dueDate)}</TableCell>
                           <TableCell align="right">{formatPKR(row.totalAmount)}</TableCell>
                           <TableCell align="right">
@@ -3728,12 +3815,13 @@ const AccountsPayable = () => {
                               )
                             )}
                           </TableCell>
-                          {payeeType === 'employee' && (
+                          {(payeeType === 'employee' || vendorAdvanceApplyOn) && (
                             <TableCell align="right">
                               <TextField
                                 size="small"
                                 type="number"
                                 placeholder="0"
+                                disabled={payeeType === 'vendor' && row.isAdvanceBill}
                                 value={row.advanceApplyAmount ?? ''}
                                 inputProps={{ min: 0, max: row.outstanding, step: 0.01 }}
                                 onChange={(e) => {
@@ -3946,6 +4034,23 @@ const AccountsPayable = () => {
                         </TableBody>
                       </Table>
                     </TableContainer>
+                    {vendorAdvanceApplyOn && (
+                      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1} sx={{ mt: 1, p: 1.5, bgcolor: 'grey.50', borderRadius: 1 }}>
+                        <Typography variant="body2" color="text.secondary">
+                          Enter <strong>Apply from advance</strong> on the bills above, then apply — open advances {formatPKR(vendorAdvanceOpenTotal)},
+                          {' '}to apply {formatPKR(vendorAdvanceApplyTotal)}. Pay any balance from the bank afterwards.
+                        </Typography>
+                        <Button
+                          variant="contained"
+                          color="success"
+                          size="small"
+                          disabled={processingCaApply || !vendorAdvanceApplyRows.length}
+                          onClick={handleApplyVendorAdvanceToBills}
+                        >
+                          {processingCaApply ? 'Applying…' : 'Apply advances to bills'}
+                        </Button>
+                      </Stack>
+                    )}
                   </Box>
                 )}
                 {payeeType === 'employee' && payeeCashApprovals.length > 0 && (
@@ -4527,15 +4632,25 @@ const AccountsPayable = () => {
         fullWidth
       >
         <DialogTitle sx={{ fontWeight: 700, color: 'error.main', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <DeleteIcon /> Delete Bill
+          <DeleteIcon /> Void Bill
         </DialogTitle>
         <DialogContent>
           <Typography variant="body1">
-            Are you sure you want to delete bill <strong>{billToDelete?.billNumber}</strong> ({billToDelete?.vendorName}) for <strong>{formatPKR(billToDelete?.totalAmount || 0)}</strong>?
+            Void bill <strong>{billToDelete?.billNumber}</strong> ({billToDelete?.vendorName}) for <strong>{formatPKR(billToDelete?.totalAmount || 0)}</strong>?
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-            This will permanently remove the bill and its corresponding General Ledger journal entries.
+            The bill is kept as Cancelled for the audit trail and its General Ledger entry is reversed with a reversing
+            journal — nothing is deleted from the ledger.
           </Typography>
+          <TextField
+            fullWidth
+            required
+            size="small"
+            sx={{ mt: 2 }}
+            label="Reason for voiding"
+            value={voidReason}
+            onChange={(e) => setVoidReason(e.target.value)}
+          />
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
           <Button onClick={() => setDeleteDialogOpen(false)} disabled={deletingBill} color="inherit">
@@ -4547,7 +4662,7 @@ const AccountsPayable = () => {
             onClick={handleConfirmDelete}
             disabled={deletingBill}
           >
-            {deletingBill ? 'Deleting...' : 'Delete Bill'}
+            {deletingBill ? 'Voiding...' : 'Void Bill'}
           </Button>
         </DialogActions>
       </Dialog>

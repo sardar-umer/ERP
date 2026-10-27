@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import ProjectInvoicesTab from './ProjectInvoicesTab';
 import {
@@ -13,8 +13,8 @@ import {
   BarChart as ChartIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon, Edit as EditIcon,
   Flag as FlagIcon,
-  PhotoCamera as PhotoIcon, Refresh as RefreshIcon, Search as SearchIcon,
-  Warning as WarnIcon, ShoppingCart as POIcon, Receipt as InvoiceIcon,
+  Refresh as RefreshIcon, Search as SearchIcon,
+  ShoppingCart as POIcon, Receipt as InvoiceIcon,
   Visibility as ViewIcon,
   AccountTree as TreeIcon,
   FactCheck as CheckRequestIcon,
@@ -25,13 +25,11 @@ import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
 import { Checkbox } from '@mui/material';
 import dayjs from 'dayjs';
-import { getImageUrl } from '../../utils/imageService';
 import {
   getProjectById,
   getBOQHeaders, createBOQHeader, updateBOQHeader, deleteBOQHeader, allocateBOQItem,
   getBOQ, addBOQItem, updateBOQItem, deleteBOQItem,
   updateBoqDiscount,
-  getDPRList, submitDPR, deleteDPR,
   addMilestone, updateMilestone, deleteMilestone,
   createPOFromBOQ, getProjectPurchaseOrders,
   generateMilestoneInvoice
@@ -87,7 +85,6 @@ const ALL_TABS = [
   { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'dpr', label: 'Daily Reports', icon: <PhotoIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'cost', label: 'Cost Report', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: true }
 ];
@@ -1482,321 +1479,6 @@ const BOQTab = ({ projectId, project }) => {
   );
 };
 
-// ─── DPR Tab ──────────────────────────────────────────────────────────────────
-const DPRTab = ({ projectId }) => {
-  const [data, setData] = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-  const [success, setSuccess] = useState('');
-  const [dialogOpen, setDialogOpen] = useState(false);
-  const [saving, setSaving] = useState(false);
-  const [photos, setPhotos] = useState([]);
-  const fileInputRef = useRef(null);
-  const [form, setForm] = useState({
-    reportDate: dayjs().format('YYYY-MM-DD'), weather: '', temperature: '',
-    workforceCivil: 0, workforceElectrical: 0, workforcePlumbing: 0, workforceSupervisors: 0,
-    summary: '', nextDayPlan: '',
-    workDone: [{ taskTitle: '', description: '', progressToday: 0 }],
-    issues: []
-  });
-
-  const load = useCallback(async () => {
-    try {
-      setLoading(true);
-      const res = await getDPRList(projectId);
-      setData(res.data?.data || null);
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to load DPRs');
-    } finally { setLoading(false); }
-  }, [projectId]);
-
-  useEffect(() => { load(); }, [load]);
-
-  const openAdd = () => {
-    setForm({
-      reportDate: dayjs().format('YYYY-MM-DD'), weather: '', temperature: '',
-      workforceCivil: 0, workforceElectrical: 0, workforcePlumbing: 0, workforceSupervisors: 0,
-      summary: '', nextDayPlan: '',
-      workDone: [{ taskTitle: '', description: '', progressToday: 0 }],
-      issues: []
-    });
-    setPhotos([]);
-    setDialogOpen(true);
-  };
-
-  const handleSubmit = async () => {
-    if (!form.reportDate) { setError('Report date is required'); return; }
-    setSaving(true); setError('');
-    try {
-      const formData = new FormData();
-      Object.entries(form).forEach(([k, v]) => {
-        if (k === 'workDone' || k === 'issues') {
-          formData.append(k, JSON.stringify(v));
-        } else {
-          formData.append(k, v);
-        }
-      });
-      photos.forEach(p => formData.append('photos', p.file));
-      formData.append('photoCaptions', JSON.stringify(photos.map(p => p.caption || '')));
-
-      await submitDPR(projectId, formData);
-      setSuccess('DPR submitted successfully');
-      setDialogOpen(false);
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to submit DPR');
-    } finally { setSaving(false); }
-  };
-
-  const handleDelete = async (dprId) => {
-    if (!window.confirm('Delete this DPR?')) return;
-    try {
-      await deleteDPR(projectId, dprId);
-      setSuccess('DPR deleted');
-      load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Failed to delete DPR');
-    }
-  };
-
-  const set = (field) => (e) => setForm(prev => ({ ...prev, [field]: e.target.value }));
-  const setNum = (field) => (e) => setForm(prev => ({ ...prev, [field]: Number(e.target.value) || 0 }));
-
-  const addWorkDone = () => setForm(prev => ({
-    ...prev, workDone: [...prev.workDone, { taskTitle: '', description: '', progressToday: 0 }]
-  }));
-
-  const setWorkDone = (idx, field) => (e) => setForm(prev => {
-    const wd = [...prev.workDone];
-    wd[idx] = { ...wd[idx], [field]: e.target.value };
-    return { ...prev, workDone: wd };
-  });
-
-  const removeWorkDone = (idx) => setForm(prev => ({
-    ...prev, workDone: prev.workDone.filter((_, i) => i !== idx)
-  }));
-
-  const handlePhotoSelect = (e) => {
-    const files = Array.from(e.target.files || []);
-    setPhotos(prev => [...prev, ...files.map(f => ({ file: f, caption: '', preview: URL.createObjectURL(f) }))]);
-  };
-
-  if (loading) return <Skeleton height={300} />;
-
-  const reports = data?.reports || [];
-
-  return (
-    <Box>
-      {error && <Alert severity="error" onClose={() => setError('')} sx={{ mb: 2 }}>{error}</Alert>}
-      {success && <Alert severity="success" onClose={() => setSuccess('')} sx={{ mb: 2 }}>{success}</Alert>}
-
-      <SectionHeader
-        title="Daily Progress Reports"
-        action={
-          <Stack direction="row" gap={1}>
-            <Button size="small" variant="outlined" startIcon={<RefreshIcon />} onClick={load}>Refresh</Button>
-            <Button size="small" variant="contained" startIcon={<AddIcon />} onClick={openAdd}>Submit DPR</Button>
-          </Stack>
-        }
-      />
-
-      {!reports.length ? (
-        <EmptyState icon={PhotoIcon} text="No daily progress reports yet"
-          action={<Button variant="outlined" startIcon={<AddIcon />} onClick={openAdd}>Submit First DPR</Button>} />
-      ) : (
-        reports.map(report => (
-          <Card key={report._id} variant="outlined" sx={{ mb: 2 }}>
-            <CardContent>
-              <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                <Box>
-                  <Stack direction="row" alignItems="center" gap={1}>
-                    <Typography variant="subtitle1" fontWeight={700}>
-                      {dayjs(report.reportDate).format('dddd, DD MMMM YYYY')}
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary" fontFamily="monospace">
-                      {report.reportNumber}
-                    </Typography>
-                  </Stack>
-                  <Stack direction="row" gap={2} sx={{ mt: 0.5 }}>
-                    {report.weather && <Typography variant="caption">🌤 {report.weather} {report.temperature}</Typography>}
-                    <Typography variant="caption">
-                      👷 {report.workforceTotal} workers
-                      {report.workforceCivil > 0 && ` (Civil: ${report.workforceCivil}`}
-                      {report.workforceElectrical > 0 && `, Elec: ${report.workforceElectrical}`}
-                      {report.workforcePlumbing > 0 && `, Plumb: ${report.workforcePlumbing}`}
-                      {report.workforceSupervisors > 0 && `, Sup: ${report.workforceSupervisors}`}
-                      {report.workforceCivil > 0 && ')'}
-                    </Typography>
-                    {report.submittedBy && (
-                      <Typography variant="caption">
-                        By: {report.submittedBy.firstName} {report.submittedBy.lastName}
-                      </Typography>
-                    )}
-                  </Stack>
-                </Box>
-                <IconButton size="small" color="error" onClick={() => handleDelete(report._id)}>
-                  <DeleteIcon fontSize="small" />
-                </IconButton>
-              </Stack>
-
-              {report.summary && (
-                <Typography variant="body2" sx={{ mt: 1, fontStyle: 'italic' }}>{report.summary}</Typography>
-              )}
-
-              {report.workDone?.length > 0 && (
-                <Box sx={{ mt: 1.5 }}>
-                  <Typography variant="caption" fontWeight={600} color="text.secondary">WORK DONE:</Typography>
-                  {report.workDone.map((w, i) => (
-                    <Typography key={i} variant="body2" sx={{ ml: 1 }}>
-                      • {w.taskTitle ? `[${w.taskTitle}] ` : ''}{w.description}
-                      {w.progressToday > 0 && ` (+${w.progressToday}%)`}
-                    </Typography>
-                  ))}
-                </Box>
-              )}
-
-              {report.issues?.length > 0 && (
-                <Box sx={{ mt: 1 }}>
-                  <Typography variant="caption" fontWeight={600} color="text.secondary">ISSUES:</Typography>
-                  {report.issues.map((iss, i) => (
-                    <Stack key={i} direction="row" alignItems="center" gap={0.5} sx={{ ml: 1 }}>
-                      <WarnIcon sx={{ fontSize: 14, color: iss.severity === 'High' || iss.severity === 'Critical' ? 'error.main' : 'warning.main' }} />
-                      <Typography variant="body2">{iss.description}</Typography>
-                      <Chip label={iss.severity} size="small" color={iss.severity === 'High' || iss.severity === 'Critical' ? 'error' : 'warning'} />
-                      <Chip label={iss.status} size="small" color={iss.status === 'Resolved' ? 'success' : 'default'} />
-                    </Stack>
-                  ))}
-                </Box>
-              )}
-
-              {report.photos?.length > 0 && (
-                <Stack direction="row" gap={1} sx={{ mt: 1.5, flexWrap: 'wrap' }}>
-                  {report.photos.map((photo, i) => (
-                    <Box key={i}>
-                      <Box
-                        component="img"
-                        src={getImageUrl(photo.url)}
-                        alt={photo.caption || `Photo ${i + 1}`}
-                        sx={{ width: 80, height: 80, objectFit: 'cover', borderRadius: 1, cursor: 'pointer' }}
-                        onClick={() => {
-                          const url = getImageUrl(photo.url);
-                          if (url?.startsWith('data:')) {
-                            const w = window.open('');
-                            if (w) {
-                              w.document.write(`<html><head><title>DPR Photo Preview</title></head><body style="margin:0;display:flex;align-items:center;justify-content:center;background:#111;"><img src="${url}" style="max-width:100%;max-height:100vh;object-fit:contain;"/></body></html>`);
-                              w.document.close();
-                            }
-                          } else if (url) {
-                            window.open(url, '_blank');
-                          }
-                        }}
-                      />
-                      {photo.caption && <Typography variant="caption" display="block" align="center">{photo.caption}</Typography>}
-                    </Box>
-                  ))}
-                </Stack>
-              )}
-
-              {report.nextDayPlan && (
-                <Typography variant="caption" color="text.secondary" sx={{ mt: 1, display: 'block' }}>
-                  <strong>Next day plan:</strong> {report.nextDayPlan}
-                </Typography>
-              )}
-            </CardContent>
-          </Card>
-        ))
-      )}
-
-      {/* DPR Dialog */}
-      <Dialog open={dialogOpen} onClose={() => setDialogOpen(false)} maxWidth="md" fullWidth>
-        <DialogTitle>Submit Daily Progress Report</DialogTitle>
-        <DialogContent sx={{ pt: 2 }}>
-          {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
-          <Grid container spacing={2}>
-            <Grid item xs={6} md={4}>
-              <TextField fullWidth type="date" label="Report Date" required value={form.reportDate}
-                onChange={set('reportDate')} InputLabelProps={{ shrink: true }} />
-            </Grid>
-            <Grid item xs={6} md={4}>
-              <TextField fullWidth label="Weather" value={form.weather} onChange={set('weather')} placeholder="Sunny, Cloudy…" />
-            </Grid>
-            <Grid item xs={6} md={4}>
-              <TextField fullWidth label="Temperature" value={form.temperature} onChange={set('temperature')} placeholder="32°C" />
-            </Grid>
-
-            <Grid item xs={12}>
-              <Typography variant="subtitle2" gutterBottom>Workforce on Site</Typography>
-              <Grid container spacing={2}>
-                {[['workforceCivil', 'Civil'], ['workforceElectrical', 'Electrical'], ['workforcePlumbing', 'Plumbing'], ['workforceSupervisors', 'Supervisors']].map(([f, l]) => (
-                  <Grid item xs={6} sm={3} key={f}>
-                    <TextField fullWidth label={l} type="number" value={form[f]} onChange={setNum(f)} size="small" />
-                  </Grid>
-                ))}
-              </Grid>
-            </Grid>
-
-            <Grid item xs={12}>
-              <Stack direction="row" justifyContent="space-between" alignItems="center">
-                <Typography variant="subtitle2">Work Done Today</Typography>
-                <Button size="small" startIcon={<AddIcon />} onClick={addWorkDone}>Add</Button>
-              </Stack>
-              {form.workDone.map((wd, idx) => (
-                <Stack key={idx} direction="row" gap={1} sx={{ mt: 1 }} alignItems="flex-start">
-                  <TextField size="small" label="Task" value={wd.taskTitle} onChange={setWorkDone(idx, 'taskTitle')} sx={{ width: 160 }} />
-                  <TextField size="small" label="Description" value={wd.description} onChange={setWorkDone(idx, 'description')} sx={{ flex: 1 }} />
-                  <TextField size="small" label="Progress %" type="number" value={wd.progressToday} onChange={setWorkDone(idx, 'progressToday')} sx={{ width: 90 }} />
-                  <IconButton size="small" onClick={() => removeWorkDone(idx)}><DeleteIcon fontSize="small" /></IconButton>
-                </Stack>
-              ))}
-            </Grid>
-
-            <Grid item xs={12}>
-              <TextField fullWidth multiline rows={3} label="Summary of Day's Work" value={form.summary} onChange={set('summary')} />
-            </Grid>
-            <Grid item xs={12}>
-              <TextField fullWidth multiline rows={2} label="Next Day Plan" value={form.nextDayPlan} onChange={set('nextDayPlan')} />
-            </Grid>
-
-            <Grid item xs={12}>
-              <Stack direction="row" alignItems="center" gap={1}>
-                <Button
-                  variant="outlined"
-                  startIcon={<PhotoIcon />}
-                  onClick={() => fileInputRef.current?.click()}
-                  size="small"
-                >
-                  Attach Photos ({photos.length})
-                </Button>
-                <input ref={fileInputRef} type="file" multiple accept="image/*" hidden onChange={handlePhotoSelect} />
-              </Stack>
-              {photos.length > 0 && (
-                <Stack direction="row" gap={1} sx={{ mt: 1, flexWrap: 'wrap' }}>
-                  {photos.map((p, i) => (
-                    <Box key={i} position="relative">
-                      <Box component="img" src={p.preview} alt={`photo-${i}`}
-                        sx={{ width: 64, height: 64, objectFit: 'cover', borderRadius: 1 }} />
-                      <IconButton size="small" sx={{ position: 'absolute', top: -8, right: -8, bgcolor: 'background.paper' }}
-                        onClick={() => setPhotos(prev => prev.filter((_, pi) => pi !== i))}>
-                        <DeleteIcon sx={{ fontSize: 14 }} />
-                      </IconButton>
-                    </Box>
-                  ))}
-                </Stack>
-              )}
-            </Grid>
-          </Grid>
-        </DialogContent>
-        <DialogActions>
-          <Button onClick={() => setDialogOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={saving}>
-            {saving ? <CircularProgress size={20} /> : 'Submit DPR'}
-          </Button>
-        </DialogActions>
-      </Dialog>
-    </Box>
-  );
-};
-
 const MainKpi = ({ label, value, hint, accent = '#0f766e' }) => (
   <Box
     sx={{
@@ -2698,7 +2380,6 @@ const ProjectDetail = () => {
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}
-          {activeTab?.id === 'dpr' && <DPRTab projectId={id} />}
           {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'cost' && <CostReportTab project={project} />}
         </Box>

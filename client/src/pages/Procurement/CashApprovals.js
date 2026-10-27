@@ -17,6 +17,7 @@ import {
   Search as SearchIcon, History as HistoryIcon
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
+import toast from 'react-hot-toast';
 import api from '../../services/api';
 import procurementService from '../../services/procurementService';
 import { formatDate } from '../../utils/dateUtils';
@@ -150,13 +151,19 @@ const EMPTY_FORM = {
 };
 
 // ─── Main Component ───────────────────────────────────────────────────────────
-const CashApprovalsPage = () => {
+/**
+ * `embedCaId` (Vendor Payments hub): mount hidden and open this page's own Finance step for that cash approval
+ * (Create Voucher / Approve / Post Payment / Settle Payment); `onEmbedClose` runs when its dialog closes.
+ */
+const EMBED_FINANCE_ACTIONS = ['create-voucher', 'finance-approve', 'issue-advance', 'settle-payment'];
+
+const CashApprovalsPage = ({ embedCaId = null, onEmbedClose = null } = {}) => {
   const navigate = useNavigate();
   const location = useLocation();
   const { user } = useAuth();
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
-  const isFinanceModule = location.pathname.startsWith('/finance/cash-approvals');
+  const isFinanceModule = Boolean(embedCaId) || location.pathname.startsWith('/finance/cash-approvals');
 
   const [approvalAuthority, setApprovalAuthority] = useState({
     preparedBy: '',
@@ -1106,6 +1113,45 @@ const CashApprovalsPage = () => {
     }
     return actions;
   };
+
+  // Opened from the Vendor Payments hub: run the Finance step due on that cash approval, report back on close
+  const embedDialogShownRef = useRef(false);
+  useEffect(() => {
+    if (!embedCaId || !user) return undefined;
+    let cancelled = false;
+    embedDialogShownRef.current = false;
+    (async () => {
+      try {
+        const res = await procurementService.getCashApprovalById(embedCaId);
+        const ca = res?.success ? res.data : null;
+        if (cancelled) return;
+        const action = ca && getAvailableActions(ca).find((a) => EMBED_FINANCE_ACTIONS.includes(a.type));
+        if (!action) {
+          toast.error(ca ? `No Finance step is open for you on ${ca.caNumber || 'this cash approval'} (${ca.status})` : 'Cash approval not found');
+          if (onEmbedClose) onEmbedClose();
+          return;
+        }
+        openAction(action.type, ca);
+      } catch (err) {
+        toast.error(err.response?.data?.message || 'Could not load the cash approval');
+        if (onEmbedClose) onEmbedClose();
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [embedCaId, user]);
+  const embedDialogOpen = actionDialog.open || advancePaymentDialog.open;
+  useEffect(() => {
+    if (!embedCaId) return;
+    if (embedDialogOpen) embedDialogShownRef.current = true;
+    else if (embedDialogShownRef.current) {
+      embedDialogShownRef.current = false;
+      if (onEmbedClose) onEmbedClose();
+    }
+  }, [embedDialogOpen, embedCaId, onEmbedClose]);
+  // The page's own message banners are hidden when embedded; show them as toasts instead
+  useEffect(() => { if (embedCaId && success) toast.success(success); }, [embedCaId, success]);
+  useEffect(() => { if (embedCaId && error) toast.error(error); }, [embedCaId, error]);
 
   // ─── Advance Issue Dialog State ───────────────────────────────────────────────
   const [advanceForm, setAdvanceForm] = useState({ advanceTo: null, advanceToName: '', advanceAmount: '', advancePaymentMethod: 'Cash', advanceVoucherNo: '', advanceRemarks: '' });

@@ -78,29 +78,33 @@ fiscalPeriodSchema.index({ status: 1 });
 fiscalPeriodSchema.index({ startDate: 1, endDate: 1 });
 
 /**
- * Check if a given date falls within an open fiscal period.
- * Returns the period if found and open, throws if closed/locked.
+ * Check a posting date against the posting company's fiscal periods.
+ * - Only that company's periods count (another company's closed month never blocks this one).
+ * - Once a company has fiscal periods set up, a date with no period is refused (no posting into months
+ *   that were never opened); closed / locked periods are refused.
+ * - A company with no periods at all may still post (setup warning in Finance), unless
+ *   FINANCE_REQUIRE_FISCAL_PERIODS=true makes periods mandatory everywhere.
  */
+const periodError = (message) => Object.assign(new Error(message), { statusCode: 400 });
+
 fiscalPeriodSchema.statics.validatePostingDate = async function (date, companyId = null) {
   const d = new Date(date);
-  const query = {
-    startDate: { $lte: d },
-    endDate: { $gte: d }
-  };
-  if (companyId) query.companyId = companyId;
+  if (Number.isNaN(d.getTime())) throw periodError('Invalid posting date');
+  const scope = companyId ? { companyId } : { $or: [{ companyId: null }, { companyId: { $exists: false } }] };
 
-  const period = await this.findOne(query);
-
-  if (!period) return null; // No period defined — allow posting (lenient mode)
+  const period = await this.findOne({ ...scope, startDate: { $lte: d }, endDate: { $gte: d } });
+  if (!period) {
+    const hasPeriods = await this.exists(scope);
+    if (hasPeriods || String(process.env.FINANCE_REQUIRE_FISCAL_PERIODS).toLowerCase() === 'true') {
+      throw periodError(`No fiscal period covers ${d.toISOString().slice(0, 10)} — open it in Finance → Fiscal Periods before posting`);
+    }
+    return null; // company has not set up fiscal periods yet
+  }
   if (period.status === 'closed') {
-    throw new Error(
-      `Fiscal period ${period.name} is closed. Cannot post journal entries to a closed period.`
-    );
+    throw periodError(`Fiscal period ${period.name} is closed. Cannot post journal entries to a closed period.`);
   }
   if (period.status === 'locked') {
-    throw new Error(
-      `Fiscal period ${period.name} is locked. Contact your Finance Manager.`
-    );
+    throw periodError(`Fiscal period ${period.name} is locked. Contact your Finance Manager.`);
   }
   return period;
 };

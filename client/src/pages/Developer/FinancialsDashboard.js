@@ -239,7 +239,7 @@ export default function FinancialsDashboard() {
       dynamicsStatus: 'Not Available (Custom ISV Partner Dev)'
     },
     {
-      module: 'Project Management (BOQ, WBS, EVM, DPR)',
+      module: 'Project Management (BOQ, WBS, EVM, Inspections)',
       ourStatus: 'Included (Full)',
       sapStatus: 'Requires SAP PS ($60/usr/mo)',
       odooStatus: 'Requires Project App ($15/mo)',

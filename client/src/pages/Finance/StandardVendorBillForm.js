@@ -13,6 +13,8 @@ import {
   Select,
   MenuItem,
   Alert,
+  Switch,
+  FormControlLabel,
   IconButton,
   Stack,
   Table,
@@ -134,6 +136,8 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
   const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
   const [dueDate, setDueDate] = useState('');
   const [billNumber, setBillNumber] = useState('');
+  // Advance / deposit bill: posts to Vendor Advance; paying it creates an advance applied to the real bill later
+  const [isAdvanceBill, setIsAdvanceBill] = useState(false);
   const [vendorInvoiceNumber, setVendorInvoiceNumber] = useState('');
 
   // Lines
@@ -597,6 +601,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
           project: l.project || primaryProject
         })),
         attachments: uploadedAttachments,
+        isAdvanceBill,
         // Department approval (like Centralized Store Manager/HOD) — NOT finance voucher authorities
         departmentApproverIds: [srId, gmId],
         departmentApprovalAuthorities: {
@@ -819,6 +824,18 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
             </Grid>
           </Grid>
 
+          <Box sx={{ mt: 2.5, p: 1.5, border: '1px solid', borderColor: isAdvanceBill ? 'warning.main' : 'divider', borderRadius: 2, bgcolor: isAdvanceBill ? 'rgba(237,108,2,0.06)' : 'transparent' }}>
+            <FormControlLabel
+              control={<Switch checked={isAdvanceBill} onChange={(e) => setIsAdvanceBill(e.target.checked)} color="warning" />}
+              label={<Typography fontWeight={700}>Advance / deposit bill</Typography>}
+            />
+            <Typography variant="body2" color="text.secondary">
+              {isAdvanceBill
+                ? 'This bill pays the vendor in advance. It posts to the Vendor Advance (Advance to Suppliers) account, not an expense — the categories below are ignored. Once paid, the amount becomes an unused advance and is deducted when you pay the vendor\'s real bill.'
+                : 'Turn on when paying the vendor before the real bill (deposit / advance). The amount is then applied to the real bill later.'}
+            </Typography>
+          </Box>
+
           <Divider sx={{ my: 3 }} />
 
           {/* Collapsible Section 1: Category Details (Chart of Accounts) */}
@@ -859,6 +876,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
                         {/* Category Dropdown */}
                         <TableCell>
                           <Autocomplete
+                            disabled={isAdvanceBill}
                             options={expenseAccounts}
                             getOptionLabel={(o) => {
                               if (o?.__isNewOption) return '+ Add new account';
@@ -899,7 +917,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
                               <TextField
                                 {...params}
                                 size="small"
-                                placeholder="Select expense category"
+                                placeholder={isAdvanceBill ? 'Vendor Advance account' : 'Select expense category'}
                                 fullWidth
                               />
                             )}
