@@ -122,6 +122,7 @@ const buildUtilityBillApNotes = (bill) => {
   const parts = [
     narration || null,
     `Admin utility bill ${bill.billId}`,
+    bill.accountNumber ? `Utility account no: ${bill.accountNumber}` : null,
     bill.accountHead ? `Account head: ${bill.accountHead}` : null,
     bill.forWhat ? `For: ${bill.forWhat}` : null,
     bill.isConsolidated ? `Consolidated (${(bill.consolidatedFrom || []).length} bills)` : null
@@ -419,7 +420,9 @@ const postUtilityBillToFinance = async (bill, createdByUserId) => {
       vendorId: bill.payeeEmployee ? null : (bill.vendorId || null),
       payeeEmployeeId: bill.payeeEmployee || null,
       billNumber,
-      vendorInvoiceNumber: bill.accountNumber || '',
+      // The utility account / consumer number repeats every month for the same connection, so it can't be
+      // the vendor invoice number — the duplicate-invoice guard would reject every bill after the first.
+      vendorInvoiceNumber: billNumber,
       billDate,
       dueDate,
       amount,
