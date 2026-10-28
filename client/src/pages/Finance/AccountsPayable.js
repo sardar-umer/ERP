@@ -1933,6 +1933,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
               >
                 <MenuItem value="">All Status</MenuItem>
                 <MenuItem value="unpaid">Unpaid / Unsettled</MenuItem>
+                <MenuItem value="in_payment_approval">In Payment Approval</MenuItem>
                 <MenuItem value="pending_dept_approval">Pending Dept Approval</MenuItem>
                 <MenuItem value="draft">Draft</MenuItem>
                 <MenuItem value="received">Received</MenuItem>

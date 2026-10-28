@@ -647,6 +647,9 @@ accountsPayableSchema.pre('save', function(next) {
     // no status recalculation
   } else if (this.balanceDue <= 0 && settled > 0) {
     this.status = settled < this.totalAmount ? 'partial' : 'paid';
+  } else if (settled > 0 && ['approved', 'received', 'overdue', 'partial', 'paid'].includes(this.status)) {
+    // Part paid: keep it "partial" (overdue / approval below would hide the payment already made)
+    this.status = 'partial';
   } else if (this.isOverdue) {
     this.status = 'overdue';
   } else if (this.approval.required && this.approval.approvedBy) {

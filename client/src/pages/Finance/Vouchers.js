@@ -54,6 +54,7 @@ import QuotationDetailView from '../../components/Procurement/QuotationDetailVie
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
+import VoucherSignaturesCell from '../../components/Finance/VoucherSignaturesCell';
 import {
   getDuePaymentAmountFromBill,
   getLineDuePaymentAmount
@@ -787,14 +788,15 @@ const Vouchers = () => {
                 <TableCell>Description</TableCell>
                 <TableCell align="right">Amount</TableCell>
                 <TableCell>Status</TableCell>
+                <TableCell>Signed By</TableCell>
                 <TableCell align="center">Action</TableCell>
               </TableRow>
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={11} align="center"><CircularProgress size={24} /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={13} align="center"><CircularProgress size={24} /></TableCell></TableRow>
               ) : voucherRows.length === 0 ? (
-                <TableRow><TableCell colSpan={12} align="center">No vouchers found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={13} align="center">No vouchers found</TableCell></TableRow>
               ) : voucherRows.map((row) => {
                 return (
                 <TableRow key={row._id} hover>
@@ -826,6 +828,9 @@ const Vouchers = () => {
                         ) : chip;
                       })()}
                     </TableCell>
+                  <TableCell>
+                    <VoucherSignaturesCell signatures={row.signatures} />
+                  </TableCell>
                   <TableCell align="center">
                       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.5 }}>
                         <Tooltip title="View Voucher">

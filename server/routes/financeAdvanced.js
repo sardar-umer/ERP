@@ -1007,6 +1007,13 @@ router.get('/journal-entries',
       console.error('[journal-entries] department enrichment failed:', deptErr.message);
     }
 
+    try {
+      const { attachVoucherSignatures } = require('../utils/voucherSignatures');
+      await attachVoucherSignatures(finalEntries);
+    } catch (sigErr) {
+      console.error('[journal-entries] signature enrichment failed:', sigErr.message);
+    }
+
     res.json({
       success: true,
       data: {
@@ -1621,6 +1628,7 @@ router.put('/journal-entries/:id',
       credit: Number(l.credit) || 0
     })) : [];
 
+    const previousDescription = entry.description;
     entry.description = req.body.description;
     entry.department = req.body.department === '' ? null : (req.body.department || null);
     entry.costCenter = req.body.costCenter === '' ? null : (req.body.costCenter || null);
@@ -1685,9 +1693,18 @@ router.put('/journal-entries/:id',
       }
     }
 
+    let narrationNote = '';
+    try {
+      const { syncBillNarrationFromJournal } = require('../utils/journalNarrationSync');
+      const billNumber = await syncBillNarrationFromJournal(entry, previousDescription);
+      if (billNumber) narrationNote = ` Narration on bill ${billNumber} updated to match.`;
+    } catch (syncErr) {
+      console.error('[Journal update] Bill narration sync failed:', syncErr.message);
+    }
+
     res.json({
       success: true,
-      message: `Journal entry updated successfully.${vendorAdvanceNote}`,
+      message: `Journal entry updated successfully.${vendorAdvanceNote}${narrationNote}`,
       data: entry
     });
   })
@@ -4611,8 +4628,37 @@ router.post('/accounts-payable/:id/apply-advance',
 // @route   GET /api/finance/accounts-payable
 // @desc    Get all accounts payable
 // @access  Private (Finance and Admin)
-router.get('/accounts-payable', 
-  authorize('super_admin', 'admin', 'finance_manager'), 
+/**
+ * Mongo expressions for a bill's settled amount (cash + advance) and what is still owed, using the same
+ * payable base as FinanceHelper.getAPPayableBase (duePaymentAmount once the due date has passed).
+ */
+const apSettlementExpr = () => {
+  const startOfToday = new Date();
+  startOfToday.setHours(0, 0, 0, 0);
+  const total = { $ifNull: ['$totalAmount', 0] };
+  const duePay = { $ifNull: ['$duePaymentAmount', 0] };
+  const payableBase = {
+    $cond: [
+      {
+        $and: [
+          { $gt: [duePay, { $add: [total, 0.009] }] },
+          { $ne: [{ $ifNull: ['$dueDate', null] }, null] },
+          { $lt: ['$dueDate', startOfToday] }
+        ]
+      },
+      duePay,
+      total
+    ]
+  };
+  const settled = { $add: [{ $ifNull: ['$amountPaid', 0] }, { $ifNull: ['$advanceApplied', 0] }] };
+  const outstanding = { $subtract: [payableBase, settled] };
+  // Payment / advance vouchers created but still waiting for finance signatures
+  const pending = { $add: [{ $ifNull: ['$paymentPending', 0] }, { $ifNull: ['$advancePending', 0] }] };
+  return { startOfToday, settled, outstanding, pending, unvouchered: { $subtract: [outstanding, pending] } };
+};
+
+router.get('/accounts-payable',
+  authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
     const { 
       page = 1, 
@@ -4630,16 +4676,25 @@ router.get('/accounts-payable',
     const company = await resolveCompanyForFinanceRoute(req);
     const baseFilters = {};
 
+    // Payment filters go by amounts, not the stored status: status can lag behind payments
+    // (a paid bill left as "approved"/"overdue", or a partly paid one never marked "partial")
+    const settlement = apSettlementExpr();
+    const openStatuses = { $nin: ['cancelled', 'Pending Audit', 'Forwarded to Audit Director'] };
+    const settlementFilters = {
+      // Include draft COA bills awaiting department approval so creators can find them.
+      // Hide only the in-flight audit queue; keep Returned from Audit visible so finance can correct/resubmit
+      // Unpaid = still needs a payment voucher; a bill whose voucher covers the full balance moves to in_payment_approval
+      unpaid: { $gt: [settlement.unvouchered, 0.009] },
+      in_payment_approval: { $and: [{ $gt: [settlement.pending, 0.009] }, { $gt: [settlement.outstanding, 0.009] }] },
+      partial: { $and: [{ $gt: [settlement.settled, 0.009] }, { $gt: [settlement.outstanding, 0.009] }] },
+      paid: { $and: [{ $gt: [settlement.settled, 0] }, { $lte: [settlement.outstanding, 0.009] }] },
+      overdue: { $and: [{ $gt: [settlement.outstanding, 0.009] }, { $lt: ['$dueDate', settlement.startOfToday] }] }
+    };
+
     if (status) {
-      if (status === 'unpaid') {
-        // Include draft COA bills awaiting department approval so creators can find them.
-        // Still hide audit-queue bills until Audit finishes (same as before).
-        // Payment UI already blocks draft / Submitted dept-approval bills.
-        baseFilters.status = {
-          $ne: 'paid',
-          // Hide only in-flight audit queue; keep Returned from Audit visible so finance can correct/resubmit
-          $nin: ['Pending Audit', 'Forwarded to Audit Director']
-        };
+      if (settlementFilters[status]) {
+        baseFilters.status = openStatuses;
+        baseFilters.$and = [{ $expr: settlementFilters[status] }];
       } else if (status === 'pending_dept_approval') {
         baseFilters.status = 'draft';
         baseFilters.approvalStatus = 'Submitted';
@@ -4940,8 +4995,20 @@ router.get('/accounts-payable',
     };
 
     // Transform bills to match frontend expectations
+    // Payment status shown from amounts, so the chip agrees with the status filter even when the stored one is stale
+    const PAYMENT_STAGE_STATUSES = ['approved', 'received', 'overdue', 'partial', 'paid'];
+    const paymentStatusOf = (bill) => {
+      if (!PAYMENT_STAGE_STATUSES.includes(bill.status)) return bill.status;
+      const settled = (Number(bill.amountPaid) || 0) + (Number(bill.advanceApplied) || 0);
+      const outstanding = FinanceHelper.getAPOutstanding(bill);
+      if (settled > 0 && outstanding <= 0.009) return 'paid';
+      if (settled > 0.009) return 'partial';
+      return bill.status === 'paid' || bill.status === 'partial' ? 'approved' : bill.status;
+    };
+
     const transformedBills = bills.map(bill => ({
       ...bill,
+      status: paymentStatusOf(bill),
       vendorName: bill.vendor?.name || 'Unknown Vendor',
       vendorEmail: bill.vendor?.email || '',
       // Keep both values explicit for UI/reporting:
