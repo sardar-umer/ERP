@@ -2745,7 +2745,24 @@ const FinanceHelper = {
     const query = bill.vendor?.vendorId
       ? { 'vendor.vendorId': bill.vendor.vendorId, status: { $in: ['open', 'partially_applied'] } }
       : { 'vendor.name': bill.vendor?.name || '', status: { $in: ['open', 'partially_applied'] } };
-    const advances = await VendorAdvance.find(query).sort({ paymentDate: 1, createdAt: 1 });
+    // Chosen advances (in the order picked, each capped at its amount) or, by default, oldest first
+    const chosen = Array.isArray(options.advanceAllocations) && options.advanceAllocations.length
+      ? options.advanceAllocations
+        .map((a) => ({ id: String(a.vendorAdvanceId || ''), amount: Math.round((Number(a.amount) || 0) * 100) / 100 }))
+        .filter((a) => a.id && a.amount > 0)
+      : null;
+    let advances;
+    if (chosen) {
+      const found = await VendorAdvance.find({ ...query, _id: { $in: chosen.map((a) => a.id) } });
+      const byId = new Map(found.map((a) => [String(a._id), a]));
+      const missing = chosen.find((a) => !byId.has(a.id));
+      if (missing) throw new Error('A selected advance is not open for this vendor any more — refresh and select again');
+      advances = chosen.map((a) => byId.get(a.id));
+      remainingRequest = Math.round(chosen.reduce((s, a) => s + a.amount, 0) * 100) / 100;
+    } else {
+      advances = await VendorAdvance.find(query).sort({ paymentDate: 1, createdAt: 1 });
+    }
+    const capById = chosen ? new Map(chosen.map((a) => [a.id, a.amount])) : null;
 
     const adjustments = [];
     const applications = [];
@@ -2758,8 +2775,12 @@ const FinanceHelper = {
       const advRemaining = Math.round(((Number(adv.amount) || 0) - (Number(adv.appliedAmount) || 0)) * 100) / 100;
       const pendingOnAdv = await ApPayment.sumPendingForVendorAdvance(adv._id);
       const openAdv = Math.max(0, Math.round((advRemaining - pendingOnAdv) * 100) / 100);
+      const cap = capById ? capById.get(String(adv._id)) : Infinity;
+      if (capById && cap > openAdv + 0.009) {
+        throw new Error(`Advance ${adv.reference || adv._id} has only PKR ${openAdv.toLocaleString('en-PK')} open (asked ${cap.toLocaleString('en-PK')})`);
+      }
       if (openAdv <= 0) continue;
-      const applyAmount = Math.min(remainingBill, remainingRequest, openAdv);
+      const applyAmount = Math.min(remainingBill, remainingRequest, openAdv, cap);
       if (applyAmount <= 0) continue;
 
       const { application, journalEntry } = await ApPayment.submitSettlement({

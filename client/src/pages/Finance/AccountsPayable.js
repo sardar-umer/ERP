@@ -528,6 +528,8 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
   const [payeeCashApprovals, setPayeeCashApprovals] = useState([]);
   const [loadingPayeeCashApprovals, setLoadingPayeeCashApprovals] = useState(false);
   const [payeeVendorAdvances, setPayeeVendorAdvances] = useState([]);
+  // Advances picked in "Available Vendor Advances": { vendorAdvanceId: amount to use }
+  const [vendorAdvanceUse, setVendorAdvanceUse] = useState({});
   const [caApplyAmounts, setCaApplyAmounts] = useState({});
   const [processingCaApply, setProcessingCaApply] = useState(false);
   const [financeAuthorityCandidates, setFinanceAuthorityCandidates] = useState([]);
@@ -1148,6 +1150,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
   };
 
   const loadPayeeVendorAdvances = async (vendorId, vendorName) => {
+    setVendorAdvanceUse({});
     if (!vendorId && !vendorName) {
       setPayeeVendorAdvances([]);
       return;
@@ -1482,57 +1485,76 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
     ? outstandingTransactions.filter((r) => !r.isAdvanceBill && (Number(r.advanceApplyAmount) || 0) > 0)
     : [];
   const vendorAdvanceApplyTotal = roundPay2(vendorAdvanceApplyRows.reduce((s, r) => s + (Number(r.advanceApplyAmount) || 0), 0));
+  const sumAdvanceUse = (use) => roundPay2(Object.values(use).reduce((s, v) => s + (Number(v) || 0), 0));
+  const vendorAdvanceUseTotal = sumAdvanceUse(vendorAdvanceUse);
 
-  const handleApplyVendorAdvanceToBills = async () => {
-    if (!vendorAdvanceApplyRows.length) {
-      toast.error('Enter "Apply from advance" on at least one bill');
+  // A bill is in this payment when the bank pays part of it or (vendor) an advance covers it
+  const isBillRowInPayment = (r) => (Number(r.payAmount) || 0) > 0
+    || (vendorAdvanceApplyOn && (Number(r.advanceApplyAmount) || 0) > 0);
+  const vendorAdvanceBillsNeed = roundPay2(outstandingTransactions
+    .filter((r) => !r.isAdvanceBill && isBillRowInPayment(r))
+    .reduce((s, r) => s + (Number(r.outstanding) || 0), 0));
+
+  /** Spread the chosen advance total over the bills in this payment (top down); the bank pays what is left */
+  const spreadVendorAdvance = (rows, pool) => {
+    let left = roundPay2(pool);
+    return rows.map((r) => {
+      if (r.isAdvanceBill) return { ...r, advanceApplyAmount: 0 };
+      if (!isBillRowInPayment(r)) return { ...r, advanceApplyAmount: 0, payAmount: 0 };
+      const adv = roundPay2(Math.min(left, Number(r.outstanding) || 0));
+      left = roundPay2(left - adv);
+      return { ...r, advanceApplyAmount: adv, payAmount: roundPay2(Math.max(0, (Number(r.outstanding) || 0) - adv)) };
+    });
+  };
+
+  /** Save bill rows and refresh Total Payment Amount (re-spreading vendor advances when they are in use) */
+  const commitBillRows = (rows, pool = vendorAdvanceUseTotal) => {
+    const next = vendorAdvanceApplyOn ? spreadVendorAdvance(rows, pool) : rows;
+    setOutstandingTransactions(next);
+    setPaymentData((prev) => ({ ...prev, amount: roundPay2(next.reduce((s, r) => s + (Number(r.payAmount) || 0), 0)) }));
+  };
+
+  const setVendorAdvanceUseAmount = (advanceId, amount) => {
+    const nextUse = { ...vendorAdvanceUse };
+    if (amount > 0) nextUse[advanceId] = roundPay2(amount);
+    else delete nextUse[advanceId];
+    setVendorAdvanceUse(nextUse);
+    commitBillRows(outstandingTransactions, sumAdvanceUse(nextUse));
+  };
+
+  const toggleVendorAdvance = (adv, checked) => {
+    if (!checked) {
+      setVendorAdvanceUseAmount(adv.vendorAdvanceId, 0);
       return;
     }
-    if (vendorAdvanceApplyTotal > vendorAdvanceOpenTotal + 0.009) {
-      toast.error(`Total to apply (${formatPKR(vendorAdvanceApplyTotal)}) is more than the open advances (${formatPKR(vendorAdvanceOpenTotal)})`);
+    // Take what the selected bills still need, up to this advance's open balance
+    const otherUse = roundPay2(vendorAdvanceUseTotal - (Number(vendorAdvanceUse[adv.vendorAdvanceId]) || 0));
+    const amount = Math.min(Number(adv.open) || 0, Math.max(0, roundPay2(vendorAdvanceBillsNeed - otherUse)));
+    if (amount <= 0) {
+      toast(vendorAdvanceBillsNeed > 0
+        ? 'The selected bills are already fully covered by the advances you picked'
+        : 'Select the bill(s) to pay first');
       return;
     }
-    const finAuthErr = validateFinanceAuthoritySelection(billPaymentFinAuth);
-    if (finAuthErr) {
-      toast.error(finAuthErr);
-      return;
-    }
-    const financeApprovalAuthorities = buildFinanceApprovalAuthoritiesPayload(billPaymentFinAuth, preparerUserId);
-    setProcessingCaApply(true);
-    let done = 0;
-    try {
-      for (const row of vendorAdvanceApplyRows) {
-        await api.post(`/finance/accounts-payable/${row.billId}/apply-advance`, {
-          source: 'vendor',
-          amount: roundPay2(row.advanceApplyAmount),
-          financeApprovalAuthorities
-        });
-        done += 1;
-      }
-      toast.success(`Advance applied to ${done} bill(s) — pending finance signatures`);
-    } catch (error) {
-      toast.error(`${done ? `${done} bill(s) done; ` : ''}${error.response?.data?.message || 'Failed to apply advance'}`);
-    } finally {
-      setProcessingCaApply(false);
-      await refreshPaymentDialogData();
-      fetchAccountsPayable();
-    }
+    setVendorAdvanceUseAmount(adv.vendorAdvanceId, amount);
   };
 
   const handleRecordPayment = async () => {
-    if (vendorAdvanceApplyRows.length) {
-      toast.error('Click "Apply advances to bills" first, or clear the "Apply from advance" amounts');
-      return;
-    }
-    if (paymentData.amount <= 0) {
+    // Advance first, then the bank pays only what is left (Total Payment Amount already excludes the advance)
+    const bankAmount = roundPay2(paymentData.amount);
+    if (bankAmount <= 0 && !vendorAdvanceApplyRows.length) {
       toast.error('Payment amount must be greater than zero');
       return;
     }
-    if (isIcPayingMode && !paymentData.bankAccountId) {
+    if (vendorAdvanceUseTotal > vendorAdvanceApplyTotal + 0.009) {
+      toast.error(`Selected advances (${formatPKR(vendorAdvanceUseTotal)}) are more than the selected bills need (${formatPKR(vendorAdvanceApplyTotal)}) — lower an advance amount`);
+      return;
+    }
+    if (bankAmount > 0 && isIcPayingMode && !paymentData.bankAccountId) {
       toast.error('Select Pay From Account (bank/cash on the Paying company).');
       return;
     }
-    if (isIcPayingMode && !paymentData.relatedPartyAccountId) {
+    if (bankAmount > 0 && isIcPayingMode && !paymentData.relatedPartyAccountId) {
       toast.error('Select Related Party Account on the original (bill) company.');
       return;
     }
@@ -1547,16 +1569,60 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
       preparerUserId
     );
 
-    try {
-      setProcessingPayment(true);
-      const payRows = outstandingTransactions
-        .filter((r) => Number(r.payAmount) > 0)
-        .map((r) => ({ ...r, payAmount: Math.round((Number(r.payAmount) || 0) * 100) / 100 }));
-      if (payRows.length === 0) {
-        toast.error('Enter payment amount against at least one outstanding bill');
+    const payRows = outstandingTransactions
+      .filter((r) => Number(r.payAmount) > 0)
+      .map((r) => ({ ...r, payAmount: Math.round((Number(r.payAmount) || 0) * 100) / 100 }));
+    if (payRows.length === 0 && !vendorAdvanceApplyRows.length) {
+      toast.error('Enter payment amount against at least one outstanding bill');
+      return;
+    }
+
+    setProcessingPayment(true);
+    let advanceNote = '';
+    if (vendorAdvanceApplyRows.length) {
+      let done = 0;
+      try {
+        // Each bill takes its share from the chosen advances, in the order they are listed
+        const pool = payeeVendorAdvances
+          .filter((a) => (Number(vendorAdvanceUse[a.vendorAdvanceId]) || 0) > 0)
+          .map((a) => ({ vendorAdvanceId: a.vendorAdvanceId, left: roundPay2(vendorAdvanceUse[a.vendorAdvanceId]) }));
+        for (const row of vendorAdvanceApplyRows) {
+          let need = roundPay2(row.advanceApplyAmount);
+          const vendorAdvanceAllocations = [];
+          for (const p of pool) {
+            if (need <= 0) break;
+            const take = roundPay2(Math.min(p.left, need));
+            if (take <= 0) continue;
+            vendorAdvanceAllocations.push({ vendorAdvanceId: p.vendorAdvanceId, amount: take });
+            p.left = roundPay2(p.left - take);
+            need = roundPay2(need - take);
+          }
+          await api.post(`/finance/accounts-payable/${row.billId}/apply-advance`, {
+            source: 'vendor',
+            amount: roundPay2(row.advanceApplyAmount),
+            vendorAdvanceAllocations,
+            financeApprovalAuthorities
+          });
+          done += 1;
+        }
+        advanceNote = `Advance ${formatPKR(vendorAdvanceApplyTotal)} applied to ${done} bill(s)`;
+      } catch (error) {
+        toast.error(`${done ? `${done} bill(s) got their advance; ` : ''}${error.response?.data?.message || 'Failed to apply advance'} — no bank payment was made`);
         setProcessingPayment(false);
+        await refreshPaymentDialogData();
+        fetchAccountsPayable();
         return;
       }
+      if (!payRows.length) {
+        toast.success(`${advanceNote} — fully covered, no bank payment needed. Pending finance signatures.`);
+        setProcessingPayment(false);
+        setPaymentDialogOpen(false);
+        fetchAccountsPayable();
+        return;
+      }
+    }
+
+    try {
       const billsPayload = payRows.map(row => ({
         billId: row.billId,
         amount: row.payAmount
@@ -1578,13 +1644,20 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
         });
 
       toast.success(
-        payRes?.data?.message || `Consolidated batch payment submitted for ${payRows.length} bill(s) — pending finance approval`
+        `${advanceNote ? `${advanceNote}; ` : ''}${payRes?.data?.message || `Consolidated batch payment submitted for ${payRows.length} bill(s) — pending finance approval`}`
       );
       setPaymentDialogOpen(false);
       fetchAccountsPayable();
     } catch (error) {
       console.error('Error recording payment:', error);
-      toast.error(error.response?.data?.message || 'Failed to record payment');
+      if (advanceNote) {
+        // The advance went through; reload so the bank amount shows just the remainder to retry
+        toast.error(`${advanceNote}, but the bank payment failed: ${error.response?.data?.message || 'unknown error'}. Post the remaining amount again.`);
+        await refreshPaymentDialogData();
+      } else {
+        toast.error(error.response?.data?.message || 'Failed to record payment');
+      }
+      fetchAccountsPayable();
     } finally {
       setProcessingPayment(false);
     }
@@ -3866,9 +3939,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                             const maxBank = roundPay2(Math.max(0, (r.outstanding || 0) - (Number(r.advanceApplyAmount) || 0)));
                             return { ...r, payAmount: maxBank };
                           });
-                          setOutstandingTransactions(next);
-                          const total = roundPay2(next.reduce((s, r) => s + (Number(r.payAmount) || 0), 0));
-                          setPaymentData((prev) => ({ ...prev, amount: total }));
+                          commitBillRows(next);
                         }}
                         sx={{ fontSize: '0.75rem', py: 0.2 }}
                       >
@@ -3879,9 +3950,12 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                         variant="outlined"
                         color="inherit"
                         onClick={() => {
-                          const next = outstandingTransactions.map((r) => ({ ...r, payAmount: 0 }));
-                          setOutstandingTransactions(next);
-                          setPaymentData((prev) => ({ ...prev, amount: 0 }));
+                          const next = outstandingTransactions.map((r) => ({
+                            ...r,
+                            payAmount: 0,
+                            ...(vendorAdvanceApplyOn ? { advanceApplyAmount: 0 } : {})
+                          }));
+                          commitBillRows(next);
                         }}
                         sx={{ fontSize: '0.75rem', py: 0.2 }}
                       >
@@ -3906,12 +3980,12 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                           <Checkbox
                             size="small"
                             indeterminate={
-                              outstandingTransactions.some((r) => r.payAmount > 0) &&
-                              !outstandingTransactions.every((r) => r.payAmount > 0)
+                              outstandingTransactions.some(isBillRowInPayment) &&
+                              !outstandingTransactions.every(isBillRowInPayment)
                             }
                             checked={
                               outstandingTransactions.length > 0 &&
-                              outstandingTransactions.every((r) => r.payAmount > 0)
+                              outstandingTransactions.every(isBillRowInPayment)
                             }
                             onChange={(e) => {
                               const isChecked = e.target.checked;
@@ -3919,11 +3993,13 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                                 const maxBank = roundPay2(
                                   Math.max(0, (r.outstanding || 0) - (Number(r.advanceApplyAmount) || 0))
                                 );
-                                return { ...r, payAmount: isChecked ? maxBank : 0 };
+                                return {
+                                  ...r,
+                                  payAmount: isChecked ? maxBank : 0,
+                                  ...(vendorAdvanceApplyOn && !isChecked ? { advanceApplyAmount: 0 } : {})
+                                };
                               });
-                              setOutstandingTransactions(next);
-                              const total = roundPay2(next.reduce((s, r) => s + (Number(r.payAmount) || 0), 0));
-                              setPaymentData((prev) => ({ ...prev, amount: total }));
+                              commitBillRows(next);
                             }}
                           />
                         </TableCell>
@@ -3941,7 +4017,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                     </TableHead>
                     <TableBody>
                       {outstandingTransactions.map((row, idx) => {
-                        const isChecked = (Number(row.payAmount) || 0) > 0;
+                        const isChecked = isBillRowInPayment(row);
                         const maxBank = roundPay2(
                           Math.max(0, (row.outstanding || 0) - (Number(row.advanceApplyAmount) || 0))
                         );
@@ -3954,12 +4030,12 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                                 onChange={(e) => {
                                   const checked = e.target.checked;
                                   const next = [...outstandingTransactions];
-                                  next[idx] = { ...next[idx], payAmount: checked ? maxBank : 0 };
-                                  setOutstandingTransactions(next);
-                                  const total = roundPay2(
-                                    next.reduce((s, r) => s + (Number(r.payAmount) || 0), 0)
-                                  );
-                                  setPaymentData((prev) => ({ ...prev, amount: total }));
+                                  next[idx] = {
+                                    ...next[idx],
+                                    payAmount: checked ? maxBank : 0,
+                                    ...(vendorAdvanceApplyOn && !checked ? { advanceApplyAmount: 0 } : {})
+                                  };
+                                  commitBillRows(next);
                                 }}
                               />
                             </TableCell>
@@ -3979,7 +4055,12 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                               )
                             )}
                           </TableCell>
-                          {(payeeType === 'employee' || vendorAdvanceApplyOn) && (
+                          {payeeType === 'vendor' && vendorAdvanceApplyOn && (
+                            <TableCell align="right" sx={{ fontWeight: 600, color: (Number(row.advanceApplyAmount) || 0) > 0 ? 'success.main' : 'text.disabled' }}>
+                              {(Number(row.advanceApplyAmount) || 0) > 0 ? formatPKR(row.advanceApplyAmount) : '—'}
+                            </TableCell>
+                          )}
+                          {payeeType === 'employee' && (
                             <TableCell align="right">
                               <TextField
                                 size="small"
@@ -4174,46 +4255,88 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                       <Table size="small">
                         <TableHead>
                           <TableRow>
+                            <TableCell padding="checkbox" />
                             <TableCell>Advance Ref</TableCell>
                             <TableCell>Payment Date</TableCell>
                             <TableCell>Method</TableCell>
                             <TableCell align="right">Original Amount</TableCell>
                             <TableCell align="right">Applied</TableCell>
                             <TableCell align="right">Open Balance</TableCell>
+                            <TableCell align="right" sx={{ minWidth: 150 }}>Use from this advance</TableCell>
                           </TableRow>
                         </TableHead>
                         <TableBody>
-                          {payeeVendorAdvances.map((adv) => (
-                            <TableRow key={adv.vendorAdvanceId} hover>
-                              <TableCell sx={{ fontWeight: 600 }}>{adv.reference}</TableCell>
-                              <TableCell>{formatDate(adv.paymentDate)}</TableCell>
-                              <TableCell>{adv.paymentMethod}</TableCell>
-                              <TableCell align="right">{formatPKR(adv.amount)}</TableCell>
-                              <TableCell align="right">{formatPKR(adv.applied)}</TableCell>
-                              <TableCell align="right" sx={{ fontWeight: 700, color: 'success.main' }}>
-                                {formatPKR(adv.open)}
-                              </TableCell>
-                            </TableRow>
-                          ))}
+                          {payeeVendorAdvances.map((adv) => {
+                            const used = Number(vendorAdvanceUse[adv.vendorAdvanceId]) || 0;
+                            const left = roundPay2((Number(adv.open) || 0) - used);
+                            return (
+                              <TableRow key={adv.vendorAdvanceId} hover selected={used > 0}>
+                                <TableCell padding="checkbox">
+                                  <Checkbox
+                                    size="small"
+                                    color="success"
+                                    checked={used > 0}
+                                    onChange={(e) => toggleVendorAdvance(adv, e.target.checked)}
+                                  />
+                                </TableCell>
+                                <TableCell sx={{ fontWeight: 600 }}>{adv.reference}</TableCell>
+                                <TableCell>{formatDate(adv.paymentDate)}</TableCell>
+                                <TableCell>{adv.paymentMethod}</TableCell>
+                                <TableCell align="right">{formatPKR(adv.amount)}</TableCell>
+                                <TableCell align="right">
+                                  {formatPKR(adv.applied)}
+                                  {(Number(adv.pending) || 0) > 0 && (
+                                    <Typography variant="caption" color="warning.main" sx={{ display: 'block' }}>
+                                      + {formatPKR(adv.pending)} in approval
+                                    </Typography>
+                                  )}
+                                </TableCell>
+                                <TableCell align="right" sx={{ fontWeight: 700, color: 'success.main' }}>
+                                  {formatPKR(adv.open)}
+                                  {used > 0 && (
+                                    <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontWeight: 400 }}>
+                                      {formatPKR(left)} left after this
+                                    </Typography>
+                                  )}
+                                </TableCell>
+                                <TableCell align="right">
+                                  <TextField
+                                    size="small"
+                                    type="number"
+                                    placeholder="0"
+                                    value={used || ''}
+                                    inputProps={{ min: 0, max: adv.open, step: 0.01 }}
+                                    onChange={(e) => setVendorAdvanceUseAmount(
+                                      adv.vendorAdvanceId,
+                                      Math.max(0, Math.min(Number(e.target.value) || 0, Number(adv.open) || 0))
+                                    )}
+                                    sx={{ width: 130 }}
+                                  />
+                                </TableCell>
+                              </TableRow>
+                            );
+                          })}
                         </TableBody>
                       </Table>
                     </TableContainer>
                     {vendorAdvanceApplyOn && (
-                      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={1} sx={{ mt: 1, p: 1.5, bgcolor: 'grey.50', borderRadius: 1 }}>
-                        <Typography variant="body2" color="text.secondary">
-                          Enter <strong>Apply from advance</strong> on the bills above, then apply — open advances {formatPKR(vendorAdvanceOpenTotal)},
-                          {' '}to apply {formatPKR(vendorAdvanceApplyTotal)}. Pay any balance from the bank afterwards.
-                        </Typography>
-                        <Button
-                          variant="contained"
-                          color="success"
-                          size="small"
-                          disabled={processingCaApply || !vendorAdvanceApplyRows.length}
-                          onClick={handleApplyVendorAdvanceToBills}
-                        >
-                          {processingCaApply ? 'Applying…' : 'Apply advances to bills'}
-                        </Button>
-                      </Stack>
+                      <Alert
+                        severity={vendorAdvanceUseTotal > vendorAdvanceApplyTotal + 0.009 ? 'error' : (vendorAdvanceUseTotal > 0 ? 'success' : 'info')}
+                        sx={{ mt: 1 }}
+                      >
+                        {vendorAdvanceUseTotal > 0 ? (
+                          <>
+                            Using <strong>{formatPKR(vendorAdvanceUseTotal)}</strong> from {Object.keys(vendorAdvanceUse).length} advance(s)
+                            {' '}on bills of {formatPKR(vendorAdvanceBillsNeed)} — bank pays <strong>{formatPKR(paymentData.amount)}</strong>.
+                            {vendorAdvanceUseTotal > vendorAdvanceApplyTotal + 0.009 && ` That is ${formatPKR(roundPay2(vendorAdvanceUseTotal - vendorAdvanceApplyTotal))} more than the selected bills need — lower an amount.`}
+                          </>
+                        ) : (
+                          <>
+                            Tick the advance(s) to use (open {formatPKR(vendorAdvanceOpenTotal)}) and adjust <strong>Use from this advance</strong>.
+                            {' '}The rest fills <strong>Total Payment Amount</strong>; <strong>Post Payment</strong> applies the advance and pays the balance in one go.
+                          </>
+                        )}
+                      </Alert>
                     )}
                   </Box>
                 )}
@@ -4283,7 +4406,9 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                 value={paymentData.amount}
                 size="small"
                 InputProps={{ readOnly: true }}
-                helperText="Sum of selected bills in the table below" />
+                helperText={vendorAdvanceApplyTotal > 0
+                  ? `Bills ${formatPKR(roundPay2(paymentData.amount + vendorAdvanceApplyTotal))} − advance ${formatPKR(vendorAdvanceApplyTotal)} = ${formatPKR(paymentData.amount)} from bank${paymentData.amount <= 0 ? ' (advance covers it all)' : ''}`
+                  : 'Sum of selected bills in the table below'} />
             </Grid>
             <Grid item xs={6}>
               <TextField fullWidth label="WHT Rate %" type="number" placeholder="e.g. 4.5"
@@ -4440,7 +4565,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
               processingPayment
               || !billPaymentFinAuth.accountsManagerUser
               || !billPaymentFinAuth.financeControllerUser
-              || (isIcPayingMode && (!paymentData.bankAccountId || !paymentData.relatedPartyAccountId))
+              || (paymentData.amount > 0 && isIcPayingMode && (!paymentData.bankAccountId || !paymentData.relatedPartyAccountId))
             }
           >
             {processingPayment ? 'Processing…' : 'Post Payment'}

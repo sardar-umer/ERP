@@ -3910,15 +3910,20 @@ router.get('/accounts-payable/vendor-advance-balance',
       .sort({ paymentDate: 1 })
       .lean();
 
-    const advances = rawAdvances.map((adv) => {
+    // Open = what can still be used: amounts already in unsigned adjustment vouchers are taken
+    const { sumPendingForVendorAdvance } = require('../utils/apPaymentApplication');
+    const pendingByAdvance = await Promise.all(rawAdvances.map((adv) => sumPendingForVendorAdvance(adv._id).catch(() => 0)));
+    const advances = rawAdvances.map((adv, i) => {
       const amount = Math.round((Number(adv.amount) || 0) * 100) / 100;
       const applied = Math.round((Number(adv.appliedAmount) || 0) * 100) / 100;
-      const open = Math.round(Math.max(0, amount - applied) * 100) / 100;
+      const pending = Math.round((Number(pendingByAdvance[i]) || 0) * 100) / 100;
+      const open = Math.round(Math.max(0, amount - applied - pending) * 100) / 100;
       return {
         vendorAdvanceId: String(adv._id),
         reference: adv.reference,
         amount,
         applied,
+        pending,
         open,
         paymentDate: adv.paymentDate,
         paymentMethod: adv.paymentMethod,
@@ -4575,7 +4580,10 @@ router.post('/accounts-payable/:id/apply-advance',
     body('source').optional().isIn(['vendor', 'employee', 'auto']).withMessage('Invalid advance source'),
     body('allocations').optional().isArray().withMessage('allocations must be an array'),
     body('allocations.*.cashApprovalId').optional().isMongoId().withMessage('Invalid cashApprovalId'),
-    body('allocations.*.amount').optional().isFloat({ min: 0.01 }).withMessage('Allocation amount must be greater than zero')
+    body('allocations.*.amount').optional().isFloat({ min: 0.01 }).withMessage('Allocation amount must be greater than zero'),
+    body('vendorAdvanceAllocations').optional().isArray().withMessage('vendorAdvanceAllocations must be an array'),
+    body('vendorAdvanceAllocations.*.vendorAdvanceId').optional().isMongoId().withMessage('Invalid vendorAdvanceId'),
+    body('vendorAdvanceAllocations.*.amount').optional().isFloat({ min: 0.01 }).withMessage('Advance amount must be greater than zero')
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -4608,7 +4616,8 @@ router.post('/accounts-payable/:id/apply-advance',
 
     if (Number(result.applied || 0) <= 0 && Number(result.pending || 0) <= 0 && source !== 'employee' && allocations.length === 0) {
       result = await FinanceHelper.applyVendorAdvanceToBill(req.params.id, req.body.amount ?? null, req.user._id, {
-        financeApprovalAuthorities: req.body.financeApprovalAuthorities
+        financeApprovalAuthorities: req.body.financeApprovalAuthorities,
+        advanceAllocations: Array.isArray(req.body.vendorAdvanceAllocations) ? req.body.vendorAdvanceAllocations : null
       });
     }
 
