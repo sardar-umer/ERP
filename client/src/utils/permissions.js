@@ -855,6 +855,8 @@ export const MODULES = {
           { name: 'Stock Check', path: '/procurement/store/stock-check' },
           { name: 'Store Issue Notes (SIN)', path: '/procurement/store/goods-issue' },
           { name: 'Store Returns', path: '/procurement/store/store-returns' },
+          { name: 'Stock Transfers', path: '/procurement/store/stock-transfers' },
+          { name: 'Stock Reports', path: '/procurement/store/stock-reports' },
           { name: 'Purchase Returns', path: '/procurement/purchase-returns' },
           { name: 'Cost Centers', path: '/procurement/store/cost-center' }
         ]
@@ -1631,6 +1633,8 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/procurement/store/delivery-challan-qa': 'quality_assurance',
       '/procurement/store/goods-issue': 'goods_issue',
       '/procurement/store/store-returns': 'goods_issue',
+      '/procurement/store/stock-transfers': 'inventory',
+      '/procurement/store/stock-reports': 'inventory',
       '/procurement/store/stock-check': 'inventory',
       '/procurement/store/cost-center': 'cost_center',
       '/procurement/reports': 'procurement_reports',

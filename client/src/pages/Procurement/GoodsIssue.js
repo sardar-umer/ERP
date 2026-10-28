@@ -9,7 +9,7 @@ import {
 import {
   ExitToApp as IssueIcon, Add as AddIcon, Visibility as ViewIcon,
   Search as SearchIcon, Refresh as RefreshIcon, Close as CloseIcon, Print as PrintIcon,
-  AssignmentReturn as ReturnIcon, Block as CancelIcon
+  AssignmentReturn as ReturnIcon, Block as CancelIcon, LocalShipping as GatePassIcon
 } from '@mui/icons-material';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
@@ -18,6 +18,7 @@ import { formatDate } from '../../utils/dateUtils';
 import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
 import LocationSelector from '../../components/Procurement/Store/LocationSelector';
 import { StoreReturnDialog, CancelSinDialog, StoreReturnsList } from '../../components/Procurement/Store/StoreReturns';
+import GatePassDialog from '../../components/Procurement/Store/GatePass';
 
 const formatSINDate = (d) => {
   if (!d) return '';
@@ -46,6 +47,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
   const [pageTab, setPageTab] = useState(initialTab);
   const [returnDialog, setReturnDialog] = useState({ open: false, sin: null });
   const [cancelDialog, setCancelDialog] = useState({ open: false, sin: null });
+  const [gatePassSin, setGatePassSin] = useState(null);
   const [returnsRefresh, setReturnsRefresh] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
@@ -744,6 +746,11 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                       </IconButton>
                       {issue.status === 'Issued' && (
                         <>
+                          <Tooltip title={issue.gatePass?.number ? `Gate pass ${issue.gatePass.number}` : 'Create outward gate pass'}>
+                            <IconButton size="small" color={issue.gatePass?.number ? 'success' : 'default'} onClick={() => setGatePassSin(issue)}>
+                              <GatePassIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="Return items to store">
                             <IconButton size="small" color="primary" onClick={() => setReturnDialog({ open: true, sin: issue })}>
                               <ReturnIcon fontSize="small" />
@@ -780,6 +787,12 @@ const GoodsIssue = ({ initialTab = 0 }) => {
         sin={returnDialog.sin}
         onClose={() => setReturnDialog({ open: false, sin: null })}
         onDone={(msg) => { setReturnDialog({ open: false, sin: null }); setSuccess(msg); loadIssues(); loadInventory(); setReturnsRefresh((n) => n + 1); }}
+      />
+      <GatePassDialog
+        open={Boolean(gatePassSin)}
+        sin={gatePassSin}
+        onClose={() => setGatePassSin(null)}
+        onDone={(msg) => { setSuccess(msg); loadIssues(); }}
       />
       <CancelSinDialog
         open={cancelDialog.open}

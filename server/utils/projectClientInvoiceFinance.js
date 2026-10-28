@@ -19,13 +19,9 @@ const finance = () => require('./financeHelper');
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const resolveCompanyId = async (projectId) => {
+  const { resolveProjectCompanyId } = require('./projectIpcFinance');
   const project = await ConstructionProject.findById(projectId).select('companyId parentProject').lean();
-  if (project?.companyId) return project.companyId;
-  if (project?.parentProject) {
-    const main = await ConstructionProject.findById(project.parentProject).select('companyId').lean();
-    return main?.companyId || null;
-  }
-  return null;
+  return resolveProjectCompanyId(project);
 };
 
 const resolveRevenueAccount = async (companyId) => {

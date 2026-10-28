@@ -119,6 +119,8 @@ import GoodsIssue from './pages/Procurement/GoodsIssue';
 import CostCenters from './pages/Procurement/CostCenters';
 import VendorBills from './pages/Procurement/VendorBills';
 import StoreDashboard from './pages/Procurement/Store/StoreDashboard';
+import StockTransfers from './pages/Procurement/Store/StockTransfers';
+import StockReports from './pages/Procurement/Store/StockReports';
 import StoreManagement from './pages/Procurement/Store/StoreManagement';
 import StoreItemCatalog from './pages/Procurement/Store/StoreItemCatalog';
 import SalesDashboard from './pages/Sales/SalesDashboard';
@@ -1666,6 +1668,14 @@ function App() {
                     <Route
                       path="/procurement/store/store-returns"
                       element={<ProtectedRoute><GoodsIssue key="srn" initialTab={1} /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/store/stock-transfers"
+                      element={<ProtectedRoute><StockTransfers /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/store/stock-reports"
+                      element={<ProtectedRoute><StockReports /></ProtectedRoute>}
                     />
                     <Route
                       path="/procurement/store/cost-center"

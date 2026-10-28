@@ -48,8 +48,10 @@ export default function PurchaseReturns() {
 
   const loadGRNs = async () => {
     try {
-      const res = await api.get('/procurement/goods-receive');
-      setGrns(res.data.data || []);
+      // The GRN list comes back as { receives, pagination } and pages at 10 by default
+      const res = await api.get('/procurement/goods-receive', { params: { limit: 500 } });
+      const data = res.data?.data;
+      setGrns(Array.isArray(data) ? data : (Array.isArray(data?.receives) ? data.receives : []));
     } catch { setGrns([]); }
   };
 

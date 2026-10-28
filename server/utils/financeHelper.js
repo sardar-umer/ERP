@@ -3244,6 +3244,15 @@ const FinanceHelper = {
       }
 
       const referenceNumber = sinDoc.issueNumber || sinDoc.sinNumber || sinDoc._id?.toString() || 'SIN';
+      // The SIN's store cost center and project travel to the COGS entry (header and both lines)
+      let costCenter = null;
+      try {
+        const { resolveFinanceCostCenter } = require('./costCenterLink');
+        costCenter = await resolveFinanceCostCenter(sinDoc.costCenter?._id || sinDoc.costCenter, cid);
+      } catch (ccErr) {
+        console.warn(`[SIN Journal] Cost center not linked for ${referenceNumber}: ${ccErr.message}`);
+      }
+      const project = sinDoc.project?._id || sinDoc.project || null;
       const je = await FinanceHelper.createAndPostJournalEntry(
         withVoucherNarration(withCompany({
           date: sinDoc.issueDate || new Date(),
@@ -3251,6 +3260,8 @@ const FinanceHelper = {
           description: `SIN ${referenceNumber}: Stock issued – ${inventoryItem.name}`,
           department: 'procurement',
           module: 'procurement',
+          costCenter,
+          project,
           referenceId: sinDoc._id,
           referenceType: 'sin',
           journalCode: 'INV',
@@ -3261,13 +3272,15 @@ const FinanceHelper = {
               account: cogsAccountId,
               description: `COGS – ${inventoryItem.name} (${qty_} × WAC ${unitCost})`,
               debit: amount,
-              department: 'procurement'
+              department: 'procurement',
+              costCenter
             },
             {
               account: inventoryAccountId,
               description: `Inventory out – ${inventoryItem.name} via SIN ${referenceNumber}`,
               credit: amount,
-              department: 'procurement'
+              department: 'procurement',
+              costCenter
             }
           ]
         }, cid), getSinNarration(sinDoc))

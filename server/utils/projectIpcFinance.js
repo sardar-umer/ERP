@@ -57,13 +57,24 @@ const resolveRetentionAccount = async (companyId) => {
   return null;
 };
 
+/** Finance company for a project: set on the Main Project, inherited by every level below it */
 const resolveProjectCompanyId = async (project) => {
-  if (project?.companyId) return project.companyId;
-  if (project?.parentProject) {
-    const main = await ConstructionProject.findById(project.parentProject).select('companyId').lean();
-    return main?.companyId || null;
+  let current = project;
+  for (let depth = 0; current && depth < 10; depth += 1) {
+    if (current.companyId) return current.companyId;
+    if (!current.parentProject) return null;
+    current = await ConstructionProject.findById(current.parentProject).select('companyId parentProject').lean();
   }
   return null;
+};
+
+/** The top-level (Main) project above this one, for messages that tell the user where to set the company */
+const findMainProject = async (project) => {
+  let current = project;
+  for (let depth = 0; current?.parentProject && depth < 10; depth += 1) {
+    current = await ConstructionProject.findById(current.parentProject).select('name projectNumber companyId parentProject').lean();
+  }
+  return current || null;
 };
 
 const financeRecipients = async () => {
@@ -275,5 +286,6 @@ module.exports = {
   postIpcToFinance,
   syncIpcFromApPayment,
   resolveProjectCompanyId,
+  findMainProject,
   RETENTION_ACCOUNT_NAME
 };

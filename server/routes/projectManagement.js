@@ -23,7 +23,7 @@ const SlabSchedule = require('../models/projectManagement/SlabSchedule');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 const { syncProjectMetrics } = require('../services/projectMetricsService');
-const { postIpcToFinance, resolveProjectCompanyId } = require('../utils/projectIpcFinance');
+const { postIpcToFinance, resolveProjectCompanyId, findMainProject } = require('../utils/projectIpcFinance');
 const { postClientInvoiceToFinance, reverseClientInvoiceInFinance } = require('../utils/projectClientInvoiceFinance');
 const { hasAuditAccess, canPerformInitialPreAuditActions } = require('../utils/auditAccess');
 const { canActAsAuditDirector } = require('../utils/auditDirectorRole');
@@ -592,6 +592,10 @@ router.post('/projects', asyncHandler(async (req, res) => {
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
   if (!name || !name.trim()) return badRequest(res, 'Project name is required');
+  // The Main Project carries the Finance company; Sub Projects, contracts and IPCs inherit it
+  if (!parentProject && !(companyId && isValidId(companyId))) {
+    return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
+  }
 
   const project = new ConstructionProject({
     name: name.trim(),
@@ -599,7 +603,7 @@ router.post('/projects', asyncHandler(async (req, res) => {
     street: street || '',
     side: ['Left', 'Right'].includes(side) ? side : '',
     clientName, clientContact, notes, tags,
-    companyId: companyId && isValidId(companyId) ? companyId : null,
+    companyId: !parentProject && companyId && isValidId(companyId) ? companyId : null,
     projectManager: projectManager || null,
     startDate: startDate ? new Date(startDate) : undefined,
     expectedEndDate: expectedEndDate ? new Date(expectedEndDate) : undefined,
@@ -658,9 +662,32 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   });
 
   const oldProject = await ConstructionProject.findById(req.params.id)
-    .select('parentProject overallProgress allocatedBudget')
+    .select('name parentProject overallProgress allocatedBudget companyId')
     .lean();
   if (!oldProject) return notFound(res, 'Project');
+
+  // Main Project must keep a Finance company; once its IPCs / invoices posted to Finance it cannot move company
+  const willBeMain = !(updates.parentProject !== undefined ? updates.parentProject : oldProject.parentProject);
+  const nextCompany = updates.companyId !== undefined ? updates.companyId : oldProject.companyId;
+  if (willBeMain && !nextCompany) {
+    return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
+  }
+  if (!willBeMain) delete updates.companyId; // Sub Projects inherit from their Main Project
+  if (willBeMain && oldProject.companyId && nextCompany && String(oldProject.companyId) !== String(nextCompany)) {
+    const familyIds = [oldProject._id];
+    for (let frontier = [oldProject._id], depth = 0; frontier.length && depth < 10; depth += 1) {
+      const children = await ConstructionProject.find({ parentProject: { $in: frontier } }).select('_id').lean();
+      frontier = children.map((c) => c._id);
+      familyIds.push(...frontier);
+    }
+    const posted = await ProjectInvoice.countDocuments({
+      project: { $in: familyIds },
+      $or: [{ financeApBillId: { $ne: null } }, { financeArId: { $ne: null } }]
+    });
+    if (posted) {
+      return badRequest(res, `${posted} IPC(s) / invoice(s) of ${oldProject.name} already posted to the current Finance company — the company can no longer be changed`);
+    }
+  }
 
   // Sub category totals cannot exceed Main allocation
   if (oldProject.parentProject && Array.isArray(updates.budgetCategories)) {
@@ -2681,6 +2708,16 @@ router.get('/ipcs/:ipcId', asyncHandler(async (req, res) => {
   res.json({ success: true, data });
 }));
 
+// GET /api/project-management/ipcs/:ipcId/dossier — certificate + all supporting records for every review desk
+router.get('/ipcs/:ipcId/dossier', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.ipcId)) return badRequest(res, 'Invalid IPC ID');
+  const ipc = await populateIpc(ProjectInvoice.findOne({ _id: req.params.ipcId, invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] } })).lean();
+  if (!ipc) return notFound(res, 'IPC');
+  const { buildIpcDossier } = require('../utils/ipcDossier');
+  const data = await buildIpcDossier(ipc, { subcontractorBalances, resolveProjectCompanyId });
+  res.json({ success: true, data });
+}));
+
 /** Advance against a sublet contract: contract must be Active; all live advances on it stay within its value */
 const checkAdvanceAmount = async (contractId, amount, excludeInvoiceId = null) => {
   if (!(amount > 0)) return { error: 'Enter the advance amount' };
@@ -2793,9 +2830,10 @@ router.post('/ipcs/:ipcId/submit', asyncHandler(async (req, res) => {
   }
   // IPCs paid from Project Management before the approval chain existed must not reach Finance a second time
   if ((Number(inv.paidAmount) || 0) > 0) return badRequest(res, 'This IPC was already paid outside the approval chain and cannot be submitted');
-  const project = await ConstructionProject.findById(inv.project).select('companyId parentProject').lean();
+  const project = await ConstructionProject.findById(inv.project).select('name companyId parentProject').lean();
   if (!(await resolveProjectCompanyId(project))) {
-    return badRequest(res, 'Set the Finance company on the Main Project first — approved IPCs post to that company\'s accounts');
+    const main = await findMainProject(project);
+    return badRequest(res, `Main Project "${main?.name || project?.name || ''}" has no Finance Company — open Projects, edit "${main?.name || 'the Main Project'}", select its Finance Company and submit again`);
   }
   pushIpcHistory(inv, 'Draft', 'Pending Audit', req.user._id, req.body.comments || 'Submitted for pre-audit', 'Project Management');
   inv.approvalStatus = 'Pending Audit';

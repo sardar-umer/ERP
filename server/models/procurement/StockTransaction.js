@@ -192,12 +192,13 @@ stockTransactionSchema.statics.getBalances = async function(store, projectId, it
  * Returns array of { item, itemCode, itemName, balance, unit }
  */
 stockTransactionSchema.statics.getProjectBalances = async function(store, projectId) {
+  const storeObjId = (typeof store === 'string' && mongoose.Types.ObjectId.isValid(store)) ? new mongoose.Types.ObjectId(store) : store;
   const projectObjId = (typeof projectId === 'string' && mongoose.Types.ObjectId.isValid(projectId)) ? new mongoose.Types.ObjectId(projectId) : projectId;
   
   const results = await this.aggregate([
     {
       $match: {
-        store: store,
+        store: storeObjId,
         project: projectObjId
       }
     },

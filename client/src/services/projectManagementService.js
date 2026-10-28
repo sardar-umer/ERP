@@ -228,6 +228,8 @@ export const cancelProjectInvoice = (projectId, invoiceId, reason) =>
 
 // ─── IPC approval chain (Pre-Audit → Audit Director → CEO Secretariat → CEO → Finance) ───
 export const getIpc = (ipcId) => api.get(`${BASE}/ipcs/${ipcId}`);
+/** IPC + every supporting record (contract, check request, inspections, earlier IPCs, project documents) */
+export const getIpcDossier = (ipcId) => api.get(`${BASE}/ipcs/${ipcId}/dossier`);
 export const submitIpc = (ipcId, comments) => api.post(`${BASE}/ipcs/${ipcId}/submit`, { comments });
 export const resubmitIpc = (ipcId, comments) => api.post(`${BASE}/ipcs/${ipcId}/resubmit`, { comments });
 export const reviseIpc = (projectId, invoiceId, data) =>

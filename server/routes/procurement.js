@@ -5477,6 +5477,45 @@ router.get('/goods-issue/:id/returnable',
   })
 );
 
+// @route   PUT /api/procurement/goods-issue/:id/gate-pass   { vehicleNumber, driverName, driverPhone, transporter, deliverTo, deliveryAddress, remarks, returnable, dispatchedAt }
+// @desc    Create / update the Outward Gate Pass (delivery note) for an issued SIN; the OGP number is given once
+router.put('/goods-issue/:id/gate-pass',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  [body('vehicleNumber').trim().notEmpty().withMessage('Vehicle number is required')],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg });
+    const sin = await GoodsIssue.findById(req.params.id).select('issueNumber status issueType customerName gatePass').lean();
+    if (!sin) return res.status(404).json({ success: false, message: 'Store Issue Note not found' });
+    if (sin.status !== 'Issued') return res.status(400).json({ success: false, message: `${sin.issueNumber} is ${sin.status} — a gate pass needs an issued SIN` });
+
+    const pick = (k) => (req.body[k] == null ? '' : String(req.body[k]).trim());
+    let number = sin.gatePass?.number;
+    if (!number) {
+      const { nextDocumentNumber } = require('../utils/documentSequence');
+      number = await nextDocumentNumber({ key: 'OGP', model: 'GoodsIssue', field: 'gatePass.number', prefix: 'OGP', pad: 8 });
+    }
+    const gatePass = {
+      number,
+      vehicleNumber: pick('vehicleNumber'),
+      driverName: pick('driverName'),
+      driverPhone: pick('driverPhone'),
+      transporter: pick('transporter'),
+      deliverTo: pick('deliverTo') || sin.customerName || '',
+      deliveryAddress: pick('deliveryAddress'),
+      remarks: pick('remarks'),
+      returnable: Boolean(req.body.returnable),
+      dispatchedAt: req.body.dispatchedAt ? new Date(req.body.dispatchedAt) : (sin.gatePass?.dispatchedAt || new Date()),
+      issuedBy: sin.gatePass?.issuedBy || req.user.id
+    };
+    // updateOne, never save(): the SIN post-save hook would issue the stock again
+    await GoodsIssue.updateOne({ _id: sin._id }, { $set: { gatePass } });
+    const updated = await GoodsIssue.findById(sin._id)
+      .populate('project', 'name projectId').populate('gatePass.issuedBy', 'firstName lastName').lean();
+    res.json({ success: true, message: `Gate pass ${number} ${sin.gatePass?.number ? 'updated' : 'created'} for ${sin.issueNumber}`, data: updated });
+  })
+);
+
 // @route   POST /api/procurement/goods-issue/:id/cancel   { reason }
 router.post('/goods-issue/:id/cancel',
   authorize('super_admin', 'admin', 'procurement_manager'),
@@ -5489,6 +5528,57 @@ router.post('/goods-issue/:id/cancel',
         message: srn ? `Store Issue Note cancelled — stock returned via ${srn.returnNumber}` : 'Store Issue Note cancelled',
         data: srn
       });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  })
+);
+
+// @route   GET /api/procurement/stock-transfers
+router.get('/stock-transfers',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const StockTransfer = require('../models/procurement/StockTransfer');
+    const { page = 1, limit = 10, search, store, project } = req.query;
+    const and = [];
+    if (store) and.push({ $or: [{ fromStore: store }, { toStore: store }] });
+    if (project) and.push({ $or: [{ fromProject: project }, { toProject: project }] });
+    if (search) {
+      const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      and.push({ $or: [{ transferNumber: rx }, { reason: rx }, { fromStoreSnapshot: rx }, { toStoreSnapshot: rx }, { 'items.itemName': rx }, { 'items.itemCode': rx }] });
+    }
+    const query = and.length ? { $and: and } : {};
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10) || 10));
+    const [rows, total] = await Promise.all([
+      StockTransfer.find(query).populate('fromProject', 'name').populate('toProject', 'name').populate('createdBy', 'firstName lastName')
+        .sort({ transferDate: -1, createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+      StockTransfer.countDocuments(query)
+    ]);
+    res.json({ success: true, data: { transfers: rows, pagination: { total, page: pageNum, limit: limitNum } } });
+  })
+);
+
+// @route   POST /api/procurement/stock-transfers   { fromStore, fromProject, toStore, toProject, items: [{ inventoryItem, quantity, notes? }], reason, ... }
+router.post('/stock-transfers',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  [
+    body('fromStore').isMongoId().withMessage('Select the source store'),
+    body('fromProject').isMongoId().withMessage('Select the source project'),
+    body('toStore').isMongoId().withMessage('Select the destination store'),
+    body('toProject').isMongoId().withMessage('Select the destination project'),
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('reason').trim().notEmpty().withMessage('Reason is required')
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg, errors: errors.array() });
+    const { postStockTransfer } = require('../utils/stockTransfers');
+    try {
+      const stn = await postStockTransfer({
+        ...req.body, lines: req.body.items, userId: req.user.id, transferDate: req.body.transferDate || undefined
+      });
+      res.status(201).json({ success: true, message: `${stn.transferNumber} posted — ${stn.totalQuantity} unit(s) moved`, data: stn });
     } catch (err) {
       res.status(err.statusCode || 400).json({ success: false, message: err.message });
     }
@@ -5786,6 +5876,90 @@ router.post('/goods-issue',
 );
 
 // ==================== STOCK BALANCE ROUTES ====================
+
+// @route   GET /api/procurement/store/stock-report?store=&project=&search=
+// @desc    Stock on hand per store + project + item from the ledger, with value (quant AVCO, else item cost)
+//          and last in / out dates — feeds Stock Reports (by store/project, valuation, slow-moving)
+router.get('/store/stock-report',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const StockQuant = mongoose.model('StockQuant');
+    const Store = require('../models/procurement/Store');
+    const toId = (v) => (v && mongoose.Types.ObjectId.isValid(String(v)) ? new mongoose.Types.ObjectId(String(v)) : null);
+    const match = {};
+    if (toId(req.query.store)) match.store = toId(req.query.store);
+    if (toId(req.query.project)) match.project = toId(req.query.project);
+    const search = String(req.query.search || '').trim();
+    if (search) {
+      const rx = new RegExp(search.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      match.$or = [{ itemName: rx }, { itemCode: rx }];
+    }
+
+    const grouped = await StockTransaction.aggregate([
+      { $match: match },
+      { $sort: { createdAt: 1 } },
+      {
+        $group: {
+          _id: { store: '$store', project: '$project', item: '$item' },
+          itemCode: { $last: '$itemCode' },
+          itemName: { $last: '$itemName' },
+          unit: { $last: '$unit' },
+          balance: { $sum: '$quantity' },
+          lastIn: { $max: { $cond: [{ $gt: ['$quantity', 0] }, '$createdAt', null] } },
+          lastOut: { $max: { $cond: [{ $lt: ['$quantity', 0] }, '$createdAt', null] } },
+          lastPrice: { $last: { $cond: [{ $gt: ['$unitPrice', 0] }, '$unitPrice', null] } }
+        }
+      },
+      { $match: { balance: { $gt: 0.0001 } } },
+      { $limit: 20000 }
+    ]);
+
+    const ids = (key) => [...new Set(grouped.map((g) => String(g._id[key])))].map((id) => new mongoose.Types.ObjectId(id));
+    const [stores, projects, items, quants] = await Promise.all([
+      Store.find({ _id: { $in: ids('store') } }).select('name code type').lean(),
+      Project.find({ _id: { $in: ids('project') } }).select('name projectId').lean(),
+      Inventory.find({ _id: { $in: ids('item') } }).select('averageCost unitPrice category').lean(),
+      StockQuant.find({ item: { $in: ids('item') }, store: { $in: ids('store') } }).select('store project item unitPrice').lean()
+    ]);
+    const byId = (list) => new Map(list.map((d) => [String(d._id), d]));
+    const storeById = byId(stores);
+    const projectById = byId(projects);
+    const itemById = byId(items);
+    const quantByKey = new Map(quants.map((q) => [`${q.store}|${q.project}|${q.item}`, q]));
+
+    const now = Date.now();
+    const rows = grouped.map((g) => {
+      const key = `${g._id.store}|${g._id.project}|${g._id.item}`;
+      const item = itemById.get(String(g._id.item));
+      const quantCost = Number(quantByKey.get(key)?.unitPrice) || 0;
+      const unitCost = quantCost > 0 ? quantCost
+        : Number(item?.averageCost) > 0 ? Number(item.averageCost)
+          : Number(item?.unitPrice) > 0 ? Number(item.unitPrice) : Number(g.lastPrice) || 0;
+      const balance = Math.round(g.balance * 10000) / 10000;
+      const lastMovement = g.lastOut || g.lastIn;
+      return {
+        store: g._id.store,
+        storeName: storeById.get(String(g._id.store))?.name || '—',
+        project: g._id.project,
+        projectName: projectById.get(String(g._id.project))?.name || '—',
+        item: g._id.item,
+        itemCode: g.itemCode,
+        itemName: g.itemName,
+        unit: g.unit,
+        category: item?.category || '',
+        balance,
+        unitCost: Math.round(unitCost * 100) / 100,
+        value: Math.round(balance * unitCost * 100) / 100,
+        lastIn: g.lastIn,
+        lastOut: g.lastOut,
+        // Days since stock last left (or arrived, if it never left)
+        daysIdle: lastMovement ? Math.floor((now - new Date(lastMovement).getTime()) / 86400000) : null
+      };
+    }).sort((a, b) => b.value - a.value);
+
+    res.json({ success: true, data: { rows, totalValue: Math.round(rows.reduce((s, r) => s + r.value, 0) * 100) / 100, generatedAt: new Date() } });
+  })
+);
 
 // @route   GET /api/procurement/stock-balance
 // @desc    Get project-wise stock balances. storeId (ObjectId) is preferred; falls back to first active store.

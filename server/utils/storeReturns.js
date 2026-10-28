@@ -59,10 +59,13 @@ const sinReturnableLines = async (sin) => {
   });
 };
 
-const postReturnJournal = async ({ item, qty, unitCost, srn, companyId, userId }) => {
+const postReturnJournal = async ({ item, qty, unitCost, srn, companyId, userId, sinCostCenter }) => {
   const amount = r2(qty * unitCost);
   if (amount <= 0) return { status: 'skipped', reason: 'No cost', amount: 0 };
   try {
+    // Reverse COGS on the same cost center / project the SIN charged
+    const { resolveFinanceCostCenter } = require('./costCenterLink');
+    const costCenter = await resolveFinanceCostCenter(sinCostCenter, companyId).catch(() => null);
     const FinanceHelper = require('./financeHelper');
     const { withCompany } = require('./financePosting');
     const { inventoryAccountId, cogsAccountId } = await FinanceHelper.resolveInventoryAccounts(item, companyId);
@@ -76,10 +79,12 @@ const postReturnJournal = async ({ item, qty, unitCost, srn, companyId, userId }
       referenceId: srn._id,
       referenceType: 'stock_adjustment',
       journalCode: 'INV',
+      costCenter,
+      project: srn.project || null,
       createdBy: userId,
       lines: [
-        { account: inventoryAccountId, description: `Inventory back in – ${item.name} via ${srn.returnNumber}`, debit: amount, department: 'procurement' },
-        { account: cogsAccountId, description: `COGS reversed – ${item.name} (${srn.sinNumber})`, credit: amount, department: 'procurement' }
+        { account: inventoryAccountId, description: `Inventory back in – ${item.name} via ${srn.returnNumber}`, debit: amount, department: 'procurement', costCenter },
+        { account: cogsAccountId, description: `COGS reversed – ${item.name} (${srn.sinNumber})`, credit: amount, department: 'procurement', costCenter }
       ]
     }, companyId));
     return { status: 'posted', journalEntry: je?._id, amount };
@@ -177,7 +182,7 @@ const postStoreReturn = async ({ sinId, lines, reason, kind = 'return', userId, 
       });
     }
     const posting = line.__cogsPosted
-      ? await postReturnJournal({ item, qty: line.quantity, unitCost: line.unitCost, srn, companyId, userId })
+      ? await postReturnJournal({ item, qty: line.quantity, unitCost: line.unitCost, srn, companyId, userId, sinCostCenter: sin.costCenter })
       : { status: 'skipped', reason: `${sinNumber} had no COGS entry for this item — nothing to reverse`, amount: 0 };
     finance.push({ inventoryItem: item._id, itemName: item.name, ...posting });
 

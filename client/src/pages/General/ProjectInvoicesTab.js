@@ -20,6 +20,7 @@ import {
 import IpcKindDialog from '../../components/ProjectManagement/IpcKindDialog';
 import ClientBillingLines from '../../components/ProjectManagement/ClientBillingLines';
 import IpcApprovalTrail, { IPC_APPROVAL_COLOR, ipcStageText } from '../../components/ProjectManagement/IpcApprovalTrail';
+import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 
 const isIpc = (inv) => inv?.invoiceType === 'Subcontractor_IPC';
 /** Documents that travel the approval chain: every IPC, and client invoices raised since the chain existed */
@@ -966,8 +967,18 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
         </DialogActions>
       </Dialog>
 
-      {/* View Detailed IPC Statement Modal */}
-      {viewIpcDialog && (
+      {/* IPCs and client invoices open the full review file (certificate + supporting documents) */}
+      <IpcReviewDialog
+        open={Boolean(viewIpcDialog) && ['Subcontractor_IPC', 'Client_Invoice'].includes(viewIpcDialog?.invoiceType)}
+        ipcId={viewIpcDialog?._id}
+        onClose={() => setViewIpcDialog(null)}
+        actions={(ipc) => (ipc.approvalStatus === 'Approved' && !(ipc.financeApBillId || ipc.financeArId)
+          ? <Button variant="outlined" onClick={handleRetryFinance}>Retry posting to Finance</Button>
+          : null)}
+      />
+
+      {/* Legacy general bills keep the simple statement */}
+      {viewIpcDialog && !['Subcontractor_IPC', 'Client_Invoice'].includes(viewIpcDialog.invoiceType) && (
         <Dialog open={Boolean(viewIpcDialog)} onClose={() => setViewIpcDialog(null)} maxWidth="md" fullWidth>
           <DialogTitle>
             Interim Payment Certificate (IPC #{viewIpcDialog.ipcNumber || 1}) — {viewIpcDialog.invoiceNumber}

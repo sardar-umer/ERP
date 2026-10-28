@@ -211,6 +211,10 @@ const ProjectFormDialog = ({
       setError('Project name is required');
       return;
     }
+    if (form.hierarchyLevel === 'main' && !form.companyId) {
+      setError('Select the Finance Company — Sub Projects, contracts and IPCs under this Main Project post to it');
+      return;
+    }
     if (form.hierarchyLevel === 'sub' && !form.parentProject) {
       setError('Select the Main Project this sub-project belongs to');
       return;
@@ -307,6 +311,22 @@ const ProjectFormDialog = ({
                     )}
                   </Select>
                 </FormControl>
+                {(() => {
+                  // Sub Projects take the Main Project's Finance company — show which one, or why IPCs will be blocked
+                  const main = mainProjects.find((m) => String(m._id) === String(form.parentProject));
+                  if (!main) return null;
+                  const mainCompanyId = main.companyId?._id || main.companyId;
+                  const companyName = main.companyId?.name || companies.find((c) => String(c._id) === String(mainCompanyId))?.name;
+                  return mainCompanyId ? (
+                    <Alert severity="info" sx={{ mt: 1 }}>
+                      Finance Company: <strong>{companyName || 'set'}</strong> — inherited from {main.name}. Contracts and IPCs here post to it.
+                    </Alert>
+                  ) : (
+                    <Alert severity="warning" sx={{ mt: 1 }}>
+                      {main.name} has no Finance Company yet. Edit that Main Project and select one, or IPCs here cannot be submitted.
+                    </Alert>
+                  );
+                })()}
               </Grid>
             </>
           )}
@@ -331,13 +351,13 @@ const ProjectFormDialog = ({
 
           {form.hierarchyLevel === 'main' && (
             <Grid item xs={12}>
-              <FormControl fullWidth>
+              <FormControl fullWidth required error={Boolean(error) && !form.companyId}>
                 <InputLabel>Finance Company</InputLabel>
                 <Select value={form.companyId || ''} label="Finance Company" onChange={set('companyId')}>
-                  <MenuItem value=""><em>Not set</em></MenuItem>
+                  <MenuItem value="" disabled><em>Select company</em></MenuItem>
                   {companies.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>)}
                 </Select>
-                <FormHelperText>Approved subcontractor IPCs of all its Sub Projects post to this company's accounts</FormHelperText>
+                <FormHelperText>All its Sub Projects, contracts, IPCs and client invoices carry this company and post to its accounts</FormHelperText>
               </FormControl>
             </Grid>
           )}

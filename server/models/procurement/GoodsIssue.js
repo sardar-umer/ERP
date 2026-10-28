@@ -242,7 +242,21 @@ const goodsIssueSchema = new mongoose.Schema({
   },
   cancelledAt: { type: Date },
   cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
-  cancelReason: { type: String, trim: true, default: '' }
+  cancelReason: { type: String, trim: true, default: '' },
+  /** Outward Gate Pass / Delivery Note — lets the issued goods leave the premises (number given once) */
+  gatePass: {
+    number: { type: String, trim: true },
+    vehicleNumber: { type: String, trim: true },
+    driverName: { type: String, trim: true },
+    driverPhone: { type: String, trim: true },
+    transporter: { type: String, trim: true },
+    deliverTo: { type: String, trim: true },
+    deliveryAddress: { type: String, trim: true },
+    remarks: { type: String, trim: true },
+    returnable: { type: Boolean, default: false },
+    dispatchedAt: { type: Date },
+    issuedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }
 }, {
   timestamps: true
 });

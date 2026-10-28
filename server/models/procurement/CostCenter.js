@@ -61,6 +61,12 @@ const costCenterSchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  /** Matching Finance cost center per company, so SIN / return journals carry this cost center (utils/costCenterLink) */
+  financeLinks: [{
+    _id: false,
+    companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlacementCompany' },
+    financeCostCenter: { type: mongoose.Schema.Types.ObjectId, ref: 'FinanceCostCenter' }
+  }],
   budget: {
     type: Number,
     default: 0,

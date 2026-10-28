@@ -12,6 +12,11 @@ const costCenterSchema = new mongoose.Schema({
     required: [true, 'Cost Center name is required'],
     trim: true
   },
+  /** Optional; the database keeps a unique (companyId, code) index, so linked store cost centers bring their code */
+  code: {
+    type: String,
+    trim: true
+  },
   description: {
     type: String,
     trim: true,
