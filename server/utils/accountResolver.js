@@ -87,7 +87,7 @@ const SYSTEM_ACCOUNT_RULES = {
   STAFF_ADVANCE: { type: 'Asset', check: /advance|staff|imprest/i, find: /(staff|employee|cash) advance|advances? to (staff|employees)/i },
   EMPLOYEE_LOAN: { type: 'Asset', check: /loan|advance/i, find: /employee loan|staff loan|loans? to employees/i },
   INVENTORY: { type: 'Asset', check: /inventory|stock/i, find: /inventory|stock valuation|stock in hand/i },
-  PAYABLE: { type: 'Liability', check: /payable|creditor/i, find: /^accounts? payable|trade creditors?/i },
+  PAYABLE: { type: 'Liability', check: /payable|creditor/i, find: /^accounts? payables?\b|^trade (creditors?|payables?)|^sundry creditors?|^creditors?( control)?$/i },
   WHT_PAYABLE: { type: 'Liability', check: /wht|withholding|tax/i, find: /wht|withholding/i },
   GRNI: { type: 'Liability', check: /received|grni|accrued/i, find: /goods received not invoiced|\bgrni\b/i },
   GRNI_ALT: { type: 'Liability', check: /received|grni|accrued/i, find: /goods received not invoiced|\bgrni\b/i },
@@ -98,7 +98,7 @@ const SYSTEM_ACCOUNT_RULES = {
   COGS: { type: 'Expense', check: /cost of|cogs|goods sold/i, find: /cost of (goods|sales)|cogs/i },
   EXPENSE_GENERAL: { type: 'Expense', check: /.*/, find: /general expense/i },
   EXPENSE_SALARIES: { type: 'Expense', check: /salar|wage/i, find: /salar(y|ies) expense|wages expense/i },
-  UTILITIES: { type: 'Expense', check: /utilit|electric/i, find: /utilit/i }
+  UTILITIES: { type: 'Expense', check: /utilit|electric/i, find: /utilit|electricity (and|&) gas|electricity expense/i }
 };
 
 const fitsRule = (account, rule) => !rule || (account && account.type === rule.type && rule.check.test(account.name || ''));

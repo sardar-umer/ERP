@@ -962,7 +962,8 @@ const FinanceHelper = {
         return apEntry;
       }
 
-      const apAccount = await A.resolve(FinanceHelper.ACCOUNTS.PAYABLE);
+      const { ensureSystemAccount } = require('./companyChartOfAccounts');
+      const apAccount = await ensureSystemAccount(companyId, FinanceHelper.ACCOUNTS.PAYABLE, { createdBy });
       // A bill without its journal would put the AP sub-ledger out of step with the GL — refuse instead
       if (!apAccount) {
         const err = new Error('No Accounts Payable account on this company\'s chart of accounts — bill not created');
@@ -987,7 +988,8 @@ const FinanceHelper = {
           debitAccount = await FinanceHelper.resolveGrniAccountForBill({ referenceType, referenceId, companyId });
         }
         if (!debitAccount && debitAccountNumber) {
-          debitAccount = await A.resolve(String(debitAccountNumber));
+          // Standard heads (e.g. 6200 Utilities) are added to the company's chart when missing
+          debitAccount = await require('./companyChartOfAccounts').ensureSystemAccount(companyId, String(debitAccountNumber), { createdBy });
           // An explicitly requested expense account must exist — never park the cost in General Expenses silently
           if (!debitAccount && !(Array.isArray(expenseJournalLines) && expenseJournalLines.length)) {
             const err = new Error(`Account ${debitAccountNumber} is not on this company's chart of accounts — bill not created`);

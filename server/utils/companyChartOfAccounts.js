@@ -131,8 +131,49 @@ const assignHistoricalAccountsToCompany = async (companyId) => {
   return { modified, totalUnassigned: accounts.length };
 };
 
+/**
+ * The company's account for a system role (e.g. '2001' Accounts Payable, '6200' Utilities). When the chart has no
+ * fitting account, the standard one is added — under its standard number, or the next free number when that number
+ * is already used by a different account — so automatic postings never stop on a missing system account.
+ */
+const ensureSystemAccount = async (companyId, accountNumber, { createdBy = null } = {}) => {
+  const { resolveSystemAccount } = require('./accountResolver');
+  const found = await resolveSystemAccount(companyId, accountNumber);
+  if (found || !companyId) return found;
+
+  const template = STANDARD_SYSTEM_ACCOUNTS.find((t) => t.accountNumber === String(accountNumber));
+  if (!template) return null;
+
+  // Standard number already taken by another account → 2001-1, 2001-2 …
+  let number = template.accountNumber;
+  for (let i = 1; await Account.exists({ companyId, accountNumber: number }); i++) {
+    number = `${template.accountNumber}-${i}`;
+  }
+  try {
+    await Account.create({
+      companyId,
+      accountNumber: number,
+      accountCode: template.accountCode,
+      name: template.name,
+      type: template.type,
+      category: template.category,
+      detailType: template.detailType,
+      description: `${template.name} (added automatically — required for automatic postings)`,
+      isActive: true,
+      isSystem: template.isSystem,
+      balance: 0,
+      metadata: createdBy ? { createdBy } : undefined
+    });
+    console.warn(`[chart] Added ${number} ${template.name} to company ${companyId} — it had no ${template.accountCode} account`);
+  } catch (err) {
+    if (err.code !== 11000) throw err;
+  }
+  return resolveSystemAccount(companyId, accountNumber);
+};
+
 module.exports = {
   STANDARD_SYSTEM_ACCOUNTS,
   seedChartOfAccountsForCompany,
-  assignHistoricalAccountsToCompany
+  assignHistoricalAccountsToCompany,
+  ensureSystemAccount
 };

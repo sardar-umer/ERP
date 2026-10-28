@@ -178,8 +178,9 @@ const postJournalForUtilityAp = async (apEntry, bill, createdByUserId) => {
 
   const companyId = co(apEntry);
   const A = acct(companyId);
-  const debitAccount = await A.resolve(UTILITY_EXPENSE_ACCOUNT);
-  const apAccount = await A.resolve(FinanceHelper.ACCOUNTS.PAYABLE);
+  const { ensureSystemAccount } = require('./companyChartOfAccounts');
+  const debitAccount = await ensureSystemAccount(companyId, UTILITY_EXPENSE_ACCOUNT, { createdBy: createdByUserId });
+  const apAccount = await ensureSystemAccount(companyId, FinanceHelper.ACCOUNTS.PAYABLE, { createdBy: createdByUserId });
   if (!debitAccount || !apAccount) {
     return {
       journalPosted: false,
@@ -253,6 +254,30 @@ const postJournalForUtilityAp = async (apEntry, bill, createdByUserId) => {
   );
 
   return { journalPosted: true, repaired: true };
+};
+
+/**
+ * Company whose books the bill goes to: the bill's site when it names a company (by name, company code or
+ * initials — "SGC", "Usman Solar"), else the payee employee's company, else the company of the person who
+ * entered the bill, else the group company.
+ */
+const resolveUtilityBillCompanyId = async (bill) => {
+  const PlacementCompany = require('../models/hr/Company');
+  const companies = await PlacementCompany.find({ isActive: { $ne: false } }).select('_id name companyCode').lean();
+  const norm = (v) => String(v || '').toUpperCase().replace(/\(.*?\)/g, ' ').replace(/[^A-Z0-9 ]/g, ' ').replace(/\s+/g, ' ').trim();
+  const STOP = new Set(['PVT', 'LTD', 'PRIVATE', 'LIMITED', 'THE', 'OF', 'AND', 'CO', 'INC']);
+  const initials = (name) => norm(name).split(' ').filter((w) => w && !STOP.has(w)).map((w) => w[0]).join('');
+  const sites = [...new Set([...(bill.billLines || []).map((l) => l.site), bill.site].filter(Boolean))];
+  for (const site of sites) {
+    const s = norm(site);
+    if (!s) continue;
+    const hit = companies.find((c) => norm(c.name) === s)
+      || companies.find((c) => c.companyCode && norm(c.companyCode) === s)
+      || companies.find((c) => initials(c.name) === s.replace(/ /g, ''))
+      || companies.find((c) => s.length >= 4 && norm(c.name).startsWith(s));
+    if (hit) return hit._id;
+  }
+  return resolveDocumentCompanyId({ employeeId: bill.payeeEmployee, userId: bill.createdBy });
 };
 
 const linkUtilityBillToAp = async (bill, apEntry, createdByUserId, historyComment) => {
@@ -363,19 +388,7 @@ const postUtilityBillToFinance = async (bill, createdByUserId) => {
 
   try {
     const expenseJournalLines = buildExpenseJournalLines(lineItems);
-    const siteName = (bill.billLines || []).map(l => l.site).find(Boolean) || bill.site || '';
-    let companyId = null;
-    if (siteName) {
-      const PlacementCompany = require('../models/hr/Company');
-      const foundComp = await PlacementCompany.findOne({
-        name: { $regex: `^${siteName.trim()}$`, $options: 'i' },
-        isActive: true
-      }).select('_id').lean();
-      if (foundComp) companyId = foundComp._id;
-    }
-    if (!companyId) {
-      companyId = await resolveDocumentCompanyId({ employeeId: bill.payeeEmployee });
-    }
+    const companyId = await resolveUtilityBillCompanyId(bill);
     const companies = [...new Set((bill.billLines || []).map(l => l.site).filter(Boolean))].join(', ') || bill.site || '';
     const projects = [...new Set((bill.billLines || []).map(l => l.location).filter(Boolean))].join(', ') || bill.location || '';
 
@@ -586,6 +599,7 @@ const repairStaleUtilityBillsFinanceStatus = async (utilityBills, userId) => {
 };
 
 module.exports = {
+  resolveUtilityBillCompanyId,
   UTILITY_EXPENSE_ACCOUNT,
   buildUtilityBillLineItems,
   getUtilityBillPostAmount,
