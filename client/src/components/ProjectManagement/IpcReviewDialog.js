@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert, Box, Button, Dialog, Grid, Link, Skeleton, Stack, Tab, Table, TableBody, TableCell, TableHead, TableRow, Tabs, Typography
 } from '@mui/material';
@@ -22,16 +22,25 @@ const docTable = {
   '& .MuiTableCell-alignRight': { fontVariantNumeric: 'tabular-nums' }
 };
 
-/** White page on the grey canvas, headed like the certificate */
-const Sheet = ({ kicker, title, children }) => (
-  <Box sx={{ bgcolor: '#fff', border: '1px solid #dcdfe4', maxWidth: 820, mx: 'auto', px: { xs: 3, sm: 7 }, py: { xs: 3, sm: 6 }, mb: 3 }}>
-    <Box sx={{ borderBottom: `2px solid ${INK}`, pb: 2, mb: 1 }}>
-      <Typography sx={label}>{kicker}</Typography>
-      <Typography sx={{ fontSize: 22, fontWeight: 300, color: INK, lineHeight: 1.25, mt: 0.5 }}>{title}</Typography>
+/** Company name for the letterhead of every page */
+const CompanyContext = createContext('');
+
+/** White page on the grey canvas, with the same letterhead as the certificate */
+const Sheet = ({ kicker, title, children }) => {
+  const company = useContext(CompanyContext);
+  return (
+    <Box sx={{ bgcolor: '#fff', border: '1px solid #dcdfe4', maxWidth: 820, mx: 'auto', px: { xs: 3, sm: 7 }, py: { xs: 3, sm: 6 }, mb: 3 }}>
+      <Box sx={{ borderBottom: `2px solid ${INK}`, pb: 2, mb: 1 }}>
+        <Stack direction="row" justifyContent="space-between" alignItems="baseline" spacing={2}>
+          <Typography sx={{ fontSize: 15, fontWeight: 700, letterSpacing: '0.02em', textTransform: 'uppercase', color: INK }}>{company}</Typography>
+          <Typography sx={{ ...label, letterSpacing: '0.14em', textAlign: 'right' }}>{kicker}</Typography>
+        </Stack>
+        <Typography sx={{ fontSize: 22, fontWeight: 300, color: INK, lineHeight: 1.25, mt: 1.5 }}>{title}</Typography>
+      </Box>
+      {children}
     </Box>
-    {children}
-  </Box>
-);
+  );
+};
 
 const Heading = ({ children }) => (
   <Typography sx={{ fontSize: 10.5, fontWeight: 700, letterSpacing: '0.12em', textTransform: 'uppercase', color: INK, mt: 4, mb: 1 }}>
@@ -148,7 +157,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
           </Typography>
           {ipc && (
             <Typography sx={{ fontSize: 12.5, color: MUTED }} noWrap>
-              {ipc.invoiceNumber} · {[dossier.mainProject?.name, dossier.subProject?.name].filter(Boolean).join(' / ')} · {ipcStageText(ipc)}
+              {[dossier.company?.name, ipc.invoiceNumber, [dossier.mainProject?.name, dossier.subProject?.name].filter(Boolean).join(' / '), ipcStageText(ipc)].filter(Boolean).join(' · ')}
             </Typography>
           )}
         </Box>
@@ -178,6 +187,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
       )}
 
       {/* Grey canvas with the document pages */}
+      <CompanyContext.Provider value={dossier?.company?.name || ''}>
       <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: '#eceef1', p: tab === 'certificate' ? 0 : { xs: 1.5, sm: 3.5 } }}>
         {error && <Alert severity="error" sx={{ m: 2 }}>{error}</Alert>}
         {!dossier && !error && (
@@ -413,6 +423,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
           </Sheet>
         )}
       </Box>
+      </CompanyContext.Provider>
 
       {ipc && actions && (
         <Stack direction="row" justifyContent="flex-end" spacing={1} sx={{ px: 3, py: 1.5, borderTop: `1px solid ${RULE}` }}>

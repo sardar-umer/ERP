@@ -490,6 +490,8 @@ router.get('/',
         .sort({ updatedAt: -1 })
         .limit(300)
         .lean();
+      const { ipcCompanyNames } = require('../utils/projectIpcFinance');
+      const ipcCompanies = await ipcCompanyNames(ipcDocs);
       for (const doc of ipcDocs) {
         const st = doc.approvalStatus;
         const preAuditStatus = st === 'Rejected' ? 'returned_with_observations'
@@ -506,6 +508,8 @@ router.get('/',
           description: `${doc.invoiceType === 'Client_Invoice' ? `Client: ${doc.clientName || '—'}` : doc.contractor?.name || 'Subcontractor'} — ${projectLabel}${doc.description ? ` — ${doc.description}` : ''}`,
           sourceModule: 'project_management',
           sourceDepartmentName: 'Project Management',
+          companyName: ipcCompanies.get(String(doc._id)) || '',
+          company: ipcCompanies.get(String(doc._id)) || '',
           sourceDepartment: null,
           documentType: doc.invoiceType === 'Client_Invoice' ? 'Client Invoice' : 'Subcontractor IPC',
           documentDate: doc.issueDate || doc.createdAt,

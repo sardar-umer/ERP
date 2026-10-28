@@ -57,6 +57,29 @@ const resolveRetentionAccount = async (companyId) => {
   return null;
 };
 
+/**
+ * Work in Progress carries certified construction cost until it is capitalised or expensed. Older company charts
+ * were created without it, so add the standard 1210 account (Current Asset) the first time an IPC needs it.
+ */
+const resolveWipAccount = async (companyId) => {
+  const existing = await findAccount(companyId, { type: 'Asset', name: /work\s*in\s*progress|\bwip\b|construction\s*in\s*progress|capital\s*work/i, number: '1210' });
+  if (existing) return existing;
+  for (let n = 1210; n < 1250; n += 1) {
+    const taken = await Account.exists({ companyId, accountNumber: String(n) });
+    if (taken) continue;
+    return Account.create({
+      companyId,
+      accountNumber: String(n),
+      name: 'Work in Progress',
+      type: 'Asset',
+      category: 'Current Asset',
+      description: 'Construction work certified on subcontractor IPCs, not yet capitalised or expensed',
+      isActive: true
+    });
+  }
+  return null;
+};
+
 /** Finance company for a project: set on the Main Project, inherited by every level below it */
 const resolveProjectCompanyId = async (project) => {
   let current = project;
@@ -66,6 +89,29 @@ const resolveProjectCompanyId = async (project) => {
     current = await ConstructionProject.findById(current.parentProject).select('companyId parentProject').lean();
   }
   return null;
+};
+
+/**
+ * Finance company name for each IPC / project invoice (set on its Main Project), for lists and dashboards.
+ * @param {Array<{ _id, project }>} invoices project may be an id or a populated doc
+ * @returns {Promise<Map<string, string>>} invoice id → company name
+ */
+const ipcCompanyNames = async (invoices) => {
+  const PlacementCompany = require('mongoose').model('PlacementCompany');
+  const companyByProject = new Map();
+  for (const inv of invoices || []) {
+    const pid = String(inv.project?._id || inv.project || '');
+    if (!pid || companyByProject.has(pid)) continue;
+    const project = await ConstructionProject.findById(pid).select('companyId parentProject').lean();
+    companyByProject.set(pid, project ? await resolveProjectCompanyId(project) : null);
+  }
+  const ids = [...new Set([...companyByProject.values()].filter(Boolean).map(String))];
+  const companies = ids.length ? await PlacementCompany.find({ _id: { $in: ids } }).select('name').lean() : [];
+  const nameById = new Map(companies.map((c) => [String(c._id), c.name]));
+  return new Map((invoices || []).map((inv) => {
+    const cid = companyByProject.get(String(inv.project?._id || inv.project || ''));
+    return [String(inv._id), cid ? nameById.get(String(cid)) || '' : ''];
+  }));
 };
 
 /** The top-level (Main) project above this one, for messages that tell the user where to set the company */
@@ -125,7 +171,7 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   const [debitAcc, ap, retentionAcc, advanceAcc] = await Promise.all([
     kind === 'Advance' ? findAdvanceAccount()
       : kind === 'Retention Release' ? resolveRetentionAccount(companyId)
-        : findAccount(companyId, { type: 'Asset', name: /work\s*in\s*progress|\bwip\b|construction\s*in\s*progress|capital\s*work/i, number: '1210' }),
+        : resolveWipAccount(companyId),
     A.resolve(FinanceHelper.ACCOUNTS.PAYABLE),
     retention > 0 ? resolveRetentionAccount(companyId) : null,
     advance > 0 ? findAdvanceAccount() : null
@@ -135,7 +181,7 @@ const postIpcToFinance = async (invoiceId, actorId) => {
       ? 'No "Advance to Suppliers / Contractors" asset account on this company\'s chart of accounts'
       : kind === 'Retention Release'
         ? 'Could not find or create a Retention Payable account'
-        : 'No "Work in Progress" asset account on this company\'s chart of accounts');
+        : 'Could not find or create a "Work in Progress" asset account on this company\'s chart of accounts');
   }
   const wip = debitAcc;
   if (!ap) return fail('No Accounts Payable (2001) account on this company\'s chart of accounts');
@@ -163,8 +209,10 @@ const postIpcToFinance = async (invoiceId, actorId) => {
 
   let apEntry = null;
   try {
+    const companyDoc = await require('mongoose').model('PlacementCompany').findById(companyId).select('name').lean();
     apEntry = await FinanceHelper.createAPFromBill({
       companyId,
+      company: companyDoc?.name || '',
       vendorName: contractor.name,
       vendorEmail: contractor.email || '',
       vendorId: contractor._id,
@@ -287,5 +335,6 @@ module.exports = {
   syncIpcFromApPayment,
   resolveProjectCompanyId,
   findMainProject,
+  ipcCompanyNames,
   RETENTION_ACCOUNT_NAME
 };

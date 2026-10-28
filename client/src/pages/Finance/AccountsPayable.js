@@ -182,7 +182,7 @@ const matchesFuzzyToken = (token, corpus, words) => {
 const AP_LIST_STATE_KEY = 'vendorBills.listState';
 
 const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbedClose = null } = {}) => {
-  const { selectedCompanyId, companies: financeCompanies } = useFinanceCompany();
+  const { selectedCompanyId, setSelectedCompanyId, companies: financeCompanies } = useFinanceCompany();
   const [payingCompanyId, setPayingCompanyId] = useState('');
   const { user: currentUser } = useAuth();
   const preparerUserId = String(currentUser?.id || currentUser?._id || '');
@@ -1237,8 +1237,21 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
     try {
       const response = await api.get(`/finance/accounts-payable/${bill._id}`);
       if (response.data?.success) b = response.data.data;
-    } catch {
-      // use list row if detail fetch fails
+    } catch (err) {
+      // A bill from another finance company (e.g. opened from Payables, which lists every company):
+      // switch this page to the bill's company so the vendor, its bills and advances all load
+      const billCompanyId = err.response?.status === 403 ? err.response?.data?.billCompanyId : null;
+      if (billCompanyId) {
+        setSelectedCompanyId(String(billCompanyId));
+        const companyName = financeCompanies.find((c) => String(c._id) === String(billCompanyId))?.name;
+        toast(`Switched to ${companyName || "the bill's company"} to pay this bill`);
+        try {
+          const retry = await api.get(`/finance/accounts-payable/${bill._id}`, { headers: { 'x-finance-company-id': String(billCompanyId) } });
+          if (retry.data?.success) b = retry.data.data;
+        } catch {
+          // fall through with the list row
+        }
+      }
     }
 
     setSelectedBill(b);

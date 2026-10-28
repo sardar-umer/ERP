@@ -5015,8 +5015,15 @@ router.get('/accounts-payable',
       return bill.status === 'paid' || bill.status === 'partial' ? 'approved' : bill.status;
     };
 
+    // Bills posted by other modules (e.g. Project IPCs) carry only companyId — give the Company column its name
+    const companyIdsWithoutName = [...new Set(bills.filter((b) => b.companyId && !String(b.company || '').trim()).map((b) => String(b.companyId)))];
+    const companyNameById = new Map(companyIdsWithoutName.length
+      ? (await mongoose.model('PlacementCompany').find({ _id: { $in: companyIdsWithoutName } }).select('name').lean()).map((c) => [String(c._id), c.name])
+      : []);
+
     const transformedBills = bills.map(bill => ({
       ...bill,
+      companyName: bill.companyName || companyNameById.get(String(bill.companyId || '')) || undefined,
       status: paymentStatusOf(bill),
       vendorName: bill.vendor?.name || 'Unknown Vendor',
       vendorEmail: bill.vendor?.email || '',

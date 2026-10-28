@@ -826,6 +826,9 @@ async function fetchProjectIpcsForUser(user) {
     .sort({ updatedAt: -1 })
     .limit(100)
     .lean();
+  // Company comes from the Main Project's Finance company (IPCs don't store one)
+  const { ipcCompanyNames } = require('./projectIpcFinance');
+  const companyNames = await ipcCompanyNames(docs);
   return docs.map((inv) => card({
     id: inv._id,
     type: 'project_ipc',
@@ -836,7 +839,7 @@ async function fetchProjectIpcsForUser(user) {
     date: inv.ceoForwardedAt || inv.updatedAt,
     amount: inv.netPayableAmount || inv.invoiceAmount,
     party: inv.invoiceType === 'Client_Invoice' ? inv.clientName : inv.contractor?.name,
-    company: null,
+    company: companyNames.get(String(inv._id)) || null,
     subtitle: [inv.project?.parentProject?.name, inv.project?.name].filter(Boolean).join(' / ') || 'Subcontractor IPC',
     department: 'Project Management',
     path: `/general/project-management/${inv.project?._id}?tab=invoices`,
