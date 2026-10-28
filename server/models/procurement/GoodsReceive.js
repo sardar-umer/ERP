@@ -455,7 +455,37 @@ goodsReceiveSchema.statics.syncItemsToInventory = async function(grnDoc) {
         }
       }
 
-      // 3) Dynamic inventory row for this GRN (works for whole or decimal qty)
+      // 3) Item Catalog (the item master): catalog code or exact name → its stock card. Items not in the catalog
+      //    are added under "Uncatalogued" with a proper code, so one product never gets a new card per GRN.
+      if (nameStr && nameStr !== '—') {
+        const { resolveCatalogItem, createUncatalogued, ensureStockCard } = require('../../utils/itemCatalog');
+        const cat = await resolveCatalogItem({ itemMaster: item.itemMaster, code: codeStr, name: nameStr })
+          || await createUncatalogued({ name: nameStr, unit: item.unit });
+        const card = await ensureStockCard(cat, {
+          userId: grnDoc.receivedBy,
+          unit: (item.unit && item.unit !== '—') ? item.unit : '',
+          unitPrice: Number(item.unitPrice) || 0,
+          store: storeId || txStoreId || undefined,
+          storeSnapshot: storeId ? storeSnapshot : (ledgerStoreSnapshot || storeSnapshot),
+          location: { rack: item.location?.rack || '', shelf: item.location?.shelf || '', bin: item.location?.bin || '' },
+          description: item.description || ''
+        });
+        // Per-line idempotency: the same product may sit on two lines of one GRN
+        const sameEarlier = (grnDoc.items || []).slice(0, idx)
+          .filter((l) => String(l?.inventoryItem?._id || l?.inventoryItem || '') === String(card._id)).length;
+        const postedForItem = await StockTransaction.countDocuments({
+          referenceType: 'GRN', referenceId: grnDoc._id, transactionType: 'IN', item: card._id
+        });
+        if (postedForItem > sameEarlier) {
+          await linkInventoryOnGrnLine(idx, card._id);
+          continue;
+        }
+        await applyStockToInventory(card, item, qty, txStoreId, ledgerStoreSnapshot, subStoreId, subStoreSnapshot);
+        await linkInventoryOnGrnLine(idx, card._id);
+        continue;
+      }
+
+      // 4) Last resort (no name on the line): dynamic inventory row for this GRN
       if (await alreadyPostedForLine(null, idx)) {
         continue;
       }

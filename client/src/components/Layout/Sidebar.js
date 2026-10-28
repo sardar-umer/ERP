@@ -345,6 +345,8 @@ const Sidebar = () => {
       '/procurement/store/delivery-challans': 'goods_receive',
       '/procurement/store/delivery-challan-qa': 'quality_assurance',
       '/procurement/store/goods-issue': 'goods_issue',
+      '/procurement/store/store-returns': 'goods_issue',
+      '/procurement/store/stock-check': 'inventory',
       '/procurement/store/cost-center': 'cost_center',
       '/procurement/store/manage': 'store_management',
       '/procurement/store/item-catalog': 'inventory',

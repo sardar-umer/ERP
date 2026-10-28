@@ -50,6 +50,9 @@ const indentSchema = new mongoose.Schema({
       required: [true, 'Item name is required'],
       trim: true
     },
+    /** Catalog link — filled from the catalog by code / exact name on save */
+    itemCode: { type: String, trim: true, default: '' },
+    itemMaster: { type: mongoose.Schema.Types.ObjectId, ref: 'ItemMaster', default: null },
     description: {
       type: String,
       required: [true, 'Item description is required'],
@@ -586,6 +589,19 @@ indentSchema.statics.generateERPRef = async function () {
 
   return `PR #${maxNum + 1}`;
 };
+
+// Link lines to the Item Catalog (code + id) so PO / GRN / SIN carry the same item
+indentSchema.pre('save', async function (next) {
+  try {
+    if (this.isNew || this.isModified('items')) {
+      const { annotateLines } = require('../../utils/itemCatalog');
+      await annotateLines(this.items, { nameField: 'itemName', codeField: 'itemCode' });
+    }
+  } catch (err) {
+    console.warn('[Indent] item catalog link skipped:', err.message);
+  }
+  next();
+});
 
 // Pre-save middleware to calculate total estimated cost and generate ERP Ref and Indent Number
 indentSchema.pre('save', async function (next) {

@@ -30,12 +30,12 @@ import {
   CircularProgress,
   Tabs,
   Tab,
-  List,
-  ListItem,
-  ListItemText,
   FormControlLabel,
   Checkbox,
-  Divider
+  Autocomplete,
+  Accordion,
+  AccordionSummary,
+  AccordionDetails
 } from '@mui/material';
 import {
   Inventory as InventoryIcon,
@@ -47,13 +47,24 @@ import {
   Refresh as RefreshIcon,
   TrendingUp as AddStockIcon,
   TrendingDown as RemoveStockIcon,
-  FileDownload as FileDownloadIcon
+  FileDownload as FileDownloadIcon,
+  FactCheck as StockCheckIcon,
+  ExpandMore as ExpandMoreIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import storeService from '../../services/storeService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 
-const Inventory = () => {
+/** Accounts an item posts to — normally inherited from its Finance Category */
+const ACCOUNT_ROLES = [
+  { key: 'inventory', field: 'inventoryAccount', type: 'asset', label: 'Inventory (DR on GRN, CR on SIN)' },
+  { key: 'grni', field: 'grniAccount', type: 'liability', label: 'GRNI (CR on GRN, cleared by vendor bill)' },
+  { key: 'cogs', field: 'cogsAccount', type: 'expense', label: 'COGS (DR on SIN)' },
+  { key: 'sales', field: 'salesAccount', type: 'revenue', label: 'Sales (customer invoices)' }
+];
+
+const Inventory = ({ openStockCheck = false }) => {
   const theme = useTheme();
   
   // State management
@@ -82,6 +93,29 @@ const Inventory = () => {
   const [viewDialog, setViewDialog] = useState({ open: false, data: null, tab: 0 });
   const [deleteDialog, setDeleteDialog] = useState({ open: false, item: null, force: false, error: '' });
   const [stockDialog, setStockDialog] = useState({ open: false, type: '', item: null });
+  // Stock always belongs to a store + project (SIN checks project stock)
+  const [projects, setProjects] = useState([]);
+  const [stores, setStores] = useState([]);
+  const [stockCheck, setStockCheck] = useState({ open: false, loading: false, rows: [], fix: {} });
+  const [companies, setCompanies] = useState([]);
+  const [movements, setMovements] = useState({ loading: false, rows: [] });
+  // Add Item picks from the Item Catalog (the one item master)
+  const [catalogOptions, setCatalogOptions] = useState([]);
+  const [catalogLoading, setCatalogLoading] = useState(false);
+  const [catalogPick, setCatalogPick] = useState(null);
+  const catalogSeq = React.useRef(0);
+  const searchCatalog = useCallback(async (q) => {
+    const seq = ++catalogSeq.current;
+    setCatalogLoading(true);
+    try {
+      const res = await api.get('/items', { params: { q: q || undefined, limit: 50 } });
+      if (seq === catalogSeq.current) setCatalogOptions(res.data?.data || []);
+    } catch (_) {
+      if (seq === catalogSeq.current) setCatalogOptions([]);
+    } finally {
+      if (seq === catalogSeq.current) setCatalogLoading(false);
+    }
+  }, []);
   
   // Form data
   const [formData, setFormData] = useState({
@@ -90,11 +124,14 @@ const Inventory = () => {
     category: 'Other',
     unit: 'pcs',
     quantity: 0,
-    minQuantity: 10,
-    maxQuantity: 1000,
+    minQuantity: 0,
+    maxQuantity: '',
+    companyId: '',
     unitPrice: 0,
     supplier: '',
     inventoryCategory: '',
+    openingProject: '',
+    openingStore: '',
     location: { rack: '', shelf: '', bin: '' },
     notes: '',
     inventoryAccount: '',
@@ -103,14 +140,18 @@ const Inventory = () => {
     salesAccount: '',
     purchaseAccount: ''
   });
-  const [financeItemType, setFinanceItemType] = useState('inventory');
+  const [effectiveAccounts, setEffectiveAccounts] = useState({ loading: false, data: null });
 
   // Stock form data
   const [stockFormData, setStockFormData] = useState({
     quantity: 0,
+    project: '',
+    store: '',
+    unitCost: '',
     reference: '',
-    notes: ''
+    reason: ''
   });
+  const [projectBalance, setProjectBalance] = useState(null);
 
   const normalizeCategoryList = (res) => {
     const payload = res?.data;
@@ -160,6 +201,56 @@ const Inventory = () => {
     loadFinanceDropdowns();
   }, [loadFinanceDropdowns]);
 
+  // What the item will post to (category → default category → system accounts), refreshed when the category changes
+  useEffect(() => {
+    if (!formDialog.open || formTab !== 1) return;
+    let cancelled = false;
+    setEffectiveAccounts({ loading: true, data: null });
+    api.get('/inventory-categories/effective-accounts', { params: { inventoryCategory: formData.inventoryCategory || undefined } })
+      .then((res) => { if (!cancelled) setEffectiveAccounts({ loading: false, data: res.data?.data || null }); })
+      .catch(() => { if (!cancelled) setEffectiveAccounts({ loading: false, data: null }); });
+    return () => { cancelled = true; };
+  }, [formDialog.open, formTab, formData.inventoryCategory]);
+
+  // Projects + stores for opening stock and the stock buttons (same sources as GRN / SIN)
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await api.get('/finance/fixed-assets/projects');
+        setProjects(res.data?.data || []);
+      } catch (_) {
+        try {
+          const res = await api.get('/projects');
+          const rows = res.data?.data?.projects || res.data?.data || res.data || [];
+          setProjects(Array.isArray(rows) ? rows : []);
+        } catch (__) { setProjects([]); }
+      }
+      try {
+        const res = await storeService.getStores({ type: 'main', activeOnly: 'true' });
+        setStores(res.data || []);
+      } catch (_) { setStores([]); }
+      try {
+        const res = await api.get('/indents/companies');
+        setCompanies(res.data?.data || []);
+      } catch (_) { setCompanies([]); }
+    })();
+  }, []);
+
+  // Current stock of the item in the chosen project (+ store) — shown in the stock dialog
+  useEffect(() => {
+    const item = stockDialog.item;
+    if (!stockDialog.open || !item || !stockFormData.project) { setProjectBalance(null); return; }
+    let cancelled = false;
+    api.get('/procurement/stock-balance', { params: { project: stockFormData.project, storeId: stockFormData.store || item.store?._id || item.store || undefined } })
+      .then((res) => {
+        if (cancelled) return;
+        const row = (res.data?.data?.balances || []).find((b) => String(b.item) === String(item._id));
+        setProjectBalance(Number(row?.balance) || 0);
+      })
+      .catch(() => { if (!cancelled) setProjectBalance(null); });
+    return () => { cancelled = true; };
+  }, [stockDialog.open, stockDialog.item, stockFormData.project, stockFormData.store]);
+
   // Load data on component mount
   useEffect(() => {
     loadInventory();
@@ -174,7 +265,7 @@ const Inventory = () => {
         page: page + 1,
         limit: rowsPerPage,
         search,
-        category: categoryFilter,
+        inventoryCategory: categoryFilter || undefined,
         status: statusFilter
       };
 
@@ -230,7 +321,7 @@ const Inventory = () => {
             page: currentPage,
             limit: pageSize,
             search,
-            category: categoryFilter,
+            inventoryCategory: categoryFilter || undefined,
             status: statusFilter
           }
         });
@@ -292,11 +383,14 @@ const Inventory = () => {
       category: 'Other',
       unit: 'pcs',
       quantity: 0,
-      minQuantity: 10,
-      maxQuantity: 1000,
+      minQuantity: 0,
+      maxQuantity: '',
+      companyId: '',
       unitPrice: 0,
       supplier: '',
       inventoryCategory: '',
+      openingProject: '',
+      openingStore: '',
       location: { rack: '', shelf: '', bin: '' },
       notes: '',
       inventoryAccount: '',
@@ -306,7 +400,8 @@ const Inventory = () => {
       purchaseAccount: ''
     });
     setFormTab(0);
-    setFinanceItemType('inventory');
+    setCatalogPick(null);
+    searchCatalog('');
     setFormDialog({ open: true, mode: 'create', data: null });
     const { categories } = await loadFinanceDropdowns();
     const general = categories.find((c) => c.name === 'General');
@@ -324,7 +419,8 @@ const Inventory = () => {
       unit: item.unit,
       quantity: item.quantity,
       minQuantity: item.minQuantity,
-      maxQuantity: item.maxQuantity,
+      maxQuantity: item.maxQuantity ?? '',
+      companyId: item.companyId?._id || item.companyId || '',
       unitPrice: item.unitPrice,
       supplier: item.supplier?._id || '',
       inventoryCategory: item.inventoryCategory?._id || item.inventoryCategory || '',
@@ -337,13 +433,16 @@ const Inventory = () => {
       purchaseAccount:  item.purchaseAccount?._id  || item.purchaseAccount  || ''
     });
     setFormTab(0);
-    setFinanceItemType('inventory');
     setFormDialog({ open: true, mode: 'edit', data: item });
     await loadFinanceDropdowns();
   };
 
   const handleView = async (item) => {
     setViewDialog({ open: true, data: item, tab: 0 });
+    setMovements({ loading: true, rows: [] });
+    api.get(`/procurement/inventory/${item._id}/movements`)
+      .then((res) => setMovements({ loading: false, rows: res.data?.data || [] }))
+      .catch(() => setMovements({ loading: false, rows: [] }));
     try {
       const res = await api.get(`/procurement/inventory/${item._id}`);
       if (res.data?.success && res.data?.data) {
@@ -357,8 +456,40 @@ const Inventory = () => {
   };
 
   const handleStockAction = (type, item) => {
-    setStockFormData({ quantity: 0, reference: '', notes: '' });
+    setStockFormData({ quantity: 0, project: '', store: item.store?._id || item.store || '', unitCost: '', reference: '', reason: '' });
     setStockDialog({ open: true, type, item });
+  };
+
+  const loadStockCheck = async () => {
+    setStockCheck((s) => ({ ...s, open: true, loading: true }));
+    try {
+      const res = await api.get('/procurement/inventory-stock-check');
+      setStockCheck((s) => ({ ...s, loading: false, rows: res.data?.data || [] }));
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to run stock check');
+      setStockCheck((s) => ({ ...s, loading: false }));
+    }
+  };
+
+  // Sidebar "Stock Check" opens straight into the check
+  useEffect(() => {
+    if (openStockCheck) loadStockCheck();
+  }, [openStockCheck]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  const fixStockRow = async (row) => {
+    const fix = stockCheck.fix[row._id] || {};
+    if (row.difference > 0 && !fix.project) {
+      setError(`Select the project to allocate ${row.difference} ${row.unit || ''} of ${row.name} to`);
+      return;
+    }
+    try {
+      const res = await api.post(`/procurement/inventory/${row._id}/reconcile`, { project: fix.project, store: fix.store });
+      setSuccess(res.data?.message || 'Fixed');
+      loadStockCheck();
+      loadInventory();
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not fix this item');
+    }
   };
 
   const confirmDelete = async () => {
@@ -386,12 +517,25 @@ const Inventory = () => {
     try {
       setLoading(true);
       
+      if (!formData.inventoryCategory) {
+        setError('Select the Finance Category — it decides the inventory / COGS accounts');
+        setLoading(false);
+        return;
+      }
+      const clean = (p) => ({ ...p, maxQuantity: p.maxQuantity === '' || p.maxQuantity == null || Number.isNaN(p.maxQuantity) ? null : p.maxQuantity, companyId: p.companyId || null });
       if (formDialog.mode === 'create') {
-        const { ...payload } = formData;
-        await api.post('/procurement/inventory', payload);
-        setSuccess('Inventory item created successfully');
+        const payload = { ...clean(formData), itemMaster: catalogPick?._id || undefined };
+        if (Number(payload.quantity) > 0 && !payload.openingProject) {
+          setError('Select the project for the opening stock (or set quantity to 0 and receive by GRN)');
+          setLoading(false);
+          return;
+        }
+        const res = await api.post('/procurement/inventory', payload);
+        setSuccess(res.data?.message || 'Inventory item created successfully');
       } else {
-        const { ...payload } = formData;
+        // Stock-derived fields are not sent — they change only through GRN, SIN or the stock buttons
+        const payload = clean(formData);
+        ['quantity', 'openingProject', 'openingStore'].forEach((k) => delete payload[k]);
         await api.put(`/procurement/inventory/${formDialog.data._id}`, payload);
         setSuccess('Inventory item updated successfully');
       }
@@ -410,9 +554,13 @@ const Inventory = () => {
     try {
       setLoading(true);
       const endpoint = `/procurement/inventory/${stockDialog.item._id}/${stockDialog.type}-stock`;
-      await api.post(endpoint, stockFormData);
-      
-      setSuccess(`Stock ${stockDialog.type === 'add' ? 'added' : stockDialog.type === 'remove' ? 'removed' : 'adjusted'} successfully`);
+      const res = await api.post(endpoint, {
+        ...stockFormData,
+        store: stockFormData.store || undefined,
+        unitCost: stockFormData.unitCost === '' ? undefined : Number(stockFormData.unitCost)
+      });
+
+      setSuccess(res.data?.message || 'Stock updated');
       setStockDialog({ open: false, type: '', item: null });
       loadInventory();
       loadStatistics();
@@ -500,6 +648,13 @@ const Inventory = () => {
               {exporting ? 'Exporting…' : 'Export Excel'}
             </Button>
             <Button
+              variant="outlined"
+              startIcon={<StockCheckIcon />}
+              onClick={loadStockCheck}
+            >
+              Stock Check
+            </Button>
+            <Button
               variant="contained"
               startIcon={<AddIcon />}
               onClick={handleCreate}
@@ -572,12 +727,7 @@ const Inventory = () => {
               onChange={(e) => setCategoryFilter(e.target.value)}
             >
               <MenuItem value="">All Categories</MenuItem>
-              <MenuItem value="Raw Materials">Raw Materials</MenuItem>
-              <MenuItem value="Finished Goods">Finished Goods</MenuItem>
-              <MenuItem value="Office Supplies">Office Supplies</MenuItem>
-              <MenuItem value="Equipment">Equipment</MenuItem>
-              <MenuItem value="Consumables">Consumables</MenuItem>
-              <MenuItem value="Other">Other</MenuItem>
+              {invCategories.map((cat) => <MenuItem key={cat._id} value={cat._id}>{cat.name}</MenuItem>)}
             </TextField>
           </Grid>
           <Grid item xs={12} md={3}>
@@ -731,18 +881,57 @@ const Inventory = () => {
         <Box sx={{ borderBottom: 1, borderColor: 'divider', px: 3 }}>
           <Tabs value={formTab} onChange={(_, v) => setFormTab(v)}>
             <Tab label="Item Details" />
-            <Tab label="Finance / Accounts" />
+            <Tab label="Accounts" />
           </Tabs>
         </Box>
         <DialogContent>
           {formTab === 0 && (
           <Grid container spacing={2} sx={{ mt: 1 }}>
+            {formDialog.mode === 'create' && (
+              <Grid item xs={12}>
+                <Autocomplete
+                  options={catalogOptions}
+                  loading={catalogLoading}
+                  value={catalogPick}
+                  filterOptions={(x) => x}
+                  getOptionLabel={(o) => (o ? `${o.itemCode || ''} — ${o.name}` : '')}
+                  isOptionEqualToValue={(a, b) => String(a._id) === String(b._id)}
+                  getOptionDisabled={(o) => Boolean(o.inventoryItem)}
+                  onInputChange={(_, v, reason) => { if (reason === 'input') searchCatalog(v); }}
+                  onChange={(_, o) => {
+                    setCatalogPick(o);
+                    if (o) setFormData((fd) => ({ ...fd, name: o.name, unit: o.unit || fd.unit }));
+                  }}
+                  renderOption={(props, o) => (
+                    <li {...props} key={o._id}>
+                      <Box sx={{ width: '100%' }}>
+                        <Typography variant="body2"><strong>{o.itemCode}</strong> — {o.name}</Typography>
+                        <Typography variant="caption" color="text.secondary">
+                          {o.categoryPath}{o.inventoryItem ? ` · already has a stock card (${o.inventoryItem.quantity ?? 0} in stock)` : ''}
+                        </Typography>
+                      </Box>
+                    </li>
+                  )}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      label="Item from catalog"
+                      placeholder="Search by name or code…"
+                      helperText={catalogPick
+                        ? `Code ${catalogPick.itemCode} comes from the Item Catalog`
+                        : 'Pick the catalog item. If it is not in the catalog, just type the name below — it will be added under Uncatalogued.'}
+                    />
+                  )}
+                />
+              </Grid>
+            )}
             <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 label="Item Name"
                 value={formData.name}
                 onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                disabled={formDialog.mode === 'create' && Boolean(catalogPick)}
                 required
               />
             </Grid>
@@ -750,30 +939,27 @@ const Inventory = () => {
               <TextField
                 fullWidth
                 select
-                label="Category"
-                value={formData.category}
-                onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                required
+                label="Company"
+                value={formData.companyId || ''}
+                onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
+                helperText="Leave blank if the item is shared by all companies"
               >
-                <MenuItem value="Raw Materials">Raw Materials</MenuItem>
-                <MenuItem value="Finished Goods">Finished Goods</MenuItem>
-                <MenuItem value="Office Supplies">Office Supplies</MenuItem>
-                <MenuItem value="Equipment">Equipment</MenuItem>
-                <MenuItem value="Consumables">Consumables</MenuItem>
-                <MenuItem value="Other">Other</MenuItem>
+                <MenuItem value=""><em>Shared (all companies)</em></MenuItem>
+                {companies.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>)}
               </TextField>
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 select
-                label="Finance Category (Inventory Category)"
+                label="Finance Category *"
+                required
                 value={formData.inventoryCategory}
                 onChange={(e) => setFormData({ ...formData, inventoryCategory: e.target.value })}
                 helperText="Links item to GL accounts — required for auto journal entries on GRN/SIN"
                 onClick={loadFinanceDropdowns}
               >
-                <MenuItem value=""><em>None</em></MenuItem>
+                <MenuItem value=""><em>Select</em></MenuItem>
                 {invCategories.map((cat) => (
                   <MenuItem key={cat._id} value={cat._id}>
                     {cat.name}
@@ -795,10 +981,14 @@ const Inventory = () => {
               <TextField
                 fullWidth
                 type="number"
-                label="Quantity"
+                label={formDialog.mode === 'create' ? 'Opening Quantity' : 'Quantity on Hand'}
                 value={formData.quantity}
                 onChange={(e) => setFormData({ ...formData, quantity: parseFloat(e.target.value) })}
-                required
+                disabled={formDialog.mode !== 'create'}
+                helperText={formDialog.mode === 'create'
+                  ? 'Leave 0 if stock will come by GRN'
+                  : 'Changes only via GRN, SIN or Add / Remove / Adjust Stock'}
+                inputProps={{ min: 0 }}
               />
             </Grid>
             <Grid item xs={12} md={4}>
@@ -814,17 +1004,49 @@ const Inventory = () => {
               <TextField
                 fullWidth
                 type="number"
-                label="Unit Price"
+                label={formDialog.mode === 'create' ? 'Unit Cost' : 'Unit Price (list / fallback cost)'}
                 value={formData.unitPrice}
                 onChange={(e) => setFormData({ ...formData, unitPrice: parseFloat(e.target.value) })}
-                required
+                disabled={formDialog.mode !== 'create' && Number(formDialog.data?.quantity) > 0}
+                helperText={formDialog.mode !== 'create' && Number(formDialog.data?.quantity) > 0
+                  ? `Locked while in stock — average cost ${formDialog.data?.averageCost || formDialog.data?.unitPrice || 0}`
+                  : (formDialog.mode === 'create' ? 'Cost per unit of the opening stock' : undefined)}
+                inputProps={{ min: 0 }}
               />
             </Grid>
+            {formDialog.mode === 'create' && Number(formData.quantity) > 0 && (
+              <>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth select required
+                    label="Opening Stock Project *"
+                    value={formData.openingProject}
+                    onChange={(e) => setFormData({ ...formData, openingProject: e.target.value })}
+                    helperText="Store Issue Notes issue stock project-wise"
+                  >
+                    <MenuItem value="">Select Project</MenuItem>
+                    {projects.map((p) => <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>)}
+                  </TextField>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth select
+                    label="Opening Stock Store"
+                    value={formData.openingStore}
+                    onChange={(e) => setFormData({ ...formData, openingStore: e.target.value })}
+                    helperText="Posts DR Inventory / CR Opening Balance Equity"
+                  >
+                    <MenuItem value=""><em>Default store</em></MenuItem>
+                    {stores.map((st) => <MenuItem key={st._id} value={st._id}>{st.name}{st.code ? ` (${st.code})` : ''}</MenuItem>)}
+                  </TextField>
+                </Grid>
+              </>
+            )}
             <Grid item xs={12} md={6}>
               <TextField
                 fullWidth
                 type="number"
-                label="Min Quantity"
+                label="Reorder Level (Min Qty)"
                 value={formData.minQuantity}
                 onChange={(e) => setFormData({ ...formData, minQuantity: parseFloat(e.target.value) })}
               />
@@ -833,9 +1055,9 @@ const Inventory = () => {
               <TextField
                 fullWidth
                 type="number"
-                label="Max Quantity"
+                label="Max Quantity (optional)"
                 value={formData.maxQuantity}
-                onChange={(e) => setFormData({ ...formData, maxQuantity: parseFloat(e.target.value) })}
+                onChange={(e) => setFormData({ ...formData, maxQuantity: e.target.value === '' ? '' : parseFloat(e.target.value) })}
               />
             </Grid>
             <Grid item xs={12}>
@@ -902,270 +1124,84 @@ const Inventory = () => {
 
           {formTab === 1 && (
             <Box sx={{ mt: 2 }}>
-              <Box sx={{ display: 'flex', gap: 1, mb: 2, flexWrap: 'wrap' }}>
-                <Button
-                  variant={financeItemType === 'inventory' ? 'contained' : 'outlined'}
-                  size="small"
-                  onClick={() => setFinanceItemType('inventory')}
-                >
-                  Inventory
-                </Button>
-                <Button
-                  variant={financeItemType === 'non_inventory' ? 'contained' : 'outlined'}
-                  size="small"
-                  onClick={() => setFinanceItemType('non_inventory')}
-                >
-                  Non-Inventory
-                </Button>
-                <Button
-                  variant={financeItemType === 'services' ? 'contained' : 'outlined'}
-                  size="small"
-                  onClick={() => setFinanceItemType('services')}
-                >
-                  Services
-                </Button>
-              </Box>
-
-              {financeItemType === 'inventory' && (
-                <>
               <Alert severity="success" sx={{ mb: 2 }}>
-                <strong>Recommended:</strong> Set <em>Finance Category</em> on the Details tab — the system will inherit all GL accounts from the category automatically. Use the fields below only if this item needs account overrides different from its category.
-              </Alert>
-              <Alert severity="info" sx={{ mb: 2 }}>
-                <strong>Journal entries posted automatically:</strong><br/>
-                • <strong>GRN received:</strong> DR Inventory Account &nbsp;/&nbsp; CR GRNI Account<br/>
-                • <strong>Vendor Bill:</strong> DR GRNI Account &nbsp;/&nbsp; CR Accounts Payable<br/>
-                • <strong>Goods Issue (SIN):</strong> DR COGS Account &nbsp;/&nbsp; CR Inventory Account &nbsp;(at Weighted Avg Cost)
+                Accounts come from the item's <strong>Finance Category</strong> (set on the Details tab, or on its catalog category in
+                Item Catalog → Finance categories). Category accounts are managed in <strong>Finance → Inventory Categories</strong>.
+                Nothing needs to be set here.
               </Alert>
 
-              {coaLoading ? (
-                <Box sx={{ display: 'flex', justifyContent: 'center', py: 3 }}>
-                  <CircularProgress size={28} />
-                </Box>
+              <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>This item will post to</Typography>
+              {effectiveAccounts.loading ? (
+                <Box sx={{ py: 2, textAlign: 'center' }}><CircularProgress size={22} /></Box>
               ) : (
-                <Grid container spacing={2}>
-                  {/* ── GRN Accounts ── */}
-                  <Grid item xs={12}>
-                    <Typography variant="subtitle2" color="primary" fontWeight={700} sx={{ mb: 0.5 }}>
-                      On GRN (Goods Received)
-                    </Typography>
-                    <Divider sx={{ mb: 1.5 }} />
-                  </Grid>
+                <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
+                  <Table size="small">
+                    <TableBody>
+                      {ACCOUNT_ROLES.map((role) => {
+                        const overrideId = formData[role.field];
+                        const override = overrideId ? coaAccounts.find((a) => String(a._id) === String(overrideId)) : null;
+                        const eff = effectiveAccounts.data?.[role.key];
+                        const acc = override || eff?.account;
+                        return (
+                          <TableRow key={role.key}>
+                            <TableCell sx={{ fontWeight: 600, width: '38%' }}>{role.label}</TableCell>
+                            <TableCell>{acc ? `${acc.accountNumber ? `${acc.accountNumber} – ` : ''}${acc.name}` : <em>not set</em>}</TableCell>
+                            <TableCell sx={{ width: '28%' }}>
+                              <Chip size="small" variant="outlined"
+                                color={override ? 'warning' : eff?.source?.startsWith('system') || eff?.source === 'not set' ? 'default' : 'success'}
+                                label={override ? 'item override' : (eff?.source || '—')} />
+                            </TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </TableContainer>
+              )}
 
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth select size="small"
-                      label="Inventory / Stock Valuation Account (DR)"
-                      value={formData.inventoryAccount}
-                      onChange={(e) => setFormData({ ...formData, inventoryAccount: e.target.value })}
-                      helperText="Asset account — increases when stock is received (e.g. 1100 Inventory)"
-                    >
-                      <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                      {coaAccounts
-                        .filter(a => a.type === 'Asset' || a.type === 'asset')
-                        .map(a => (
-                          <MenuItem key={a._id} value={a._id}>
-                            {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth select size="small"
-                      label="GRNI Account — Goods Received Not Invoiced (CR)"
-                      value={formData.grniAccount}
-                      onChange={(e) => setFormData({ ...formData, grniAccount: e.target.value })}
-                      helperText="Clearing liability — credited on GRN, debited when vendor bill is created (e.g. 2100 GRNI)"
-                    >
-                      <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                      {coaAccounts
-                        .filter(a => a.type === 'Liability' || a.type === 'liability')
-                        .map(a => (
-                          <MenuItem key={a._id} value={a._id}>
-                            {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Grid>
-
-                  {/* ── SIN Accounts ── */}
-                  <Grid item xs={12}>
-                    <Typography variant="subtitle2" color="primary" fontWeight={700} sx={{ mb: 0.5, mt: 1 }}>
-                      On SIN (Goods Issued from Store)
-                    </Typography>
-                    <Divider sx={{ mb: 1.5 }} />
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth select size="small"
-                      label="COGS / Expense Account (DR)"
-                      value={formData.cogsAccount}
-                      onChange={(e) => setFormData({ ...formData, cogsAccount: e.target.value })}
-                      helperText="Expense account — debited at Weighted Avg Cost when stock is issued (e.g. 5000 COGS)"
-                    >
-                      <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                      {coaAccounts
-                        .filter(a => a.type === 'Expense' || a.type === 'expense')
-                        .map(a => (
-                          <MenuItem key={a._id} value={a._id}>
-                            {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Grid>
-
-                  {/* ── Sales / Purchase ── */}
-                  <Grid item xs={12}>
-                    <Typography variant="subtitle2" color="primary" fontWeight={700} sx={{ mb: 0.5, mt: 1 }}>
-                      Sales &amp; Direct Purchase (optional overrides)
-                    </Typography>
-                    <Divider sx={{ mb: 1.5 }} />
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth select size="small"
-                      label="Sales / Revenue Account"
-                      value={formData.salesAccount}
-                      onChange={(e) => setFormData({ ...formData, salesAccount: e.target.value })}
-                      helperText="Revenue account when item is sold via AR invoice"
-                    >
-                      <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                      {coaAccounts
-                        .filter(a => a.type === 'Revenue' || a.type === 'revenue' || a.type === 'Income' || a.type === 'income')
-                        .map(a => (
-                          <MenuItem key={a._id} value={a._id}>
-                            {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Grid>
-
-                  <Grid item xs={12} md={6}>
-                    <TextField
-                      fullWidth select size="small"
-                      label="Purchase / Direct Expense Account"
-                      value={formData.purchaseAccount}
-                      onChange={(e) => setFormData({ ...formData, purchaseAccount: e.target.value })}
-                      helperText="Expense account for direct (non-GRN) AP bills only"
-                    >
-                      <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                      {coaAccounts
-                        .filter(a => a.type === 'Expense' || a.type === 'expense')
-                        .map(a => (
-                          <MenuItem key={a._id} value={a._id}>
-                            {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                          </MenuItem>
-                        ))}
-                    </TextField>
-                  </Grid>
-
-                  {coaAccounts.length === 0 && !coaLoading && (
-                    <Grid item xs={12}>
-                      <Alert severity="warning">
-                        No Chart of Accounts found. Please set up accounts in Finance → Chart of Accounts first, then use the Finance Setup Wizard to seed standard accounts.
-                      </Alert>
+              <Accordion disableGutters variant="outlined" defaultExpanded={ACCOUNT_ROLES.some((r) => formData[r.field])}>
+                <AccordionSummary expandIcon={<ExpandMoreIcon />}>
+                  <Typography variant="body2" fontWeight={600}>
+                    Advanced — use different accounts for this item only
+                    {ACCOUNT_ROLES.some((r) => formData[r.field]) && <Chip size="small" color="warning" label="overrides set" sx={{ ml: 1, height: 20 }} />}
+                  </Typography>
+                </AccordionSummary>
+                <AccordionDetails>
+                  <Typography variant="caption" color="text.secondary" component="div" sx={{ mb: 2 }}>
+                    Only for exceptions. An override stays fixed even if the Finance Category's accounts change later.
+                  </Typography>
+                  {coaLoading ? (
+                    <Box sx={{ py: 2, textAlign: 'center' }}><CircularProgress size={22} /></Box>
+                  ) : (
+                    <Grid container spacing={2}>
+                      {ACCOUNT_ROLES.map((role) => (
+                        <Grid item xs={12} md={6} key={role.key}>
+                          <TextField
+                            fullWidth select size="small"
+                            label={role.label}
+                            value={formData[role.field] || ''}
+                            onChange={(e) => setFormData({ ...formData, [role.field]: e.target.value })}
+                          >
+                            <MenuItem value=""><em>Use Finance Category</em></MenuItem>
+                            {coaAccounts
+                              .filter((a) => String(a.type || '').toLowerCase() === role.type)
+                              .map((a) => (
+                                <MenuItem key={a._id} value={a._id}>
+                                  {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
+                                </MenuItem>
+                              ))}
+                          </TextField>
+                        </Grid>
+                      ))}
+                      <Grid item xs={12}>
+                        <Button size="small" onClick={() => setFormData((fd) => ({ ...fd, ...Object.fromEntries(ACCOUNT_ROLES.map((r) => [r.field, ''])) }))}>
+                          Clear all overrides
+                        </Button>
+                      </Grid>
                     </Grid>
                   )}
-                </Grid>
-              )}
-                </>
-              )}
-
-              {financeItemType === 'non_inventory' && (
-                <>
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    Non-Inventory items are expensed directly when billed. GRN/SIN inventory postings are not used.
-                  </Alert>
-                  <Grid container spacing={2}>
-                    <Grid item xs={12} md={6}>
-                      <TextField
-                        fullWidth select size="small"
-                        label="Purchase / Expense Account"
-                        value={formData.purchaseAccount}
-                        onChange={(e) => setFormData({ ...formData, purchaseAccount: e.target.value })}
-                        helperText="Used when vendor bill is posted directly to expense"
-                      >
-                        <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                        {coaAccounts
-                          .filter(a => a.type === 'Expense' || a.type === 'expense')
-                          .map(a => (
-                            <MenuItem key={a._id} value={a._id}>
-                              {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                            </MenuItem>
-                          ))}
-                      </TextField>
-                    </Grid>
-                    <Grid item xs={12} md={6}>
-                      <TextField
-                        fullWidth select size="small"
-                        label="Sales / Revenue Account (optional)"
-                        value={formData.salesAccount}
-                        onChange={(e) => setFormData({ ...formData, salesAccount: e.target.value })}
-                        helperText="Use only if this non-inventory item is sold"
-                      >
-                        <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                        {coaAccounts
-                          .filter(a => a.type === 'Revenue' || a.type === 'revenue' || a.type === 'Income' || a.type === 'income')
-                          .map(a => (
-                            <MenuItem key={a._id} value={a._id}>
-                              {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                            </MenuItem>
-                          ))}
-                      </TextField>
-                    </Grid>
-                  </Grid>
-                </>
-              )}
-
-              {financeItemType === 'services' && (
-                <>
-                  <Alert severity="info" sx={{ mb: 2 }}>
-                    Service items do not affect stock. Use service income/expense mapping below.
-                  </Alert>
-                  <Grid container spacing={2}>
-                    <Grid item xs={12} md={6}>
-                      <TextField
-                        fullWidth select size="small"
-                        label="Service Income / Revenue Account"
-                        value={formData.salesAccount}
-                        onChange={(e) => setFormData({ ...formData, salesAccount: e.target.value })}
-                        helperText="Revenue account for service invoices"
-                      >
-                        <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                        {coaAccounts
-                          .filter(a => a.type === 'Revenue' || a.type === 'revenue' || a.type === 'Income' || a.type === 'income')
-                          .map(a => (
-                            <MenuItem key={a._id} value={a._id}>
-                              {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                            </MenuItem>
-                          ))}
-                      </TextField>
-                    </Grid>
-                    <Grid item xs={12} md={6}>
-                      <TextField
-                        fullWidth select size="small"
-                        label="Service Cost / Expense Account (optional)"
-                        value={formData.purchaseAccount}
-                        onChange={(e) => setFormData({ ...formData, purchaseAccount: e.target.value })}
-                        helperText="Optional service delivery cost account"
-                      >
-                        <MenuItem value=""><em>Inherit from Finance Category</em></MenuItem>
-                        {coaAccounts
-                          .filter(a => a.type === 'Expense' || a.type === 'expense')
-                          .map(a => (
-                            <MenuItem key={a._id} value={a._id}>
-                              {a.accountNumber ? `${a.accountNumber} – ` : ''}{a.name}
-                            </MenuItem>
-                          ))}
-                      </TextField>
-                    </Grid>
-                  </Grid>
-                </>
-              )}
+                </AccordionDetails>
+              </Accordion>
             </Box>
           )}
         </DialogContent>
@@ -1176,7 +1212,7 @@ const Inventory = () => {
           <Button 
             variant="contained" 
             onClick={handleSubmit}
-            disabled={!formData.name || !formData.category || !formData.unit}
+            disabled={!formData.name || !formData.inventoryCategory || !formData.unit}
           >
             {formDialog.mode === 'create' ? 'Create' : 'Update'}
           </Button>
@@ -1196,7 +1232,7 @@ const Inventory = () => {
             <Box>
               <Tabs value={viewDialog.tab} onChange={(e, v) => setViewDialog({ ...viewDialog, tab: v })}>
                 <Tab label="Details" />
-                <Tab label="Transactions" />
+                <Tab label="Stock Movements" />
                 <Tab label="Finance" />
               </Tabs>
               
@@ -1290,49 +1326,49 @@ const Inventory = () => {
               )}
 
               {viewDialog.tab === 1 && (
-                <List>
-                  {viewDialog.data.transactions && viewDialog.data.transactions.length > 0 ? (
-                    [...viewDialog.data.transactions].reverse().map((trans, index) => {
-                      const isAddition = trans.type === 'In' || trans.type === 'Addition';
-                      const perfUser = trans.performedBy ? (trans.performedBy.firstName ? `${trans.performedBy.firstName} ${trans.performedBy.lastName || ''}` : trans.performedBy) : '';
-                      return (
-                        <ListItem key={index} divider sx={{ py: 1.5 }}>
-                          <Box sx={{ mr: 2 }}>
-                            <Chip
-                              label={trans.type}
-                              size="small"
-                              color={isAddition ? 'success' : 'warning'}
-                              variant="filled"
-                              sx={{ fontWeight: 'bold', minWidth: 70 }}
-                            />
-                          </Box>
-                          <ListItemText
-                            primary={
-                              <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                <Typography variant="subtitle2" fontWeight="bold">
-                                  {isAddition ? '+' : '-'}{trans.quantity} {viewDialog.data.unit}
-                                </Typography>
-                                <Typography variant="caption" color="text.secondary">
-                                  {formatDate(trans.date)}
-                                </Typography>
-                              </Box>
-                            }
-                            secondary={
-                              <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 0.5 }}>
-                                {trans.notes || trans.reference || 'No notes'}
-                                {perfUser && ` • Performed by: ${perfUser}`}
-                              </Typography>
-                            }
-                          />
-                        </ListItem>
-                      );
-                    })
-                  ) : (
-                    <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
-                      No transactions recorded yet
-                    </Typography>
-                  )}
-                </List>
+                movements.loading ? (
+                  <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={24} /></Box>
+                ) : movements.rows.length === 0 ? (
+                  <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+                    No stock movements recorded yet
+                  </Typography>
+                ) : (
+                  <TableContainer sx={{ mt: 1 }}>
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 700 }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Document</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Project / Store</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Qty</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }} align="right">Balance</TableCell>
+                          <TableCell sx={{ fontWeight: 700 }}>Notes</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {movements.rows.map((m) => (
+                          <TableRow key={m._id}>
+                            <TableCell>{formatDate(m.createdAt)}</TableCell>
+                            <TableCell>
+                              <Chip size="small" label={m.referenceType} sx={{ mr: 0.5, height: 20 }}
+                                color={m.quantity > 0 ? 'success' : 'warning'} variant="outlined" />
+                              {m.referenceNumber}
+                            </TableCell>
+                            <TableCell>{m.project?.name || '—'} / {m.storeSnapshot || '—'}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 600, color: m.quantity > 0 ? 'success.main' : 'warning.main' }}>
+                              {m.quantity > 0 ? '+' : ''}{m.quantity} {viewDialog.data.unit}
+                            </TableCell>
+                            <TableCell align="right">{m.balanceAfter}</TableCell>
+                            <TableCell sx={{ fontSize: 12 }}>
+                              {m.description || m.notes}
+                              {m.createdBy?.firstName ? ` • ${m.createdBy.firstName} ${m.createdBy.lastName || ''}` : ''}
+                            </TableCell>
+                          </TableRow>
+                        ))}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                )
               )}
 
               {viewDialog.tab === 2 && (
@@ -1421,13 +1457,70 @@ const Inventory = () => {
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}>
+              <Typography variant="body2" color="text.secondary">
+                {stockDialog.item?.name} — item total {stockDialog.item?.quantity} {stockDialog.item?.unit}
+              </Typography>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth select required
+                label="Project *"
+                value={stockFormData.project}
+                onChange={(e) => setStockFormData({ ...stockFormData, project: e.target.value })}
+                helperText={projectBalance != null ? `In this project now: ${projectBalance} ${stockDialog.item?.unit || ''}` : 'Stock is held project-wise'}
+              >
+                <MenuItem value="">Select Project</MenuItem>
+                {projects.map((p) => <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>)}
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
+              <TextField
+                fullWidth select
+                label="Store"
+                value={stockFormData.store}
+                onChange={(e) => setStockFormData({ ...stockFormData, store: e.target.value })}
+              >
+                <MenuItem value=""><em>Item's store / default</em></MenuItem>
+                {stores.map((st) => <MenuItem key={st._id} value={st._id}>{st.name}{st.code ? ` (${st.code})` : ''}</MenuItem>)}
+              </TextField>
+            </Grid>
+            <Grid item xs={12}>
               <TextField
                 fullWidth
                 type="number"
-                label="Quantity"
+                label={stockDialog.type === 'adjust' ? 'Counted Quantity (physical count) *' : 'Quantity *'}
                 value={stockFormData.quantity}
                 onChange={(e) => setStockFormData({ ...stockFormData, quantity: parseFloat(e.target.value) })}
+                helperText={stockDialog.type === 'adjust' && projectBalance != null && !Number.isNaN(stockFormData.quantity)
+                  ? `Difference: ${(Number(stockFormData.quantity) || 0) - projectBalance > 0 ? '+' : ''}${(Number(stockFormData.quantity) || 0) - projectBalance}`
+                  : undefined}
+                inputProps={{ min: 0 }}
+              />
+            </Grid>
+            {stockDialog.type === 'add' && (
+              <Grid item xs={12}>
+                <TextField
+                  fullWidth
+                  type="number"
+                  label="Unit Cost"
+                  value={stockFormData.unitCost}
+                  onChange={(e) => setStockFormData({ ...stockFormData, unitCost: e.target.value })}
+                  placeholder={String(stockDialog.item?.averageCost || stockDialog.item?.unitPrice || 0)}
+                  helperText="Blank = current average cost"
+                  inputProps={{ min: 0 }}
+                />
+              </Grid>
+            )}
+            <Grid item xs={12}>
+              <TextField
+                fullWidth
                 required
+                multiline
+                rows={2}
+                label="Reason *"
+                placeholder={stockDialog.type === 'adjust' ? 'e.g. Physical count 28 Oct' : stockDialog.type === 'remove' ? 'e.g. Damaged / expired' : 'e.g. Found in store, not on any GRN'}
+                value={stockFormData.reason}
+                onChange={(e) => setStockFormData({ ...stockFormData, reason: e.target.value })}
               />
             </Grid>
             <Grid item xs={12}>
@@ -1439,14 +1532,13 @@ const Inventory = () => {
               />
             </Grid>
             <Grid item xs={12}>
-              <TextField
-                fullWidth
-                multiline
-                rows={2}
-                label="Notes"
-                value={stockFormData.notes}
-                onChange={(e) => setStockFormData({ ...stockFormData, notes: e.target.value })}
-              />
+              <Alert severity="info" sx={{ py: 0 }}>
+                {stockDialog.type === 'remove'
+                  ? 'Posts DR COGS (stock loss) / CR Inventory at average cost.'
+                  : stockDialog.type === 'add'
+                    ? 'Posts DR Inventory / CR COGS (stock gain).'
+                    : 'Gain: DR Inventory / CR COGS. Loss: DR COGS / CR Inventory.'}
+              </Alert>
             </Grid>
           </Grid>
         </DialogContent>
@@ -1457,10 +1549,82 @@ const Inventory = () => {
           <Button 
             variant="contained" 
             onClick={handleStockSubmit}
-            disabled={!stockFormData.quantity || stockFormData.quantity <= 0}
+            disabled={loading || !stockFormData.project || !stockFormData.reason.trim()
+              || (stockDialog.type === 'adjust' ? !(stockFormData.quantity >= 0) : !(stockFormData.quantity > 0))}
           >
             Confirm
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Stock Check: item total vs project stock */}
+      <Dialog open={stockCheck.open} onClose={() => setStockCheck((s) => ({ ...s, open: false }))} maxWidth="lg" fullWidth>
+        <DialogTitle>Stock Check — item total vs project stock</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Store Issue Notes issue from project stock. Items listed here have an item total that differs from their project stock.
+            <strong> More on item</strong>: allocate the extra quantity to a project (no accounting entry — it is already valued).
+            <strong> More in projects</strong>: raise the item total to match.
+          </Typography>
+          {stockCheck.loading ? (
+            <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+          ) : stockCheck.rows.length === 0 ? (
+            <Alert severity="success">All items match their project stock.</Alert>
+          ) : (
+            <TableContainer>
+              <Table size="small">
+                <TableHead>
+                  <TableRow>
+                    <TableCell sx={{ fontWeight: 700 }}>Item</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }} align="right">Item Total</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }} align="right">Project Stock</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }} align="right">Difference</TableCell>
+                    <TableCell sx={{ fontWeight: 700 }}>By Project</TableCell>
+                    <TableCell sx={{ fontWeight: 700, minWidth: 320 }}>Fix</TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {stockCheck.rows.map((row) => {
+                    const fix = stockCheck.fix[row._id] || {};
+                    const setFix = (patch) => setStockCheck((s) => ({ ...s, fix: { ...s.fix, [row._id]: { ...fix, ...patch } } }));
+                    return (
+                      <TableRow key={row._id}>
+                        <TableCell>{row.name} <Typography component="span" variant="caption" color="text.secondary">({row.itemCode})</Typography></TableCell>
+                        <TableCell align="right">{row.itemQuantity} {row.unit}</TableCell>
+                        <TableCell align="right">{row.ledgerQuantity}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 700, color: row.difference > 0 ? 'warning.main' : 'error.main' }}>
+                          {row.difference > 0 ? '+' : ''}{row.difference}
+                        </TableCell>
+                        <TableCell sx={{ fontSize: 12 }}>
+                          {row.breakdown.length ? row.breakdown.map((b) => `${b.project} / ${b.store}: ${b.qty}`).join(', ') : '—'}
+                        </TableCell>
+                        <TableCell>
+                          {row.difference > 0 ? (
+                            <Box sx={{ display: 'flex', gap: 1, alignItems: 'center' }}>
+                              <TextField select size="small" label="Project" value={fix.project || ''} onChange={(e) => setFix({ project: e.target.value })} sx={{ minWidth: 150 }}>
+                                {projects.map((p) => <MenuItem key={p._id} value={p._id}>{p.name}</MenuItem>)}
+                              </TextField>
+                              <TextField select size="small" label="Store" value={fix.store || ''} onChange={(e) => setFix({ store: e.target.value })} sx={{ minWidth: 110 }}>
+                                <MenuItem value=""><em>Default</em></MenuItem>
+                                {stores.map((st) => <MenuItem key={st._id} value={st._id}>{st.name}</MenuItem>)}
+                              </TextField>
+                              <Button size="small" variant="contained" onClick={() => fixStockRow(row)}>Allocate</Button>
+                            </Box>
+                          ) : (
+                            <Button size="small" variant="outlined" onClick={() => fixStockRow(row)}>Raise item total</Button>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={loadStockCheck} startIcon={<RefreshIcon />}>Re-check</Button>
+          <Button onClick={() => setStockCheck((s) => ({ ...s, open: false }))}>Close</Button>
         </DialogActions>
       </Dialog>
 

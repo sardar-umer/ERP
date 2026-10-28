@@ -844,16 +844,19 @@ export const MODULES = {
         name: 'Store',
         path: '/procurement/store',
         subItems: [
+          // In process order: setup → receive → stock → issue → returns
           { name: 'Store Dashboard', path: '/procurement/store' },
-          { name: 'Store Management', path: '/procurement/store/manage' },
-          { name: 'Item catalog', path: '/procurement/store/item-catalog' },
+          { name: 'Stores & Locations', path: '/procurement/store/manage' },
+          { name: 'Item Catalog', path: '/procurement/store/item-catalog' },
+          { name: 'Delivery Challans', path: '/procurement/store/delivery-challans' },
+          { name: 'DC Quality Check', path: '/procurement/store/delivery-challan-qa' },
+          { name: 'Goods Received Notes (GRN)', path: '/procurement/store/goods-receive' },
           { name: 'Inventory', path: '/procurement/store/inventory' },
-          { name: 'GRN (Goods Received Note)', path: '/procurement/store/goods-receive' },
-          { name: 'Delivery challans (DC QA)', path: '/procurement/store/delivery-challans' },
-          { name: 'QA (delivery challans)', path: '/procurement/store/delivery-challan-qa' },
-          { name: 'Store Issue Note', path: '/procurement/store/goods-issue' },
-          { name: 'Cost Center', path: '/procurement/store/cost-center' },
-          { name: 'Purchase Returns', path: '/procurement/purchase-returns' }
+          { name: 'Stock Check', path: '/procurement/store/stock-check' },
+          { name: 'Store Issue Notes (SIN)', path: '/procurement/store/goods-issue' },
+          { name: 'Store Returns', path: '/procurement/store/store-returns' },
+          { name: 'Purchase Returns', path: '/procurement/purchase-returns' },
+          { name: 'Cost Centers', path: '/procurement/store/cost-center' }
         ]
       }
     ]
@@ -1627,6 +1630,8 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/procurement/store/delivery-challans': 'goods_receive',
       '/procurement/store/delivery-challan-qa': 'quality_assurance',
       '/procurement/store/goods-issue': 'goods_issue',
+      '/procurement/store/store-returns': 'goods_issue',
+      '/procurement/store/stock-check': 'inventory',
       '/procurement/store/cost-center': 'cost_center',
       '/procurement/reports': 'procurement_reports',
       

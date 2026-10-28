@@ -16,11 +16,25 @@ const inventorySchema = new mongoose.Schema({
     type: String,
     trim: true
   },
+  /** Legacy fixed category — no longer on the form; Finance Category (inventoryCategory) is the real one */
   category: {
     type: String,
-    required: true,
     enum: ['Raw Materials', 'Finished Goods', 'Office Supplies', 'Equipment', 'Consumables', 'Other'],
     default: 'Other'
+  },
+  /** Catalog item (Item Catalog = the item master); this record is its stock card */
+  itemMaster: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'ItemMaster',
+    default: null,
+    index: true
+  },
+  /** Owning company; null = shared by all companies */
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlacementCompany',
+    default: null,
+    index: true
   },
   unit: {
     type: String,
@@ -40,7 +54,7 @@ const inventorySchema = new mongoose.Schema({
   },
   maxQuantity: {
     type: Number,
-    default: 1000,
+    default: null,
     min: 0
   },
   unitPrice: {

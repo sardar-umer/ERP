@@ -69,7 +69,7 @@ const stockTransactionSchema = new mongoose.Schema({
   // Reference to source document
   referenceType: {
     type: String,
-    enum: ['GRN', 'SIN', 'ADJUSTMENT', 'TRANSFER', 'OTHER'],
+    enum: ['GRN', 'SIN', 'SRN', 'ADJUSTMENT', 'TRANSFER', 'OTHER'],
     required: true
   },
   referenceId: {

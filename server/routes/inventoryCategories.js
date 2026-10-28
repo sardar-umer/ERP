@@ -44,6 +44,43 @@ router.get('/', asyncHandler(async (req, res) => {
 }));
 
 // ─── GET single category ─────────────────────────────────────────────────────
+// ─── EFFECTIVE accounts for an item (what GRN / SIN will actually post to, and why) ─────────
+// GET /api/inventory-categories/effective-accounts?inventoryCategory=<id>&item=<inventory id>
+router.get('/effective-accounts', asyncHandler(async (req, res) => {
+  const mongoose = require('mongoose');
+  const Account = require('../models/finance/Account');
+  const FinanceHelper = require('../utils/financeHelper');
+  const { acct } = require('../utils/financePosting');
+  const { resolveDocumentCompanyId } = require('../utils/financeCompanyContext');
+  const { defaultFinanceCategory } = require('../utils/itemCatalog');
+  const isId = (v) => v && mongoose.Types.ObjectId.isValid(String(v));
+
+  const item = isId(req.query.item) ? await Inventory.findById(req.query.item).lean() : null;
+  const catId = isId(req.query.inventoryCategory) ? req.query.inventoryCategory : item?.inventoryCategory;
+  const cat = isId(catId) ? await InventoryCategory.findById(catId).lean() : null;
+  const defCat = cat ? null : await defaultFinanceCategory().then((d) => (d ? InventoryCategory.findById(d._id).lean() : null));
+  const companyId = await resolveDocumentCompanyId({ userId: req.user?._id });
+  const A = acct(companyId);
+
+  const roles = [
+    { key: 'inventory', label: 'Inventory (DR on GRN, CR on SIN)', itemField: 'inventoryAccount', catField: 'stockValuationAccount', system: FinanceHelper.ACCOUNTS.INVENTORY },
+    { key: 'grni', label: 'GRNI (CR on GRN, cleared by vendor bill)', itemField: 'grniAccount', catField: 'stockInputAccount', system: FinanceHelper.ACCOUNTS.GRNI },
+    { key: 'cogs', label: 'COGS (DR on SIN)', itemField: 'cogsAccount', catField: 'stockOutputAccount', system: FinanceHelper.ACCOUNTS.COGS },
+    { key: 'sales', label: 'Sales (customer invoices)', itemField: 'salesAccount', catField: 'salesAccount', system: '4001' }
+  ];
+  const data = {};
+  for (const r of roles) {
+    let id = null; let source = '';
+    if (item?.[r.itemField]) { id = item[r.itemField]; source = 'item override'; }
+    else if (cat?.[r.catField]) { id = cat[r.catField]; source = `category "${cat.name}"`; }
+    else if (defCat?.[r.catField]) { id = defCat[r.catField]; source = `default category "${defCat.name}"`; }
+    let account = id ? (await A.map(id)) || await Account.findById(id).lean() : null;
+    if (!account) { account = await A.resolve(r.system); source = account ? `system default ${r.system}` : 'not set'; }
+    data[r.key] = { label: r.label, source, account: account ? { _id: account._id, accountNumber: account.accountNumber, name: account.name } : null };
+  }
+  noStoreJson(res, { success: true, data });
+}));
+
 router.get('/:id', asyncHandler(async (req, res) => {
   const cat = await InventoryCategory.findById(req.params.id)
     .populate('stockValuationAccount', 'accountNumber name type')
@@ -88,7 +125,7 @@ router.put('/:id',
     if (!cat) return res.status(404).json({ success: false, message: 'Category not found' });
 
     const fields = [
-      'name', 'description', 'isActive',
+      'name', 'description', 'isActive', 'isDefault',
       'stockValuationAccount', 'stockInputAccount', 'stockOutputAccount',
       'purchaseAccount', 'salesAccount'
     ];
@@ -99,6 +136,9 @@ router.put('/:id',
     }
     cat.updatedBy = req.user._id;
     await cat.save();
+    if (cat.isDefault) {
+      await InventoryCategory.updateMany({ _id: { $ne: cat._id }, isDefault: true }, { $set: { isDefault: false } });
+    }
 
     const updated = await InventoryCategory.findById(cat._id)
       .populate('stockValuationAccount', 'accountNumber name type')

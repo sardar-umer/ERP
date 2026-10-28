@@ -53,6 +53,7 @@ import dayjs from 'dayjs';
 import PODocumentView from './PODocumentView';
 import WorkflowHistoryDialog from '../../../components/WorkflowHistoryDialog';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../../utils/poA4PrintStyles';
+import StoreStockOverview from '../../../components/Procurement/Store/StoreStockOverview';
 
 const StoreDashboard = () => {
   const theme = useTheme();
@@ -284,7 +285,7 @@ const StoreDashboard = () => {
                 Store Dashboard
               </Typography>
               <Typography variant="body2" color="textSecondary">
-                Purchase Orders sent to Store - Organized by Month/Year
+                Stock at a glance, items waiting to be received, and approved indents to issue
               </Typography>
             </Box>
           </Box>
@@ -297,13 +298,15 @@ const StoreDashboard = () => {
         </Alert>
       )}
 
+      <StoreStockOverview />
+
       <Alert severity="info" sx={{ mb: 3 }} icon={<DeliveryChallanIcon />}>
         <Typography variant="body2" fontWeight={600} gutterBottom>
           Full-advance purchase orders
         </Typography>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
           After a PO is sent to the store, create a <strong>delivery challan (DC)</strong> for it, complete <strong>DC QA</strong>, then post the <strong>GRN</strong>.
-          Use <strong>Create DC</strong> on a row below, or open <RouterLink to="/procurement/store/delivery-challans">Delivery challans</RouterLink>. DC QA is recorded in <RouterLink to="/procurement/store/delivery-challan-qa">QA (delivery challans)</RouterLink>.
+          Use <strong>Create DC</strong> on a row below, or open <RouterLink to="/procurement/store/delivery-challans">Delivery Challans</RouterLink>. QA is recorded in <RouterLink to="/procurement/store/delivery-challan-qa">DC Quality Check</RouterLink>.
         </Typography>
       </Alert>
 

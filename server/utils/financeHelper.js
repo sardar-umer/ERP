@@ -95,10 +95,13 @@ const FinanceHelper = {
     let grniAccountId = inventoryItem.grniAccount;
     let cogsAccountId = inventoryItem.cogsAccount;
 
-    // Try category-level defaults for any missing account
-    if ((!inventoryAccountId || !grniAccountId || !cogsAccountId) && inventoryItem.inventoryCategory) {
+    // Try category-level defaults for any missing account (item without a category → the default category)
+    if (!inventoryAccountId || !grniAccountId || !cogsAccountId) {
       const catId = inventoryItem.inventoryCategory?._id || inventoryItem.inventoryCategory;
-      const cat = await InventoryCategory.findById(catId).lean();
+      const cat = catId
+        ? await InventoryCategory.findById(catId).lean()
+        : await require('./itemCatalog').defaultFinanceCategory()
+          .then((d) => (d ? InventoryCategory.findById(d._id).lean() : null));
       if (cat) {
         if (!inventoryAccountId) inventoryAccountId = cat.stockValuationAccount;
         if (!grniAccountId) grniAccountId = cat.stockInputAccount;

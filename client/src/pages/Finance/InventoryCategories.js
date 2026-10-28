@@ -129,6 +129,14 @@ export default function InventoryCategories() {
     }
   };
 
+  const handleMakeDefault = async (cat) => {
+    try {
+      await api.put(`/inventory-categories/${cat._id}`, { isDefault: true });
+      setSuccess(`"${cat.name}" is now the default Finance Category`);
+      load();
+    } catch (e) { setError(e.response?.data?.message || 'Could not set default'); }
+  };
+
   const handleDelete = async (cat) => {
     if (!window.confirm(`Delete category "${cat.name}"?`)) return;
     try {
@@ -229,7 +237,10 @@ export default function InventoryCategories() {
               ) : categories.map(cat => (
                 <TableRow key={cat._id} hover>
                   <TableCell>
-                    <Typography fontWeight={700}>{cat.name}</Typography>
+                    <Typography fontWeight={700}>
+                      {cat.name}
+                      {cat.isDefault && <Chip label="Default" size="small" color="primary" sx={{ ml: 1, height: 20 }} />}
+                    </Typography>
                     <Typography variant="caption" color="text.secondary">{cat.description}</Typography>
                   </TableCell>
                   <TableCell>
@@ -249,6 +260,11 @@ export default function InventoryCategories() {
                   </TableCell>
                   <TableCell>
                     <Chip label={cat.isActive ? 'Active' : 'Inactive'} color={cat.isActive ? 'success' : 'default'} size="small" variant="outlined" />
+                    {!cat.isDefault && cat.isActive && (
+                      <Tooltip title="Items with no Finance Category use the default one">
+                        <Button size="small" sx={{ ml: 1 }} onClick={() => handleMakeDefault(cat)}>Make default</Button>
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Tooltip title="Edit"><IconButton size="small" onClick={() => openEdit(cat)}><EditIcon fontSize="small" /></IconButton></Tooltip>

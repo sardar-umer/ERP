@@ -873,7 +873,8 @@ function normalizeInventoryObjectIdFields(payload = {}) {
     'purchaseAccount',
     'store',
     'subStore',
-    'project'
+    'project',
+    'companyId'
   ];
   for (const field of objectIdLikeFields) {
     if (cleaned[field] === '') cleaned[field] = undefined;
@@ -3338,6 +3339,86 @@ router.get('/store/pending-indents',
 // @route   GET /api/procurement/store/dashboard
 // @desc    Get Purchase Orders available for GRN workflow grouped by month/year
 // @access  Private (Procurement, Admin, Store Manager)
+// @route   GET /api/procurement/store/stock-kpis
+// @desc    Store Dashboard numbers: stock value by project, low / out of stock, receiving & issuing activity
+router.get('/store/stock-kpis',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const startOfDay = new Date(); startOfDay.setHours(0, 0, 0, 0);
+    const startOfMonth = new Date(startOfDay.getFullYear(), startOfDay.getMonth(), 1);
+    const StoreReturn = require('../models/procurement/StoreReturn');
+    const { findStockMismatches } = require('../utils/inventoryMovements');
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+    const [byProject, lowStock, outOfStock, totalItems, poAwaiting, dcQaPending, grnMonth, sinToday, sinMonth, srnMonth, customerSins, mismatches, recent] = await Promise.all([
+      // Stock value per project: ledger qty per project + item × the item's average cost
+      StockTransaction.aggregate([
+        { $group: { _id: { project: '$project', item: '$item' }, qty: { $sum: '$quantity' } } },
+        { $match: { qty: { $gt: 0 } } },
+        { $lookup: { from: 'inventories', localField: '_id.item', foreignField: '_id', as: 'inv' } },
+        { $unwind: '$inv' },
+        { $project: { project: '$_id.project', qty: 1, value: { $multiply: ['$qty', { $cond: [{ $gt: ['$inv.averageCost', 0] }, '$inv.averageCost', { $ifNull: ['$inv.unitPrice', 0] }] }] } } },
+        { $group: { _id: '$project', value: { $sum: '$value' }, items: { $sum: 1 } } },
+        { $lookup: { from: 'projects', localField: '_id', foreignField: '_id', as: 'p' } },
+        { $project: { project: { $ifNull: [{ $arrayElemAt: ['$p.name', 0] }, '—'] }, value: 1, items: 1 } },
+        { $sort: { value: -1 } }
+      ]),
+      Inventory.find({ minQuantity: { $gt: 0 }, $expr: { $lte: ['$quantity', '$minQuantity'] } })
+        .select('itemCode name unit quantity minQuantity').sort({ quantity: 1 }).limit(10).lean(),
+      Inventory.countDocuments({ quantity: { $lte: 0 } }),
+      Inventory.countDocuments({}),
+      PurchaseOrder.countDocuments({ status: { $in: ['Sent to Store', 'GRN Created', 'Partially Received'] } }),
+      DeliveryChallan.countDocuments({ status: 'qa_pending' }),
+      GoodsReceive.countDocuments({ receiveDate: { $gte: startOfMonth } }),
+      GoodsIssue.countDocuments({ status: 'Issued', issueDate: { $gte: startOfDay } }),
+      GoodsIssue.countDocuments({ status: 'Issued', issueDate: { $gte: startOfMonth } }),
+      StoreReturn.countDocuments({ returnDate: { $gte: startOfMonth } }),
+      GoodsIssue.find({ status: 'Issued', issueType: 'customer' }).select('_id items').lean(),
+      findStockMismatches(),
+      StockTransaction.find({}).populate('project', 'name').sort({ createdAt: -1 }).limit(8)
+        .select('createdAt itemName itemCode quantity unit referenceType referenceNumber project storeSnapshot').lean()
+    ]);
+    const lowStockCount = await Inventory.countDocuments({ minQuantity: { $gt: 0 }, $expr: { $lte: ['$quantity', '$minQuantity'] } });
+
+    // Customer SINs with qty not yet on an AR invoice
+    let customerSinsToInvoice = 0;
+    if (customerSins.length) {
+      const AccountsReceivable = require('../models/finance/AccountsReceivable');
+      const invoiced = await AccountsReceivable.aggregate([
+        { $match: { 'lineItems.sourceSin': { $in: customerSins.map((x) => x._id) }, status: { $ne: 'cancelled' } } },
+        { $unwind: '$lineItems' },
+        { $group: { _id: '$lineItems.sourceSin', qty: { $sum: '$lineItems.quantity' } } }
+      ]);
+      const invMap = new Map(invoiced.map((x) => [String(x._id), x.qty]));
+      customerSinsToInvoice = customerSins.filter((x) => {
+        const net = (x.items || []).reduce((t, it) => t + (Number(it.qtyIssued ?? it.quantity) || 0) - (Number(it.qtyReturnedToStore) || 0), 0);
+        return net - (invMap.get(String(x._id)) || 0) > 1e-9;
+      }).length;
+    }
+
+    res.json({
+      success: true,
+      data: {
+        stockValue: r2(byProject.reduce((t, p) => t + p.value, 0)),
+        stockByProject: byProject.map((p) => ({ project: p.project, value: r2(p.value), items: p.items })),
+        totalItems,
+        lowStockCount,
+        lowStock,
+        outOfStock,
+        poAwaitingReceipt: poAwaiting,
+        dcQaPending,
+        grnThisMonth: grnMonth,
+        sinToday,
+        sinThisMonth: sinMonth,
+        returnsThisMonth: srnMonth,
+        customerSinsToInvoice,
+        stockCheckMismatches: mismatches.length,
+        recentMovements: recent
+      }
+    });
+  })
+);
+
 router.get('/store/dashboard',
   authorize('super_admin', 'admin', 'procurement_manager'),
   asyncHandler(async (req, res) => {
@@ -4068,6 +4149,7 @@ router.get('/inventory',
     const query = {};
 
     if (category) query.category = category;
+    if (req.query.inventoryCategory) query.inventoryCategory = req.query.inventoryCategory;
     if (status) query.status = status;
     if (supplier) query.supplier = supplier;
 
@@ -4169,8 +4251,8 @@ router.get('/inventory/:id',
 // @desc    Create new inventory item
 // @access  Private (Procurement and Admin)
 router.post('/inventory', [
-  body('name').trim().notEmpty().withMessage('Item name is required'),
-  body('category').isIn(['Raw Materials', 'Finished Goods', 'Office Supplies', 'Equipment', 'Consumables', 'Other']).withMessage('Valid category is required'),
+  body('name').if(body('itemMaster').isEmpty()).trim().notEmpty().withMessage('Item name is required'),
+  body('category').optional({ checkFalsy: true }).isIn(['Raw Materials', 'Finished Goods', 'Office Supplies', 'Equipment', 'Consumables', 'Other']).withMessage('Valid category is required'),
   body('unit').trim().notEmpty().withMessage('Unit is required'),
   body('quantity').isFloat({ min: 0 }).withMessage('Quantity must be non-negative'),
   body('unitPrice').isFloat({ min: 0 }).withMessage('Unit price must be non-negative'),
@@ -4180,8 +4262,34 @@ router.post('/inventory', [
   if (!errors.isEmpty()) {
     return res.status(400).json({
       success: false,
-      errors: errors.array()
+      message: errors.array()[0]?.msg, errors: errors.array()
     });
+  }
+
+  // Item Catalog is the item master — a stock card is created for a catalog item (one card per item)
+  const { resolveCatalogItem, createUncatalogued } = require('../utils/itemCatalog');
+  let catalogItem = null;
+  if (req.body.itemMaster) {
+    catalogItem = await resolveCatalogItem({ itemMaster: req.body.itemMaster });
+    if (!catalogItem) return res.status(400).json({ success: false, message: 'Catalog item not found' });
+    const existingCard = await Inventory.findOne({ $or: [{ itemMaster: catalogItem._id }, ...(catalogItem.inventoryItem ? [{ _id: catalogItem.inventoryItem }] : [])] }).select('itemCode').lean();
+    if (existingCard) {
+      return res.status(400).json({ success: false, message: `${catalogItem.name} already has a stock card (${existingCard.itemCode}) — use Add Stock on it instead` });
+    }
+    req.body.name = catalogItem.name;
+    req.body.itemCode = catalogItem.itemCode;
+    if (!req.body.unit && catalogItem.unit) req.body.unit = catalogItem.unit;
+  } else if (req.body.name) {
+    // Typed a name that is already in the catalog — use that catalog item rather than duplicating it
+    const sameName = await resolveCatalogItem({ name: req.body.name });
+    if (sameName) {
+      const card = await Inventory.findOne({ itemMaster: sameName._id }).select('itemCode').lean();
+      if (card) {
+        return res.status(400).json({ success: false, message: `${sameName.name} already has a stock card (${card.itemCode}) — use Add Stock on it instead` });
+      }
+      catalogItem = sameName;
+      req.body.itemCode = sameName.itemCode;
+    }
   }
 
   let newItemCode = (req.body.itemCode != null && String(req.body.itemCode).trim() !== '')
@@ -4193,27 +4301,64 @@ router.post('/inventory', [
       return res.status(400).json({ success: false, message: 'itemCode already exists' });
     }
   } else {
-    const invCount = await Inventory.countDocuments();
-    newItemCode = `INV-${String(invCount + 1).padStart(5, '0')}`;
+    const { nextDocumentNumber } = require('../utils/documentSequence');
+    newItemCode = await nextDocumentNumber({ key: 'INV-ITEM', model: 'Inventory', field: 'itemCode', prefix: 'INV-', pad: 5 });
+  }
+
+  // Opening stock must belong to a project (SIN checks project stock) and is posted like any other stock in
+  const openingQty = Number(req.body.quantity) || 0;
+  if (openingQty > 0 && !req.body.openingProject) {
+    return res.status(400).json({ success: false, message: 'Select the project for the opening stock (or leave quantity 0 and receive stock by GRN)' });
   }
 
   let normalizedBody = normalizeInventoryObjectIdFields(req.body);
   if (!normalizedBody.inventoryCategory) {
-    let def = await InventoryCategory.findOne({ name: 'General', isActive: true }).select('_id').lean();
-    if (!def) {
-      def = await InventoryCategory.findOne({ isActive: true }).sort({ name: 1 }).select('_id').lean();
-    }
+    // Catalog item's Finance Category, else the default category
+    const { defaultFinanceCategory } = require('../utils/itemCatalog');
+    const def = catalogItem?.inventoryCategory ? { _id: catalogItem.inventoryCategory } : await defaultFinanceCategory();
     if (def) normalizedBody.inventoryCategory = def._id;
   }
 
+  const { openingProject, openingStore, itemMaster: _ignored, ...itemFields } = normalizedBody;
   const item = new Inventory({
-    ...normalizedBody,
+    ...itemFields,
+    quantity: 0,
+    averageCost: 0,
+    transactions: [],
     itemCode: newItemCode,
     createdBy: req.user.id,
     lastRestocked: new Date()
   });
 
   await item.save();
+
+  // Link to the catalog (adding the item to the catalog when it is new, with the same code)
+  try {
+    if (!catalogItem) catalogItem = await createUncatalogued({ name: item.name, unit: item.unit, itemCode: item.itemCode });
+    const ItemMaster = require('../models/general/ItemMaster');
+    await Promise.all([
+      Inventory.updateOne({ _id: item._id }, { $set: { itemMaster: catalogItem._id } }),
+      ItemMaster.updateOne({ _id: catalogItem._id }, { $set: { inventoryItem: item._id, ...(catalogItem.unit ? {} : { unit: item.unit }) } })
+    ]);
+  } catch (linkErr) {
+    console.warn('[Inventory create] catalog link skipped:', linkErr.message);
+  }
+
+  let openingResult = null;
+  if (openingQty > 0) {
+    const { postStockMovement } = require('../utils/inventoryMovements');
+    try {
+      openingResult = await postStockMovement({
+        item, kind: 'opening', qty: openingQty, projectId: openingProject, storeId: openingStore,
+        unitCost: Number(req.body.unitPrice) || 0, reference: `OPEN-${item.itemCode}`, reason: 'Opening stock', userId: req.user.id,
+        location: req.body.location || {}
+      });
+    } catch (err) {
+      // Item without its opening stock would silently disagree with the project ledger — undo the create
+      await Inventory.deleteOne({ _id: item._id });
+      return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  }
 
   const populatedItem = await Inventory.findById(item._id)
     .populate('supplier', 'name contactPerson')
@@ -4227,7 +4372,10 @@ router.post('/inventory', [
 
   res.status(201).json({
     success: true,
-    message: 'Inventory item created successfully',
+    message: openingResult
+      ? `Item created with opening stock ${openingQty} ${item.unit || ''} in ${openingResult.project} / ${openingResult.store}`
+        + (openingResult.finance.status === 'posted' ? '' : ` (no accounting entry: ${openingResult.finance.reason})`)
+      : 'Inventory item created successfully',
     data: populatedItem
   });
 }));
@@ -4258,6 +4406,17 @@ router.put('/inventory/:id', [
   }
 
   const normalizedBody = normalizeInventoryObjectIdFields(req.body);
+  // Quantity / cost / value only change through GRN, SIN or the stock buttons, so stock, project ledger
+  // and accounts stay equal. Unit price (fallback cost) is editable only while the item has no stock.
+  ['quantity', 'averageCost', 'totalValue', 'status', 'transactions', 'itemCode', 'createdBy', 'lastRestocked', 'openingProject', 'openingStore']
+    .forEach((k) => delete normalizedBody[k]);
+  if (normalizedBody.unitPrice != null && Number(item.quantity) > 0
+    && Number(normalizedBody.unitPrice) !== Number(item.unitPrice)) {
+    return res.status(400).json({
+      success: false,
+      message: `Unit price cannot change while ${item.quantity} ${item.unit || ''} are in stock — cost comes from GRN receipts (average cost ${item.averageCost || item.unitPrice})`
+    });
+  }
   Object.assign(item, normalizedBody);
   item.updatedBy = req.user.id;
   await item.save();
@@ -4279,164 +4438,99 @@ router.put('/inventory/:id', [
   });
 }));
 
-// @route   POST /api/procurement/inventory/:id/add-stock
-// @desc    Add stock to inventory item
-// @access  Private (Procurement and Admin)
-router.post('/inventory/:id/add-stock', [
-  body('quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0')
+// Manual stock movements — each one updates the item total, the store + project ledger and the accounts
+const runStockMovement = (kind) => [[
+  body('quantity').isFloat({ min: kind === 'adjust' ? 0 : 0.0001 }).withMessage(kind === 'adjust' ? 'Counted quantity must be 0 or more' : 'Quantity must be greater than 0'),
+  body('project').isMongoId().withMessage('Select the project'),
+  body('reason').trim().notEmpty().withMessage('Reason is required'),
+  body('store').optional({ checkFalsy: true }).isMongoId(),
+  body('unitCost').optional({ checkFalsy: true }).isFloat({ min: 0 })
 ], authorize('super_admin', 'admin', 'procurement_manager'), asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      errors: errors.array()
-    });
+    return res.status(400).json({ success: false, message: errors.array()[0]?.msg, errors: errors.array() });
   }
-
   const item = await Inventory.findById(req.params.id);
   if (!item) {
-    return res.status(404).json({
-      success: false,
-      message: 'Inventory item not found'
-    });
+    return res.status(404).json({ success: false, message: 'Inventory item not found' });
   }
-
-  await item.addStock(
-    req.body.quantity,
-    req.body.reference || '',
-    req.body.notes || '',
-    req.user.id
-  );
-
-  res.json({
-    success: true,
-    message: 'Stock added successfully',
-    data: item
-  });
-}));
-
-// @route   POST /api/procurement/inventory/:id/remove-stock
-// @desc    Remove stock from inventory item
-// @access  Private (Procurement and Admin)
-router.post('/inventory/:id/remove-stock', [
-  body('quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0')
-], authorize('super_admin', 'admin', 'procurement_manager'), asyncHandler(async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      errors: errors.array()
-    });
-  }
-
-  const item = await Inventory.findById(req.params.id);
-  if (!item) {
-    return res.status(404).json({
-      success: false,
-      message: 'Inventory item not found'
-    });
-  }
-
+  const { postStockMovement } = require('../utils/inventoryMovements');
   try {
-    await item.removeStock(
-      req.body.quantity,
-      req.body.reference || '',
-      req.body.notes || '',
-      req.user.id
-    );
-
+    const result = await postStockMovement({
+      item, kind, qty: Number(req.body.quantity), projectId: req.body.project, storeId: req.body.store || null,
+      unitCost: Number(req.body.unitCost) || 0, reference: req.body.reference || '', reason: req.body.reason,
+      userId: req.user.id
+    });
+    const verb = result.delta > 0 ? `+${result.delta}` : `${result.delta}`;
     res.json({
       success: true,
-      message: 'Stock removed successfully',
-      data: item
+      message: `Stock ${verb} ${item.unit || ''} in ${result.project} / ${result.store} (now ${result.balanceAfter})`
+        + (result.finance.status === 'posted' ? '' : ` — no accounting entry: ${result.finance.reason}`),
+      data: result.item,
+      finance: result.finance
     });
-  } catch (error) {
-    return res.status(400).json({
-      success: false,
-      message: error.message
-    });
+  } catch (err) {
+    res.status(err.statusCode || 400).json({ success: false, message: err.message });
   }
-}));
+})];
 
-// @route   POST /api/procurement/inventory/:id/adjust-stock
-// @desc    Adjust stock for inventory item
-// @access  Private (Procurement and Admin)
-router.post('/inventory/:id/adjust-stock', [
-  body('quantity').isFloat({ min: 0 }).withMessage('Quantity must be non-negative')
-], authorize('super_admin', 'admin', 'procurement_manager'), asyncHandler(async (req, res) => {
-  const errors = validationResult(req);
-  if (!errors.isEmpty()) {
-    return res.status(400).json({
-      success: false,
-      errors: errors.array()
-    });
-  }
+// @route   POST /api/procurement/inventory/:id/add-stock   { quantity, project, store?, unitCost?, reason }
+router.post('/inventory/:id/add-stock', ...runStockMovement('add'));
 
-  const item = await Inventory.findById(req.params.id);
-  if (!item) {
-    return res.status(404).json({
-      success: false,
-      message: 'Inventory item not found'
-    });
-  }
+// @route   POST /api/procurement/inventory/:id/remove-stock   { quantity, project, store?, reason }
+router.post('/inventory/:id/remove-stock', ...runStockMovement('remove'));
 
-  const oldQty = item.quantity;
-  const newQty = Number(req.body.quantity);
-  const diff = newQty - oldQty;
+// @route   POST /api/procurement/inventory/:id/adjust-stock   { quantity (counted, for this project + store), project, store?, reason }
+router.post('/inventory/:id/adjust-stock', ...runStockMovement('adjust'));
 
-  await item.adjustStock(
-    newQty,
-    req.body.reference || 'Manual Adjustment',
-    req.body.notes || '',
-    req.user.id
-  );
+// @route   GET /api/procurement/inventory/:id/movements
+// @desc    Store + project stock history of one item (GRN / SIN / SRN / adjustments)
+router.get('/inventory/:id/movements',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) return res.status(400).json({ success: false, message: 'Invalid item' });
+    const rows = await StockTransaction.find({ item: req.params.id })
+      .populate('project', 'name')
+      .populate('createdBy', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .limit(500)
+      .lean();
+    res.json({ success: true, data: rows });
+  })
+);
 
-  // Post GL journal for quantity difference (stock gain/loss).
-  // resolveInventoryAccounts handles the full fallback chain (item → category → global).
-  if (Math.abs(diff) > 0) {
+// @route   GET /api/procurement/inventory-stock-check
+// @desc    Items whose total differs from their store + project stock
+router.get('/inventory-stock-check',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const { findStockMismatches } = require('../utils/inventoryMovements');
+    res.json({ success: true, data: await findStockMismatches() });
+  })
+);
+
+// @route   POST /api/procurement/inventory/:id/reconcile   { project?, store? }
+// @desc    Fix one mismatch: allocate unallocated stock to a project, or raise the item total to the ledger
+router.post('/inventory/:id/reconcile',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const item = await Inventory.findById(req.params.id);
+    if (!item) return res.status(404).json({ success: false, message: 'Inventory item not found' });
+    const { reconcileItemStock } = require('../utils/inventoryMovements');
     try {
-      const FinanceHelper = require('../utils/financeHelper');
-      const { resolveDocumentCompanyId } = require('../utils/financeCompanyContext');
-      const { withCompany } = require('../utils/financePosting');
-      const companyId = await resolveDocumentCompanyId({ userId: req.user.id });
-      const { inventoryAccountId, cogsAccountId } = await FinanceHelper.resolveInventoryAccounts(item, companyId);
-      // For adjustments: gains offset against COGS (reversed), losses hit COGS
-      const adjAccount = cogsAccountId || inventoryAccountId;
-      const unitCost = item.averageCost || item.unitPrice || 0;
-      const adjAmt = Math.abs(Math.round(diff * unitCost * 100) / 100);
-
-      if (inventoryAccountId && adjAccount && adjAmt > 0) {
-        const isGain = diff > 0;
-        await FinanceHelper.createAndPostJournalEntry(withCompany({
-          date: new Date(),
-          reference: req.body.reference || `ADJ-${item.itemCode}`,
-          description: `Stock adjustment – ${item.name} (${diff > 0 ? '+' : ''}${diff} units)`,
-          department: 'procurement',
-          module: 'procurement',
-          referenceId: item._id,
-          referenceType: 'stock_adjustment',
-          journalCode: 'INV',
-          createdBy: req.user.id,
-          lines: isGain ? [
-            { account: inventoryAccountId, description: `Stock gain – ${item.name}`,  debit: adjAmt,  department: 'procurement' },
-            { account: adjAccount,         description: `Gain offset – ${item.name}`, credit: adjAmt, department: 'procurement' }
-          ] : [
-            { account: adjAccount,         description: `Stock loss – ${item.name}`,    debit: adjAmt,  department: 'procurement' },
-            { account: inventoryAccountId, description: `Inventory reduction – ${item.name}`, credit: adjAmt, department: 'procurement' }
-          ]
-        }, companyId));
-      }
-    } catch (finErr) {
-      console.warn('[Stock Adj] Finance journal skipped:', finErr.message);
+      const r = await reconcileItemStock({ item, projectId: req.body.project, storeId: req.body.store || null, userId: req.user.id });
+      res.json({
+        success: true,
+        message: r.action === 'allocated'
+          ? `${r.qty} ${item.unit || ''} allocated to ${r.project} / ${r.store}`
+          : `Item total raised by ${r.qty} to match project stock`,
+        data: r
+      });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
     }
-  }
-
-  res.json({
-    success: true,
-    message: 'Stock adjusted successfully',
-    data: item
-  });
-}));
+  })
+);
 
 // @route   DELETE /api/procurement/inventory/:id
 // @desc    Delete inventory item. Use ?force=true to delete even when stock > 0 (use with care).
@@ -5371,10 +5465,95 @@ router.get('/goods-issue',
 // @route   GET /api/procurement/goods-issue/:id
 // @desc    Get single goods issue record
 // @access  Private
+// ── Store Return Notes (SRN) and SIN cancellation ────────────────────────────
+// @route   GET /api/procurement/goods-issue/:id/returnable
+router.get('/goods-issue/:id/returnable',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const sin = await GoodsIssue.findById(req.params.id).lean();
+    if (!sin) return res.status(404).json({ success: false, message: 'Store Issue Note not found' });
+    const { sinReturnableLines } = require('../utils/storeReturns');
+    res.json({ success: true, data: { sinNumber: sin.issueNumber, status: sin.status, lines: await sinReturnableLines(sin) } });
+  })
+);
+
+// @route   POST /api/procurement/goods-issue/:id/cancel   { reason }
+router.post('/goods-issue/:id/cancel',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const { cancelStoreIssue } = require('../utils/storeReturns');
+    try {
+      const { srn } = await cancelStoreIssue({ sinId: req.params.id, reason: req.body.reason, userId: req.user.id });
+      res.json({
+        success: true,
+        message: srn ? `Store Issue Note cancelled — stock returned via ${srn.returnNumber}` : 'Store Issue Note cancelled',
+        data: srn
+      });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  })
+);
+
+// @route   GET /api/procurement/store-returns
+router.get('/store-returns',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const StoreReturn = require('../models/procurement/StoreReturn');
+    const { page = 1, limit = 10, search, goodsIssue } = req.query;
+    const query = {};
+    if (goodsIssue) query.goodsIssue = goodsIssue;
+    if (search) {
+      const rx = new RegExp(String(search).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      query.$or = [{ returnNumber: rx }, { sinNumber: rx }, { customerName: rx }, { reason: rx }, { 'items.itemName': rx }];
+    }
+    const pageNum = Math.max(1, parseInt(page, 10) || 1);
+    const limitNum = Math.min(500, Math.max(1, parseInt(limit, 10) || 10));
+    const [rows, total] = await Promise.all([
+      StoreReturn.find(query).populate('project', 'name').populate('createdBy', 'firstName lastName')
+        .sort({ returnDate: -1, createdAt: -1 }).skip((pageNum - 1) * limitNum).limit(limitNum).lean(),
+      StoreReturn.countDocuments(query)
+    ]);
+    res.json({ success: true, data: { returns: rows, pagination: { total, page: pageNum, limit: limitNum } } });
+  })
+);
+
+// @route   POST /api/procurement/store-returns   { goodsIssue, items: [{ inventoryItem, quantity, condition?, notes? }], reason, returnDate?, returnedByName?, receivedByName? }
+router.post('/store-returns',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  [
+    body('goodsIssue').isMongoId().withMessage('Select the Store Issue Note'),
+    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+    body('reason').trim().notEmpty().withMessage('Reason is required')
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, message: errors.array()[0]?.msg, errors: errors.array() });
+    const { postStoreReturn } = require('../utils/storeReturns');
+    try {
+      const srn = await postStoreReturn({
+        sinId: req.body.goodsIssue, lines: req.body.items, reason: req.body.reason, userId: req.user.id,
+        returnDate: req.body.returnDate || undefined, returnedByName: req.body.returnedByName, receivedByName: req.body.receivedByName
+      });
+      const notPosted = (srn.financePosting || []).filter((f) => f.status !== 'posted');
+      res.status(201).json({
+        success: true,
+        message: `${srn.returnNumber} posted — ${srn.totalQuantity} unit(s) back in stock`
+          + (notPosted.length ? ` (no accounting entry for ${notPosted.map((f) => `${f.itemName}: ${f.reason}`).join('; ')})` : ''),
+        data: srn
+      });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  })
+);
+
 router.get('/goods-issue/:id',
   authorize('super_admin', 'admin', 'procurement_manager'),
   asyncHandler(async (req, res) => {
     const issue = await GoodsIssue.findById(req.params.id)
+      .populate('companyId', 'name code')
+      .populate('cancelledBy', 'firstName lastName')
       .populate('requestedBy', 'firstName lastName email')
       .populate('issuedBy', 'firstName lastName email')
       .populate('costCenter', 'code name department')
@@ -5402,7 +5581,8 @@ router.post('/goods-issue',
     body('project').isMongoId().withMessage('Valid project ID is required'),
     body('issueType').optional().isIn(['project', 'customer']).withMessage('Issue type must be project or customer'),
     body('customer').if(body('issueType').equals('customer')).isMongoId().withMessage('Select the customer for a customer-wise SIN'),
-    body('department').isIn(['hr', 'admin', 'procurement', 'sales', 'finance', 'audit', 'general', 'it']).withMessage('Valid department is required'),
+    body('department').optional({ checkFalsy: true }).isString(),
+    body('companyId').optional({ checkFalsy: true }).isMongoId().withMessage('Valid company is required'),
     body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
     body('items.*.inventoryItem').isMongoId().withMessage('Valid inventory item ID is required'),
     body('items.*.quantity').optional().isFloat({ min: 0 }),
@@ -5539,6 +5719,10 @@ router.post('/goods-issue',
     if (!issueCompanyId && referencePurchaseOrder) {
       const poDoc = await PurchaseOrder.findById(referencePurchaseOrder).select('companyId').lean();
       if (poDoc && poDoc.companyId) issueCompanyId = poDoc.companyId;
+    }
+    // Company decides which books the COGS entry goes to — never leave it to guesswork
+    if (!issueCompanyId) {
+      throw Object.assign(new Error('Select the company for this Store Issue Note'), { statusCode: 400 });
     }
 
     const issue = new GoodsIssue({

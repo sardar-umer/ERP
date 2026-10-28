@@ -150,6 +150,8 @@ const purchaseOrderSchema = new mongoose.Schema({
   },
   items: [{
     productCode: { type: String, trim: true },
+    /** Catalog link — filled from the catalog by code / exact description on save */
+    itemMaster: { type: mongoose.Schema.Types.ObjectId, ref: 'ItemMaster', default: null },
     description: {
       type: String,
       required: true,
@@ -322,6 +324,19 @@ const purchaseOrderSchema = new mongoose.Schema({
   }]
 }, {
   timestamps: true
+});
+
+// Link lines to the Item Catalog — PO lines carry the catalog code as productCode
+purchaseOrderSchema.pre('save', async function(next) {
+  try {
+    if (this.isNew || this.isModified('items')) {
+      const { annotateLines } = require('../../utils/itemCatalog');
+      await annotateLines(this.items, { nameField: 'description', codeField: 'productCode' });
+    }
+  } catch (err) {
+    console.warn('[PO] item catalog link skipped:', err.message);
+  }
+  next();
 });
 
 // Generate order number

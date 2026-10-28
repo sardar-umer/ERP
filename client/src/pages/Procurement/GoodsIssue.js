@@ -3,12 +3,13 @@ import {
   Box, Typography, Paper, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Alert, CircularProgress,
-  Avatar, useTheme, alpha, Chip, Grid, Divider, Checkbox, Autocomplete,
-  ToggleButton, ToggleButtonGroup
+  Avatar, useTheme, alpha, Chip, Grid, Divider, Autocomplete,
+  ToggleButton, ToggleButtonGroup, Tabs, Tab, Tooltip
 } from '@mui/material';
 import {
   ExitToApp as IssueIcon, Add as AddIcon, Visibility as ViewIcon,
   Search as SearchIcon, Refresh as RefreshIcon, Close as CloseIcon, Print as PrintIcon,
+  AssignmentReturn as ReturnIcon, Block as CancelIcon
 } from '@mui/icons-material';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
@@ -16,6 +17,7 @@ import storeService from '../../services/storeService';
 import { formatDate } from '../../utils/dateUtils';
 import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
 import LocationSelector from '../../components/Procurement/Store/LocationSelector';
+import { StoreReturnDialog, CancelSinDialog, StoreReturnsList } from '../../components/Procurement/Store/StoreReturns';
 
 const formatSINDate = (d) => {
   if (!d) return '';
@@ -25,7 +27,7 @@ const formatSINDate = (d) => {
   return `${day} ${months[x.getMonth()]}, ${x.getFullYear()}`;
 };
 
-const GoodsIssue = () => {
+const GoodsIssue = ({ initialTab = 0 }) => {
   const theme = useTheme();
   const location = useLocation();
   const [searchParams] = useSearchParams();
@@ -38,6 +40,13 @@ const GoodsIssue = () => {
   const [projects, setProjects] = useState([]);
   // Customer-wise SINs pick from the same Finance → Customers list as AR invoices
   const [customers, setCustomers] = useState([]);
+  // Company decides which books the COGS goes to; departments come from HR (same list as indents)
+  const [companies, setCompanies] = useState([]);
+  const [orgDepartments, setOrgDepartments] = useState([]);
+  const [pageTab, setPageTab] = useState(initialTab);
+  const [returnDialog, setReturnDialog] = useState({ open: false, sin: null });
+  const [cancelDialog, setCancelDialog] = useState({ open: false, sin: null });
+  const [returnsRefresh, setReturnsRefresh] = useState(0);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
@@ -69,6 +78,7 @@ const GoodsIssue = () => {
     project: '',
     issueType: 'project',
     customer: '',
+    companyId: '',
     costCenter: '',
     costCenterCode: '',
     costCenterName: '',
@@ -103,6 +113,7 @@ const GoodsIssue = () => {
     loadProjects();
     loadCustomers();
     loadMainStores();
+    loadOrgLists();
   }, [page, rowsPerPage, search, departmentFilter]);
 
   const loadMainStores = async () => {
@@ -158,9 +169,10 @@ const GoodsIssue = () => {
 
       setFormData({
         issueDate: new Date().toISOString().split('T')[0],
-        department: deptValue,
-        departmentName: deptLabel,
+        department: indentDeptName || deptValue,
+        departmentName: indentDeptName || deptLabel,
         concernedDepartment: indentDeptName || '',
+        companyId: fromIndent.companyId?._id || fromIndent.companyId || '',
         issuingLocation: 'Store',
         store: 'Main Store',
         project: '',
@@ -386,6 +398,12 @@ const GoodsIssue = () => {
     }
   };
 
+  const loadOrgLists = async () => {
+    const [co, dep] = await Promise.allSettled([api.get('/indents/companies'), api.get('/indents/departments')]);
+    if (co.status === 'fulfilled') setCompanies(co.value.data?.data || []);
+    if (dep.status === 'fulfilled') setOrgDepartments(dep.value.data?.data || []);
+  };
+
   const loadCustomers = async () => {
     try {
       const res = await api.get('/procurement/goods-issue-customers');
@@ -443,6 +461,7 @@ const GoodsIssue = () => {
       project: '',
       issueType: 'project',
       customer: '',
+      companyId: companies.length === 1 ? companies[0]._id : '',
       costCenter: '',
       costCenterCode: '',
       costCenterName: '',
@@ -467,8 +486,16 @@ const GoodsIssue = () => {
       setError('Please select the customer');
       return;
     }
+    if (!formData.companyId) {
+      setError('Please select the company');
+      return;
+    }
     if (!formData.project) {
       setError(isCustomerIssue ? 'Please select the project whose stock is being issued' : 'Please select a project');
+      return;
+    }
+    if (!formData.store) {
+      setError('Please select the store');
       return;
     }
     try {
@@ -482,6 +509,7 @@ const GoodsIssue = () => {
       const payload = {
         ...formRest,
         issueType: isCustomerIssue ? 'customer' : 'project',
+        department: formData.department || undefined,
         customer: isCustomerIssue ? formData.customer : undefined,
         referenceIndent: referenceIndent || undefined,
         referencePurchaseOrder: referencePurchaseOrder || undefined,
@@ -622,7 +650,7 @@ const GoodsIssue = () => {
                 Store Issue Note
               </Typography>
               <Typography variant="body2" color="textSecondary">
-                Create and view Taj Residencia Store Issue Notes (SIN)
+                Issue stock to projects or customers, return items to store, and cancel wrong issues
               </Typography>
             </Box>
           </Box>
@@ -641,6 +669,12 @@ const GoodsIssue = () => {
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
 
       <Paper>
+        <Tabs value={pageTab} onChange={(_, v) => setPageTab(v)} sx={{ px: 2, borderBottom: 1, borderColor: 'divider' }}>
+          <Tab label="Store Issue Notes" />
+          <Tab label="Store Returns" />
+        </Tabs>
+        {pageTab === 1 && <StoreReturnsList refreshKey={returnsRefresh} />}
+        {pageTab === 0 && (<>
         <Box sx={{ p: 2, display: 'flex', gap: 2, alignItems: 'center' }}>
           <TextField
             size="small"
@@ -659,7 +693,7 @@ const GoodsIssue = () => {
             sx={{ minWidth: 150 }}
           >
             <MenuItem value="">All</MenuItem>
-            {departments.map((dept) => <MenuItem key={dept.value} value={dept.value}>{dept.label}</MenuItem>)}
+            {orgDepartments.map((d) => <MenuItem key={d._id} value={d.name}>{d.name}</MenuItem>)}
           </TextField>
         </Box>
         <TableContainer>
@@ -696,7 +730,7 @@ const GoodsIssue = () => {
                     <TableCell>{issue.requestedByName || issue.requestedBy?.firstName || '-'}</TableCell>
                     <TableCell>{issue.totalItems || 0}</TableCell>
                     <TableCell>{issue.totalQuantity || 0}</TableCell>
-                    <TableCell><Chip label={issue.status} size="small" color={issue.status === 'Issued' ? 'success' : 'default'} /></TableCell>
+                    <TableCell><Chip label={issue.status} size="small" color={issue.status === 'Issued' ? 'success' : issue.status === 'Cancelled' ? 'error' : 'default'} /></TableCell>
                     <TableCell>
                       <IconButton size="small" onClick={async () => {
                         setViewDialog({ open: true, data: issue });
@@ -708,6 +742,20 @@ const GoodsIssue = () => {
                       }}>
                         <ViewIcon fontSize="small" />
                       </IconButton>
+                      {issue.status === 'Issued' && (
+                        <>
+                          <Tooltip title="Return items to store">
+                            <IconButton size="small" color="primary" onClick={() => setReturnDialog({ open: true, sin: issue })}>
+                              <ReturnIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title="Cancel SIN (reverse all)">
+                            <IconButton size="small" color="error" onClick={() => setCancelDialog({ open: true, sin: issue })}>
+                              <CancelIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                        </>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -724,7 +772,21 @@ const GoodsIssue = () => {
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
           rowsPerPageOptions={[5, 10, 25, 50]}
         />
+        </>)}
       </Paper>
+
+      <StoreReturnDialog
+        open={returnDialog.open}
+        sin={returnDialog.sin}
+        onClose={() => setReturnDialog({ open: false, sin: null })}
+        onDone={(msg) => { setReturnDialog({ open: false, sin: null }); setSuccess(msg); loadIssues(); loadInventory(); setReturnsRefresh((n) => n + 1); }}
+      />
+      <CancelSinDialog
+        open={cancelDialog.open}
+        sin={cancelDialog.sin}
+        onClose={() => setCancelDialog({ open: false, sin: null })}
+        onDone={(msg) => { setCancelDialog({ open: false, sin: null }); setSuccess(msg); loadIssues(); loadInventory(); setReturnsRefresh((n) => n + 1); }}
+      />
 
       {/* Create Dialog - Store Issue Note layout */}
       <Dialog open={formDialog.open} onClose={() => {
@@ -732,7 +794,7 @@ const GoodsIssue = () => {
         processedIndentRef.current = null;
         window.history.replaceState({}, document.title);
       }} maxWidth="lg" fullWidth>
-        <DialogTitle>Create Store Issue Note (Taj Residencia)</DialogTitle>
+        <DialogTitle>Create Store Issue Note</DialogTitle>
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}><Typography variant="overline" color="textSecondary">Details</Typography></Grid>
@@ -778,11 +840,10 @@ const GoodsIssue = () => {
                   <MenuItem key={p._id} value={p._id}>{p.name} {p.projectId ? `(${p.projectId})` : ''}</MenuItem>
                 ))}
               </TextField>
-              <TextField fullWidth label="Issuing Location" value={formData.issuingLocation} onChange={(e) => setFormData({ ...formData, issuingLocation: e.target.value })} placeholder="e.g. Store" sx={{ mt: 1 }} />
               <TextField
-                fullWidth select label="Main Store" value={formData.store || ''} sx={{ mt: 1 }}
+                fullWidth select required label="Store *" value={formData.store || ''} sx={{ mt: 1 }}
                 onChange={(e) => setFormData({ ...formData, store: e.target.value })}
-                helperText="Select the issuing store"
+                helperText="Store the items are issued from"
               >
                 <MenuItem value=""><em>— Select Store —</em></MenuItem>
                 {mainStores.map(s => <MenuItem key={s._id} value={s._id}>{s.name} ({s.code})</MenuItem>)}
@@ -798,14 +859,18 @@ const GoodsIssue = () => {
               <TextField fullWidth label="Justification" value={formData.justification} onChange={(e) => setFormData({ ...formData, justification: e.target.value })} placeholder="e.g. MY Builders (Street #10)" sx={{ mt: 1 }} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="Date" type="date" value={formData.issueDate} onChange={(e) => setFormData({ ...formData, issueDate: e.target.value })} InputLabelProps={{ shrink: true }} />
+              <TextField fullWidth select required label="Company *" value={formData.companyId || ''} onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
+                helperText="Books the COGS entry is posted to">
+                <MenuItem value="">Select Company</MenuItem>
+                {companies.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>)}
+              </TextField>
+              <TextField fullWidth label="Date" type="date" value={formData.issueDate} onChange={(e) => setFormData({ ...formData, issueDate: e.target.value })} InputLabelProps={{ shrink: true }} sx={{ mt: 1 }} />
               <TextField fullWidth label="EPR No." value={formData.eprNo} onChange={(e) => setFormData({ ...formData, eprNo: e.target.value })} placeholder="e.g. M3-00000461" sx={{ mt: 1 }} />
-              <TextField fullWidth label="Concerned Department" value={formData.concernedDepartment} onChange={(e) => setFormData({ ...formData, concernedDepartment: e.target.value })} placeholder="e.g. Civil Structure" sx={{ mt: 1 }} />
-              <TextField fullWidth select label="Department" value={formData.department} onChange={(e) => {
-                const dept = departments.find(d => d.value === e.target.value);
-                setFormData({ ...formData, department: e.target.value, departmentName: dept?.label || '' });
+              <TextField fullWidth select label="Department" value={orgDepartments.some((d) => d.name === formData.departmentName) ? formData.departmentName : ''} onChange={(e) => {
+                setFormData({ ...formData, department: e.target.value || 'general', departmentName: e.target.value, concernedDepartment: e.target.value });
               }} sx={{ mt: 1 }}>
-                {departments.map((dept) => <MenuItem key={dept.value} value={dept.value}>{dept.label}</MenuItem>)}
+                <MenuItem value=""><em>None</em></MenuItem>
+                {orgDepartments.map((d) => <MenuItem key={d._id} value={d.name}>{d.name}</MenuItem>)}
               </TextField>
               <TextField fullWidth label="Requested By" value={formData.requestedByName} onChange={(e) => setFormData({ ...formData, requestedByName: e.target.value })} placeholder="Name of requester" sx={{ mt: 1 }} />
               <TextField fullWidth select label="Reference Indent (optional)" value={formData.referenceIndent || ''} onChange={(e) => setFormData({ ...formData, referenceIndent: e.target.value })} sx={{ mt: 1 }}>
@@ -862,15 +927,10 @@ const GoodsIssue = () => {
                   <TableHead>
                     <TableRow>
                       <TableCell sx={{ fontWeight: 'bold' }}>Sr. #</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>From inventory</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>Item Code</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>Description of Material</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }}>Item *</TableCell>
                       <TableCell sx={{ fontWeight: 'bold' }}>UOM</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty Returned</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty Issued</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Balance Qty</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>New Stock</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>Old Stock</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Available</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty Issued *</TableCell>
                       <TableCell sx={{ fontWeight: 'bold' }}>Issue From Location</TableCell>
                       <TableCell width={40} />
                     </TableRow>
@@ -885,31 +945,17 @@ const GoodsIssue = () => {
                         <TableRow key={index}>
                           <TableCell>{index + 1}</TableCell>
                           <TableCell>
-                            <TextField size="small" fullWidth select value={item.inventoryItem} onChange={(e) => updateItem(index, 'inventoryItem', e.target.value)} sx={{ minWidth: 110 }}>
+                            <TextField size="small" fullWidth select value={item.inventoryItem} onChange={(e) => updateItem(index, 'inventoryItem', e.target.value)} sx={{ minWidth: 240 }}
+                              SelectProps={{ displayEmpty: true, renderValue: (v) => (v ? `${dispCode} - ${dispName}` : 'Select') }}>
                               <MenuItem value="">Select</MenuItem>
                               {inventoryPickList.map((i) => <MenuItem key={i._id} value={i._id}>{i.itemCode} - {i.name}</MenuItem>)}
                             </TextField>
                           </TableCell>
-                          <TableCell>
-                            <TextField size="small" fullWidth value={item.itemCode ?? dispCode ?? ''} onChange={(e) => updateItem(index, 'itemCode', e.target.value)} placeholder="Item code" sx={{ minWidth: 100 }} />
-                          </TableCell>
-                          <TableCell>
-                            <TextField size="small" fullWidth value={item.itemName ?? dispName ?? ''} onChange={(e) => updateItem(index, 'itemName', e.target.value)} placeholder="Description" sx={{ minWidth: 120 }} />
-                          </TableCell>
-                          <TableCell>
-                            <TextField size="small" fullWidth value={item.unit ?? dispUnit ?? ''} onChange={(e) => updateItem(index, 'unit', e.target.value)} placeholder="UOM" sx={{ width: 70 }} />
-                          </TableCell>
+                          <TableCell>{dispUnit || '—'}</TableCell>
+                          <TableCell align="right">{inv ? getAvailableStock(item.inventoryItem) : '—'}</TableCell>
                           <TableCell align="right">
-                            <TextField size="small" type="number" value={item.qtyReturned} onChange={(e) => updateItem(index, 'qtyReturned', e.target.value)} inputProps={{ min: 0, step: 0.01 }} sx={{ width: 80 }} />
+                            <TextField size="small" type="number" value={item.qtyIssued} onChange={(e) => updateItem(index, 'qtyIssued', e.target.value)} inputProps={{ min: 0, max: inv ? getAvailableStock(item.inventoryItem) : undefined, step: 0.01 }} sx={{ width: 90 }} error={inv && (Number(item.qtyIssued) || 0) > getAvailableStock(item.inventoryItem)} />
                           </TableCell>
-                          <TableCell align="right">
-                            <TextField size="small" type="number" value={item.qtyIssued} onChange={(e) => updateItem(index, 'qtyIssued', e.target.value)} inputProps={{ min: 0, max: inv ? getAvailableStock(item.inventoryItem) : undefined, step: 0.01 }} sx={{ width: 80 }} helperText={inv ? `Avail: ${getAvailableStock(item.inventoryItem)}` : ''} error={inv && (Number(item.qtyIssued) || 0) > getAvailableStock(item.inventoryItem)} />
-                          </TableCell>
-                          <TableCell align="right">
-                            <TextField size="small" type="number" value={item.balanceQty} onChange={(e) => updateItem(index, 'balanceQty', e.target.value)} inputProps={{ min: 0, step: 0.01 }} sx={{ width: 80 }} />
-                          </TableCell>
-                          <TableCell><Checkbox checked={!!item.issuedFromNewStock} onChange={(e) => updateItem(index, 'issuedFromNewStock', e.target.checked)} size="small" /></TableCell>
-                          <TableCell><Checkbox checked={!!item.issuedFromOldStock} onChange={(e) => updateItem(index, 'issuedFromOldStock', e.target.checked)} size="small" /></TableCell>
                           <TableCell sx={{ minWidth: 200 }}>
                             <LocationSelector
                               mainStoreId={formData.store || undefined}
@@ -942,7 +988,7 @@ const GoodsIssue = () => {
             processedIndentRef.current = null;
             window.history.replaceState({}, document.title);
           }}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || (formData.issueType === 'customer' && !formData.customer) || !formData.items.some((i) => i.inventoryItem && (Number(i.qtyIssued) || 0) > 0)}>
+          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.store || !formData.companyId || (formData.issueType === 'customer' && !formData.customer) || !formData.items.some((i) => i.inventoryItem && (Number(i.qtyIssued) || 0) > 0)}>
             Create Store Issue Note
           </Button>
         </DialogActions>
@@ -961,11 +1007,13 @@ const GoodsIssue = () => {
               {/* Header: TAJ RESIDENCIA / LIVE YOUR DREAMS (left), Taj Residencia Store Issue Note (center), Doc metadata (right) */}
               <Grid container sx={{ mb: 2, borderBottom: 1, borderColor: 'divider', pb: 2 }} alignItems="center">
                 <Grid item xs={4}>
-                  <Typography variant="h6" fontWeight="bold">TAJ RESIDENCIA</Typography>
-                  <Typography variant="caption" color="textSecondary">LIVE YOUR DREAMS</Typography>
+                  <Typography variant="h6" fontWeight="bold">{(viewDialog.data.companyId?.name || '').toUpperCase() || '—'}</Typography>
                 </Grid>
                 <Grid item xs={4} sx={{ textAlign: 'center' }}>
-                  <Typography variant="h6" fontWeight="bold">Taj Residencia Store Issue Note</Typography>
+                  <Typography variant="h6" fontWeight="bold">Store Issue Note</Typography>
+                  {viewDialog.data.status === 'Cancelled' && (
+                    <Chip label="CANCELLED" color="error" size="small" sx={{ mt: 0.5 }} />
+                  )}
                 </Grid>
                 <Grid item xs={4} sx={{ textAlign: 'right' }}>
                   <Typography variant="caption" color="textSecondary">Doc. No. PROC/STR/FRM-13</Typography>
@@ -1003,7 +1051,14 @@ const GoodsIssue = () => {
                   <Typography variant="body2">{viewDialog.data.concernedDepartment || viewDialog.data.departmentName || departments.find(d => d.value === viewDialog.data.department)?.label || '—'}</Typography>
                 </Grid>
               </Grid>
-              {/* Items table: Sr.#, Item Code, Description of Material, UOM, Qty Returned, Qty Issued, Balance Qty, New Stock, Old Stock */}
+              {viewDialog.data.status === 'Cancelled' && (
+                <Alert severity="error" sx={{ mb: 2 }}>
+                  Cancelled {viewDialog.data.cancelledAt ? formatSINDate(viewDialog.data.cancelledAt) : ''}
+                  {viewDialog.data.cancelledBy?.firstName ? ` by ${viewDialog.data.cancelledBy.firstName} ${viewDialog.data.cancelledBy.lastName || ''}` : ''}
+                  {viewDialog.data.cancelReason ? ` — ${viewDialog.data.cancelReason}` : ''}
+                </Alert>
+              )}
+              {/* Items table: Sr.#, Item Code, Description, UOM, Qty Issued, Returned (via SRN), Net Issued */}
               <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
                 <Table size="small">
                   <TableHead>
@@ -1012,11 +1067,9 @@ const GoodsIssue = () => {
                       <TableCell sx={{ fontWeight: 'bold' }}>Item Code</TableCell>
                       <TableCell sx={{ fontWeight: 'bold' }}>Description of Material</TableCell>
                       <TableCell sx={{ fontWeight: 'bold' }}>UOM</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty Returned</TableCell>
                       <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty Issued</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Balance Qty</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>New Stock</TableCell>
-                      <TableCell sx={{ fontWeight: 'bold' }}>Old Stock</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Returned</TableCell>
+                      <TableCell sx={{ fontWeight: 'bold' }} align="right">Net Issued</TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -1026,11 +1079,9 @@ const GoodsIssue = () => {
                         <TableCell>{item.itemCode || '—'}</TableCell>
                         <TableCell>{item.itemName || '—'}</TableCell>
                         <TableCell>{item.unit || '—'}</TableCell>
-                        <TableCell align="right">{item.qtyReturned ?? '—'}</TableCell>
                         <TableCell align="right">{item.qtyIssued ?? item.quantity ?? '—'}</TableCell>
-                        <TableCell align="right">{item.balanceQty ?? '—'}</TableCell>
-                        <TableCell>{item.issuedFromNewStock ? '✓' : '—'}</TableCell>
-                        <TableCell>{item.issuedFromOldStock ? '✓' : '—'}</TableCell>
+                        <TableCell align="right">{item.qtyReturnedToStore || '—'}</TableCell>
+                        <TableCell align="right" sx={{ fontWeight: 600 }}>{(Number(item.qtyIssued ?? item.quantity) || 0) - (Number(item.qtyReturnedToStore) || 0)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -1039,24 +1090,19 @@ const GoodsIssue = () => {
               {/* Footer: Signatures (Returned By, Approved By, Issued By, Received By) */}
               <Divider sx={{ my: 2 }} />
               <Grid container spacing={2}>
-                <Grid item xs={6} md={3}>
-                  <Typography variant="caption" color="textSecondary">Returned By</Typography>
-                  <Typography variant="body2" fontWeight="medium">{viewDialog.data.returnedByName || '—'}</Typography>
-                  <Box sx={{ height: 32, border: '1px dashed', borderColor: 'divider', mt: 0.5 }} />
-                </Grid>
-                <Grid item xs={6} md={3}>
+                <Grid item xs={6} md={4}>
                   <Typography variant="caption" color="textSecondary">Approved By (for)</Typography>
                   <Typography variant="caption" color="textSecondary">Sign & Position (HOD)</Typography>
                   <Typography variant="body2" fontWeight="medium">{viewDialog.data.approvedByName || '—'}</Typography>
                   <Box sx={{ height: 32, border: '1px dashed', borderColor: 'divider', mt: 0.5 }} />
                 </Grid>
-                <Grid item xs={6} md={3}>
+                <Grid item xs={6} md={4}>
                   <Typography variant="caption" color="textSecondary">Issued By</Typography>
                   <Typography variant="caption" color="textSecondary">Store (Sign & Name)</Typography>
                   <Typography variant="body2" fontWeight="medium">{viewDialog.data.issuedByName || (viewDialog.data.issuedBy?.firstName && viewDialog.data.issuedBy?.lastName ? `${viewDialog.data.issuedBy.firstName} ${viewDialog.data.issuedBy.lastName}` : '—')}</Typography>
                   <Box sx={{ height: 32, border: '1px dashed', borderColor: 'divider', mt: 0.5 }} />
                 </Grid>
-                <Grid item xs={6} md={3}>
+                <Grid item xs={6} md={4}>
                   <Typography variant="caption" color="textSecondary">Received By</Typography>
                   <Typography variant="caption" color="textSecondary">(Sign & Name)</Typography>
                   <Typography variant="body2" fontWeight="medium">{viewDialog.data.receivedByName || '—'}</Typography>

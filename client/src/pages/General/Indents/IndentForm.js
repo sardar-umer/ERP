@@ -418,15 +418,12 @@ const IndentForm = () => {
   }, []);
 
   const handleItemChange = (index, field, value) => {
-    const updatedItems = [...formData.items];
-    updatedItems[index] = {
-      ...updatedItems[index],
-      [field]: value
-    };
-    setFormData(prev => ({
-      ...prev,
-      items: updatedItems
-    }));
+    // Functional update — several fields are set in a row when an item is picked
+    setFormData(prev => {
+      const updatedItems = [...prev.items];
+      updatedItems[index] = { ...updatedItems[index], [field]: value };
+      return { ...prev, items: updatedItems };
+    });
   };
 
   const handleAddItem = () => {
@@ -673,6 +670,8 @@ const IndentForm = () => {
           formData.category === OTHERS_CATEGORY ? formData.categoryOtherDescription.trim() : '',
         items: formData.items.map(item => ({
           itemName: item.itemName,
+          itemCode: item.itemCode || '',
+          itemMaster: item.itemMaster || undefined,
           description: item.description || '',
           brand: item.brand || '',
           quantity: item.quantity,
@@ -1072,6 +1071,9 @@ const IndentForm = () => {
                               handleItemChange(index, 'itemName', newValue || '');
                               // If matched item has default unit/description, prefill optionally
                               const matchedOpt = itemOptions.find(o => (o.name || '') === newValue);
+                              // Keep the Item Catalog link so PO / GRN / SIN carry the same item code
+                              handleItemChange(index, 'itemMaster', matchedOpt?._id || null);
+                              handleItemChange(index, 'itemCode', matchedOpt?.itemCode || '');
                               if (matchedOpt) {
                                 if (matchedOpt.unit && !item.unit) {
                                   handleItemChange(index, 'unit', matchedOpt.unit);
@@ -1081,8 +1083,21 @@ const IndentForm = () => {
                                 }
                               }
                             }}
-                            onInputChange={(_, newInputValue) => {
+                            onInputChange={(_, newInputValue, reason) => {
                               handleItemChange(index, 'itemName', newInputValue || '');
+                              if (reason === 'input') {
+                                handleItemChange(index, 'itemMaster', null);
+                                handleItemChange(index, 'itemCode', '');
+                              }
+                            }}
+                            renderOption={(props, option) => {
+                              const code = itemOptions.find(o => (o.name || '') === option)?.itemCode;
+                              return (
+                                <li {...props} key={`${option}-${code || ''}`}>
+                                  {code && <Typography component="span" variant="caption" color="text.secondary" sx={{ fontFamily: 'monospace', mr: 1 }}>{code}</Typography>}
+                                  {option}
+                                </li>
+                              );
                             }}
                             renderInput={(params) => (
                               <TextField

@@ -29,7 +29,18 @@ const makeEmptyItem = () => ({
   poLineIndex: undefined
 });
 
-/** GRN table rows from PO lines (remaining qty). */
+/** Inventory item for a PO / DC line: linked id → exact code → exact name (case-insensitive) */
+const matchInventoryItem = (list, { inventoryItem, code, name }) => {
+  const id = String(inventoryItem?._id || inventoryItem || '');
+  const c = String(code || '').trim();
+  const n = String(name || '').trim().toLowerCase();
+  return (id && list.find((x) => String(x._id) === id))
+    || (c && list.find((x) => String(x.itemCode || '').trim() === c))
+    || (n && list.find((x) => String(x.name || '').trim().toLowerCase() === n))
+    || null;
+};
+
+/** GRN table rows from PO lines (remaining qty). Code comes from the matched inventory item — PO lines rarely carry one. */
 const buildItemsFromPurchaseOrder = (po, invList = []) => {
   if (!po?.items?.length) return [makeEmptyItem()];
   const list = Array.isArray(invList) ? invList : [];
@@ -38,19 +49,12 @@ const buildItemsFromPurchaseOrder = (po, invList = []) => {
     const alreadyReceived = Number(it.receivedQuantity) || 0;
     const remainingQty = Math.max(0, Math.round((orderedQty - alreadyReceived) * 100) / 100);
     const code = String(it.productCode || it.itemCode || '').trim();
-    const desc = String(it.description || '').trim();
-    let matchedInv = null;
-    if (code) {
-      matchedInv = list.find((x) => String(x.itemCode || '').trim() === code || String(x.productCode || '').trim() === code);
-    }
-    if (!matchedInv && desc) {
-      matchedInv = list.find((x) => String(x.name || '').trim().toLowerCase() === desc.toLowerCase());
-    }
+    const matchedInv = matchInventoryItem(list, { inventoryItem: it.inventoryItem, code, name: it.description });
     return {
       poLineIndex: j,
-      inventoryItem: matchedInv?._id || it.inventoryItem || '',
-      productCode: it.productCode || '',
-      itemCode: it.productCode || '',
+      inventoryItem: matchedInv?._id || '',
+      productCode: code || matchedInv?.itemCode || '',
+      itemCode: code || matchedInv?.itemCode || '',
       itemName: it.description || '',
       unit: it.unit || '',
       quantity: remainingQty,
@@ -72,14 +76,14 @@ const buildItemsFromDeliveryChallan = (dcDoc, invList) => {
     const open = Math.round(((Number(it.quantity) || 0) - (Number(it.quantityReceived) || 0)) * 100) / 100;
     if (open <= 0) continue;
     const code = String(it.productCode || '').trim() || String(it.itemCode || '').trim();
-    const inv = code ? list.find((x) => String(x.itemCode || '').trim() === code) : null;
+    const inv = matchInventoryItem(list, { inventoryItem: it.inventoryItem, code, name: it.itemName });
     const plRaw = Number(it.poLineIndex);
     const poLineIndex = Number.isNaN(plRaw) ? undefined : plRaw;
     out.push({
       poLineIndex,
       inventoryItem: inv?._id || '',
-      productCode: code,
-      itemCode: String(it.itemCode || '').trim() || code,
+      productCode: code || inv?.itemCode || '',
+      itemCode: String(it.itemCode || '').trim() || code || inv?.itemCode || '',
       itemName: String(it.itemName || '').trim(),
       unit: String(it.unit || '').trim(),
       quantity: open,
@@ -133,6 +137,19 @@ const GoodsReceive = () => {
   const inventoryRef = useRef([]);
   useEffect(() => {
     inventoryRef.current = inventory;
+    if (!inventory.length) return;
+    setFormData((prev) => {
+      if (!prev?.items?.some((r) => !r.inventoryItem && (r.itemName || r.productCode))) return prev;
+      let changed = false;
+      const items = prev.items.map((r) => {
+        if (r.inventoryItem || !(r.itemName || r.productCode)) return r;
+        const inv = matchInventoryItem(inventory, { code: r.productCode || r.itemCode, name: r.itemName });
+        if (!inv) return r;
+        changed = true;
+        return { ...r, inventoryItem: inv._id, productCode: r.productCode || inv.itemCode, itemCode: r.itemCode || inv.itemCode, unit: r.unit || inv.unit };
+      });
+      return changed ? { ...prev, items } : prev;
+    });
   }, [inventory]);
   const [suppliers, setSuppliers] = useState([]);
   const [projects, setProjects] = useState([]);
@@ -308,7 +325,7 @@ const GoodsReceive = () => {
       serviceCharges: 0,
       packingCharges: 0,
       loadingCharges: 0,
-      items: buildItemsFromPurchaseOrder(po, inventory),
+      items: buildItemsFromPurchaseOrder(po, inventoryRef.current),
       project: '',
       notes: '',
       deliveryChallan: ''
@@ -461,6 +478,10 @@ const GoodsReceive = () => {
   const handleSubmit = async () => {
     if (!formData.project) {
       setError('Please select a project');
+      return;
+    }
+    if (!formData.store) {
+      setError('Please select the receiving store');
       return;
     }
     if (grnRequiresDeliveryChallan && !formData.deliveryChallan) {
@@ -819,7 +840,7 @@ const GoodsReceive = () => {
                           if (poId) {
                             try {
                               const res = await api.get(`/procurement/purchase-orders/${poId}`);
-                              if (res.data?.data) nextItems = buildItemsFromPurchaseOrder(res.data.data, inventory);
+                              if (res.data?.data) nextItems = buildItemsFromPurchaseOrder(res.data.data, inventoryRef.current);
                             } catch (_) { /* keep rows */ }
                           }
                         } else {
@@ -876,7 +897,8 @@ const GoodsReceive = () => {
               </TextField>
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth select label="Supplier" value={formData.supplier} onChange={(e) => {
+              <TextField fullWidth select label="Supplier" value={formData.supplier} disabled={Boolean(formData.purchaseOrder)}
+                helperText={formData.purchaseOrder ? 'From the purchase order' : undefined} onChange={(e) => {
                 const s = suppliers.find((x) => x._id === e.target.value);
                 setFormData({
                   ...formData,
@@ -895,20 +917,20 @@ const GoodsReceive = () => {
               <TextField fullWidth label="Date" type="date" value={formData.receiveDate} onChange={(e) => setFormData({ ...formData, receiveDate: e.target.value })} InputLabelProps={{ shrink: true }} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="Address" value={formData.supplierAddress} onChange={(e) => setFormData({ ...formData, supplierAddress: e.target.value })} placeholder="Supplier address" />
+              <TextField fullWidth label="Address" value={formData.supplierAddress} disabled={Boolean(formData.purchaseOrder)} onChange={(e) => setFormData({ ...formData, supplierAddress: e.target.value })} placeholder="Supplier address" />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="Currency" value={formData.currency} onChange={(e) => setFormData({ ...formData, currency: e.target.value })} />
+              <TextField fullWidth label="Currency" value={formData.currency} disabled={Boolean(formData.purchaseOrder)} onChange={(e) => setFormData({ ...formData, currency: e.target.value })} />
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField fullWidth label="Narration" value={formData.narration} onChange={(e) => setFormData({ ...formData, narration: e.target.value })} placeholder="e.g. Indent No., Material Received for..., End user..." multiline rows={2} />
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth label="P.O No." value={formData.poNumber} onChange={(e) => setFormData({ ...formData, poNumber: e.target.value })} />
+              <TextField fullWidth label="P.O No." value={formData.poNumber} disabled={Boolean(formData.purchaseOrder)} onChange={(e) => setFormData({ ...formData, poNumber: e.target.value })} />
               <TextField
-                fullWidth select label="Main Store" value={formData.store || ''} sx={{ mt: 1 }}
+                fullWidth select required label="Store *" value={formData.store || ''} sx={{ mt: 1 }}
                 onChange={(e) => setFormData({ ...formData, store: e.target.value })}
-                helperText="Select the receiving store"
+                helperText="Receiving store — stock is recorded per store + project"
               >
                 <MenuItem value=""><em>— Select Store —</em></MenuItem>
                 {mainStores.map(s => <MenuItem key={s._id} value={s._id}>{s.name} ({s.code})</MenuItem>)}
@@ -1034,7 +1056,8 @@ const GoodsReceive = () => {
                           </TableCell>
                           <TableCell>{index + 1}</TableCell>
                           <TableCell>
-                            <TextField size="small" fullWidth value={item.productCode ?? item.itemCode ?? d.itemCode ?? ''} onChange={(e) => updateItem(index, 'productCode', e.target.value)} placeholder="Product code" sx={{ minWidth: 110 }} />
+                            <TextField size="small" fullWidth value={item.productCode || item.itemCode || d.itemCode || ''} onChange={(e) => updateItem(index, 'productCode', e.target.value)}
+                              placeholder={item.itemName ? 'New item — code on save' : 'Product code'} sx={{ minWidth: 110 }} />
                           </TableCell>
                           <TableCell>
                             <TextField size="small" fullWidth value={item.itemName ?? d.itemName ?? ''} onChange={(e) => updateItem(index, 'itemName', e.target.value)} placeholder="Description" sx={{ minWidth: 140 }} />
@@ -1229,7 +1252,7 @@ const GoodsReceive = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => { setFormDialog({ open: false }); setAttachmentFiles([]); setGrnRequiresDeliveryChallan(false); setGrnDcStatusNote(''); setDeliveryChallanOptions([]); }}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.items.some((i) => (i.selected !== false) && (Number(i.quantity) || 0) > 0)}>
+          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.store || !formData.items.some((i) => (i.selected !== false) && (Number(i.quantity) || 0) > 0)}>
             Create GRN
           </Button>
         </DialogActions>

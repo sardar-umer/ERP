@@ -2403,7 +2403,8 @@ const sinLinesWithBalance = (sin, invoicedMap, invById) => {
   (sin.items || []).forEach((it) => {
     const itemId = String(it.inventoryItem?._id || it.inventoryItem);
     const row = byItem.get(itemId) || { inventoryItem: itemId, itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qtyIssued: 0 };
-    row.qtyIssued += Number(it.qtyIssued ?? it.quantity) || 0;
+    // Net of Store Return Notes — returned stock can't be billed
+    row.qtyIssued += (Number(it.qtyIssued ?? it.quantity) || 0) - (Number(it.qtyReturnedToStore) || 0);
     byItem.set(itemId, row);
   });
   const postedCost = new Map((sin.financePosting || [])

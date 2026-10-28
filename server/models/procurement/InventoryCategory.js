@@ -74,6 +74,11 @@ const inventoryCategorySchema = new mongoose.Schema(
       type: Boolean,
       default: true
     },
+    /** Used for items with no Finance Category (only one category is the default) */
+    isDefault: {
+      type: Boolean,
+      default: false
+    },
     createdBy: {
       type: mongoose.Schema.Types.ObjectId,
       ref: 'User'

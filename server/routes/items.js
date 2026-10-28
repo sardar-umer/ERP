@@ -40,6 +40,34 @@ async function ensureCategoryRootIfNoActiveItems(categoryPath, categoryLabel) {
   }
 }
 
+const objId = (v) => {
+  const id = String(v?._id || v || '');
+  return /^[a-f0-9]{24}$/i.test(id) ? id : null;
+};
+
+/** Finance Category for a new row in a path: the category row's, else the most common one among its items */
+async function financeCategoryForPath(categoryPath) {
+  const root = await ItemMaster.findOne({ categoryPath, isCategoryRoot: true, inventoryCategory: { $ne: null } }).select('inventoryCategory').lean();
+  if (root) return root.inventoryCategory;
+  const [top] = await ItemMaster.aggregate([
+    { $match: { categoryPath, inventoryCategory: { $ne: null } } },
+    { $group: { _id: '$inventoryCategory', n: { $sum: 1 } } },
+    { $sort: { n: -1 } },
+    { $limit: 1 }
+  ]);
+  return top?._id || null;
+}
+
+/** Keep stock cards on the same Finance Category as their catalog item */
+async function syncStockCardCategory(filter) {
+  const Inventory = require('../models/procurement/Inventory');
+  const rows = await ItemMaster.find({ ...filter, inventoryItem: { $ne: null }, inventoryCategory: { $ne: null } }).select('inventoryItem inventoryCategory').lean();
+  if (!rows.length) return;
+  await Inventory.bulkWrite(rows.map((r) => ({
+    updateOne: { filter: { _id: r.inventoryItem }, update: { $set: { inventoryCategory: r.inventoryCategory } } }
+  })));
+}
+
 function trimStr(v) {
   return v != null ? String(v).replace(/\s+/g, ' ').trim() : '';
 }
@@ -60,7 +88,8 @@ router.get(
   manageCatalog,
   asyncHandler(async (req, res) => {
     const items = await ItemMaster.find({})
-      .populate('accountId', 'accountNumber name')
+      .populate('inventoryCategory', 'name')
+      .populate('inventoryItem', 'quantity unit itemCode')
       .sort({ updatedAt: -1, categoryPath: 1, isCategoryRoot: -1, srNo: 1, name: 1 })
       .lean();
     res.json({ success: true, data: items });
@@ -107,7 +136,7 @@ router.post(
         srNo: 0,
         isActive: true,
         isCategoryRoot: true,
-        accountId: req.body.accountId || null
+        inventoryCategory: objId(req.body.inventoryCategory)
       });
       res.status(201).json({ success: true, data: doc });
     } catch (e) {
@@ -122,6 +151,56 @@ router.post(
   })
 );
 
+// GET /api/items/category-finance — each catalog category with its Finance Category (decides the accounts)
+router.get(
+  '/category-finance',
+  manageCatalog,
+  asyncHandler(async (req, res) => {
+    const rows = await ItemMaster.aggregate([
+      { $group: {
+        _id: '$categoryPath',
+        category: { $first: '$category' },
+        items: { $sum: { $cond: [{ $ne: ['$isCategoryRoot', true] }, 1, 0] } },
+        // $ifNull: rows created before these fields existed do not have them at all
+        stocked: { $sum: { $cond: [{ $ifNull: ['$inventoryItem', false] }, 1, 0] } },
+        financeCategories: { $addToSet: { $ifNull: ['$inventoryCategory', null] } }
+      } },
+      { $sort: { _id: 1 } }
+    ]);
+    const InventoryCategory = require('../models/procurement/InventoryCategory');
+    const names = new Map((await InventoryCategory.find({}).select('name').lean()).map((c) => [String(c._id), c.name]));
+    res.json({
+      success: true,
+      data: rows.map((r) => {
+        const set = r.financeCategories.filter(Boolean).map(String);
+        return {
+          categoryPath: r._id,
+          category: r.category,
+          items: r.items,
+          stocked: r.stocked,
+          inventoryCategory: set.length === 1 && r.financeCategories.every(Boolean) ? set[0] : null,
+          mixed: set.length > 1 || (set.length === 1 && !r.financeCategories.every(Boolean)),
+          financeCategoryNames: set.map((id) => names.get(id) || '?')
+        };
+      })
+    });
+  })
+);
+
+// PUT /api/items/category-finance { categoryPath, inventoryCategory } — set it for every item in the category
+router.put(
+  '/category-finance',
+  manageCatalog,
+  asyncHandler(async (req, res) => {
+    const categoryPath = trimStr(req.body.categoryPath);
+    if (!categoryPath) return res.status(400).json({ success: false, message: 'Category path is required' });
+    const inventoryCategory = objId(req.body.inventoryCategory);
+    const r = await ItemMaster.updateMany({ categoryPath }, { $set: { inventoryCategory } });
+    await syncStockCardCategory({ categoryPath });
+    res.json({ success: true, message: `Finance Category set for ${r.modifiedCount} catalog row(s) in ${categoryPath}` });
+  })
+);
+
 // GET /api/items?category=Bricks&q=brick&limit=50
 router.get(
   '/',
@@ -131,10 +210,14 @@ router.get(
 
     const query = { isActive: true, isCategoryRoot: { $ne: true } };
     if (category) query.category = category;
-    if (q) query.name = { $regex: q, $options: 'i' };
+    if (q) {
+      const rx = { $regex: String(q).replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), $options: 'i' };
+      query.$or = [{ name: rx }, { itemCode: rx }];
+    }
 
     const items = await ItemMaster.find(query)
-      .select('category categoryPath srNo name')
+      .select('category categoryPath srNo name itemCode unit inventoryItem')
+      .populate('inventoryItem', 'quantity unit itemCode')
       .sort({ categoryPath: 1, srNo: 1, name: 1 })
       .limit(lim)
       .lean();
@@ -182,7 +265,8 @@ router.post(
       srNo,
       isActive: true,
       isCategoryRoot: false,
-      accountId: req.body.accountId || null
+      unit: trimStr(req.body.unit),
+      inventoryCategory: objId(req.body.inventoryCategory) || await financeCategoryForPath(categoryPath)
     });
     await removeCategoryRootsForPath(categoryPath);
     res.status(201).json({ success: true, data: doc });
@@ -205,7 +289,9 @@ router.put(
     const nextPath = req.body.categoryPath !== undefined ? trimStr(req.body.categoryPath) : doc.categoryPath;
     let nextSr = req.body.srNo !== undefined ? parseInt(req.body.srNo, 10) : doc.srNo;
     const nextActive = req.body.isActive !== undefined ? !!req.body.isActive : doc.isActive;
-    const nextAccountId = req.body.accountId !== undefined ? (req.body.accountId || null) : doc.accountId;
+    const prevFinanceCategory = doc.inventoryCategory ? String(doc.inventoryCategory) : null;
+    const nextFinanceCategory = req.body.inventoryCategory !== undefined ? objId(req.body.inventoryCategory) : doc.inventoryCategory;
+    const nextUnit = req.body.unit !== undefined ? trimStr(req.body.unit) : doc.unit;
 
     if (!nextCategory) return res.status(400).json({ success: false, message: 'Category is required' });
     if (!nextPath) return res.status(400).json({ success: false, message: 'Category path is required' });
@@ -245,8 +331,21 @@ router.put(
     doc.categoryPath = nextPath;
     doc.srNo = nextSr;
     doc.isActive = nextActive;
-    doc.accountId = nextAccountId;
+    doc.inventoryCategory = nextFinanceCategory;
+    doc.unit = nextUnit;
     await doc.save();
+
+    // Category row: its Finance Category flows to the items that followed the old one (or had none)
+    const financeChanged = String(nextFinanceCategory || '') !== String(prevFinanceCategory || '');
+    if (doc.isCategoryRoot && financeChanged) {
+      await ItemMaster.updateMany(
+        { categoryPath: doc.categoryPath, isCategoryRoot: { $ne: true }, inventoryCategory: { $in: [null, prevFinanceCategory].filter((v, i) => i === 0 || v) } },
+        { $set: { inventoryCategory: nextFinanceCategory } }
+      );
+      await syncStockCardCategory({ categoryPath: doc.categoryPath });
+    } else if (financeChanged) {
+      await syncStockCardCategory({ _id: doc._id });
+    }
 
     if (!doc.isCategoryRoot) {
       const newPath = doc.categoryPath;

@@ -140,7 +140,14 @@ const goodsIssueSchema = new mongoose.Schema({
       required: true,
       min: 0
     },
+    /** Legacy typed field (never moved stock) — returns now go through Store Return Notes */
     qtyReturned: {
+      type: Number,
+      default: 0,
+      min: 0
+    },
+    /** Qty brought back to stock by Store Return Notes (kept by the SRN route, never typed) */
+    qtyReturnedToStore: {
       type: Number,
       default: 0,
       min: 0
@@ -230,9 +237,12 @@ const goodsIssueSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Draft', 'Issued'],
+    enum: ['Draft', 'Issued', 'Cancelled'],
     default: 'Issued'
-  }
+  },
+  cancelledAt: { type: Date },
+  cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  cancelReason: { type: String, trim: true, default: '' }
 }, {
   timestamps: true
 });
@@ -240,8 +250,8 @@ const goodsIssueSchema = new mongoose.Schema({
 // Pre-save: Generate SIN number (Store Issue Note) and issueNumber if not provided
 goodsIssueSchema.pre('save', async function(next) {
   if (!this.issueNumber) {
-    const count = await mongoose.model('GoodsIssue').countDocuments();
-    const sin = `SIN${String(count + 1).padStart(8, '0')}`;
+    const { nextDocumentNumber } = require('../../utils/documentSequence');
+    const sin = await nextDocumentNumber({ key: 'SIN', model: 'GoodsIssue', field: 'issueNumber', prefix: 'SIN', pad: 8 });
     this.sinNumber = sin;
     this.issueNumber = sin;
   }

@@ -1641,7 +1641,11 @@ function App() {
                     />
                     <Route
                       path="/procurement/store/inventory"
-                      element={<ProtectedRoute><Inventory /></ProtectedRoute>}
+                      element={<ProtectedRoute><Inventory key="inventory" /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/store/stock-check"
+                      element={<ProtectedRoute><Inventory key="stock-check" openStockCheck /></ProtectedRoute>}
                     />
                     <Route
                       path="/procurement/store/goods-receive"
@@ -1657,7 +1661,11 @@ function App() {
                     />
                     <Route
                       path="/procurement/store/goods-issue"
-                      element={<ProtectedRoute><GoodsIssue /></ProtectedRoute>}
+                      element={<ProtectedRoute><GoodsIssue key="sin" /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/store/store-returns"
+                      element={<ProtectedRoute><GoodsIssue key="srn" initialTab={1} /></ProtectedRoute>}
                     />
                     <Route
                       path="/procurement/store/cost-center"

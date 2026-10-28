@@ -46,7 +46,9 @@ import {
   createItemCategory,
   createItemMaster,
   updateItemMaster,
-  deactivateItemMaster
+  deactivateItemMaster,
+  fetchCategoryFinance,
+  setCategoryFinance
 } from '../../../services/itemMasterService';
 import api from '../../../services/api';
 
@@ -56,25 +58,41 @@ const StoreItemCatalog = () => {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'info' });
 
   const [categoryDialogOpen, setCategoryDialogOpen] = useState(false);
-  const [categoryForm, setCategoryForm] = useState({ category: '', accountId: null });
+  const [categoryForm, setCategoryForm] = useState({ category: '', financeCategory: null });
 
-  const [accounts, setAccounts] = useState([]);
-
+  // Finance Categories (Finance → Inventory Categories) — each one carries the inventory / GRNI / COGS accounts
+  const [financeCategories, setFinanceCategories] = useState([]);
   useEffect(() => {
-    const fetchSgcAccounts = async () => {
-      try {
-        const compRes = await api.get('/finance/companies', { params: { status: 'active' } });
-        const sgc = (compRes.data?.data || []).find(c => String(c.name).trim().toUpperCase() === 'SARDAR GROUP OF COMPANIES');
-        if (sgc) {
-          const accRes = await api.get('/finance/accounts', { params: { companyId: sgc._id, limit: 5000 } });
-          setAccounts(accRes.data?.data || []);
-        }
-      } catch (err) {
-        console.error('Failed to fetch SGC accounts', err);
-      }
-    };
-    fetchSgcAccounts();
+    api.get('/inventory-categories', { params: { isActive: 'true' } })
+      .then((res) => setFinanceCategories(Array.isArray(res.data?.data) ? res.data.data : []))
+      .catch(() => setFinanceCategories([]));
   }, []);
+
+  // Bulk "catalog category → Finance Category" mapping
+  const [financeMap, setFinanceMap] = useState({ open: false, loading: false, rows: [], search: '' });
+  const openFinanceMap = async () => {
+    setFinanceMap((m) => ({ ...m, open: true, loading: true }));
+    try {
+      const res = await fetchCategoryFinance();
+      setFinanceMap((m) => ({ ...m, loading: false, rows: res.data?.data || [] }));
+    } catch (err) {
+      setSnackbar({ open: true, message: err.response?.data?.message || 'Failed to load categories', severity: 'error' });
+      setFinanceMap((m) => ({ ...m, loading: false }));
+    }
+  };
+  const saveFinanceMap = async (row, inventoryCategory) => {
+    try {
+      await setCategoryFinance(row.categoryPath, inventoryCategory);
+      setFinanceMap((m) => ({
+        ...m,
+        rows: m.rows.map((r) => (r.categoryPath === row.categoryPath ? { ...r, inventoryCategory: inventoryCategory || null, mixed: false } : r))
+      }));
+      setSnackbar({ open: true, message: `${row.category}: Finance Category saved`, severity: 'success' });
+      load();
+    } catch (err) {
+      setSnackbar({ open: true, message: err.response?.data?.message || 'Failed to save', severity: 'error' });
+    }
+  };
 
   const [itemDialogOpen, setItemDialogOpen] = useState(false);
   const [editingId, setEditingId] = useState(null);
@@ -83,7 +101,7 @@ const StoreItemCatalog = () => {
     categoryPath: '',
     name: '',
     srNo: '',
-    accountId: null
+    financeCategory: null
   });
   const [saving, setSaving] = useState(false);
   const [exporting, setExporting] = useState(false);
@@ -130,7 +148,7 @@ const StoreItemCatalog = () => {
   }, [rows]);
 
   const openAddCategory = () => {
-    setCategoryForm({ category: '', accountId: null });
+    setCategoryForm({ category: '', financeCategory: null });
     setCategoryDialogOpen(true);
   };
 
@@ -142,7 +160,7 @@ const StoreItemCatalog = () => {
     }
     try {
       setSaving(true);
-      await createItemCategory(c, null, categoryForm.accountId ? categoryForm.accountId._id : null);
+      await createItemCategory(c, null, categoryForm.financeCategory?._id || null);
       setSnackbar({ open: true, message: 'Category created', severity: 'success' });
       setCategoryDialogOpen(false);
       setSearch('');
@@ -168,29 +186,28 @@ const StoreItemCatalog = () => {
       categoryPath: first,
       name: '',
       srNo: '',
-      accountId: null
+      financeCategory: null
     });
     setItemDialogOpen(true);
   };
 
   const sameId = (a, b) => String(a?._id || a || '') === String(b?._id || b || '');
 
-  const resolveAccountOption = (accountRef) => {
-    if (!accountRef) return null;
-    const id = accountRef._id || accountRef;
-    const fromList = accounts.find((a) => sameId(a._id, id));
+  const resolveFinanceOption = (ref) => {
+    if (!ref) return null;
+    const fromList = financeCategories.find((c) => sameId(c._id, ref));
     if (fromList) return fromList;
-    if (typeof accountRef === 'object' && accountRef._id) return accountRef;
-    return null;
+    return typeof ref === 'object' && ref._id ? ref : null;
   };
 
-  const accountAutocompleteProps = {
-    options: accounts,
-    getOptionLabel: (o) => {
-      if (!o || typeof o !== 'object') return '';
-      return o.accountNumber && o.name ? `${o.accountNumber} - ${o.name}` : (o.name || '');
-    },
+  const financeAutocompleteProps = {
+    options: financeCategories,
+    getOptionLabel: (o) => (o && typeof o === 'object' ? o.name || '' : ''),
     isOptionEqualToValue: (o, v) => sameId(o, v),
+    renderInput: (params) => (
+      <TextField {...params} label="Finance Category" margin="normal" size="small"
+        helperText="Decides the inventory / GRNI / COGS accounts. Blank = the category's (or the default) Finance Category." />
+    )
   };
 
   const openEdit = (row) => {
@@ -200,7 +217,7 @@ const StoreItemCatalog = () => {
       categoryPath: row.categoryPath || row.category || '',
       name: row.isCategoryRoot ? '' : row.name || '',
       srNo: row.srNo != null && row.srNo !== '' ? String(row.srNo) : '',
-      accountId: resolveAccountOption(row.accountId)
+      financeCategory: resolveFinanceOption(row.inventoryCategory)
     });
     setItemDialogOpen(true);
   };
@@ -215,9 +232,7 @@ const StoreItemCatalog = () => {
     }
     if (editingId) {
       const row = rows.find((r) => sameId(r._id, editingId));
-      const accountIdPayload = itemForm.accountId
-        ? (itemForm.accountId._id || itemForm.accountId)
-        : null;
+      const financePayload = itemForm.financeCategory?._id || null;
       if (row?.isCategoryRoot) {
         try {
           setSaving(true);
@@ -226,7 +241,7 @@ const StoreItemCatalog = () => {
             categoryPath,
             name: category,
             isActive: true,
-            accountId: accountIdPayload,
+            inventoryCategory: financePayload,
             srNo: Number.isFinite(Number(row.srNo)) ? Number(row.srNo) : 0
           });
           setSnackbar({ open: true, message: 'Category updated', severity: 'success' });
@@ -258,7 +273,7 @@ const StoreItemCatalog = () => {
           category,
           categoryPath,
           name,
-          accountId: accountIdPayload,
+          inventoryCategory: financePayload,
           srNo
         });
         setSnackbar({ open: true, message: 'Item updated', severity: 'success' });
@@ -286,7 +301,7 @@ const StoreItemCatalog = () => {
         category,
         categoryPath,
         name,
-        accountId: itemForm.accountId ? itemForm.accountId._id : null,
+        inventoryCategory: itemForm.financeCategory?._id || null,
         ...(itemForm.srNo?.trim() ? { srNo: parseInt(itemForm.srNo, 10) } : {})
       });
       setSnackbar({ open: true, message: 'Item created', severity: 'success' });
@@ -384,6 +399,7 @@ const StoreItemCatalog = () => {
         r.category,
         r.categoryPath,
         nameForSearch,
+        r.itemCode,
         r.srNo != null ? String(r.srNo) : ''
       ]
         .filter(Boolean)
@@ -416,10 +432,14 @@ const StoreItemCatalog = () => {
       const XLSX = await import('xlsx');
       const exportData = filteredRows.map((r) => ({
         'Sr #': r.isCategoryRoot ? '' : (r.srNo ?? ''),
+        'Item code': r.isCategoryRoot ? '' : (r.itemCode || ''),
         Type: r.isCategoryRoot ? 'Category' : 'Item',
         Category: r.category || '',
         'Category path': r.categoryPath || '',
         'Item name': r.isCategoryRoot ? '' : (r.name || ''),
+        'Finance category': r.inventoryCategory?.name || '',
+        Unit: r.unit || '',
+        'In stock': r.inventoryItem ? (r.inventoryItem.quantity ?? 0) : '',
         Status: r.isActive === false ? 'Inactive' : 'Active'
       }));
       const ws = XLSX.utils.json_to_sheet(exportData);
@@ -451,8 +471,9 @@ const StoreItemCatalog = () => {
       </Box>
 
       <Alert severity="info" sx={{ mb: 2 }}>
-        Categories and items here are the same master list used in{' '}
-        <strong>General → Indents → Create Indent</strong> (category dropdown and item search). Add a category first, then add items under it.
+        This is the <strong>one item master</strong>: every item has one code, used on indents, purchase orders, GRNs and
+        Store Issue Notes. An item gets a stock card in Inventory automatically on its first GRN (or via Inventory → Add Item).
+        Items first seen on a GRN that were not here are added under <strong>Material › Uncatalogued</strong> — move them to the right category.
       </Alert>
 
       <Card>
@@ -462,6 +483,9 @@ const StoreItemCatalog = () => {
           </Button>
           <Button variant="outlined" startIcon={<AddIcon />} onClick={openAddItem} disabled={loading || categoryOptions.length === 0}>
             Add item
+          </Button>
+          <Button variant="outlined" onClick={openFinanceMap} disabled={loading}>
+            Finance categories
           </Button>
           <Button
             variant="outlined"
@@ -505,10 +529,13 @@ const StoreItemCatalog = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell align="right"><strong>Sr #</strong></TableCell>
+                    <TableCell><strong>Item code</strong></TableCell>
                     <TableCell><strong>Type</strong></TableCell>
                     <TableCell><strong>Category</strong></TableCell>
                     <TableCell><strong>Category path</strong></TableCell>
                     <TableCell><strong>Item name</strong></TableCell>
+                    <TableCell><strong>Finance category</strong></TableCell>
+                    <TableCell align="right"><strong>In stock</strong></TableCell>
                     <TableCell><strong>Status</strong></TableCell>
                     <TableCell align="right"><strong>Actions</strong></TableCell>
                   </TableRow>
@@ -516,13 +543,13 @@ const StoreItemCatalog = () => {
                 <TableBody>
                   {sortedRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={10}>
                         <Typography color="text.secondary">No catalog rows yet. Add a category to begin.</Typography>
                       </TableCell>
                     </TableRow>
                   ) : filteredRows.length === 0 ? (
                     <TableRow>
-                      <TableCell colSpan={7}>
+                      <TableCell colSpan={10}>
                         <Typography color="text.secondary">
                           No rows match &quot;{searchDebounced.trim()}&quot;. Try another term — search covers the full catalog, not only this page.
                         </Typography>
@@ -532,6 +559,7 @@ const StoreItemCatalog = () => {
                     pagedRows.map((r) => (
                       <TableRow key={r._id} hover>
                         <TableCell align="right">{r.isCategoryRoot ? '—' : r.srNo}</TableCell>
+                        <TableCell sx={{ fontFamily: 'monospace', whiteSpace: 'nowrap' }}>{r.isCategoryRoot ? '—' : (r.itemCode || '—')}</TableCell>
                         <TableCell>
                           {r.isCategoryRoot ? (
                             <Chip size="small" label="Category" color="primary" variant="outlined" />
@@ -543,6 +571,14 @@ const StoreItemCatalog = () => {
                         <TableCell sx={{ maxWidth: 220, wordBreak: 'break-word' }}>{r.categoryPath}</TableCell>
                         <TableCell sx={{ maxWidth: 280, wordBreak: 'break-word' }}>
                           {r.isCategoryRoot ? '—' : r.name}
+                        </TableCell>
+                        <TableCell>
+                          {r.inventoryCategory?.name || <Typography component="span" variant="caption" color="text.secondary">default</Typography>}
+                        </TableCell>
+                        <TableCell align="right">
+                          {r.isCategoryRoot ? '—' : r.inventoryItem
+                            ? `${r.inventoryItem.quantity ?? 0} ${r.inventoryItem.unit || r.unit || ''}`
+                            : <Typography component="span" variant="caption" color="text.secondary">no stock card</Typography>}
                         </TableCell>
                         <TableCell>
                           <Chip
@@ -606,10 +642,9 @@ const StoreItemCatalog = () => {
             placeholder="e.g. Bricks, Cement, Electrical"
           />
           <Autocomplete
-            {...accountAutocompleteProps}
-            value={categoryForm.accountId}
-            onChange={(e, v) => setCategoryForm({ ...categoryForm, accountId: v })}
-            renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
+            {...financeAutocompleteProps}
+            value={categoryForm.financeCategory}
+            onChange={(e, v) => setCategoryForm({ ...categoryForm, financeCategory: v })}
           />
         </DialogContent>
         <DialogActions>
@@ -656,10 +691,9 @@ const StoreItemCatalog = () => {
                 onChange={(e) => setItemForm((f) => ({ ...f, categoryPath: e.target.value }))}
               />
               <Autocomplete
-                {...accountAutocompleteProps}
-                value={itemForm.accountId}
-                onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
-                renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
+                {...financeAutocompleteProps}
+                value={itemForm.financeCategory}
+                onChange={(e, v) => setItemForm((f) => ({ ...f, financeCategory: v }))}
               />
             </>
           ) : editingId ? (
@@ -698,10 +732,9 @@ const StoreItemCatalog = () => {
                 onChange={(e) => setItemForm((f) => ({ ...f, srNo: e.target.value }))}
               />
               <Autocomplete
-                {...accountAutocompleteProps}
-                value={itemForm.accountId}
-                onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
-                renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
+                {...financeAutocompleteProps}
+                value={itemForm.financeCategory}
+                onChange={(e, v) => setItemForm((f) => ({ ...f, financeCategory: v }))}
               />
             </>
           ) : (
@@ -751,10 +784,9 @@ const StoreItemCatalog = () => {
                 placeholder="Auto if empty"
               />
               <Autocomplete
-                {...accountAutocompleteProps}
-                value={itemForm.accountId}
-                onChange={(e, v) => setItemForm((f) => ({ ...f, accountId: v }))}
-                renderInput={(params) => <TextField {...params} label="Chart of Account (SGC)" margin="normal" size="small" />}
+                {...financeAutocompleteProps}
+                value={itemForm.financeCategory}
+                onChange={(e, v) => setItemForm((f) => ({ ...f, financeCategory: v }))}
               />
             </>
           )}
@@ -772,6 +804,64 @@ const StoreItemCatalog = () => {
           <Button variant="contained" onClick={handleSaveItem} disabled={saving}>
             {saving ? <CircularProgress size={22} /> : 'Save'}
           </Button>
+        </DialogActions>
+      </Dialog>
+
+      <Dialog open={financeMap.open} onClose={() => setFinanceMap((m) => ({ ...m, open: false }))} maxWidth="md" fullWidth>
+        <DialogTitle>Finance categories</DialogTitle>
+        <DialogContent dividers>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Pick a <strong>Finance Category</strong> for each catalog category once. Its accounts (Inventory, GRNI, COGS) are then
+            used for every item in that category — no accounts on individual items. Accounts are set in
+            <strong> Finance → Inventory Categories</strong>. Blank = the default Finance Category.
+          </Alert>
+          <TextField
+            size="small" fullWidth placeholder="Filter categories…" sx={{ mb: 1 }}
+            value={financeMap.search} onChange={(e) => setFinanceMap((m) => ({ ...m, search: e.target.value }))}
+          />
+          {financeMap.loading ? (
+            <Box sx={{ py: 4, textAlign: 'center' }}><CircularProgress size={28} /></Box>
+          ) : (
+            <TableContainer sx={{ maxHeight: 480 }}>
+              <Table size="small" stickyHeader>
+                <TableHead>
+                  <TableRow>
+                    <TableCell><strong>Catalog category</strong></TableCell>
+                    <TableCell align="right"><strong>Items</strong></TableCell>
+                    <TableCell align="right"><strong>Stocked</strong></TableCell>
+                    <TableCell sx={{ minWidth: 220 }}><strong>Finance category</strong></TableCell>
+                  </TableRow>
+                </TableHead>
+                <TableBody>
+                  {financeMap.rows
+                    .filter((r) => !financeMap.search.trim() || r.categoryPath.toLowerCase().includes(financeMap.search.trim().toLowerCase()))
+                    .map((r) => (
+                      <TableRow key={r.categoryPath} hover>
+                        <TableCell sx={{ fontSize: 13 }}>{r.categoryPath}</TableCell>
+                        <TableCell align="right">{r.items}</TableCell>
+                        <TableCell align="right">{r.stocked || '—'}</TableCell>
+                        <TableCell>
+                          <Select
+                            size="small" fullWidth displayEmpty
+                            value={r.inventoryCategory || ''}
+                            onChange={(e) => saveFinanceMap(r, e.target.value)}
+                            renderValue={(v) => (v
+                              ? financeCategories.find((c) => sameId(c._id, v))?.name || '—'
+                              : (r.mixed ? `Mixed: ${r.financeCategoryNames.join(', ')}` : 'Default'))}
+                          >
+                            <MenuItem value=""><em>Default</em></MenuItem>
+                            {financeCategories.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}{c.isDefault ? ' (default)' : ''}</MenuItem>)}
+                          </Select>
+                        </TableCell>
+                      </TableRow>
+                    ))}
+                </TableBody>
+              </Table>
+            </TableContainer>
+          )}
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setFinanceMap((m) => ({ ...m, open: false }))}>Done</Button>
         </DialogActions>
       </Dialog>
 
