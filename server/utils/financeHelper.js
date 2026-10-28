@@ -1019,6 +1019,14 @@ const FinanceHelper = {
               let accRef = row.account;
               if (!accRef && row.accountNumber) {
                 accRef = (await A.resolve(String(row.accountNumber)))?._id;
+                if (!accRef) {
+                  accRef = (await ensureSystemAccount(companyId, String(row.accountNumber), { createdBy }))?._id;
+                }
+              }
+              // Never drop a debit line — fall back to the bill's default expense account
+              // so DR total still equals the AP credit.
+              if (!accRef && debitAccount) {
+                accRef = debitAccount._id;
               }
               if (!accRef) continue;
               journalLines.push({
@@ -1032,6 +1040,21 @@ const FinanceHelper = {
             if (journalLines.length === 0) {
               useCustomDebits = false;
             } else {
+              const debitSum = journalLines.reduce((s, l) => s + (Number(l.debit) || 0), 0);
+              if (Math.abs(debitSum - creditAmount) > 0.01 && debitAccount) {
+                const gap = Math.round((creditAmount - debitSum) * 100) / 100;
+                if (gap > 0) {
+                  journalLines.push({
+                    account: debitAccount._id,
+                    description: `Expense — ${billNumber} (balance)`,
+                    debit: gap,
+                    department
+                  });
+                } else if (journalLines.length > 0) {
+                  journalLines[journalLines.length - 1].debit =
+                    Math.round((journalLines[journalLines.length - 1].debit + gap) * 100) / 100;
+                }
+              }
               journalLines.push({
                 account: apAccount._id,
                 description: `Payable to ${vendorName}`,

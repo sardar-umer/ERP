@@ -103,16 +103,18 @@ const getUtilityBillPostAmount = (bill) => {
 
 const buildExpenseJournalLines = (apLineItems) => {
   if (!Array.isArray(apLineItems) || !apLineItems.length) return null;
+  // Every line must carry a debit account. Missing ones fall back to 6200 so DR total
+  // still matches the AP credit (partial expenseAccount on bill lines used to skip those
+  // debits and leave the journal unbalanced — e.g. The Tenacious OTH722774 / OTH027567).
   const rows = apLineItems
     .filter((li) => li.unitPrice > 0)
     .map((li) => ({
       account: li.expenseAccount || null,
-      accountNumber: li.expenseAccountNumber || null,
+      accountNumber: String(li.expenseAccountNumber || '').trim() || UTILITY_EXPENSE_ACCOUNT,
       debit: Math.round((li.quantity * li.unitPrice) * 100) / 100,
       description: li.description
     }));
-  const hasAccount = rows.some((r) => r.account || r.accountNumber);
-  return hasAccount ? rows : null;
+  return rows.length ? rows : null;
 };
 
 const buildUtilityBillApNotes = (bill) => {
