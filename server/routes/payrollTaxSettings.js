@@ -94,6 +94,7 @@ router.get(
         allowanceLabels: {
           conveyance: 'Conveyance',
           food: 'Food',
+          mobile: 'Mobile',
           vehicle: 'Vehicle',
           fuel: 'Fuel',
           medical: 'Medical',

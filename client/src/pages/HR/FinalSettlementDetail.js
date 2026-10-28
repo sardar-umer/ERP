@@ -490,6 +490,10 @@ const FinalSettlementDetail = () => {
                       <TableCell align="right">{formattedEarnings.foodAllowance}</TableCell>
                     </TableRow>
                     <TableRow>
+                      <TableCell>Mobile Allowance</TableCell>
+                      <TableCell align="right">{formattedEarnings.mobileAllowance}</TableCell>
+                    </TableRow>
+                    <TableRow>
                       <TableCell>Vehicle Allowance</TableCell>
                       <TableCell align="right">{formattedEarnings.vehicleAllowance}</TableCell>
                     </TableRow>

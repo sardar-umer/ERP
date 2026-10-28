@@ -64,6 +64,7 @@ export const buildPayslipPreviewData = ({
     medicalAllowance: payroll?.medicalAllowance || 0,
     conveyanceAllowance: payroll?.allowances?.conveyance?.amount || 0,
     foodAllowance: payroll?.allowances?.food?.amount || 0,
+    mobileAllowance: payroll?.allowances?.mobile?.amount || 0,
     vehicleAllowance: vehicleAllowanceAmount(payroll?.allowances),
     fuelAllowance: fuelAllowanceAmount(payroll?.allowances),
     medicalFromAllowances: payroll?.allowances?.medical?.amount || 0,
@@ -152,6 +153,7 @@ export const buildPayslipCreatePayload = ({ employee, payroll, notes }) => {
       otherAllowances:
         earnings.otherAllowances +
         earnings.foodAllowance +
+        (earnings.mobileAllowance || 0) +
         earnings.vehicleAllowance +
         earnings.fuelAllowance +
         earnings.medicalFromAllowances +
@@ -212,6 +214,7 @@ export const previewToPayslipPdfPayload = (preview = {}) => {
       fuelAllowance: earnings?.fuelAllowance || 0,
       vehicleFuelAllowance: 0,
       foodAllowance: earnings?.foodAllowance || 0,
+      mobileAllowance: earnings?.mobileAllowance || 0,
       specialAllowance: earnings?.specialAllowance || 0,
       otherAllowances,
       overtime: earnings?.overtime || 0,

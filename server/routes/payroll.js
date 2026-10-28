@@ -483,6 +483,9 @@ async function generatePayslipPDF(payslip, res) {
     if (payslip.earnings.foodAllowance > 0) {
       earnings.push(['Food Allowance', payslip.earnings.foodAllowance]);
     }
+    if (payslip.earnings.mobileAllowance > 0) {
+      earnings.push(['Mobile Allowance', payslip.earnings.mobileAllowance]);
+    }
     if (payslip.earnings.specialAllowance > 0) {
       earnings.push(['Special Allowance', payslip.earnings.specialAllowance]);
     }
@@ -2474,6 +2477,7 @@ router.put('/:id', [
   console.log('💰 Additional Allowances Calculation:');
   console.log('   Conveyance:', payroll.allowances?.conveyance?.isActive ? payroll.allowances.conveyance.amount : 0);
   console.log('   Food:', payroll.allowances?.food?.isActive ? payroll.allowances.food.amount : 0);
+  console.log('   Mobile:', payroll.allowances?.mobile?.isActive ? payroll.allowances.mobile.amount : 0);
   console.log('   Vehicle:', payroll.allowances?.vehicle?.isActive ? payroll.allowances.vehicle.amount : 0);
   console.log('   Fuel:', payroll.allowances?.fuel?.isActive ? payroll.allowances.fuel.amount : 0);
   console.log('   Special:', payroll.allowances?.special?.isActive ? payroll.allowances.special.amount : 0);
@@ -3754,6 +3758,7 @@ router.post('/:id/generate-payslip',
         fuelAllowance: fuelAllowanceAmount(payroll.allowances),
         vehicleFuelAllowance: vehicleFuelTotal(payroll.allowances),
         foodAllowance: payroll.allowances?.food?.amount || 0,
+        mobileAllowance: payroll.allowances?.mobile?.amount || 0,
         specialAllowance: payroll.allowances?.special?.amount || 0,
         otherAllowances: payroll.allowances?.other?.amount || 0,
 
@@ -3767,6 +3772,7 @@ router.post('/:id/generate-payslip',
           fuelAllowance: fuelAllowanceAmount(payroll.allowances),
           vehicleFuelAllowance: vehicleFuelTotal(payroll.allowances),
           foodAllowance: payroll.allowances?.food?.amount || 0,
+          mobileAllowance: payroll.allowances?.mobile?.amount || 0,
           specialAllowance: payroll.allowances?.special?.amount || 0,
           otherAllowances: payroll.allowances?.other?.amount || 0,
           overtime: payroll.overtimeAmount || 0,

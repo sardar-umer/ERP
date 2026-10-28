@@ -1275,6 +1275,11 @@ const EmployeeView = () => {
                   Food Allowance: {formatPKR(employee.allowances.food.amount || 0)}
                 </Typography>
               )}
+              {employee.allowances?.mobile?.isActive && (
+                <Typography variant="body2" color="success.main">
+                  Mobile Allowance: {formatPKR(employee.allowances.mobile.amount || 0)}
+                </Typography>
+              )}
               {employee.allowances?.conveyance?.isActive && (
                 <Typography variant="body2" color="success.main">
                   Conveyance: {formatPKR(employee.allowances.conveyance.amount || 0)}

@@ -114,6 +114,7 @@ const PayslipReviewModal = ({
                     ['Medical Allowance', earnings?.medicalAllowance],
                     ['Conveyance Allowance', earnings?.conveyanceAllowance],
                     ['Food Allowance', earnings?.foodAllowance],
+                    ['Mobile Allowance', earnings?.mobileAllowance],
                     ['Vehicle Allowance', earnings?.vehicleAllowance],
                     ['Fuel Allowance', earnings?.fuelAllowance],
                     ['Medical Allowance (from allowances)', earnings?.medicalFromAllowances],

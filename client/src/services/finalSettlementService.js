@@ -260,6 +260,7 @@ class FinalSettlementService {
       (Number(earnings.medicalAllowance) || 0) +
       (Number(earnings.conveyanceAllowance) || 0) +
       (Number(earnings.foodAllowance) || 0) +
+      (Number(earnings.mobileAllowance) || 0) +
       (Number(earnings.vehicleAllowance) || 0) +
       (Number(earnings.fuelAllowance) || 0) +
       (Number(earnings.specialAllowance) || 0) +
@@ -279,6 +280,7 @@ class FinalSettlementService {
       medicalAllowance: formatPKR(earnings.medicalAllowance || 0),
       conveyanceAllowance: formatPKR(earnings.conveyanceAllowance || 0),
       foodAllowance: formatPKR(earnings.foodAllowance || 0),
+      mobileAllowance: formatPKR(earnings.mobileAllowance || 0),
       vehicleAllowance: formatPKR(earnings.vehicleAllowance || 0),
       fuelAllowance: formatPKR(earnings.fuelAllowance || 0),
       specialAllowance: formatPKR(earnings.specialAllowance || 0),

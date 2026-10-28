@@ -30,6 +30,7 @@ import api from '../../services/api';
 const DEFAULT_POLICIES = () => ({
   conveyance: { mode: 'taxable', exemptPercent: 0 },
   food: { mode: 'taxable', exemptPercent: 0 },
+  mobile: { mode: 'taxable', exemptPercent: 0 },
   vehicle: { mode: 'taxable', exemptPercent: 0 },
   fuel: { mode: 'taxable', exemptPercent: 0 },
   medical: { mode: 'taxable', exemptPercent: 0 },

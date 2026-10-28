@@ -82,6 +82,9 @@ class PayrollService {
       if (allowanceUpdates.food !== undefined) {
         payroll.allowances.food = allowanceUpdates.food;
       }
+      if (allowanceUpdates.mobile !== undefined) {
+        payroll.allowances.mobile = allowanceUpdates.mobile;
+      }
       if (allowanceUpdates.vehicle !== undefined) {
         payroll.allowances.vehicle = allowanceUpdates.vehicle;
       }
@@ -146,6 +149,18 @@ class PayrollService {
           },
           isOverridden: payroll.allowances.food.isActive !== (employeeAllowances.food?.isActive || false) ||
                        payroll.allowances.food.amount !== (employeeAllowances.food?.amount || 0)
+        },
+        mobile: {
+          employeeMaster: {
+            isActive: employeeAllowances.mobile?.isActive || false,
+            amount: employeeAllowances.mobile?.amount || 0
+          },
+          monthlyOverride: {
+            isActive: payroll.allowances.mobile?.isActive || false,
+            amount: payroll.allowances.mobile?.amount || 0
+          },
+          isOverridden: (payroll.allowances.mobile?.isActive || false) !== (employeeAllowances.mobile?.isActive || false) ||
+                       (payroll.allowances.mobile?.amount || 0) !== (employeeAllowances.mobile?.amount || 0)
         },
         vehicle: {
           employeeMaster: {

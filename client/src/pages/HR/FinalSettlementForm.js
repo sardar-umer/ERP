@@ -106,6 +106,7 @@ const FinalSettlementForm = () => {
       parseAmount(e.medicalAllowance) +
       parseAmount(e.transportAllowance) +
       parseAmount(e.foodAllowance) +
+      parseAmount(e.mobileAllowance) +
       parseAmount(e.vehicleAllowance) +
       parseAmount(e.fuelAllowance) +
       parseAmount(e.specialAllowance) +
@@ -162,6 +163,7 @@ const FinalSettlementForm = () => {
       medicalAllowance: parseAmount(e.medicalAllowance),
       conveyanceAllowance: parseAmount(e.transportAllowance) || parseAmount(e.conveyanceAllowance),
       foodAllowance: parseAmount(e.foodAllowance),
+      mobileAllowance: parseAmount(e.mobileAllowance),
       vehicleAllowance: parseAmount(e.vehicleAllowance),
       fuelAllowance: parseAmount(e.fuelAllowance),
       specialAllowance: parseAmount(e.specialAllowance),
@@ -290,6 +292,7 @@ const FinalSettlementForm = () => {
         medicalAllowance: 0,
         transportAllowance: 0,
         foodAllowance: 0,
+        mobileAllowance: 0,
         vehicleAllowance: 0,
         fuelAllowance: 0,
         specialAllowance: 0,
@@ -319,6 +322,7 @@ const FinalSettlementForm = () => {
         medicalAllowance: 0,
         transportAllowance: 0,
         foodAllowance: 0,
+        mobileAllowance: 0,
         vehicleAllowance: 0,
         fuelAllowance: 0,
         specialAllowance: 0,
@@ -467,6 +471,7 @@ const FinalSettlementForm = () => {
       const medicalAllowance = getAllow('medical');
       const houseRentAllowance = getAllow('houseRent');
       const foodAllowance = getAllow('food');
+      const mobileAllowance = getAllow('mobile');
       const vehicleAllowance = getAllow('vehicle');
       const fuelAllowance = getAllow('fuel');
       const specialAllowance = getAllow('special');
@@ -476,7 +481,7 @@ const FinalSettlementForm = () => {
       const basicSalary = Math.round(
         Number(employee.salary?.basic) > 0
           ? employee.salary.basic
-          : Math.max(0, grossSalary - medicalAllowance - houseRentAllowance - foodAllowance - vehicleAllowance - fuelAllowance - specialAllowance - otherAllowances - transportAllowance)
+          : Math.max(0, grossSalary - medicalAllowance - houseRentAllowance - foodAllowance - mobileAllowance - vehicleAllowance - fuelAllowance - specialAllowance - otherAllowances - transportAllowance)
       );
 
       // Calculate daily rate from calendar days in last-working / settlement month
@@ -517,6 +522,7 @@ const FinalSettlementForm = () => {
           medicalAllowance,
           transportAllowance,
           foodAllowance,
+          mobileAllowance,
           vehicleAllowance,
           fuelAllowance,
           specialAllowance,
@@ -602,6 +608,7 @@ const FinalSettlementForm = () => {
           medicalAllowance: earnings.medicalAllowance || 0,
           transportAllowance: earnings.conveyanceAllowance || earnings.transportAllowance || 0,
           foodAllowance: earnings.foodAllowance || 0,
+          mobileAllowance: earnings.mobileAllowance || 0,
           vehicleAllowance: earnings.vehicleAllowance || 0,
           fuelAllowance: earnings.fuelAllowance || 0,
           specialAllowance: earnings.specialAllowance || 0,
@@ -775,6 +782,7 @@ const FinalSettlementForm = () => {
     const medicalAllowance = getAllow('medical');
     const houseRentAllowance = getAllow('houseRent');
     const foodAllowance = getAllow('food');
+      const mobileAllowance = getAllow('mobile');
     const vehicleAllowance = getAllow('vehicle');
     const fuelAllowance = getAllow('fuel');
     const specialAllowance = getAllow('special');
@@ -789,6 +797,7 @@ const FinalSettlementForm = () => {
           medicalAllowance -
           houseRentAllowance -
           foodAllowance -
+          mobileAllowance -
           vehicleAllowance -
           fuelAllowance -
           specialAllowance -
@@ -825,6 +834,7 @@ const FinalSettlementForm = () => {
         houseRent: prorate(houseRentAllowance),
         transportAllowance: prorate(transportAllowance),
         foodAllowance: prorate(foodAllowance),
+        mobileAllowance: prorate(mobileAllowance),
         vehicleAllowance: prorate(vehicleAllowance),
         fuelAllowance: prorate(fuelAllowance),
         specialAllowance: prorate(specialAllowance),
@@ -846,6 +856,7 @@ const FinalSettlementForm = () => {
         medicalAllowance: shortfallOf(medicalAllowance),
         transportAllowance: shortfallOf(transportAllowance),
         foodAllowance: shortfallOf(foodAllowance),
+        mobileAllowance: shortfallOf(mobileAllowance),
         vehicleAllowance: shortfallOf(vehicleAllowance),
         fuelAllowance: shortfallOf(fuelAllowance),
         specialAllowance: shortfallOf(specialAllowance),
@@ -1179,6 +1190,7 @@ const FinalSettlementForm = () => {
                               {[
                                 formik.values.shortfallBreakdown.basicSalary > 0 && `Basic ${formatPKR(formik.values.shortfallBreakdown.basicSalary)}`,
                                 formik.values.shortfallBreakdown.foodAllowance > 0 && `Food ${formatPKR(formik.values.shortfallBreakdown.foodAllowance)}`,
+                                formik.values.shortfallBreakdown.mobileAllowance > 0 && `Mobile ${formatPKR(formik.values.shortfallBreakdown.mobileAllowance)}`,
                                 formik.values.shortfallBreakdown.houseRent > 0 && `HRA ${formatPKR(formik.values.shortfallBreakdown.houseRent)}`,
                                 formik.values.shortfallBreakdown.medicalAllowance > 0 && `Medical ${formatPKR(formik.values.shortfallBreakdown.medicalAllowance)}`,
                                 formik.values.shortfallBreakdown.transportAllowance > 0 && `Transport ${formatPKR(formik.values.shortfallBreakdown.transportAllowance)}`,
@@ -1259,6 +1271,18 @@ const FinalSettlementForm = () => {
                     name="earnings.foodAllowance"
                     label="Food Allowance"
                     value={formik.values.earnings.foodAllowance}
+                    onChange={formik.handleChange}
+                    InputProps={amountInputProps}
+                  />
+                </Grid>
+
+                <Grid item xs={12} md={6}>
+                  <TextField
+                    fullWidth
+                    type="number"
+                    name="earnings.mobileAllowance"
+                    label="Mobile Allowance"
+                    value={formik.values.earnings.mobileAllowance}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />

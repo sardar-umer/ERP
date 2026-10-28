@@ -248,6 +248,10 @@ const EmployeeForm = () => {
         isActive: Yup.boolean(),
         amount: Yup.number().min(0, 'Food allowance must be positive')
       }),
+      mobile: Yup.object({
+        isActive: Yup.boolean(),
+        amount: Yup.number().min(0, 'Mobile allowance must be positive')
+      }),
       vehicle: Yup.object({
         isActive: Yup.boolean(),
         amount: Yup.number().min(0, 'Vehicle allowance must be positive')
@@ -753,6 +757,10 @@ const EmployeeForm = () => {
           food: {
             isActive: employeeData.allowances?.food?.isActive || false,
             amount: employeeData.allowances?.food?.amount || 0
+          },
+          mobile: {
+            isActive: employeeData.allowances?.mobile?.isActive || false,
+            amount: employeeData.allowances?.mobile?.amount || 0
           },
           medical: {
             isActive: employeeData.allowances?.medical?.isActive || false,
@@ -3956,6 +3964,37 @@ const EmployeeForm = () => {
               </Grid>
             )}
             
+            {/* Mobile Allowance */}
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={formik.values.allowances?.mobile?.isActive || false}
+                      onChange={(e) => formik.setFieldValue('allowances.mobile.isActive', e.target.checked)}
+                      name="allowances.mobile.isActive"
+                    />
+                  }
+                  label="Mobile Allowance"
+                />
+              </FormControl>
+            </Grid>
+            {formik.values.allowances?.mobile?.isActive && (
+              <Grid item xs={12} md={6}>
+                <TextField
+                  fullWidth
+                  name="allowances.mobile.amount"
+                  label="Mobile Allowance Amount"
+                  type="number"
+                  value={formik.values.allowances?.mobile?.amount || ''}
+                  onChange={formik.handleChange}
+                  InputProps={{
+                    startAdornment: <span style={{ marginRight: 8 }}>PKR</span>
+                  }}
+                />
+              </Grid>
+            )}
+            
             {/* Vehicle Allowance */}
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
@@ -4404,6 +4443,11 @@ const EmployeeForm = () => {
                   {formik.values.allowances?.food?.isActive && (
                     <Typography variant="body2" color="success.main">
                       Food Allowance: {formatPKR(formik.values.allowances.food.amount || 0)}
+                    </Typography>
+                  )}
+                  {formik.values.allowances?.mobile?.isActive && (
+                    <Typography variant="body2" color="success.main">
+                      Mobile Allowance: {formatPKR(formik.values.allowances.mobile.amount || 0)}
                     </Typography>
                   )}
                   {formik.values.allowances?.conveyance?.isActive && (

@@ -226,6 +226,12 @@ function calculateTaxableIncomeCorrected(salary) {
     } else if (salary.allowances.food?.isActive) {
       totalGrossAmount += salary.allowances.food.amount || 0;
     }
+
+    if (typeof salary.allowances.mobile === 'number') {
+      totalGrossAmount += salary.allowances.mobile;
+    } else if (salary.allowances.mobile?.isActive) {
+      totalGrossAmount += salary.allowances.mobile.amount || 0;
+    }
     
     totalGrossAmount += vehicleFuelTotal(salary.allowances);
     

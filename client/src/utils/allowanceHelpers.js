@@ -56,6 +56,7 @@ export const buildAllowancesPayload = (src) => {
   return {
     conveyance: parse(src.conveyance),
     food: parse(src.food),
+    mobile: parse(src.mobile),
     vehicle: parse(src.vehicle),
     fuel: parse(src.fuel),
     vehicleFuel: { isActive: false, amount: 0 },
@@ -69,6 +70,7 @@ export const buildAllowancesPayload = (src) => {
 export const defaultAllowanceFields = () => ({
   conveyance: { isActive: false, amount: 0 },
   food: { isActive: false, amount: 0 },
+  mobile: { isActive: false, amount: 0 },
   vehicle: { isActive: false, amount: 0 },
   fuel: { isActive: false, amount: 0 },
   medical: { isActive: false, amount: 0 },

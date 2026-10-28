@@ -23,6 +23,7 @@ const earningRows = (earnings = {}) =>
     ['Medical Allowance', earnings.medicalAllowance],
     ['Conveyance', earnings.conveyanceAllowance],
     ['Food Allowance', earnings.foodAllowance],
+    ['Mobile Allowance', earnings.mobileAllowance],
     ['Vehicle Allowance', earnings.vehicleAllowance],
     ['Fuel Allowance', earnings.fuelAllowance],
     ['Special Allowance', earnings.specialAllowance],

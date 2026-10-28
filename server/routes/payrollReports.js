@@ -67,6 +67,50 @@ const applyAttendanceExclusion = (row, exclude) => {
   };
 };
 
+/**
+ * One-month salary % cut: payroll stores earnings already scaled down.
+ * For the export, restore earnings columns to full and show the cut amount
+ * in "Salary Deduction" (included in Total Deductions). Net Pay is unchanged.
+ */
+const SALARY_CUT_EARNING_FIELDS = [
+  'grossSalary',
+  'basicSalary',
+  'houseRent',
+  'medical',
+  'arrears',
+  'conveyanceAllowance',
+  'houseAllowance',
+  'foodAllowance',
+  'vehicleAllowance',
+  'fuelAllowance',
+  'vehicleFuelAllowance',
+  'medicalAllowance',
+  'mobileAllowance',
+  'totalEarnings'
+];
+
+const applySalaryCutPresentation = (row, salaryPercentageCut) => {
+  const pct = Number(salaryPercentageCut?.percentage);
+  let factor = Number(salaryPercentageCut?.factor);
+  if (!Number.isFinite(factor) || factor <= 0) {
+    factor = Number.isFinite(pct) && pct > 0 && pct < 100 ? (100 - pct) / 100 : 0;
+  }
+  if (!Number.isFinite(factor) || factor <= 0 || factor >= 1) {
+    return { ...row, salaryDeduction: 0 };
+  }
+
+  const next = { ...row };
+  for (const field of SALARY_CUT_EARNING_FIELDS) {
+    next[field] = Math.round((Number(row[field]) || 0) / factor);
+  }
+  const salaryDeduction = Math.max(0, next.totalEarnings - Math.round(Number(row.totalEarnings) || 0));
+  next.salaryDeduction = salaryDeduction;
+  next.deductions = roundMoney((Number(row.deductions) || 0) + salaryDeduction);
+  next.totalDeductions = next.deductions;
+  next.salaryCutPercentage = pct;
+  return next;
+};
+
 // ==================== PAYROLL REPORTS ROUTES ====================
 
 // @route   GET /api/hr/reports/payroll/monthly
@@ -390,6 +434,7 @@ router.get('/monthly',
             conveyanceAllowance: 1,
             houseRentAllowance: 1,
             foodAllowance: 1,
+            mobileAllowance: 1,
             vehicleFuelAllowance: 1,
             medicalAllowance: 1,
             // Other payroll fields
@@ -403,6 +448,7 @@ router.get('/monthly',
             otherDeductions: 1,
             // Allowances object
             allowances: 1,
+            salaryPercentageCut: 1,
             // Populated fields
             'departmentData.name': 1,
             'bankData.name': 1,
@@ -480,6 +526,7 @@ router.get('/monthly',
           fuelAllowance: fuelAllowanceAmount(employee.allowances),
           vehicleFuelAllowance: vehicleFuelTotal(employee.allowances),
           medicalAllowance: employee.allowances?.medical?.amount || 0,
+          mobileAllowance: employee.allowances?.mobile?.amount || 0,
           totalEarnings: employee.totalEarnings || 0,
           incomeTax: employee.incomeTax || 0,
           companyLoan: employee.loanDeductions || employee.companyLoanDeduction || 0,
@@ -499,7 +546,8 @@ router.get('/monthly',
           totalWorkingDays: employee.totalWorkingDays ?? null,
           proration: employee.proration || null
         };
-        return applyAttendanceExclusion(base, excludeAttendance);
+        const withCut = applySalaryCutPresentation(base, employee.salaryPercentageCut);
+        return applyAttendanceExclusion(withCut, excludeAttendance);
       });
 
       // Summary uses adjusted export figures (attendance excluded when applicable)
@@ -888,8 +936,10 @@ function convertToCSV(reportData, options = {}) {
     'Vehicle Allowance',
     'Fuel Allowance',
     'Medical Allowance',
+    'Mobile Allowance',
     'Total Earnings',
     'Total Deductions',
+    'Salary Deduction',
     'Income Tax',
     'EOBI Ded',
     'Health Insurance',
@@ -941,8 +991,10 @@ function convertToCSV(reportData, options = {}) {
       Math.round(row.vehicleAllowance || 0), // Vehicle Allowance
       Math.round(row.fuelAllowance || 0), // Fuel Allowance
       Math.round(row.medicalAllowance || 0), // Medical Allowance
-      Math.round(row.totalEarnings || 0), // Total Earnings (from actual payroll)
-      Math.round(row.deductions || 0), // Total Deductions (from actual payroll)
+      Math.round(row.mobileAllowance || 0), // Mobile Allowance
+      Math.round(row.totalEarnings || 0), // Total Earnings (full, before salary cut)
+      Math.round(row.deductions || 0), // Total Deductions (includes salary cut)
+      Math.round(row.salaryDeduction || 0), // Salary Deduction (one-month % cut)
       Math.round(row.tax || 0), // Income Tax (from actual payroll)
       Math.round(row.eobi || 0), // EOBI Ded (from actual payroll)
       Math.round(row.healthInsurance || 0), // Health Insurance (from actual payroll)

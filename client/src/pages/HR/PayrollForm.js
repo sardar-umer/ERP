@@ -109,6 +109,10 @@ const PayrollForm = () => {
         isActive: Yup.boolean(),
         amount: Yup.number().min(0, 'Food allowance must be positive')
       }),
+      mobile: Yup.object({
+        isActive: Yup.boolean(),
+        amount: Yup.number().min(0, 'Mobile allowance must be positive')
+      }),
       vehicle: Yup.object({
         isActive: Yup.boolean(),
         amount: Yup.number().min(0, 'Vehicle allowance must be positive')
@@ -177,6 +181,10 @@ const PayrollForm = () => {
           amount: 0
         },
         food: {
+          isActive: false,
+          amount: 0
+        },
+        mobile: {
           isActive: false,
           amount: 0
         },
@@ -269,6 +277,10 @@ const PayrollForm = () => {
           food: {
             isActive: values.allowances?.food?.isActive || false,
             amount: values.allowances?.food?.isActive ? (values.allowances.food.amount || 0) : 0
+          },
+          mobile: {
+            isActive: values.allowances?.mobile?.isActive || false,
+            amount: values.allowances?.mobile?.isActive ? (values.allowances.mobile.amount || 0) : 0
           },
           vehicle: {
             isActive: values.allowances?.vehicle?.isActive || false,
@@ -512,6 +524,10 @@ const PayrollForm = () => {
             isActive: payroll.allowances?.food?.isActive || false,
             amount: payroll.allowances?.food?.amount || 0
           },
+          mobile: {
+            isActive: payroll.allowances?.mobile?.isActive || false,
+            amount: payroll.allowances?.mobile?.amount || 0
+          },
           vehicle: {
             isActive: payroll.allowances?.vehicle?.isActive || false,
             amount: payroll.allowances?.vehicle?.amount || 0
@@ -606,6 +622,8 @@ const PayrollForm = () => {
 
       formik.setFieldValue('allowances.food.isActive', employee.allowances?.food?.isActive || false);
       formik.setFieldValue('allowances.food.amount', employee.allowances?.food?.isActive ? employee.allowances.food.amount : 0);
+      formik.setFieldValue('allowances.mobile.isActive', employee.allowances?.mobile?.isActive || false);
+      formik.setFieldValue('allowances.mobile.amount', employee.allowances?.mobile?.isActive ? employee.allowances.mobile.amount : 0);
 
       const empAllowances = allowancesForForm(employee.allowances || {});
       formik.setFieldValue('allowances.vehicle.isActive', empAllowances.vehicle?.isActive || false);
@@ -704,6 +722,7 @@ const PayrollForm = () => {
     const totalAllowances =
       (values.allowances?.conveyance?.isActive ? (values.allowances.conveyance.amount || 0) : 0) +
       (values.allowances?.food?.isActive ? (values.allowances.food.amount || 0) : 0) +
+      (values.allowances?.mobile?.isActive ? (values.allowances.mobile.amount || 0) : 0) +
       vehicleAllowanceAmount(values.allowances) +
       fuelAllowanceAmount(values.allowances) +
       (values.allowances?.medical?.isActive ? (values.allowances.medical.amount || 0) : 0) +
@@ -756,6 +775,7 @@ const PayrollForm = () => {
     const additionalAllowances = 
       (values.allowances?.conveyance?.isActive ? (values.allowances.conveyance.amount || 0) : 0) +
       (values.allowances?.food?.isActive ? (values.allowances.food.amount || 0) : 0) +
+      (values.allowances?.mobile?.isActive ? (values.allowances.mobile.amount || 0) : 0) +
       vehicleAllowanceAmount(values.allowances) +
       fuelAllowanceAmount(values.allowances) +
       (values.allowances?.special?.isActive ? (values.allowances.special.amount || 0) : 0) +
@@ -807,6 +827,7 @@ const PayrollForm = () => {
     const additionalAllowances =
       (allowances?.conveyance?.isActive ? allowances.conveyance.amount : 0) +
       (allowances?.food?.isActive ? allowances.food.amount : 0) +
+      (allowances?.mobile?.isActive ? allowances.mobile.amount : 0) +
       vehicleAllowanceAmount(allowances) +
       fuelAllowanceAmount(allowances) +
       (allowances?.special?.isActive ? allowances.special.amount : 0) +
@@ -1191,6 +1212,38 @@ const PayrollForm = () => {
                             name="allowances.food.amount"
                             label="Amount"
                             value={formik.values.allowances?.food?.amount || ''}
+                            onChange={formik.handleChange}
+                            inputProps={{
+                              step: "1",
+                              min: "0"
+                            }}
+                            InputProps={{
+                              startAdornment: <span style={{ marginRight: 8 }}>PKR</span>
+                            }}
+                          />
+                        )}
+                      </Box>
+                    </Grid>
+
+                    {/* Mobile Allowance */}
+                    <Grid item xs={12} sm={6} md={4}>
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 1 }}>
+                        <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
+                          <input
+                            type="checkbox"
+                            checked={formik.values.allowances?.mobile?.isActive || false}
+                            onChange={(e) => formik.setFieldValue('allowances.mobile.isActive', e.target.checked)}
+                            style={{ margin: 0 }}
+                          />
+                          <Typography variant="subtitle2">Mobile Allowance</Typography>
+                        </Box>
+                        {formik.values.allowances?.mobile?.isActive && (
+                          <TextField
+                            fullWidth
+                            type="number"
+                            name="allowances.mobile.amount"
+                            label="Amount"
+                            value={formik.values.allowances?.mobile?.amount || ''}
                             onChange={formik.handleChange}
                             inputProps={{
                               step: "1",
@@ -1839,6 +1892,9 @@ const PayrollForm = () => {
                           </Typography>
                           <Typography variant="body2" sx={{ mb: 1 }}>
                             <strong>Food:</strong> {formatPKR(formik.values.allowances?.food?.isActive ? formik.values.allowances.food.amount : 0)}
+                          </Typography>
+                          <Typography variant="body2" sx={{ mb: 1 }}>
+                            <strong>Mobile:</strong> {formatPKR(formik.values.allowances?.mobile?.isActive ? formik.values.allowances.mobile.amount : 0)}
                           </Typography>
                           <Typography variant="body2" sx={{ mb: 1 }}>
                             <strong>Vehicle:</strong> {formatPKR(formik.values.allowances?.vehicle?.isActive ? formik.values.allowances.vehicle.amount : 0)}

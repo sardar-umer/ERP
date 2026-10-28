@@ -19,6 +19,7 @@ export const PROJECT_SUMMARY_AMOUNT_COLUMNS = [
   { key: 'conveyanceAllowance', label: 'Covance Allowance' },
   { key: 'houseAllowance', label: 'House Allowance' },
   { key: 'foodAllowance', label: 'Food Allowance' },
+  { key: 'mobileAllowance', label: 'Mobile Allowance' },
   { key: 'vehicleAllowance', label: 'Vehicle Allowance' },
   { key: 'medicalAllowance', label: 'Medical Allowance' },
   { key: 'fuelAllowance', label: 'Fuel Allowance' },
@@ -42,6 +43,7 @@ export const PAYROLL_ALLOWANCE_SUMMARY_ROWS = [
   { key: 'conveyanceAllowance', label: 'Conveyance Allowance' },
   { key: 'houseAllowance', label: 'House Allowance' },
   { key: 'foodAllowance', label: 'Food Allowance' },
+  { key: 'mobileAllowance', label: 'Mobile Allowance' },
   { key: 'vehicleAllowance', label: 'Vehicle Allowance' },
   { key: 'medicalAllowance', label: 'Medical Allowance' },
   { key: 'fuelAllowance', label: 'Fuel Allowance' }

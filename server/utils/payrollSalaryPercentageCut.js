@@ -14,6 +14,7 @@ const SCALE_FIELDS = [
   'medicalAllowance',
   'conveyanceAllowance',
   'foodAllowance',
+  'mobileAllowance',
   'vehicleAllowance',
   'fuelAllowance',
   'vehicleFuelAllowance',

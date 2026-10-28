@@ -9,6 +9,7 @@ const MONTH_NAMES = [
 const ALLOWANCE_LABELS = {
   conveyance: 'Conveyance Allowance',
   food: 'Food Allowance',
+  mobile: 'Mobile Allowance',
   vehicle: 'Vehicle Allowance',
   fuel: 'Fuel Allowance',
   medical: 'Medical Allowance',

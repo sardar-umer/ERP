@@ -259,6 +259,7 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       medicalAllowance: employee.salary?.medical || employee.allowances?.medical?.amount || 0,
       conveyanceAllowance: employee.allowances?.conveyance?.amount || employee.allowances?.transport?.amount || 0,
       foodAllowance: employee.allowances?.food?.amount || 0,
+      mobileAllowance: employee.allowances?.mobile?.amount || 0,
       vehicleAllowance: employee.allowances?.vehicle?.amount || 0,
       fuelAllowance: employee.allowances?.fuel?.amount || 0,
       specialAllowance: employee.allowances?.special?.amount || 0,

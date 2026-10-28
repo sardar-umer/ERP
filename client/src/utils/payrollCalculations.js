@@ -45,6 +45,7 @@ export const calculateTotalEarnings = (payroll) => {
   const additionalAllowances = [
     payroll?.allowances?.conveyance?.isActive ? (payroll.allowances.conveyance.amount || 0) : 0,
     payroll?.allowances?.food?.isActive ? (payroll.allowances.food.amount || 0) : 0,
+    payroll?.allowances?.mobile?.isActive ? (payroll.allowances.mobile.amount || 0) : 0,
     vehicleAllowanceAmount(payroll?.allowances),
     fuelAllowanceAmount(payroll?.allowances),
     payroll?.allowances?.special?.isActive ? (payroll.allowances.special.amount || 0) : 0,

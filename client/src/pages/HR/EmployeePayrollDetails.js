@@ -389,6 +389,10 @@ const EmployeePayrollDetails = () => {
                       <TableCell align="right">{formatPKR(currentPayroll.allowances?.food?.amount || 0)}</TableCell>
                     </TableRow>
                     <TableRow>
+                      <TableCell>Mobile Allowance</TableCell>
+                      <TableCell align="right">{formatPKR(currentPayroll.allowances?.mobile?.amount || 0)}</TableCell>
+                    </TableRow>
+                    <TableRow>
                       <TableCell>Vehicle Allowance</TableCell>
                       <TableCell align="right">{formatPKR(vehicleAllowanceAmount(currentPayroll.allowances))}</TableCell>
                     </TableRow>

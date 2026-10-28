@@ -100,6 +100,7 @@ const finalSettlementSchema = new mongoose.Schema({
     medicalAllowance: { type: Number, default: 0 },
     conveyanceAllowance: { type: Number, default: 0 },
     foodAllowance: { type: Number, default: 0 },
+    mobileAllowance: { type: Number, default: 0 },
     vehicleAllowance: { type: Number, default: 0 },
     fuelAllowance: { type: Number, default: 0 },
     specialAllowance: { type: Number, default: 0 },
@@ -303,6 +304,7 @@ finalSettlementSchema.pre('save', function(next) {
     (e.medicalAllowance || 0) +
     (e.conveyanceAllowance || 0) +
     (e.foodAllowance || 0) +
+    (e.mobileAllowance || 0) +
     (e.vehicleAllowance || 0) +
     (e.fuelAllowance || 0) +
     (e.specialAllowance || 0) +

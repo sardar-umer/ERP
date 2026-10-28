@@ -3,6 +3,7 @@ const mongoose = require('mongoose');
 const ALLOWANCE_TAX_KEYS = [
   'conveyance',
   'food',
+  'mobile',
   'vehicle',
   'fuel',
   'medical',

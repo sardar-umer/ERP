@@ -117,6 +117,17 @@ const payrollSchema = new mongoose.Schema({
         min: [0, 'Food allowance cannot be negative']
       }
     },
+    mobile: {
+      isActive: {
+        type: Boolean,
+        default: false
+      },
+      amount: {
+        type: Number,
+        default: 0,
+        min: [0, 'Mobile allowance cannot be negative']
+      }
+    },
     vehicle: {
       isActive: {
         type: Boolean,
@@ -572,6 +583,9 @@ payrollSchema.virtual('totalAllowances').get(function() {
     if (this.allowances.food?.isActive) {
       total += this.allowances.food.amount || 0;
     }
+    if (this.allowances.mobile?.isActive) {
+      total += this.allowances.mobile.amount || 0;
+    }
     if (this.allowances.vehicle?.isActive) {
       total += this.allowances.vehicle.amount || 0;
     }
@@ -655,6 +669,7 @@ payrollSchema.pre('save', function(next) {
     const additionalAllowances = 
       (this.allowances?.conveyance?.isActive ? this.allowances.conveyance.amount : 0) +
       (this.allowances?.food?.isActive ? this.allowances.food.amount : 0) +
+      (this.allowances?.mobile?.isActive ? this.allowances.mobile.amount : 0) +
       (this.allowances?.vehicleFuel?.isActive ? this.allowances.vehicleFuel.amount : 0) +
       (this.allowances?.special?.isActive ? this.allowances.special.amount : 0) +
       (this.allowances?.other?.isActive ? this.allowances.other.amount : 0);
@@ -954,6 +969,7 @@ payrollSchema.statics.generatePayroll = async function(employeeId, month, year, 
   const additionalAllowances = 
     (payrollAllowances.conveyance.isActive ? payrollAllowances.conveyance.amount : 0) +
     (payrollAllowances.food.isActive ? payrollAllowances.food.amount : 0) +
+    (payrollAllowances.mobile?.isActive ? payrollAllowances.mobile.amount : 0) +
     vehicleFuelTotal(payrollAllowances) +
     (payrollAllowances.medical.isActive ? payrollAllowances.medical.amount : 0) +
     (payrollAllowances.houseRent.isActive ? payrollAllowances.houseRent.amount : 0) +
@@ -1007,6 +1023,7 @@ payrollSchema.statics.generatePayroll = async function(employeeId, month, year, 
     // Set direct allowance fields for backward compatibility
     conveyanceAllowance: payrollAllowances.conveyance.isActive ? payrollAllowances.conveyance.amount : 0,
     foodAllowance: payrollAllowances.food.isActive ? payrollAllowances.food.amount : 0,
+    mobileAllowance: payrollAllowances.mobile?.isActive ? payrollAllowances.mobile.amount : 0,
     vehicleAllowance: vehicleAllowanceAmount(payrollAllowances),
     fuelAllowance: fuelAllowanceAmount(payrollAllowances),
     vehicleFuelAllowance: vehicleFuelTotal(payrollAllowances),

@@ -47,6 +47,7 @@ const additionalAllowancesTotal = (allowances) => {
   return (
     activeAmount(a.conveyance) +
     activeAmount(a.food) +
+    activeAmount(a.mobile) +
     vehicleFuelTotal(a) +
     activeAmount(a.medical) +
     activeAmount(a.houseRent) +
@@ -69,7 +70,7 @@ const prorateEmployeeAllowances = (allowances, factor) => {
       amount: Math.round((Number(entry.amount) || 0) * factor)
     };
   };
-  const keys = ['conveyance', 'food', 'vehicle', 'fuel', 'vehicleFuel', 'medical', 'houseRent', 'special', 'other'];
+  const keys = ['conveyance', 'food', 'mobile', 'vehicle', 'fuel', 'vehicleFuel', 'medical', 'houseRent', 'special', 'other'];
   const out = { ...allowances };
   keys.forEach((key) => {
     if (out[key] !== undefined) {
@@ -92,6 +93,7 @@ const buildAllowancesPayload = (src) => {
   return {
     conveyance: parse(src.conveyance),
     food: parse(src.food),
+    mobile: parse(src.mobile),
     vehicle: parse(src.vehicle),
     fuel: parse(src.fuel),
     vehicleFuel: defaultEntry(),
@@ -118,6 +120,7 @@ const payrollAllowancesFromEmployee = (employeeAllowances = {}) => {
   return {
     conveyance: pick('conveyance'),
     food: pick('food'),
+    mobile: pick('mobile'),
     vehicle: legacyOnly
       ? { isActive: true, amount: activeAmount(a.vehicleFuel) }
       : { isActive: !!a.vehicle?.isActive, amount: vehicleAmt },
@@ -136,7 +139,7 @@ const payrollAllowancesFromEmployee = (employeeAllowances = {}) => {
 const mergePayrollAllowances = (payrollDataAllowances, employeeAllowances = {}) => {
   const master = payrollAllowancesFromEmployee(employeeAllowances);
   if (!payrollDataAllowances) return master;
-  const keys = ['conveyance', 'food', 'vehicle', 'fuel', 'medical', 'houseRent', 'special', 'other'];
+  const keys = ['conveyance', 'food', 'mobile', 'vehicle', 'fuel', 'medical', 'houseRent', 'special', 'other'];
   const out = { ...master };
   keys.forEach((key) => {
     if (payrollDataAllowances[key] !== undefined) {
