@@ -2376,6 +2376,169 @@ router.get('/accounts-receivable/aging',
   })
 );
 
+// ── AR invoices billed from Store Issue Notes ────────────────────────────────
+// The SIN already posted DR COGS / CR Inventory at cost; the invoice only carries the selling price.
+// Invoiced qty is summed from live invoice lines, so cancelling / deleting an invoice frees the qty again.
+const sinLineKey = (sinId, itemId) => `${sinId}:${itemId}`;
+
+const sinInvoicedQtyMap = async (sinIds, excludeInvoiceId = null) => {
+  if (!sinIds.length) return new Map();
+  const match = { 'lineItems.sourceSin': { $in: sinIds }, status: { $ne: 'cancelled' } };
+  if (excludeInvoiceId && mongoose.Types.ObjectId.isValid(String(excludeInvoiceId))) {
+    match._id = { $ne: new mongoose.Types.ObjectId(String(excludeInvoiceId)) };
+  }
+  const rows = await AccountsReceivable.aggregate([
+    { $match: match },
+    { $unwind: '$lineItems' },
+    { $match: { 'lineItems.sourceSin': { $in: sinIds } } },
+    { $group: { _id: { sin: '$lineItems.sourceSin', item: '$lineItems.inventoryItem' }, qty: { $sum: '$lineItems.quantity' } } }
+  ]);
+  return new Map(rows.map((r) => [sinLineKey(r._id.sin, r._id.item), r.qty]));
+};
+
+// One row per inventory item on the SIN: issued, already invoiced, still open, and cost per unit
+const sinLinesWithBalance = (sin, invoicedMap, invById) => {
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const byItem = new Map();
+  (sin.items || []).forEach((it) => {
+    const itemId = String(it.inventoryItem?._id || it.inventoryItem);
+    const row = byItem.get(itemId) || { inventoryItem: itemId, itemCode: it.itemCode, itemName: it.itemName, unit: it.unit, qtyIssued: 0 };
+    row.qtyIssued += Number(it.qtyIssued ?? it.quantity) || 0;
+    byItem.set(itemId, row);
+  });
+  const postedCost = new Map((sin.financePosting || [])
+    .filter((p) => p.status === 'posted' && Number(p.qty) > 0)
+    .map((p) => [String(p.inventoryItem), Number(p.amount) / Number(p.qty)]));
+  return [...byItem.values()].map((row) => {
+    const qtyInvoiced = invoicedMap.get(sinLineKey(sin._id, row.inventoryItem)) || 0;
+    const inv = invById.get(row.inventoryItem);
+    const unitCost = postedCost.has(row.inventoryItem)
+      ? postedCost.get(row.inventoryItem)
+      : (Number(inv?.averageCost) > 0 ? Number(inv.averageCost) : Number(inv?.unitPrice) || 0);
+    return { ...row, qtyInvoiced, qtyAvailable: Math.max(0, r2(row.qtyIssued - qtyInvoiced)), unitCost: r2(unitCost) };
+  });
+};
+
+const loadSinBalances = async (sins, excludeInvoiceId = null) => {
+  const Inventory = require('../models/procurement/Inventory');
+  const sinIds = sins.map((s) => s._id);
+  const itemIds = [...new Set(sins.flatMap((s) => (s.items || []).map((it) => String(it.inventoryItem))))]
+    .filter((id) => mongoose.Types.ObjectId.isValid(id));
+  const [invoicedMap, invRows] = await Promise.all([
+    sinInvoicedQtyMap(sinIds, excludeInvoiceId),
+    Inventory.find({ _id: { $in: itemIds } }).select('averageCost unitPrice').lean()
+  ]);
+  const invById = new Map(invRows.map((i) => [String(i._id), i]));
+  return new Map(sins.map((s) => [String(s._id), sinLinesWithBalance(s, invoicedMap, invById)]));
+};
+
+// Maps posted line items; lines carrying sourceSin are checked against the SIN's open qty
+const buildArLineItems = async (rawLines, { excludeInvoiceId = null, customerId = null } = {}) => {
+  const GoodsIssue = require('../models/procurement/GoodsIssue');
+  const lines = (rawLines || []).map((item) => {
+    const line = {
+      description: item.description || 'Line Item',
+      quantity: Number(item.quantity) || 1,
+      unitPrice: Number(item.unitPrice) || Number(item.amount) || 0,
+      amount: Number(item.amount) || (Number(item.quantity || 1) * Number(item.unitPrice || 0)),
+      account: item.account || null
+    };
+    const sinId = String(item.sourceSin?._id || item.sourceSin || '');
+    const itemId = String(item.inventoryItem?._id || item.inventoryItem || '');
+    if (mongoose.Types.ObjectId.isValid(sinId) && mongoose.Types.ObjectId.isValid(itemId)) {
+      line.sourceSin = sinId;
+      line.inventoryItem = itemId;
+    }
+    return line;
+  });
+
+  const sinLines = lines.filter((l) => l.sourceSin);
+  if (!sinLines.length) return lines;
+
+  const fail = (message) => { const err = new Error(message); err.statusCode = 400; throw err; };
+  const sinIds = [...new Set(sinLines.map((l) => l.sourceSin))].map((id) => new mongoose.Types.ObjectId(id));
+  const sins = await GoodsIssue.find({ _id: { $in: sinIds } }).select('issueNumber sinNumber status issueType customer customerName items financePosting').lean();
+  const sinById = new Map(sins.map((s) => [String(s._id), s]));
+  const balances = await loadSinBalances(sins, excludeInvoiceId);
+
+  const wanted = new Map();
+  for (const line of sinLines) {
+    const sin = sinById.get(line.sourceSin);
+    if (!sin || sin.status !== 'Issued') fail(`"${line.description}": its Store Issue Note was not found or is not issued`);
+    const sinNo = sin.issueNumber || sin.sinNumber;
+    if (sin.issueType !== 'customer') fail(`${sinNo} is a project issue — only customer-wise SINs can be invoiced`);
+    if (customerId && sin.customer && String(sin.customer) !== String(customerId)) {
+      fail(`${sinNo} was issued to ${sin.customerName || 'another customer'}, not this invoice's customer`);
+    }
+    const bal = balances.get(line.sourceSin).find((r) => r.inventoryItem === line.inventoryItem);
+    if (!bal) fail(`"${line.description}": item is not on ${sinNo}`);
+    Object.assign(line, { sourceSinNumber: sinNo, itemCode: bal.itemCode || '', unit: bal.unit || '', unitCost: bal.unitCost });
+    const key = sinLineKey(line.sourceSin, line.inventoryItem);
+    wanted.set(key, (wanted.get(key) || 0) + line.quantity);
+    if (wanted.get(key) > bal.qtyAvailable + 1e-9) {
+      fail(`${bal.itemName} on ${sinNo}: only ${bal.qtyAvailable} ${bal.unit || ''} left to invoice`.trim());
+    }
+  }
+  return lines;
+};
+
+// @route   GET /api/finance/accounts-receivable-sin-sources
+// @desc    Customer-wise Store Issue Notes with qty not yet invoiced (pick list for "Load from SIN" on the invoice form)
+// @access  Private (Finance and Admin)
+router.get('/accounts-receivable-sin-sources',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const GoodsIssue = require('../models/procurement/GoodsIssue');
+    const { search = '', showAll, excludeInvoiceId, customerId } = req.query;
+    const company = await resolveCompanyForFinanceRoute(req);
+
+    // Only customer-wise SINs are billable; project SINs are internal use
+    const and = [{ status: 'Issued' }, { issueType: 'customer' }];
+    if (customerId && mongoose.Types.ObjectId.isValid(String(customerId))) {
+      and.push({ customer: new mongoose.Types.ObjectId(String(customerId)) });
+    }
+    // Legacy SINs often have companyId=null — include them with the selected company (same as the AR list)
+    if (company?._id && !company.isAll && !isHistoricalCompany(company)) {
+      and.push({ $or: [{ companyId: company._id }, { companyId: null }, { companyId: { $exists: false } }] });
+    }
+    const term = String(search).trim();
+    if (term) {
+      const rx = new RegExp(term.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'i');
+      and.push({ $or: [{ issueNumber: rx }, { sinNumber: rx }, { departmentName: rx }, { costCenterName: rx }, { requiredFor: rx }, { purpose: rx }, { customerName: rx }, { 'items.itemName': rx }, { 'items.itemCode': rx }] });
+    }
+
+    const sins = await GoodsIssue.find({ $and: and })
+      .select('issueNumber sinNumber issueDate project customer customerName departmentName costCenterName requiredFor purpose items financePosting financePostingStatus')
+      .populate('project', 'name')
+      .sort({ issueDate: -1, createdAt: -1 })
+      .limit(150)
+      .lean();
+    const balances = await loadSinBalances(sins, excludeInvoiceId);
+
+    const data = sins.map((s) => {
+      const lines = balances.get(String(s._id));
+      const open = lines.reduce((sum, l) => sum + l.qtyAvailable, 0);
+      const invoiced = lines.reduce((sum, l) => sum + l.qtyInvoiced, 0);
+      return {
+        _id: s._id,
+        sinNumber: s.issueNumber || s.sinNumber,
+        issueDate: s.issueDate,
+        project: s.project?.name || '',
+        customer: s.customer || null,
+        customerName: s.customerName || '',
+        department: s.departmentName || '',
+        costCenter: s.costCenterName || '',
+        requiredFor: s.requiredFor || s.purpose || '',
+        financePostingStatus: s.financePostingStatus || '',
+        invoiceStatus: open <= 0 ? 'invoiced' : invoiced > 0 ? 'partial' : 'not_invoiced',
+        lines
+      };
+    }).filter((s) => showAll === 'true' || s.invoiceStatus !== 'invoiced');
+
+    res.json({ success: true, data });
+  })
+);
+
 // @route   POST /api/finance/accounts-receivable
 // @desc    Create new invoice
 // @access  Private (Finance and Admin)
@@ -2426,13 +2589,7 @@ router.post('/accounts-receivable',
       });
     }
 
-    const lineItems = (req.body.lineItems || []).map(item => ({
-      description: item.description || 'Line Item',
-      quantity: Number(item.quantity) || 1,
-      unitPrice: Number(item.unitPrice) || Number(item.amount) || 0,
-      amount: Number(item.amount) || (Number(item.quantity || 1) * Number(item.unitPrice || 0)),
-      account: item.account || null
-    }));
+    const lineItems = await buildArLineItems(req.body.lineItems, { customerId: req.body.customer?.customerId || null });
 
     const arEntry = await FinanceHelper.createARFromInvoice({
       companyId: company._id,
@@ -2547,13 +2704,10 @@ router.put('/accounts-receivable/:id',
     }
 
     if (Array.isArray(body.lineItems) && body.lineItems.length > 0) {
-      invoice.lineItems = body.lineItems.map((item) => ({
-        description: item.description || 'Line Item',
-        quantity: Number(item.quantity) || 1,
-        unitPrice: Number(item.unitPrice) || Number(item.amount) || 0,
-        amount: Number(item.amount) || (Number(item.quantity || 1) * Number(item.unitPrice || 0)),
-        account: item.account || null
-      }));
+      invoice.lineItems = await buildArLineItems(body.lineItems, {
+        excludeInvoiceId: invoice._id,
+        customerId: body.customer?.customerId || invoice.customer?.customerId || null
+      });
     }
 
     if (body.totalAmount != null) {
@@ -9268,60 +9422,117 @@ router.get('/reports/budget-vs-actual',
 );
 
 // ─────────────────────────────────────────────────────────────────────────────
-// AGED PAYABLES REPORT
+// AGED RECEIVABLES / PAYABLES — one row per customer / vendor, open documents nested for drill-down
+// Buckets by days past due as of the date: current (not yet due), 1–30, 31–60, 61–90, over 90
 // ─────────────────────────────────────────────────────────────────────────────
+const AGING_BUCKETS = ['current', 'days1_30', 'days31_60', 'days61_90', 'over90'];
+const agingBucketOf = (daysOverdue) => (daysOverdue > 90 ? 'over90' : daysOverdue > 60 ? 'days61_90'
+  : daysOverdue > 30 ? 'days31_60' : daysOverdue > 0 ? 'days1_30' : 'current');
+
+// docs: [{ partyKey, partyId, partyName, _id, number, date, dueDate, total, paid, balance }]
+const buildAgingByParty = (docs, asOf) => {
+  const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const emptyBuckets = () => Object.fromEntries(AGING_BUCKETS.map((k) => [k, 0]));
+  const totals = { ...emptyBuckets(), balance: 0 };
+  const parties = new Map();
+  docs.forEach((d) => {
+    const daysOverdue = d.dueDate ? Math.floor((asOf - new Date(d.dueDate)) / 86400000) : 0;
+    const bucket = agingBucketOf(daysOverdue);
+    const party = parties.get(d.partyKey) || { key: d.partyKey, partyId: d.partyId || null, name: d.partyName || '—', ...emptyBuckets(), balance: 0, items: [] };
+    party[bucket] = r2(party[bucket] + d.balance);
+    party.balance = r2(party.balance + d.balance);
+    totals[bucket] = r2(totals[bucket] + d.balance);
+    totals.balance = r2(totals.balance + d.balance);
+    party.items.push({
+      _id: d._id, number: d.number, date: d.date, dueDate: d.dueDate,
+      total: r2(d.total), paid: r2(d.paid), balance: r2(d.balance),
+      daysOverdue: Math.max(0, daysOverdue), bucket,
+      status: d.paid > 0.009 ? 'partial' : 'pending',
+      overdue: daysOverdue > 0
+    });
+    parties.set(d.partyKey, party);
+  });
+  const rows = [...parties.values()]
+    .map((p) => ({ ...p, items: p.items.sort((a, b) => new Date(a.dueDate || 0) - new Date(b.dueDate || 0)) }))
+    .sort((a, b) => b.balance - a.balance);
+  // buckets: kept for the Finance Dashboard charts
+  const buckets = Object.fromEntries(AGING_BUCKETS.map((k) => [k, totals[k]]));
+  return { asOfDate: asOf, parties: rows, totals, buckets };
+};
+
+const agingAsOf = (req) => {
+  const asOf = req.query.asOfDate ? new Date(req.query.asOfDate) : new Date();
+  asOf.setHours(23, 59, 59, 999);
+  return asOf;
+};
+
 router.get('/reports/aged-payables',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
-    const asOf = req.query.asOfDate ? new Date(req.query.asOfDate) : new Date();
+    const asOf = agingAsOf(req);
     const { q } = await financeScope(req);
 
-    const bills = await AccountsPayable.find(q({ status: { $in: ['pending', 'partial'] } }))
-      .populate('supplier', 'name code');
+    const bills = await AccountsPayable.find(q({
+      status: { $nin: ['draft', 'paid', 'cancelled'] },
+      voidedAt: null,
+      $or: [{ billDate: { $lte: asOf } }, { billDate: null }]
+    }))
+      .select('billNumber vendorInvoiceNumber billDate dueDate vendor payeeEmployee totalAmount duePaymentAmount amountPaid advanceApplied advancePending paymentPending status')
+      .populate('payeeEmployee', 'firstName lastName employeeId');
 
-    const buckets = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, over90: 0 };
-    const rows = bills.map(b => {
-      const daysOutstanding = Math.floor((asOf - new Date(b.dueDate || b.createdAt)) / 86400000);
-      const balance = b.balance || 0;
-      let bucket = 'current';
-      if (daysOutstanding > 90) bucket = 'over90';
-      else if (daysOutstanding > 60) bucket = 'days61_90';
-      else if (daysOutstanding > 30) bucket = 'days31_60';
-      else if (daysOutstanding > 0) bucket = 'days1_30';
-      buckets[bucket] = Math.round((buckets[bucket] + balance) * 100) / 100;
-      return { _id: b._id, reference: b.referenceNumber, supplier: b.supplier, dueDate: b.dueDate, balance, daysOutstanding, bucket };
-    });
+    const docs = bills.map((b) => {
+      const emp = b.payeeEmployee;
+      const empName = emp ? `${emp.firstName || ''} ${emp.lastName || ''}`.trim() : '';
+      const name = b.vendor?.name || empName || 'Unknown vendor';
+      const partyId = b.vendor?.vendorId || emp?._id || null;
+      return {
+        partyKey: partyId ? String(partyId) : `name:${name.trim().toLowerCase()}`,
+        partyId,
+        partyName: name,
+        _id: b._id,
+        number: b.billNumber || b.vendorInvoiceNumber || '',
+        date: b.billDate,
+        dueDate: b.dueDate,
+        total: b.totalAmount,
+        paid: (Number(b.amountPaid) || 0) + (Number(b.advanceApplied) || 0),
+        balance: b.balanceDue
+      };
+    }).filter((d) => d.balance > 0.009);
 
-    res.json({ success: true, data: { asOfDate: asOf, rows, buckets } });
+    res.json({ success: true, data: buildAgingByParty(docs, asOf) });
   })
 );
 
-// ─────────────────────────────────────────────────────────────────────────────
-// AGED RECEIVABLES REPORT
-// ─────────────────────────────────────────────────────────────────────────────
 router.get('/reports/aged-receivables',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
-    const asOf = req.query.asOfDate ? new Date(req.query.asOfDate) : new Date();
+    const asOf = agingAsOf(req);
     const { q } = await financeScope(req);
 
-    const invoices = await AccountsReceivable.find(q({ status: { $in: ['pending', 'partial'] } }))
-      .populate('customer', 'name code');
+    // AR invoices post to the ledger when booked (status starts at draft), so only cancelled / paid are excluded
+    const invoices = await AccountsReceivable.find(q({
+      status: { $nin: ['paid', 'cancelled'] },
+      invoiceDate: { $lte: asOf }
+    })).select('invoiceNumber invoiceDate dueDate customer totalAmount amountPaid status');
 
-    const buckets = { current: 0, days1_30: 0, days31_60: 0, days61_90: 0, over90: 0 };
-    const rows = invoices.map(inv => {
-      const daysOutstanding = Math.floor((asOf - new Date(inv.dueDate || inv.createdAt)) / 86400000);
-      const balance = inv.balance || 0;
-      let bucket = 'current';
-      if (daysOutstanding > 90) bucket = 'over90';
-      else if (daysOutstanding > 60) bucket = 'days61_90';
-      else if (daysOutstanding > 30) bucket = 'days31_60';
-      else if (daysOutstanding > 0) bucket = 'days1_30';
-      buckets[bucket] = Math.round((buckets[bucket] + balance) * 100) / 100;
-      return { _id: inv._id, reference: inv.referenceNumber, customer: inv.customer, dueDate: inv.dueDate, balance, daysOutstanding, bucket };
-    });
+    const docs = invoices.map((inv) => {
+      const name = inv.customer?.name || 'Unknown customer';
+      const partyId = inv.customer?.customerId || null;
+      return {
+        partyKey: partyId ? String(partyId) : `name:${name.trim().toLowerCase()}`,
+        partyId,
+        partyName: name,
+        _id: inv._id,
+        number: inv.invoiceNumber,
+        date: inv.invoiceDate,
+        dueDate: inv.dueDate,
+        total: inv.totalAmount,
+        paid: inv.amountPaid,
+        balance: inv.balanceDue
+      };
+    }).filter((d) => d.balance > 0.009);
 
-    res.json({ success: true, data: { asOfDate: asOf, rows, buckets } });
+    res.json({ success: true, data: buildAgingByParty(docs, asOf) });
   })
 );
 

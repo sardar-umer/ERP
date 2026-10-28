@@ -33,14 +33,16 @@ import {
   DialogActions,
   CircularProgress,
   Tooltip,
-  Divider
+  Divider,
+  Checkbox
 } from '@mui/material';
 import {
   Add as AddIcon,
   Delete as DeleteIcon,
   ExpandMore as ExpandMoreIcon,
   Save as SaveIcon,
-  ArrowBack as ArrowBackIcon
+  ArrowBack as ArrowBackIcon,
+  Inventory2 as InventoryIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import api from '../../services/api';
@@ -70,8 +72,22 @@ const emptyLine = () => ({
   description: '',
   quantity: 1,
   unitPrice: '',
-  amount: ''
+  amount: '',
+  // Store Issue Note link (set only for lines loaded from a SIN)
+  sourceSin: null,
+  sourceSinNumber: '',
+  inventoryItem: null,
+  unit: '',
+  unitCost: 0,
+  maxQty: null
 });
+
+const sinKey = (sinId, itemId) => `${sinId}:${itemId}`;
+const SIN_STATUS = {
+  not_invoiced: { label: 'Not invoiced', color: 'default' },
+  partial: { label: 'Partially invoiced', color: 'warning' },
+  invoiced: { label: 'Invoiced', color: 'success' }
+};
 
 const filter = createFilterOptions();
 
@@ -154,6 +170,9 @@ const StandardCustomerInvoiceForm = () => {
     phone: '',
     street: ''
   });
+
+  // Load lines from Store Issue Notes
+  const [sinDialog, setSinDialog] = useState({ open: false, loading: false, search: '', list: [], picked: {} });
 
   // Submitting
   const [submitting, setSubmitting] = useState(false);
@@ -293,7 +312,13 @@ const StandardCustomerInvoiceForm = () => {
             description: li.description || '',
             quantity: Number(li.quantity) || 1,
             unitPrice: Number(li.unitPrice) || Number(li.amount) || '',
-            amount: Number(li.amount) || ''
+            amount: Number(li.amount) || '',
+            sourceSin: li.sourceSin?._id || li.sourceSin || null,
+            sourceSinNumber: li.sourceSinNumber || '',
+            inventoryItem: li.inventoryItem?._id || li.inventoryItem || null,
+            unit: li.unit || '',
+            unitCost: Number(li.unitCost) || 0,
+            maxQty: null
           };
         });
         setLines(mappedLines.length ? mappedLines : [emptyLine()]);
@@ -353,6 +378,75 @@ const StandardCustomerInvoiceForm = () => {
       return;
     }
     setLines((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  // ── Store Issue Note → invoice lines ──
+  const fetchSins = async (search = '') => {
+    setSinDialog((d) => ({ ...d, loading: true }));
+    try {
+      const res = await api.get('/finance/accounts-receivable-sin-sources', {
+        params: { search: search || undefined, customerId: selectedCustomer?._id, excludeInvoiceId: editInvoiceId || undefined }
+      });
+      setSinDialog((d) => ({ ...d, loading: false, list: res.data?.data || [] }));
+    } catch (err) {
+      toast.error(err.response?.data?.message || 'Could not load Store Issue Notes');
+      setSinDialog((d) => ({ ...d, loading: false }));
+    }
+  };
+
+  const openSinDialog = () => {
+    if (!selectedCustomer?._id) {
+      toast.error('Select the customer first — only that customer\'s Store Issue Notes are listed');
+      return;
+    }
+    setSinDialog({ open: true, loading: true, search: '', list: [], picked: {} });
+    fetchSins('');
+  };
+
+  // Qty of a SIN item already sitting on this form (not saved yet)
+  const qtyOnForm = (sinId, itemId) => lines
+    .filter((l) => l.sourceSin && sinKey(l.sourceSin, l.inventoryItem) === sinKey(sinId, itemId))
+    .reduce((sum, l) => sum + (Number(l.quantity) || 0), 0);
+
+  const togglePicked = (key) => setSinDialog((d) => {
+    const picked = { ...d.picked };
+    if (picked[key]) delete picked[key];
+    else picked[key] = true;
+    return { ...d, picked };
+  });
+
+  const addPickedSinLines = () => {
+    const defaultSalesAccount = revenueAccounts.find((a) => String(a.accountNumber) === '4001') || null;
+    const added = [];
+    sinDialog.list.forEach((sin) => {
+      sin.lines.forEach((l) => {
+        if (!sinDialog.picked[sinKey(sin._id, l.inventoryItem)]) return;
+        const open = Math.max(0, l.qtyAvailable - qtyOnForm(sin._id, l.inventoryItem));
+        if (open <= 0) return;
+        added.push({
+          ...emptyLine(),
+          account: defaultSalesAccount,
+          description: `${l.itemName}${l.itemCode ? ` (${l.itemCode})` : ''}`,
+          quantity: open,
+          sourceSin: sin._id,
+          sourceSinNumber: sin.sinNumber,
+          inventoryItem: l.inventoryItem,
+          unit: l.unit || '',
+          unitCost: l.unitCost || 0,
+          maxQty: open
+        });
+      });
+    });
+    if (!added.length) {
+      toast.error('Select at least one item that still has qty to invoice');
+      return;
+    }
+    setLines((prev) => {
+      const kept = prev.filter((l) => l.sourceSin || l.account || l.description.trim() || Number(l.amount) > 0);
+      return [...kept, ...added];
+    });
+    setSinDialog((d) => ({ ...d, open: false }));
+    toast.success(`${added.length} item(s) added — enter the selling price for each`);
   };
 
   // Grand Total Calculation
@@ -489,6 +583,17 @@ const StandardCustomerInvoiceForm = () => {
       return;
     }
 
+    const unpricedSin = lines.find((l) => l.sourceSin && Number(l.quantity) > 0 && !(Number(l.unitPrice) > 0));
+    if (unpricedSin) {
+      setError(`Enter the selling price for "${unpricedSin.description}" (${unpricedSin.sourceSinNumber})`);
+      return;
+    }
+    const overSin = lines.find((l) => l.sourceSin && l.maxQty != null && Number(l.quantity) > l.maxQty);
+    if (overSin) {
+      setError(`"${overSin.description}": only ${overSin.maxQty} ${overSin.unit} left to invoice on ${overSin.sourceSinNumber}`);
+      return;
+    }
+
     const validLines = lines.filter((l) => Number(l.amount) > 0);
     if (validLines.length === 0) {
       setError('Please add at least one line item with an amount');
@@ -522,7 +627,8 @@ const StandardCustomerInvoiceForm = () => {
           quantity: Number(l.quantity) || 1,
           unitPrice: Number(l.unitPrice) || Number(l.amount),
           amount: Number(l.amount),
-          account: l.account?._id || null
+          account: l.account?._id || null,
+          ...(l.sourceSin ? { sourceSin: l.sourceSin, inventoryItem: l.inventoryItem } : {})
         }))
       };
 
@@ -848,9 +954,14 @@ const StandardCustomerInvoiceForm = () => {
           <Divider sx={{ my: 3 }} />
 
           {/* Revenue Line Items Section */}
-          <Typography variant="h6" fontWeight={700} sx={{ mb: 2 }}>
-            Revenue & Line Item Breakdown
-          </Typography>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 2 }}>
+            <Typography variant="h6" fontWeight={700}>
+              Revenue & Line Item Breakdown
+            </Typography>
+            <Button variant="outlined" size="small" startIcon={<InventoryIcon />} onClick={openSinDialog}>
+              Load from Store Issue Note
+            </Button>
+          </Stack>
           <TableContainer component={Paper} variant="outlined" sx={{ borderRadius: 2, mb: 2 }}>
             <Table size="small">
               <TableHead sx={{ backgroundColor: 'action.hover' }}>
@@ -928,6 +1039,15 @@ const StandardCustomerInvoiceForm = () => {
                         value={row.description}
                         onChange={(e) => handleLineChange(idx, 'description', e.target.value)}
                       />
+                      {row.sourceSin && (
+                        <Stack direction="row" spacing={1} alignItems="center" sx={{ mt: 0.5 }}>
+                          <Chip label={row.sourceSinNumber || 'SIN'} size="small" color="info" variant="outlined" sx={{ height: 20, fontSize: 11 }} />
+                          <Typography variant="caption" color="text.secondary">
+                            Cost {formatPKR(row.unitCost)}{row.unit ? ` / ${row.unit}` : ''}
+                            {row.maxQty != null ? ` · ${row.maxQty} open` : ''}
+                          </Typography>
+                        </Stack>
+                      )}
                     </TableCell>
 
                     {/* Qty */}
@@ -938,7 +1058,8 @@ const StandardCustomerInvoiceForm = () => {
                         type="number"
                         value={row.quantity}
                         onChange={(e) => handleLineChange(idx, 'quantity', e.target.value)}
-                        inputProps={{ min: 1, style: { textAlign: 'right' } }}
+                        inputProps={{ min: 1, ...(row.maxQty != null ? { max: row.maxQty } : {}), style: { textAlign: 'right' } }}
+                        error={row.maxQty != null && Number(row.quantity) > row.maxQty}
                       />
                     </TableCell>
 
@@ -948,11 +1069,21 @@ const StandardCustomerInvoiceForm = () => {
                         fullWidth
                         size="small"
                         type="number"
-                        placeholder="0.00"
                         value={row.unitPrice}
                         onChange={(e) => handleLineChange(idx, 'unitPrice', e.target.value)}
                         inputProps={{ min: 0, step: 0.01, style: { textAlign: 'right' } }}
+                        placeholder={row.sourceSin ? 'Selling price' : '0.00'}
+                        error={Boolean(row.sourceSin) && !(Number(row.unitPrice) > 0)}
                       />
+                      {row.sourceSin && Number(row.unitPrice) > 0 && row.unitCost > 0 && (
+                        <Typography
+                          variant="caption"
+                          color={Number(row.unitPrice) >= row.unitCost ? 'success.main' : 'error.main'}
+                          sx={{ display: 'block', mt: 0.5 }}
+                        >
+                          Margin {formatPKR((Number(row.unitPrice) - row.unitCost) * (Number(row.quantity) || 0))}
+                        </Typography>
+                      )}
                     </TableCell>
 
                     {/* Amount */}
@@ -1062,6 +1193,92 @@ const StandardCustomerInvoiceForm = () => {
           </Button>
         </Stack>
       </Paper>
+
+      {/* Load from Store Issue Note Dialog */}
+      <Dialog open={sinDialog.open} onClose={() => setSinDialog((d) => ({ ...d, open: false }))} maxWidth="lg" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Load items from Store Issue Note — {selectedCustomer?.name}</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Cost (COGS / Inventory) was already posted when the store issued these items. Pick the items to bill — you enter the selling price on the invoice.
+          </Typography>
+          <TextField
+            size="small"
+            fullWidth
+            placeholder="Search SIN number, department, item name or code… (press Enter)"
+            value={sinDialog.search}
+            onChange={(e) => setSinDialog((d) => ({ ...d, search: e.target.value }))}
+            onKeyDown={(e) => { if (e.key === 'Enter') fetchSins(sinDialog.search); }}
+            sx={{ mb: 2 }}
+          />
+          {sinDialog.loading ? (
+            <Box sx={{ py: 4, display: 'flex', justifyContent: 'center' }}><CircularProgress size={28} /></Box>
+          ) : sinDialog.list.length === 0 ? (
+            <Alert severity="info">No customer-wise Store Issue Notes for {selectedCustomer?.name} with qty left to invoice.</Alert>
+          ) : (
+            <Stack spacing={1.5}>
+              {sinDialog.list.map((sin) => (
+                <Paper key={sin._id} variant="outlined" sx={{ borderRadius: 2 }}>
+                  <Stack direction="row" spacing={1.5} alignItems="center" sx={{ px: 2, py: 1, backgroundColor: 'action.hover' }} flexWrap="wrap">
+                    <Typography fontWeight={700}>{sin.sinNumber}</Typography>
+                    <Typography variant="body2" color="text.secondary">{toDateInput(sin.issueDate)}</Typography>
+                    {[sin.project, sin.department, sin.requiredFor].filter(Boolean).map((t) => (
+                      <Typography key={t} variant="body2" color="text.secondary">· {t}</Typography>
+                    ))}
+                    <Box sx={{ flexGrow: 1 }} />
+                    <Chip size="small" label={SIN_STATUS[sin.invoiceStatus]?.label} color={SIN_STATUS[sin.invoiceStatus]?.color} />
+                  </Stack>
+                  <Table size="small">
+                    <TableHead>
+                      <TableRow>
+                        <TableCell padding="checkbox" />
+                        <TableCell sx={{ fontWeight: 700 }}>ITEM</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }} align="right">ISSUED</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }} align="right">INVOICED</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }} align="right">OPEN</TableCell>
+                        <TableCell sx={{ fontWeight: 700 }} align="right">COST / UNIT</TableCell>
+                      </TableRow>
+                    </TableHead>
+                    <TableBody>
+                      {sin.lines.map((l) => {
+                        const key = sinKey(sin._id, l.inventoryItem);
+                        const open = Math.max(0, l.qtyAvailable - qtyOnForm(sin._id, l.inventoryItem));
+                        return (
+                          <TableRow key={key} hover onClick={() => open > 0 && togglePicked(key)} sx={{ cursor: open > 0 ? 'pointer' : 'default', opacity: open > 0 ? 1 : 0.5 }}>
+                            <TableCell padding="checkbox">
+                              <Checkbox size="small" disabled={open <= 0} checked={Boolean(sinDialog.picked[key]) && open > 0} />
+                            </TableCell>
+                            <TableCell>
+                              {l.itemName}
+                              {l.itemCode && <Typography component="span" variant="caption" color="text.secondary"> ({l.itemCode})</Typography>}
+                            </TableCell>
+                            <TableCell align="right">{l.qtyIssued} {l.unit}</TableCell>
+                            <TableCell align="right">{l.qtyInvoiced}</TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700 }}>
+                              {open}
+                              {open < l.qtyAvailable && <Typography component="span" variant="caption" color="text.secondary"> (rest on this form)</Typography>}
+                            </TableCell>
+                            <TableCell align="right">{formatPKR(l.unitCost)}</TableCell>
+                          </TableRow>
+                        );
+                      })}
+                    </TableBody>
+                  </Table>
+                </Paper>
+              ))}
+            </Stack>
+          )}
+        </DialogContent>
+        <DialogActions sx={{ p: 2 }}>
+          <Button onClick={() => setSinDialog((d) => ({ ...d, open: false }))} color="inherit">Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={addPickedSinLines}
+            disabled={!Object.keys(sinDialog.picked).length}
+          >
+            Add {Object.keys(sinDialog.picked).length || ''} item(s) to invoice
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Quick Add Revenue Account Dialog */}
       <Dialog open={newAccountDialog} onClose={() => setNewAccountDialog(false)} maxWidth="sm" fullWidth>

@@ -3,7 +3,8 @@ import {
   Box, Typography, Paper, Button, Table, TableBody, TableCell, TableContainer,
   TableHead, TableRow, TablePagination, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Alert, CircularProgress,
-  Avatar, useTheme, alpha, Chip, Grid, Divider, Checkbox
+  Avatar, useTheme, alpha, Chip, Grid, Divider, Checkbox, Autocomplete,
+  ToggleButton, ToggleButtonGroup
 } from '@mui/material';
 import {
   ExitToApp as IssueIcon, Add as AddIcon, Visibility as ViewIcon,
@@ -35,6 +36,8 @@ const GoodsIssue = () => {
   const [inventory, setInventory] = useState([]);
   const [costCenters, setCostCenters] = useState([]);
   const [projects, setProjects] = useState([]);
+  // Customer-wise SINs pick from the same Finance → Customers list as AR invoices
+  const [customers, setCustomers] = useState([]);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(10);
   const [totalItems, setTotalItems] = useState(0);
@@ -64,6 +67,8 @@ const GoodsIssue = () => {
     issuingLocation: 'Store',
     store: '',
     project: '',
+    issueType: 'project',
+    customer: '',
     costCenter: '',
     costCenterCode: '',
     costCenterName: '',
@@ -96,6 +101,7 @@ const GoodsIssue = () => {
     loadInventory();
     loadCostCenters();
     loadProjects();
+    loadCustomers();
     loadMainStores();
   }, [page, rowsPerPage, search, departmentFilter]);
 
@@ -380,6 +386,15 @@ const GoodsIssue = () => {
     }
   };
 
+  const loadCustomers = async () => {
+    try {
+      const res = await api.get('/procurement/goods-issue-customers');
+      setCustomers(res.data?.data || []);
+    } catch (e) {
+      setCustomers([]);
+    }
+  };
+
   const loadProjects = async () => {
     try {
       const res = await api.get('/finance/fixed-assets/projects');
@@ -426,6 +441,8 @@ const GoodsIssue = () => {
       issuingLocation: 'Store',
       store: '',
       project: '',
+      issueType: 'project',
+      customer: '',
       costCenter: '',
       costCenterCode: '',
       costCenterName: '',
@@ -445,8 +462,13 @@ const GoodsIssue = () => {
   };
 
   const handleSubmit = async () => {
+    const isCustomerIssue = formData.issueType === 'customer';
+    if (isCustomerIssue && !formData.customer) {
+      setError('Please select the customer');
+      return;
+    }
     if (!formData.project) {
-      setError('Please select a project');
+      setError(isCustomerIssue ? 'Please select the project whose stock is being issued' : 'Please select a project');
       return;
     }
     try {
@@ -459,6 +481,8 @@ const GoodsIssue = () => {
       } = formData;
       const payload = {
         ...formRest,
+        issueType: isCustomerIssue ? 'customer' : 'project',
+        customer: isCustomerIssue ? formData.customer : undefined,
         referenceIndent: referenceIndent || undefined,
         referencePurchaseOrder: referencePurchaseOrder || undefined,
         referenceGoodsReceive: referenceGoodsReceive || undefined,
@@ -644,7 +668,7 @@ const GoodsIssue = () => {
               <TableRow>
                 <TableCell>SIN #</TableCell>
                 <TableCell>Date</TableCell>
-                <TableCell>Department</TableCell>
+                <TableCell>Department / Customer</TableCell>
                 <TableCell>Cost Center</TableCell>
                 <TableCell>Requested By</TableCell>
                 <TableCell>Items</TableCell>
@@ -663,7 +687,11 @@ const GoodsIssue = () => {
                   <TableRow key={issue._id} hover>
                     <TableCell><Typography variant="body2" fontWeight="bold">{issue.sinNumber || issue.issueNumber}</Typography></TableCell>
                     <TableCell>{formatDate(issue.issueDate)}</TableCell>
-                    <TableCell>{issue.departmentName || departments.find(d => d.value === issue.department)?.label || issue.department}</TableCell>
+                    <TableCell>
+                      {issue.issueType === 'customer'
+                        ? <><Chip label="Customer" size="small" color="info" variant="outlined" sx={{ mr: 0.5, height: 20 }} />{issue.customerName}</>
+                        : (issue.departmentName || departments.find(d => d.value === issue.department)?.label || issue.department)}
+                    </TableCell>
                     <TableCell>{issue.costCenterName || issue.costCenter?.name || issue.costCenterCode || '-'}</TableCell>
                     <TableCell>{issue.requestedByName || issue.requestedBy?.firstName || '-'}</TableCell>
                     <TableCell>{issue.totalItems || 0}</TableCell>
@@ -708,8 +736,43 @@ const GoodsIssue = () => {
         <DialogContent>
           <Grid container spacing={2} sx={{ mt: 1 }}>
             <Grid item xs={12}><Typography variant="overline" color="textSecondary">Details</Typography></Grid>
+            <Grid item xs={12}>
+              <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mb: 0.5 }}>Issue Type</Typography>
+              <ToggleButtonGroup
+                exclusive
+                size="small"
+                color="primary"
+                value={formData.issueType || 'project'}
+                onChange={(_, v) => v && setFormData({ ...formData, issueType: v, customer: v === 'customer' ? formData.customer : '' })}
+              >
+                <ToggleButton value="project">Project (internal use)</ToggleButton>
+                <ToggleButton value="customer">Customer (sale)</ToggleButton>
+              </ToggleButtonGroup>
+              {formData.issueType === 'customer' && (
+                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 0.5 }}>
+                  This SIN will appear in Finance → AR Invoices under the selected customer for billing at selling price.
+                </Typography>
+              )}
+            </Grid>
             <Grid item xs={12} md={6}>
-              <TextField fullWidth select label="Project *" value={formData.project || ''} onChange={(e) => setFormData({ ...formData, project: e.target.value })} required>
+              {formData.issueType === 'customer' && (
+                <Autocomplete
+                  options={customers}
+                  getOptionLabel={(c) => (c?.name ? `${c.name}${c.company && c.company !== c.name ? ` (${c.company})` : ''}` : '')}
+                  value={customers.find((c) => String(c._id) === String(formData.customer)) || null}
+                  onChange={(_, c) => setFormData({ ...formData, customer: c?._id || '' })}
+                  isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
+                  renderInput={(params) => (
+                    <TextField {...params} label="Customer *" required helperText="From Finance → Customers" />
+                  )}
+                  sx={{ mb: 1 }}
+                />
+              )}
+              <TextField
+                fullWidth select
+                label={formData.issueType === 'customer' ? 'Issue Stock From Project *' : 'Project *'}
+                helperText={formData.issueType === 'customer' ? "Items are taken out of this project's stock" : undefined}
+                value={formData.project || ''} onChange={(e) => setFormData({ ...formData, project: e.target.value })} required>
                 <MenuItem value="">Select Project</MenuItem>
                 {projects.map((p) => (
                   <MenuItem key={p._id} value={p._id}>{p.name} {p.projectId ? `(${p.projectId})` : ''}</MenuItem>
@@ -879,7 +942,7 @@ const GoodsIssue = () => {
             processedIndentRef.current = null;
             window.history.replaceState({}, document.title);
           }}>Cancel</Button>
-          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.items.some((i) => i.inventoryItem && (Number(i.qtyIssued) || 0) > 0)}>
+          <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || (formData.issueType === 'customer' && !formData.customer) || !formData.items.some((i) => i.inventoryItem && (Number(i.qtyIssued) || 0) > 0)}>
             Create Store Issue Note
           </Button>
         </DialogActions>
@@ -914,6 +977,14 @@ const GoodsIssue = () => {
                 <Grid item xs={12} md={6}>
                   <Typography variant="caption" color="textSecondary">SIN No.</Typography>
                   <Typography variant="body1" fontWeight="bold">{viewDialog.data.sinNumber || viewDialog.data.issueNumber || '—'}</Typography>
+                  {viewDialog.data.issueType === 'customer' && (
+                    <>
+                      <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Issued To Customer</Typography>
+                      <Typography variant="body2" fontWeight="bold">{viewDialog.data.customerName || '—'}</Typography>
+                      <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Stock From Project</Typography>
+                      <Typography variant="body2">{viewDialog.data.project?.name || '—'}</Typography>
+                    </>
+                  )}
                   <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Issuing Location</Typography>
                   <Typography variant="body2">{viewDialog.data.issuingLocation || '—'}</Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Cost Center</Typography>

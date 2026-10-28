@@ -5300,6 +5300,20 @@ router.post('/goods-receive',
 // @route   GET /api/procurement/goods-issue
 // @desc    Get all goods issue records
 // @access  Private (Procurement and Admin)
+// Customer dropdown for customer-wise SINs — reads the same Finance → Customers list as AR invoices
+router.get('/goods-issue-customers',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const SalesCustomer = require('../models/sales/SalesCustomer');
+    const customers = await SalesCustomer.find({ status: { $ne: 'inactive' } })
+      .select('name company phone email')
+      .sort({ name: 1 })
+      .limit(5000)
+      .lean();
+    res.json({ success: true, data: customers });
+  })
+);
+
 router.get('/goods-issue',
   authorize('super_admin', 'admin', 'procurement_manager'),
   asyncHandler(async (req, res) => {
@@ -5321,7 +5335,8 @@ router.get('/goods-issue',
         { sinNumber: { $regex: search, $options: 'i' } },
         { departmentName: { $regex: search, $options: 'i' } },
         { requestedByName: { $regex: search, $options: 'i' } },
-        { costCenterName: { $regex: search, $options: 'i' } }
+        { costCenterName: { $regex: search, $options: 'i' } },
+        { customerName: { $regex: search, $options: 'i' } }
       ];
     }
 
@@ -5363,6 +5378,7 @@ router.get('/goods-issue/:id',
       .populate('requestedBy', 'firstName lastName email')
       .populate('issuedBy', 'firstName lastName email')
       .populate('costCenter', 'code name department')
+      .populate('project', 'name projectId')
       .populate('referenceIndent', 'indentNumber title status')
       .populate('referencePurchaseOrder', 'orderNumber status totalAmount')
       .populate('referenceGoodsReceive', 'receiveNumber poNumber status')
@@ -5384,6 +5400,8 @@ router.post('/goods-issue',
   [
     body('issueDate').optional().isISO8601(),
     body('project').isMongoId().withMessage('Valid project ID is required'),
+    body('issueType').optional().isIn(['project', 'customer']).withMessage('Issue type must be project or customer'),
+    body('customer').if(body('issueType').equals('customer')).isMongoId().withMessage('Select the customer for a customer-wise SIN'),
     body('department').isIn(['hr', 'admin', 'procurement', 'sales', 'finance', 'audit', 'general', 'it']).withMessage('Valid department is required'),
     body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
     body('items.*.inventoryItem').isMongoId().withMessage('Valid inventory item ID is required'),
@@ -5408,6 +5426,16 @@ router.post('/goods-issue',
     } = req.body;
     const normalizedCostCenter = (typeof costCenter === 'string' && costCenter.trim() === '') ? undefined : costCenter;
     const normalizedRequestedBy = (typeof requestedBy === 'string' && requestedBy.trim() === '') ? undefined : requestedBy;
+
+    const issueType = req.body.issueType === 'customer' ? 'customer' : 'project';
+    let customerDoc = null;
+    if (issueType === 'customer') {
+      const SalesCustomer = require('../models/sales/SalesCustomer');
+      customerDoc = await SalesCustomer.findById(req.body.customer).select('name').lean();
+      if (!customerDoc) {
+        return res.status(400).json({ success: false, message: 'Customer not found' });
+      }
+    }
 
     // Validate project exists
     const projectDoc = await Project.findById(project);
@@ -5520,6 +5548,9 @@ router.post('/goods-issue',
       store: docStoreId || undefined,
       storeSnapshot,
       project: project,
+      issueType,
+      customer: customerDoc?._id || null,
+      customerName: customerDoc?.name || '',
       referenceIndent: referenceIndent || undefined,
       referencePurchaseOrder: referencePurchaseOrder || undefined,
       referenceGoodsReceive: referenceGoodsReceive || undefined,

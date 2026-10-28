@@ -37,10 +37,30 @@ const goodsIssueSchema = new mongoose.Schema({
     trim: true,
     default: 'Main Store'
   },
+  /** Project stock the items come out of — required for both issue types (stock is held per store + project) */
   project: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Project',
     required: true
+  },
+  /** 'project' = internal use; 'customer' = sold to a customer and billed later from AR Invoices */
+  issueType: {
+    type: String,
+    enum: ['project', 'customer'],
+    default: 'project',
+    index: true
+  },
+  /** Same Finance → Customers list the AR invoice uses */
+  customer: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'SalesCustomer',
+    default: null,
+    index: true
+  },
+  customerName: {
+    type: String,
+    trim: true,
+    default: ''
   },
   /** Optional traceability — SIN always issues stock by inventory line; these link back to the business document */
   referenceIndent: {

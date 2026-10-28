@@ -189,7 +189,15 @@ const accountsReceivableSchema = new mongoose.Schema({
       type: mongoose.Schema.Types.ObjectId,
       ref: 'Account',
       default: null
-    }
+    },
+    // Set when the line was billed from a Store Issue Note — the SIN already posted COGS at cost,
+    // this line carries the selling price. Invoiced qty per SIN line is summed from these.
+    sourceSin: { type: mongoose.Schema.Types.ObjectId, ref: 'GoodsIssue', default: null },
+    sourceSinNumber: { type: String, trim: true, default: '' },
+    inventoryItem: { type: mongoose.Schema.Types.ObjectId, ref: 'Inventory', default: null },
+    itemCode: { type: String, trim: true, default: '' },
+    unit: { type: String, trim: true, default: '' },
+    unitCost: { type: Number, default: 0 }
   }],
   // Payment history
   payments: [{
@@ -355,6 +363,7 @@ accountsReceivableSchema.index({ status: 1 });
 accountsReceivableSchema.index({ department: 1 });
 accountsReceivableSchema.index({ module: 1 });
 accountsReceivableSchema.index({ balanceDue: 1 });
+accountsReceivableSchema.index({ 'lineItems.sourceSin': 1 });
 
 // Virtuals
 accountsReceivableSchema.virtual('isOverdue').get(function() {
