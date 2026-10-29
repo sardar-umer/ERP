@@ -818,6 +818,16 @@ const EmployeeView = () => {
                     <Typography variant="body1">{formatDate(employee.confirmationDate)}</Typography>
                   </Grid>
                 )}
+                {employee.terminationDate && (
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="textSecondary">
+                      {employee.employmentStatus === 'Active'
+                        ? 'Leaving Date (last working day)'
+                        : employee.employmentStatus === 'Reinstated' ? 'Previous Separation Date' : 'Termination/Separation Date'}
+                    </Typography>
+                    <Typography variant="body1">{formatDate(employee.terminationDate)}</Typography>
+                  </Grid>
+                )}
                 {employee.foreignBankAccount && (
                   <Grid item xs={6}>
                     <Typography variant="body2" color="textSecondary">Foreign Bank Account</Typography>

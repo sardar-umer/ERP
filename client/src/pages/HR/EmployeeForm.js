@@ -3576,6 +3576,21 @@ const EmployeeForm = () => {
                 )}
               </FormControl>
             </Grid>
+            {['Active', 'Reinstated'].includes(formik.values.employmentStatus) && (
+              <Grid item xs={12} md={6}>
+                {/* Leaving while still employed: payroll tax closes the tax year in this month (final-month true-up) */}
+                <TextField
+                  fullWidth
+                  type="date"
+                  name="terminationDate"
+                  label="Leaving Date (last working day)"
+                  InputLabelProps={{ shrink: true }}
+                  value={formik.values.terminationDate}
+                  onChange={formik.handleChange}
+                  helperText="Only if the employee is leaving. Payroll tax settles their year in this month; set status to Resigned after their final payroll."
+                />
+              </Grid>
+            )}
             {['Terminated', 'Resigned', 'Inactive', 'Retired'].includes(formik.values.employmentStatus) && (
               <>
                 <Grid item xs={12} md={6}>
