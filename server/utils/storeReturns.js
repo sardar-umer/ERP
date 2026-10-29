@@ -230,4 +230,59 @@ const cancelStoreIssue = async ({ sinId, reason, userId }) => {
   return { srn };
 };
 
-module.exports = { sinReturnableLines, postStoreReturn, cancelStoreIssue };
+/**
+ * Where each SIN stands after its Store Return Notes and AR invoices (read-only, batched for lists).
+ * returnStatus: none | partial | full — billingStatus (customer SINs): none | partial | full of the net issued qty.
+ */
+const sinFlowSummaries = async (sins) => {
+  const list = (sins || []).filter(Boolean);
+  if (!list.length) return new Map();
+  const ids = list.map((s) => s._id);
+  const customerIds = list.filter((s) => s.issueType === 'customer').map((s) => s._id);
+  // require (not mongoose.model) — these models may not be registered yet when the SIN list is the first caller
+  const StoreReturn = require('../models/procurement/StoreReturn');
+  const AccountsReceivable = require('../models/finance/AccountsReceivable');
+  const [returnRows, invoiceRows] = await Promise.all([
+    StoreReturn.aggregate([
+      { $match: { goodsIssue: { $in: ids } } },
+      { $group: { _id: '$goodsIssue', count: { $sum: 1 } } }
+    ]),
+    customerIds.length
+      ? AccountsReceivable.aggregate([
+        { $match: { 'lineItems.sourceSin': { $in: customerIds }, status: { $ne: 'cancelled' } } },
+        { $unwind: '$lineItems' },
+        { $match: { 'lineItems.sourceSin': { $in: customerIds } } },
+        { $group: { _id: '$lineItems.sourceSin', qty: { $sum: '$lineItems.quantity' }, invoices: { $addToSet: '$_id' } } }
+      ])
+      : []
+  ]);
+  const returnsBySin = new Map(returnRows.map((r) => [String(r._id), r.count]));
+  const invoicedBySin = new Map(invoiceRows.map((r) => [String(r._id), { qty: r.qty, count: r.invoices.length }]));
+
+  return new Map(list.map((sin) => {
+    const id = String(sin._id);
+    const qtyIssued = r2((sin.items || []).reduce((t, it) => t + (Number(it.qtyIssued ?? it.quantity) || 0), 0));
+    const qtyReturned = r2((sin.items || []).reduce((t, it) => t + (Number(it.qtyReturnedToStore) || 0), 0));
+    const inv = invoicedBySin.get(id) || { qty: 0, count: 0 };
+    const qtyInvoiced = r2(inv.qty);
+    const netIssued = Math.max(0, r2(qtyIssued - qtyReturned));
+    const qtyOpen = Math.max(0, r2(netIssued - qtyInvoiced));
+    const returnStatus = qtyReturned <= 0 ? 'none' : qtyReturned + 1e-9 >= qtyIssued ? 'full' : 'partial';
+    let billingStatus = null;
+    // Nothing left after returns = nothing to bill, so no billing status
+    if (sin.issueType === 'customer' && (netIssued > 0 || qtyInvoiced > 0)) {
+      billingStatus = qtyInvoiced <= 0 ? 'none' : qtyInvoiced + 1e-9 >= netIssued ? 'full' : 'partial';
+    }
+    const issued = sin.status === 'Issued';
+    return [id, {
+      qtyIssued, qtyReturned, qtyInvoiced, qtyOpen,
+      returnStatus, billingStatus,
+      returnCount: returnsBySin.get(id) || 0,
+      invoiceCount: inv.count,
+      canReturn: issued && qtyOpen > 0,
+      canCancel: issued && qtyInvoiced <= 0 && qtyOpen > 0
+    }];
+  }));
+};
+
+module.exports = { sinReturnableLines, sinFlowSummaries, postStoreReturn, cancelStoreIssue };

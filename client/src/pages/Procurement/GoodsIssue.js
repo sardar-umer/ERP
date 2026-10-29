@@ -4,7 +4,7 @@ import {
   TableHead, TableRow, TablePagination, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Alert, CircularProgress,
   Avatar, useTheme, alpha, Chip, Grid, Divider, Autocomplete,
-  ToggleButton, ToggleButtonGroup, Tabs, Tab, Tooltip
+  ToggleButton, ToggleButtonGroup, Tabs, Tab, Tooltip, Stack
 } from '@mui/material';
 import {
   ExitToApp as IssueIcon, Add as AddIcon, Visibility as ViewIcon,
@@ -28,6 +28,33 @@ const formatSINDate = (d) => {
   const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
   return `${day} ${months[x.getMonth()]}, ${x.getFullYear()}`;
 };
+
+const RETURN_CHIP = { partial: { label: 'Partially Returned', color: 'warning' }, full: { label: 'Fully Returned', color: 'info' } };
+const BILLING_CHIP = { none: { label: 'Not Invoiced', color: 'default' }, partial: { label: 'Partially Invoiced', color: 'warning' }, full: { label: 'Invoiced', color: 'success' } };
+
+/** Return / billing position next to the SIN status (from the API's flow summary) */
+const SinFlowChips = ({ sin }) => {
+  const flow = sin?.flow;
+  if (!flow || sin.status === 'Cancelled') return null;
+  const ret = RETURN_CHIP[flow.returnStatus];
+  const bill = flow.billingStatus ? BILLING_CHIP[flow.billingStatus] : null;
+  return (
+    <>
+      {ret && (
+        <Tooltip title={`${flow.qtyReturned} of ${flow.qtyIssued} returned on ${flow.returnCount} SRN(s)`}>
+          <Chip label={ret.label} size="small" color={ret.color} variant="outlined" />
+        </Tooltip>
+      )}
+      {bill && (
+        <Tooltip title={`${flow.qtyInvoiced} invoiced${flow.invoiceCount ? ` on ${flow.invoiceCount} invoice(s)` : ''}`}>
+          <Chip label={bill.label} size="small" color={bill.color} variant="outlined" />
+        </Tooltip>
+      )}
+    </>
+  );
+};
+
+const SRN_KIND_LABEL = { return: 'Return', cancellation: 'Cancellation' };
 
 const GoodsIssue = ({ initialTab = 0 }) => {
   const theme = useTheme();
@@ -281,6 +308,62 @@ const GoodsIssue = ({ initialTab = 0 }) => {
     handleCreate();
   }, [searchParams]); // eslint-disable-line react-hooks/exhaustive-deps
 
+  /** GRN → form fields: its project/store (where the stock sits), its PO, and its lines as issue items */
+  const mapGrnToForm = (grn) => {
+    let skipped = 0;
+    const items = (grn.items || []).map((it) => {
+      const linkedId = it.inventoryItem?._id || it.inventoryItem;
+      let inv = linkedId ? inventory.find((x) => x._id === String(linkedId)) : null;
+      if (!inv && it.itemCode) inv = inventory.find((x) => x.itemCode === it.itemCode);
+      if (!inv && it.itemName) inv = inventory.find((x) => x.name === it.itemName);
+      if (!inv) { skipped += 1; return null; }
+      return {
+        ...emptyItem(),
+        inventoryItem: inv._id,
+        itemCode: inv.itemCode,
+        itemName: inv.name,
+        unit: inv.unit,
+        qtyIssued: Number(it.quantity ?? it.quantityReceived) || 1,
+        balanceQty: Number(inv.quantity) || 0,
+        subStore: it.subStore?._id || it.subStore || inv.subStore?._id || inv.subStore || '',
+        location: {
+          rack: it.location?.rack || inv.location?.rack || '',
+          shelf: it.location?.shelf || inv.location?.shelf || '',
+          bin: it.location?.bin || inv.location?.bin || ''
+        },
+        notes: it.notes || ''
+      };
+    }).filter(Boolean);
+    const patch = {};
+    const project = grn.project?._id || grn.project;
+    const store = grn.store?._id || grn.store;
+    if (project) patch.project = String(project);
+    if (store) patch.store = String(store);
+    if (grn.purchaseOrder?._id || grn.purchaseOrder) patch.referencePurchaseOrder = String(grn.purchaseOrder?._id || grn.purchaseOrder);
+    if (items.length > 0) patch.items = items;
+    return { patch, loaded: items.length, skipped };
+  };
+
+  // Picking a Reference GRN loads that GRN's items into the item list
+  const handleReferenceGrnChange = async (grnId) => {
+    setFormData((prev) => ({ ...prev, referenceGoodsReceive: grnId }));
+    if (!grnId) return;
+    try {
+      const res = await api.get(`/procurement/goods-receive/${grnId}`);
+      const grn = res.data?.data;
+      if (!grn) return;
+      const { patch, loaded, skipped } = mapGrnToForm(grn);
+      setFormData((prev) => ({ ...prev, ...patch, referenceGoodsReceive: grnId }));
+      if (loaded === 0) {
+        setError(`No items from ${grn.receiveNumber || 'this GRN'} are in inventory to issue.`);
+      } else {
+        setSuccess(`Loaded ${loaded} item(s) from ${grn.receiveNumber || 'GRN'}${skipped ? ` (${skipped} not in inventory, skipped)` : ''}`);
+      }
+    } catch (e) {
+      setError(e.response?.data?.message || 'Failed to load GRN items');
+    }
+  };
+
   useEffect(() => {
     const poId = searchParams.get('poId');
     const grnId = searchParams.get('grnId');
@@ -303,41 +386,15 @@ const GoodsIssue = ({ initialTab = 0 }) => {
           const grnRes = await api.get(`/procurement/goods-receive/${grnId}`);
           const grn = grnRes.data?.data;
           if (grn) {
+            const { patch } = mapGrnToForm(grn);
             next = {
               ...next,
-              project: grn.project?._id || grn.project || '',
-              store: grn.store?._id || grn.store || '',
+              ...patch,
+              referencePurchaseOrder: next.referencePurchaseOrder || patch.referencePurchaseOrder || '',
               issuingLocation: grn.storeSnapshot || 'Store',
               requiredFor: grn.narration || '',
               eprNo: grn.poNumber || grn.receiveNumber || ''
             };
-            if (!next.referencePurchaseOrder && grn.purchaseOrder?._id) {
-              next.referencePurchaseOrder = grn.purchaseOrder._id;
-            }
-
-            const mappedItems = (grn.items || []).map((it) => {
-              const linkedId = it.inventoryItem?._id || it.inventoryItem;
-              let inv = linkedId ? inventory.find((x) => x._id === String(linkedId)) : null;
-              if (!inv && it.itemCode) inv = inventory.find((x) => x.itemCode === it.itemCode);
-              if (!inv && it.itemName) inv = inventory.find((x) => x.name === it.itemName);
-              if (!inv) return null;
-              const available = getAvailableStock(inv._id);
-              return {
-                inventoryItem: inv._id,
-                itemCode: inv.itemCode,
-                itemName: inv.name,
-                unit: inv.unit,
-                qtyReturned: 0,
-                qtyIssued: Number(it.quantity) || 1,
-                balanceQty: available,
-                issuedFromNewStock: true,
-                issuedFromOldStock: false,
-                subStore: '',
-                location: { rack: '', shelf: '', bin: '' },
-                notes: it.notes || ''
-              };
-            }).filter(Boolean);
-            if (mappedItems.length > 0) next.items = mappedItems;
           }
         } else if (poId) {
           // If only PO is provided, keep refs and context fields prefilled.
@@ -735,7 +792,12 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                     <TableCell>{issue.requestedByName || issue.requestedBy?.firstName || '-'}</TableCell>
                     <TableCell>{issue.totalItems || 0}</TableCell>
                     <TableCell>{issue.totalQuantity || 0}</TableCell>
-                    <TableCell><Chip label={issue.status} size="small" color={issue.status === 'Issued' ? 'success' : issue.status === 'Cancelled' ? 'error' : 'default'} /></TableCell>
+                    <TableCell>
+                      <Stack direction="row" gap={0.5} flexWrap="wrap">
+                        <Chip label={issue.status} size="small" color={issue.status === 'Issued' ? 'success' : issue.status === 'Cancelled' ? 'error' : 'default'} />
+                        <SinFlowChips sin={issue} />
+                      </Stack>
+                    </TableCell>
                     <TableCell>
                       <IconButton size="small" onClick={async () => {
                         setViewDialog({ open: true, data: issue });
@@ -754,16 +816,20 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                               <GatePassIcon fontSize="small" />
                             </IconButton>
                           </Tooltip>
-                          <Tooltip title="Return items to store">
-                            <IconButton size="small" color="primary" onClick={() => setReturnDialog({ open: true, sin: issue })}>
-                              <ReturnIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
-                          <Tooltip title="Cancel SIN (reverse all)">
-                            <IconButton size="small" color="error" onClick={() => setCancelDialog({ open: true, sin: issue })}>
-                              <CancelIcon fontSize="small" />
-                            </IconButton>
-                          </Tooltip>
+                          {(issue.flow ? issue.flow.canReturn : true) && (
+                            <Tooltip title="Return items to store">
+                              <IconButton size="small" color="primary" onClick={() => setReturnDialog({ open: true, sin: issue })}>
+                                <ReturnIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {(issue.flow ? issue.flow.canCancel : true) && (
+                            <Tooltip title="Cancel SIN (reverse all)">
+                              <IconButton size="small" color="error" onClick={() => setCancelDialog({ open: true, sin: issue })}>
+                                <CancelIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
                         </>
                       )}
                     </TableCell>
@@ -897,7 +963,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                 <MenuItem value="">None</MenuItem>
                 {poOptions.map((po) => <MenuItem key={po._id} value={po._id}>{po.orderNumber} ({po.status})</MenuItem>)}
               </TextField>
-              <TextField fullWidth select label="Reference GRN (optional)" value={formData.referenceGoodsReceive || ''} onChange={(e) => setFormData({ ...formData, referenceGoodsReceive: e.target.value })} sx={{ mt: 1 }}>
+              <TextField fullWidth select label="Reference GRN (optional)" value={formData.referenceGoodsReceive || ''} onChange={(e) => handleReferenceGrnChange(e.target.value)} sx={{ mt: 1 }}>
                 <MenuItem value="">None</MenuItem>
                 {grnOptions.map((g) => <MenuItem key={g._id} value={g._id}>{g.receiveNumber || g.poNumber || g._id} ({g.status})</MenuItem>)}
               </TextField>
@@ -1103,6 +1169,72 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                   </TableBody>
                 </Table>
               </TableContainer>
+              {/* Linked documents: Store Return Notes and AR invoices raised against this SIN */}
+              {(viewDialog.data.flow || (viewDialog.data.linkedReturns || []).length > 0) && (
+                <Box sx={{ mb: 2 }}>
+                  <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap" sx={{ mb: 1 }}>
+                    <Typography variant="subtitle2" fontWeight="bold">Linked Documents</Typography>
+                    <SinFlowChips sin={viewDialog.data} />
+                    {viewDialog.data.flow && viewDialog.data.status === 'Issued' && (
+                      <Typography variant="caption" color="textSecondary">
+                        {viewDialog.data.flow.qtyOpen > 0
+                          ? `${viewDialog.data.flow.qtyOpen} still open to return${viewDialog.data.issueType === 'customer' ? ' or invoice' : ''}`
+                          : 'Nothing left to return — this SIN is closed'}
+                      </Typography>
+                    )}
+                  </Stack>
+                  <TableContainer component={Paper} variant="outlined">
+                    <Table size="small">
+                      <TableHead>
+                        <TableRow>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Document</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Type</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Date</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }}>Details</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }} align="right">Qty</TableCell>
+                          <TableCell sx={{ fontWeight: 'bold' }} align="right">Value</TableCell>
+                        </TableRow>
+                      </TableHead>
+                      <TableBody>
+                        {(viewDialog.data.linkedReturns || []).map((r) => (
+                          <TableRow key={r._id}>
+                            <TableCell sx={{ fontWeight: 600 }}>{r.returnNumber}</TableCell>
+                            <TableCell>
+                              <Chip size="small" variant="outlined" color={r.kind === 'cancellation' ? 'error' : 'primary'} label={`Store ${SRN_KIND_LABEL[r.kind] || 'Return'}`} />
+                            </TableCell>
+                            <TableCell>{formatSINDate(r.returnDate)}</TableCell>
+                            <TableCell>
+                              {r.reason || '—'}
+                              {r.createdBy?.firstName ? ` · ${r.createdBy.firstName} ${r.createdBy.lastName || ''}` : ''}
+                            </TableCell>
+                            <TableCell align="right">{r.totalQuantity || 0}</TableCell>
+                            <TableCell align="right">{(Number(r.totalValue) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
+                          </TableRow>
+                        ))}
+                        {(viewDialog.data.linkedInvoices || []).map((inv) => (
+                          <TableRow key={inv._id}>
+                            <TableCell sx={{ fontWeight: 600 }}>{inv.invoiceNumber || '—'}</TableCell>
+                            <TableCell>
+                              <Chip size="small" variant="outlined" color={inv.status === 'cancelled' ? 'default' : 'success'} label="AR Invoice" />
+                            </TableCell>
+                            <TableCell>{formatSINDate(inv.invoiceDate)}</TableCell>
+                            <TableCell sx={{ textTransform: 'capitalize' }}>{inv.status || '—'}</TableCell>
+                            <TableCell align="right">{inv.quantity || 0}</TableCell>
+                            <TableCell align="right">{(Number(inv.amount) || 0).toLocaleString(undefined, { maximumFractionDigits: 2 })}</TableCell>
+                          </TableRow>
+                        ))}
+                        {!(viewDialog.data.linkedReturns || []).length && !(viewDialog.data.linkedInvoices || []).length && (
+                          <TableRow>
+                            <TableCell colSpan={6} align="center" sx={{ color: 'text.secondary' }}>
+                              No returns{viewDialog.data.issueType === 'customer' ? ' or invoices' : ''} against this SIN yet
+                            </TableCell>
+                          </TableRow>
+                        )}
+                      </TableBody>
+                    </Table>
+                  </TableContainer>
+                </Box>
+              )}
               {/* Footer: Signatures (Returned By, Approved By, Issued By, Received By) */}
               <Divider sx={{ my: 2 }} />
               <Grid container spacing={2}>

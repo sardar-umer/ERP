@@ -5445,14 +5445,19 @@ router.get('/goods-issue',
       .populate('referenceGoodsReceive', 'receiveNumber poNumber status')
       .sort({ issueDate: -1 })
       .limit(limit * 1)
-      .skip((page - 1) * limit);
+      .skip((page - 1) * limit)
+      .lean();
     
     const total = await GoodsIssue.countDocuments(query);
+
+    // Return / billing position of each SIN, from its Store Return Notes and AR invoices
+    const { sinFlowSummaries } = require('../utils/storeReturns');
+    const flows = await sinFlowSummaries(issues);
     
     res.json({
       success: true,
       data: {
-        issues,
+        issues: issues.map((i) => ({ ...i, flow: flows.get(String(i._id)) || null })),
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(total / limit),
@@ -5658,8 +5663,33 @@ router.get('/goods-issue/:id',
     if (!issue) {
       return res.status(404).json({ success: false, message: 'Goods issue not found' });
     }
-    
-    res.json({ success: true, data: issue });
+
+    // Linked documents: Store Return Notes against this SIN and (customer SINs) the AR invoices billing it
+    const StoreReturn = require('../models/procurement/StoreReturn');
+    const AccountsReceivable = require('../models/finance/AccountsReceivable');
+    const { sinFlowSummaries } = require('../utils/storeReturns');
+    const [linkedReturns, linkedInvoices, flows] = await Promise.all([
+      StoreReturn.find({ goodsIssue: issue._id })
+        .select('returnNumber returnDate kind reason totalQuantity totalValue financePostingStatus createdBy')
+        .populate('createdBy', 'firstName lastName')
+        .sort({ returnDate: 1, createdAt: 1 })
+        .lean(),
+      issue.issueType === 'customer'
+        ? AccountsReceivable.aggregate([
+          { $match: { 'lineItems.sourceSin': issue._id } },
+          { $unwind: '$lineItems' },
+          { $match: { 'lineItems.sourceSin': issue._id } },
+          { $group: { _id: '$_id', invoiceNumber: { $first: '$invoiceNumber' }, invoiceDate: { $first: '$invoiceDate' }, status: { $first: '$status' }, quantity: { $sum: '$lineItems.quantity' }, amount: { $sum: '$lineItems.amount' } } },
+          { $sort: { invoiceDate: 1 } }
+        ])
+        : [],
+      sinFlowSummaries([issue])
+    ]);
+
+    res.json({
+      success: true,
+      data: { ...issue.toObject(), flow: flows.get(String(issue._id)) || null, linkedReturns, linkedInvoices }
+    });
   })
 );
 
