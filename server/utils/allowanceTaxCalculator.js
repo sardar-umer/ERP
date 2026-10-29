@@ -73,8 +73,7 @@ const buildTaxResult = ({
   arrearsAmt,
   priorFyArrears = 0,
   priorPaidMonths = null,
-  priorTaxDeducted = 0,
-  leavingDate = null,
+  priorMonths = null,
   normalSalaryBase = null,
   salaryBase,
   salaryExempt,
@@ -91,17 +90,10 @@ const buildTaxResult = ({
     monthlyTax,
     fyMonths,
     annualTaxableIncome,
-    annualTax,
-    finalMonthTrueUp = false,
-    taxRefundDue = 0
+    annualTax
   } = priorPaidMonths != null && payrollMonth
-    // Tax-year context known: the year is the months actually paid + months to come (Sidat method);
-    // a leaver's year ends at the leaving month, which is trued up against tax already deducted
-    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, arrearsAmt + priorFyArrears, priorPaidMonths, payrollMonth, {
-      payrollYear,
-      leavingDate,
-      priorTaxDeducted
-    })
+    // Tax-year context known: the year is the months actually paid + months to come (Sidat method)
+    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, arrearsAmt + priorFyArrears, priorPaidMonths, payrollMonth, priorMonths)
     : calculateMonthlyTaxFYAwareWithOneTimeArrears(
       salaryBase,
       arrearsAmt + priorFyArrears,
@@ -124,9 +116,6 @@ const buildTaxResult = ({
     priorFyArrears: Math.round(priorFyArrears),
     // Full-month taxable used for the rest of the FY when this month's pay is reduced
     normalMonthlyTaxable: Math.round(normalSalaryBase == null ? salaryBase : normalSalaryBase),
-    // Leaver's final month: year closed on actual pay; tax deducted beyond the year's tax is refundable
-    finalMonthTrueUp,
-    taxRefundDue,
     annualTaxableIncome,
     annualTax,
     fyMonths,
@@ -156,7 +145,7 @@ const calculateTaxLegacy = (
   hireDate = null,
   payrollMonth = null,
   payrollYear = null,
-  { priorFyArrears = 0, priorPaidMonths = null, priorTaxDeducted = 0, leavingDate = null, normalMainSalary = null } = {}
+  { priorFyArrears = 0, priorPaidMonths = null, priorMonths = null, normalMainSalary = null } = {}
 ) => {
   const salaryMedicalExempt = Math.round(mainSalary * 0.1);
   const salaryAfterMedical = mainSalary - salaryMedicalExempt;
@@ -170,8 +159,7 @@ const calculateTaxLegacy = (
     arrearsAmt,
     priorFyArrears: Math.max(0, Number(priorFyArrears) || 0),
     priorPaidMonths,
-    priorTaxDeducted,
-    leavingDate,
+    priorMonths,
     normalSalaryBase,
     salaryBase: salaryAfterMedical,
     salaryExempt: salaryMedicalExempt,
@@ -204,7 +192,8 @@ const calculateTaxLegacy = (
  *   priorFyArrears              — arrears paid in earlier months of this FY, kept in the annual figure
  *   priorPaidMonths             — payrolls already paid earlier in this FY; when given, the tax year is
  *                                  the months actually paid + months to come (instead of DOJ → June)
- *   priorTaxDeducted, leavingDate — a leaver's year ends at the leaving month, trued up in that month
+ *   priorMonths                 — those months in order; the year rolls month by month with partial-pay
+ *                                  months at their actual pay (see calculateMonthlyTaxPaidMonths)
  *   normalGrossSalary/Allowances — full-month pay for the rest of the FY when this month is reduced
  *                                  (partial-pay days, joining proration); omitted = this month's pay
  */
@@ -219,8 +208,7 @@ const calculatePayrollTaxWithSettings = ({
   payrollYear = null,
   priorFyArrears = 0,
   priorPaidMonths = null,
-  priorTaxDeducted = 0,
-  leavingDate = null,
+  priorMonths = null,
   normalGrossSalary = null,
   normalAllowances = null
 }) => {
@@ -237,8 +225,7 @@ const calculatePayrollTaxWithSettings = ({
     return calculateTaxLegacy(gross + totalAllowances, arrearsAmt, hireDate, payrollMonth, payrollYear, {
       priorFyArrears: priorArrears,
       priorPaidMonths,
-      priorTaxDeducted,
-      leavingDate,
+      priorMonths,
       normalMainSalary: hasNormal ? normalGross + additionalAllowancesTotal(normalAllow) : null
     });
   }
@@ -281,8 +268,7 @@ const calculatePayrollTaxWithSettings = ({
     arrearsAmt,
     priorFyArrears: priorArrears,
     priorPaidMonths,
-    priorTaxDeducted,
-    leavingDate,
+    priorMonths,
     normalSalaryBase,
     salaryBase,
     salaryExempt,
@@ -309,74 +295,92 @@ const priorFyMonthsFilter = (payrollMonth, payrollYear) => {
 };
 
 /**
+ * Pay of a payroll before a one-month salary cut (a cut reduces pay, not tax): gross, allowances, arrears
+ */
+const payBeforeSalaryCut = (payroll) => {
+  const cutFactor = Number(payroll.salaryPercentageCut?.factor) || 1;
+  const uncut = (v) => (cutFactor > 0 && cutFactor < 1 ? Math.round((Number(v) || 0) / cutFactor) : (Number(v) || 0));
+  const rawAllowances = payroll.allowances?.toObject?.() || payroll.allowances || {};
+  const allowances = cutFactor < 1
+    ? Object.fromEntries(Object.entries(rawAllowances).map(([k, slot]) => [
+      k, slot && typeof slot === 'object' && slot.amount != null ? { ...slot, amount: uncut(slot.amount) } : slot
+    ]))
+    : rawAllowances;
+  const grossSalary = uncut(
+    payroll.grossSalary ||
+    (payroll.basicSalary || 0) + (payroll.houseRentAllowance || 0) + (payroll.medicalAllowance || 0)
+  );
+  return { grossSalary, allowances, arrears: uncut(payroll.arrears), uncut };
+};
+
+/**
+ * An earlier month as the tax year counts it: taxable on the salary actually paid, and whether it was a
+ * partial-pay month (prorated, or salary paid below gross — e.g. unpaid days in imported months)
+ */
+const paidMonthForTax = (payroll, settings) => {
+  const { grossSalary, allowances, arrears, uncut } = payBeforeSalaryCut(payroll);
+  const earnedSalary = uncut(
+    (Number(payroll.totalEarnings) || 0) - additionalAllowancesTotal(payroll.allowances) - (Number(payroll.arrears) || 0)
+  );
+  const salaryPaid = earnedSalary > 0 && earnedSalary < grossSalary ? earnedSalary : grossSalary;
+  const partial = Number(payroll.proration?.factor) < 1 || salaryPaid < grossSalary - 1;
+  const { mainTaxableIncome } = calculatePayrollTaxWithSettings({
+    grossSalary: salaryPaid,
+    allowances,
+    employeeId: payroll.employee,
+    settings
+  });
+  return { month: payroll.month, taxable: Math.round(mainTaxableIncome), partial, arrears };
+};
+
+/**
  * Tax-year context per employee from their payrolls earlier in this FY (not Cancelled):
- *   priorFyArrears   — arrears paid, kept in the annual taxable figure until June
- *   priorPaidMonths  — months already paid, so a month with no pay (e.g. a joining month paid later as
- *                      arrears) is not projected
- *   priorTaxDeducted — income tax already deducted, for a leaver's final-month true-up
- *   leavingDate      — employee's termination date, else their final settlement's last working date
- * @returns {Promise<Map<string, { priorFyArrears, priorPaidMonths, priorTaxDeducted, leavingDate }>>}
+ *   priorFyArrears  — arrears paid, kept in the annual taxable figure until June
+ *   priorPaidMonths — months already paid, so a month with no pay (e.g. a joining month paid later as
+ *                     arrears) is not projected
+ *   priorMonths     — those months in order (taxable as paid, partial-pay flag, arrears), so the year
+ *                     rolls month by month and a partial month counts at its actual pay
+ * @returns {Promise<Map<string, { priorFyArrears: number, priorPaidMonths: number, priorMonths: Array }>>}
  *          employeeId → context (employees with no earlier payroll are absent → use taxYearContextFor)
  */
 const loadTaxYearContextByEmployee = async ({ payrollMonth, payrollYear, employeeIds = null }) => {
-  const map = new Map();
   const monthsFilter = priorFyMonthsFilter(payrollMonth, payrollYear);
-  if (monthsFilter) {
-    const Payroll = require('../models/hr/Payroll');
-    const match = { ...monthsFilter, status: { $ne: 'Cancelled' } };
-    if (employeeIds) match.employee = { $in: employeeIds };
-    const rows = await Payroll.aggregate([
-      { $match: match },
-      // one payroll per month counts once, even if a month was regenerated
-      {
-        $group: {
-          _id: { employee: '$employee', year: '$year', month: '$month' },
-          arrears: { $max: '$arrears' },
-          tax: { $max: '$incomeTax' }
-        }
-      },
-      { $group: { _id: '$_id.employee', arrears: { $sum: '$arrears' }, tax: { $sum: '$tax' }, months: { $sum: 1 } } }
-    ]);
-    rows.forEach((r) => map.set(String(r._id), {
-      priorFyArrears: Math.round(Number(r.arrears) || 0),
-      priorPaidMonths: r.months,
-      priorTaxDeducted: Math.round(Number(r.tax) || 0),
-      leavingDate: null
-    }));
-  }
+  if (!monthsFilter) return new Map();
+  const Payroll = require('../models/hr/Payroll');
+  const match = { ...monthsFilter, status: { $ne: 'Cancelled' } };
+  if (employeeIds) match.employee = { $in: employeeIds };
+  const payrolls = await Payroll.find(match)
+    .select('employee month year grossSalary basicSalary houseRentAllowance medicalAllowance totalEarnings allowances arrears salaryPercentageCut proration updatedAt')
+    .sort({ updatedAt: 1 })
+    .lean();
+  const settings = await loadPayrollTaxSettings();
 
-  // Leaving dates in this FY: termination date on the employee, else the final settlement's last working date
-  const pm = Number(payrollMonth);
-  const py = Number(payrollYear);
-  if (pm && py) {
-    const fyStartYear = pm >= 7 ? py : py - 1;
-    const range = { $gte: new Date(fyStartYear, 6, 1), $lt: new Date(fyStartYear + 1, 6, 1) };
-    const Employee = require('../models/hr/Employee');
-    const FinalSettlement = require('../models/hr/FinalSettlement');
-    const empFilter = { terminationDate: range };
-    const fsFilter = { lastWorkingDate: range, status: { $ne: 'cancelled' } };
-    if (employeeIds) {
-      empFilter._id = { $in: employeeIds };
-      fsFilter.employee = { $in: employeeIds };
-    }
-    const [terminated, settlements] = await Promise.all([
-      Employee.find(empFilter).select('_id terminationDate').lean(),
-      FinalSettlement.find(fsFilter).select('employee lastWorkingDate').sort({ createdAt: 1 }).lean()
-    ]);
-    const leaving = new Map();
-    settlements.forEach((s) => leaving.set(String(s.employee), s.lastWorkingDate));
-    terminated.forEach((e) => leaving.set(String(e._id), e.terminationDate));
-    leaving.forEach((date, id) => {
-      const ctx = map.get(id) || { priorFyArrears: 0, priorPaidMonths: 0, priorTaxDeducted: 0 };
-      map.set(id, { ...ctx, leavingDate: date });
+  // one payroll per month counts once, even if a month was regenerated (latest kept)
+  const byMonth = new Map();
+  payrolls.forEach((p) => byMonth.set(`${p.employee}|${p.year}|${p.month}`, p));
+  const byEmployee = new Map();
+  byMonth.forEach((p) => {
+    const id = String(p.employee);
+    if (!byEmployee.has(id)) byEmployee.set(id, []);
+    byEmployee.get(id).push(p);
+  });
+
+  const map = new Map();
+  byEmployee.forEach((rows, id) => {
+    rows.sort((a, b) => (a.year - b.year) || (a.month - b.month));
+    const priorMonths = rows.map((p) => paidMonthForTax(p, settings));
+    map.set(id, {
+      priorFyArrears: Math.round(priorMonths.reduce((sum, m) => sum + m.arrears, 0)),
+      priorPaidMonths: priorMonths.length,
+      priorMonths
     });
-  }
+  });
   return map;
 };
 
 /** Context for one employee from a loaded map; no earlier payroll this FY = nothing paid yet */
 const taxYearContextFor = (contextByEmployee, employeeId) =>
-  contextByEmployee.get(String(employeeId)) || { priorFyArrears: 0, priorPaidMonths: 0, priorTaxDeducted: 0, leavingDate: null };
+  contextByEmployee.get(String(employeeId)) || { priorFyArrears: 0, priorPaidMonths: 0, priorMonths: [] };
 
 /**
  * Normal full-month pay for the rest of the FY — only when this month is reduced (partial-pay days,
@@ -397,21 +401,10 @@ const normalPayForTax = ({ proration, monthlyGross, employee }) => {
  * arrears paid earlier this FY stay in the annual figure.
  * @param {object} args.payroll        - Payroll doc / lean object
  * @param {object} args.employee       - Employee (hireDate, appointmentDate, allowances)
- * @param {object} [args.taxYearContext] - { priorFyArrears, priorPaidMonths } preloaded (bulk); loaded when omitted
+ * @param {object} [args.taxYearContext] - { priorFyArrears, priorPaidMonths, priorMonths } preloaded (bulk); loaded when omitted
  */
 const calculateTaxForExistingPayroll = async ({ payroll, employee, settings, taxYearContext = null }) => {
-  const cutFactor = Number(payroll.salaryPercentageCut?.factor) || 1;
-  const uncut = (v) => (cutFactor > 0 && cutFactor < 1 ? Math.round((Number(v) || 0) / cutFactor) : (Number(v) || 0));
-  const rawAllowances = payroll.allowances?.toObject?.() || payroll.allowances || {};
-  const allowances = cutFactor < 1
-    ? Object.fromEntries(Object.entries(rawAllowances).map(([k, slot]) => [
-      k, slot && typeof slot === 'object' && slot.amount != null ? { ...slot, amount: uncut(slot.amount) } : slot
-    ]))
-    : rawAllowances;
-  const grossSalary = uncut(
-    payroll.grossSalary ||
-    (payroll.basicSalary || 0) + (payroll.houseRentAllowance || 0) + (payroll.medicalAllowance || 0)
-  );
+  const { grossSalary, allowances, arrears } = payBeforeSalaryCut(payroll);
 
   let context = taxYearContext;
   if (!context) {
@@ -433,7 +426,7 @@ const calculateTaxForExistingPayroll = async ({ payroll, employee, settings, tax
   return calculatePayrollTaxWithSettings({
     grossSalary,
     allowances,
-    arrears: uncut(payroll.arrears),
+    arrears,
     employeeId: employee?._id || payroll.employee,
     settings,
     hireDate: employee?.hireDate || employee?.appointmentDate,
@@ -456,8 +449,6 @@ const toStoredTaxCalculation = (taxCalculation) => ({
   fyMonths: taxCalculation.fyMonths || 12,
   priorFyArrears: taxCalculation.priorFyArrears || 0,
   normalMonthlyTaxable: taxCalculation.normalMonthlyTaxable || 0,
-  finalMonthTrueUp: Boolean(taxCalculation.finalMonthTrueUp),
-  taxRefundDue: taxCalculation.taxRefundDue || 0,
   usesAllowanceTaxPolicy: taxCalculation.usesAllowanceTaxPolicy
 });
 

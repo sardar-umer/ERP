@@ -134,8 +134,6 @@ const statuses = includeApproved ? ['Draft', 'Approved by AVP'] : ['Draft'];
         mainTaxable: calc.mainTaxableIncome,
         normalMonthlyTaxable: calc.normalMonthlyTaxable,
         priorFyArrears: calc.priorFyArrears,
-        finalMonthTrueUp: calc.finalMonthTrueUp || undefined,
-        taxRefundDue: calc.taxRefundDue || undefined,
         salaryCut: p.salaryPercentageCut?.percentage || 0,
         allowanceTaxable: calc.allowanceTaxable
       });

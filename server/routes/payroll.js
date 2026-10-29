@@ -2033,15 +2033,10 @@ router.post('/', [
               fyMonths: taxCalculation.fyMonths || 12,
               priorFyArrears: taxCalculation.priorFyArrears || 0,
               normalMonthlyTaxable: taxCalculation.normalMonthlyTaxable || 0,
-              finalMonthTrueUp: Boolean(taxCalculation.finalMonthTrueUp),
-              taxRefundDue: taxCalculation.taxRefundDue || 0,
               usesAllowanceTaxPolicy: taxCalculation.usesAllowanceTaxPolicy
             },
             currency: 'PKR',
-            remarks: `Monthly payroll generated for ${month}/${year}${buildPayrollProrationRemarksSuffix(proration)}${
-              taxCalculation.finalMonthTrueUp
-                ? ` | Final month tax true-up${taxCalculation.taxRefundDue ? ` — Rs ${taxCalculation.taxRefundDue} tax refundable` : ''}`
-                : ''}`,
+            remarks: `Monthly payroll generated for ${month}/${year}${buildPayrollProrationRemarksSuffix(proration)}`,
             proration: proration?.isProrated ? proration : undefined,
             isCashSalary: Boolean(employee.cashSalary),
             createdBy: req.user.id,

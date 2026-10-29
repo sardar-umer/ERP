@@ -224,8 +224,6 @@ const syncDraftPayrollsTaxFromSettings = async (settings) => {
       fyMonths: taxCalculation.fyMonths || 12,
       priorFyArrears: taxCalculation.priorFyArrears || 0,
       normalMonthlyTaxable: taxCalculation.normalMonthlyTaxable || 0,
-      finalMonthTrueUp: Boolean(taxCalculation.finalMonthTrueUp),
-      taxRefundDue: taxCalculation.taxRefundDue || 0,
       usesAllowanceTaxPolicy: taxCalculation.usesAllowanceTaxPolicy
     };
 

@@ -334,65 +334,60 @@ function calculateMonthlyTaxFYAwareWithOneTimeArrears(
  * Example — Ahmed Khan, joined 15 Jul, July days (32,903) paid as arrears in Aug, 60,000 salary (Oct):
  *   Aug–Sep paid (2) + Oct + Nov–Jun (8) = 11 months × 54,000 + 32,903 = 626,903 → 269 ÷ 11 = 24
  *
- * Leavers (leavingDate in this FY): months after the leaving month are not projected. In the leaving
- * month itself the year is closed on what was actually paid — tax for the year minus the tax already
- * deducted this FY — and anything deducted beyond that is reported as taxRefundDue (tax is never negative).
+ * With priorMonths (the months already paid, in order) the year is rolled month by month (Sidat):
+ * a full month counts at the normal salary, a partial-pay month (unpaid days, joining proration) at
+ * what was actually paid. Each month's tax = (FBR(annual so far + months to come) − tax that rule gave
+ * the earlier months) ÷ months left including it, so a partial month lowers the rest of the year.
+ *
+ * Example — Sarah Karim, 205,000 (184,500 taxable); Aug paid 29/31 days, Sep 28/30:
+ *   Jul 9,900 → Aug 9,684 → Sep 9,529 → Oct (FBR(2,189,796) − 29,113) ÷ 9 = 9,529
  *
  * @param {number} monthlySalaryBase  - This month's taxable (no arrears)
  * @param {number} normalMonthlyBase  - Full-month taxable for other months
  * @param {number} arrears            - All arrears paid in this FY (incl. this month)
  * @param {number} priorPaidMonths    - Payrolls already generated for this employee earlier in the FY
  * @param {number} payrollMonth       - 1–12
- * @param {object} [leaver]           - { payrollYear, leavingDate, priorTaxDeducted }
+ * @param {Array<{ month: number, taxable: number, partial: boolean, arrears: number }>} [priorMonths]
  */
-function calculateMonthlyTaxPaidMonths(
-  monthlySalaryBase,
-  normalMonthlyBase,
-  arrears,
-  priorPaidMonths,
-  payrollMonth,
-  { payrollYear = null, leavingDate = null, priorTaxDeducted = 0 } = {}
-) {
+function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arrears, priorPaidMonths, payrollMonth, priorMonths = null) {
   const base = Math.max(0, Number(monthlySalaryBase) || 0);
   const normal = normalMonthlyBase == null ? base : Math.max(0, Number(normalMonthlyBase) || 0);
   const arrearsAmt = Math.max(0, Number(arrears) || 0);
   const pm = Number(payrollMonth);
-  let monthsToCome = pm >= 7 ? 18 - pm : 6 - pm; // after this month, through June
+  const monthsToCome = pm >= 7 ? 18 - pm : 6 - pm; // after this month, through June
   const prior = Math.max(0, Math.floor(Number(priorPaidMonths) || 0));
-
-  // Leaving date in this FY: project only up to the leaving month; the leaving month closes the year
-  let finalMonth = false;
-  const leaving = leavingDate ? new Date(leavingDate) : null;
-  if (leaving && !Number.isNaN(leaving.getTime()) && payrollYear) {
-    const py = Number(payrollYear);
-    const fyEndAbs = (pm >= 7 ? py + 1 : py) * 12 + 5; // June of this FY
-    const payAbs = py * 12 + (pm - 1);
-    const leaveAbs = leaving.getFullYear() * 12 + leaving.getMonth();
-    // A leaving date before this payroll month means they were reinstated (still on payroll): ignore it
-    if (leaveAbs <= fyEndAbs && leaveAbs >= payAbs) {
-      if (leaveAbs === payAbs) finalMonth = true;
-      else monthsToCome = Math.min(monthsToCome, leaveAbs - payAbs);
-    }
-  }
-  if (finalMonth) monthsToCome = 0;
   const fyMonths = Math.min(12, prior + 1 + monthsToCome);
 
-  const annualTaxableIncome = normal * prior + base + normal * monthsToCome + arrearsAmt;
-  const annualTax = annualTaxableIncome > 0 ? calculateAnnualTaxFromSlabs(annualTaxableIncome) : 0;
-
-  if (finalMonth) {
-    const deducted = Math.max(0, Number(priorTaxDeducted) || 0);
-    const due = annualTax - deducted;
+  if (Array.isArray(priorMonths)) {
+    const monthsLeftFrom = (m) => (Number(m) >= 7 ? 19 - Number(m) : 7 - Number(m)); // incl. that month
+    const yearTax = (taxable) => (taxable > 0 ? calculateAnnualTaxFromSlabs(taxable) : 0);
+    let paidTaxable = 0;
+    let arrearsSoFar = 0;
+    let taxSoFar = 0;
+    priorMonths.forEach((p) => {
+      const left = monthsLeftFrom(p.month);
+      const taxable = p.partial ? Math.max(0, Number(p.taxable) || 0) : normal;
+      arrearsSoFar += Math.max(0, Number(p.arrears) || 0);
+      const annual = paidTaxable + taxable + normal * (left - 1) + arrearsSoFar;
+      taxSoFar += Math.max(0, Math.round((yearTax(annual) - taxSoFar) / left));
+      paidTaxable += taxable;
+    });
+    // this month's arrears = FY arrears not already counted in the earlier months
+    const annualTaxableIncome = paidTaxable + base + normal * monthsToCome + Math.max(arrearsSoFar, arrearsAmt);
+    const annualTax = yearTax(annualTaxableIncome);
     return {
-      monthlyTax: Math.max(0, Math.round(due)),
+      monthlyTax: Math.max(0, Math.round((annualTax - taxSoFar) / (monthsToCome + 1))),
       fyMonths,
       annualTaxableIncome: Math.round(annualTaxableIncome),
-      annualTax: Math.round(annualTax),
-      finalMonthTrueUp: true,
-      priorTaxDeducted: Math.round(deducted),
-      taxRefundDue: Math.max(0, Math.round(-due))
+      annualTax: Math.round(annualTax)
     };
   }
+
+  const annualTaxableIncome = normal * prior + base + normal * monthsToCome + arrearsAmt;
+  if (annualTaxableIncome <= 0) {
+    return { monthlyTax: 0, fyMonths, annualTaxableIncome: 0, annualTax: 0 };
+  }
+  const annualTax = calculateAnnualTaxFromSlabs(annualTaxableIncome);
   return {
     monthlyTax: Math.round(annualTax / fyMonths),
     fyMonths,
