@@ -1,7 +1,7 @@
 /**
  * Apply a one-month salary % cut to payroll amounts.
- * Everything is scaled by (100 - percentage) / 100 except EOBI (kept full).
- * Loan / advance repayments are left unchanged.
+ * Everything is scaled by (100 - percentage) / 100 except EOBI and income tax (kept full —
+ * tax stays on the normal salary, as Sidat calculates it). Loan / advance repayments are left unchanged.
  */
 
 const roundPKR = (n) => Math.round(Number(n) || 0);
@@ -24,7 +24,6 @@ const SCALE_FIELDS = [
   'otherBonus',
   'arrears',
   'providentFund',
-  'incomeTax',
   'healthInsurance',
   'employeeSecurity',
   'otherDeductions',
@@ -32,16 +31,6 @@ const SCALE_FIELDS = [
   'dailyRate',
   'grossSalary',
   'totalEarnings'
-];
-
-const TAX_CALC_SCALE_FIELDS = [
-  'mainTax',
-  'arrearsTax',
-  'totalTax',
-  'mainTaxableIncome',
-  'arrearsTaxableIncome',
-  'annualTaxableIncome',
-  'annualTax'
 ];
 
 const scaleAllowances = (allowances, factor) => {
@@ -109,14 +98,6 @@ const removeSalaryPercentageCutFromPayrollData = (payrollData) => {
     payrollData.allowances = scaleAllowances(payrollData.allowances, reverse);
   }
 
-  if (payrollData.taxCalculation && typeof payrollData.taxCalculation === 'object') {
-    const tax = { ...payrollData.taxCalculation };
-    for (const field of TAX_CALC_SCALE_FIELDS) {
-      if (tax[field] != null) tax[field] = scale(tax[field], reverse);
-    }
-    payrollData.taxCalculation = tax;
-  }
-
   payrollData.eobi = eobiKeep;
   recalcTotals(payrollData);
   payrollData.salaryPercentageCut = undefined;
@@ -163,14 +144,6 @@ const applySalaryPercentageCutToPayrollData = (payrollData, percentage) => {
     payrollData.allowances = scaleAllowances(payrollData.allowances, factor);
   }
 
-  if (payrollData.taxCalculation && typeof payrollData.taxCalculation === 'object') {
-    const tax = { ...payrollData.taxCalculation };
-    for (const field of TAX_CALC_SCALE_FIELDS) {
-      if (tax[field] != null) tax[field] = scale(tax[field], factor);
-    }
-    payrollData.taxCalculation = tax;
-  }
-
   payrollData.eobi = eobiKeep;
   recalcTotals(payrollData);
 
@@ -180,7 +153,7 @@ const applySalaryPercentageCutToPayrollData = (payrollData, percentage) => {
     appliedAt: new Date()
   };
 
-  const note = `Salary cut ${pct}% this month only (EOBI full)`;
+  const note = `Salary cut ${pct}% this month only (EOBI & income tax full)`;
   const remarks = stripSalaryCutRemark(payrollData.remarks);
   payrollData.remarks = remarks ? `${remarks} | ${note}` : note;
 

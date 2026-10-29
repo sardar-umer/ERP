@@ -268,11 +268,18 @@ function calculateTaxableIncomeCorrected(salary) {
  *   (230,000 − 10%) = 207,000 × 10 = 2,070,000 + 59,354 = 2,129,354
  *   → slab tax ≈ 108,228 ÷ 10 ≈ 10,823
  *
- * @param {number}       monthlySalaryBase - Recurring monthly taxable (after medical + taxable allowances; NO arrears)
- * @param {number}       arrears           - One-time arrears added to annual only
+ * When this month's pay is reduced (partial-pay days, joining proration), pass the normal full-month
+ * taxable as `normalMonthlyBase`: only this month counts at the reduced amount and the rest of the
+ * FY at the normal amount, instead of the reduced month being annualized (Sidat method):
+ *
+ *   annual taxable = this month + normal × (FY months − 1) + arrears
+ *
+ * @param {number}       monthlySalaryBase - This month's taxable (after medical + taxable allowances; NO arrears)
+ * @param {number}       arrears           - One-time arrears added to annual only (this FY's, incl. earlier months)
  * @param {Date|string}  hireDate
  * @param {number}       payrollMonth
  * @param {number}       payrollYear
+ * @param {number|null}  normalMonthlyBase - Full-month taxable for the remaining months (null = same as this month)
  * @returns {{ monthlyTax: number, fyMonths: number, annualTaxableIncome: number, annualTax: number }}
  */
 function calculateMonthlyTaxFYAwareWithOneTimeArrears(
@@ -280,12 +287,14 @@ function calculateMonthlyTaxFYAwareWithOneTimeArrears(
   arrears = 0,
   hireDate = null,
   payrollMonth = null,
-  payrollYear = null
+  payrollYear = null,
+  normalMonthlyBase = null
 ) {
   const base = Math.max(0, Number(monthlySalaryBase) || 0);
   const arrearsAmt = Math.max(0, Number(arrears) || 0);
+  const normal = normalMonthlyBase == null ? base : Math.max(0, Number(normalMonthlyBase) || 0);
 
-  if (base <= 0 && arrearsAmt <= 0) {
+  if (base <= 0 && normal <= 0 && arrearsAmt <= 0) {
     return { monthlyTax: 0, fyMonths: 12, annualTaxableIncome: 0, annualTax: 0 };
   }
 
@@ -294,12 +303,59 @@ function calculateMonthlyTaxFYAwareWithOneTimeArrears(
     fyMonths = getRemainingFYMonths(hireDate, payrollMonth, payrollYear);
   }
 
-  const annualTaxableIncome = base * fyMonths + arrearsAmt;
+  // A short joining month that falls outside the FY months (joined in the second half of the month)
+  // adds to the year on top of the full months rather than replacing one of them
+  let normalMonths = fyMonths - 1;
+  if (normalMonthlyBase != null && payrollMonth) {
+    const pm = Number(payrollMonth);
+    const monthsLeftInclThis = pm >= 7 ? 19 - pm : 7 - pm;
+    if (monthsLeftInclThis > fyMonths) normalMonths = fyMonths;
+  }
+  const annualTaxableIncome = base + normal * normalMonths + arrearsAmt;
   const annualTax = calculateAnnualTaxFromSlabs(annualTaxableIncome);
   const monthlyTax = Math.round(annualTax / fyMonths);
 
   return {
     monthlyTax,
+    fyMonths,
+    annualTaxableIncome: Math.round(annualTaxableIncome),
+    annualTax: Math.round(annualTax)
+  };
+}
+
+/**
+ * Tax year made of the months actually paid (Sidat method): months already paid in this FY, this
+ * month, and the months still to come through June. Joining days paid late come in as arrears, so a
+ * joining month with no payroll of its own (or a month with no pay at all) is not projected.
+ *
+ *   annual taxable = normal × months already paid + this month + normal × months to come + FY arrears
+ *   monthly tax    = FBR(annual) ÷ (months already paid + 1 + months to come)
+ *
+ * Example — Ahmed Khan, joined 15 Jul, July days (32,903) paid as arrears in Aug, 60,000 salary (Oct):
+ *   Aug–Sep paid (2) + Oct + Nov–Jun (8) = 11 months × 54,000 + 32,903 = 626,903 → 269 ÷ 11 = 24
+ *
+ * @param {number} monthlySalaryBase  - This month's taxable (no arrears)
+ * @param {number} normalMonthlyBase  - Full-month taxable for other months
+ * @param {number} arrears            - All arrears paid in this FY (incl. this month)
+ * @param {number} priorPaidMonths    - Payrolls already generated for this employee earlier in the FY
+ * @param {number} payrollMonth       - 1–12
+ */
+function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arrears, priorPaidMonths, payrollMonth) {
+  const base = Math.max(0, Number(monthlySalaryBase) || 0);
+  const normal = normalMonthlyBase == null ? base : Math.max(0, Number(normalMonthlyBase) || 0);
+  const arrearsAmt = Math.max(0, Number(arrears) || 0);
+  const pm = Number(payrollMonth);
+  const monthsToCome = pm >= 7 ? 18 - pm : 6 - pm; // after this month, through June
+  const prior = Math.max(0, Math.floor(Number(priorPaidMonths) || 0));
+  const fyMonths = Math.min(12, prior + 1 + monthsToCome);
+
+  const annualTaxableIncome = normal * prior + base + normal * monthsToCome + arrearsAmt;
+  if (annualTaxableIncome <= 0) {
+    return { monthlyTax: 0, fyMonths, annualTaxableIncome: 0, annualTax: 0 };
+  }
+  const annualTax = calculateAnnualTaxFromSlabs(annualTaxableIncome);
+  return {
+    monthlyTax: Math.round(annualTax / fyMonths),
     fyMonths,
     annualTaxableIncome: Math.round(annualTaxableIncome),
     annualTax: Math.round(annualTax)
@@ -408,6 +464,7 @@ module.exports = {
   calculateMonthlyTax,
   calculateMonthlyTaxFYAware,
   calculateMonthlyTaxFYAwareWithOneTimeArrears,
+  calculateMonthlyTaxPaidMonths,
   calculateAnnualTaxFromSlabs,
   getRemainingFYMonths,
   calculateMonthlyTaxImage,

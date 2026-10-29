@@ -176,39 +176,43 @@ const syncDraftPayrollsAllowancesFromEmployee = async (employee) => {
 const syncDraftPayrollsTaxFromSettings = async (settings) => {
   const Payroll = require('../models/hr/Payroll');
   const Employee = require('../models/hr/Employee');
-  const { calculatePayrollTaxWithSettings, normalizeSettings } = require('./allowanceTaxCalculator');
+  const {
+    normalizeSettings,
+    loadTaxYearContextByEmployee,
+    taxYearContextFor,
+    calculateTaxForExistingPayroll
+  } = require('./allowanceTaxCalculator');
   const config = normalizeSettings(settings);
 
   const payrolls = await Payroll.find({ status: 'Draft' });
   let updated = 0;
+  // Months already paid this FY and their arrears, per payroll period (drafts can span months)
+  const contextByPeriod = new Map();
 
   for (const payroll of payrolls) {
-    const grossSalary =
-      payroll.grossSalary ||
-      (payroll.basicSalary || 0) +
-        (payroll.houseRentAllowance || 0) +
-        (payroll.medicalAllowance || 0);
-    const arrears = payroll.arrears || 0;
     const employeeId = payroll.employee;
+    const emp = employeeId
+      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax').lean()
+      : null;
 
-    let hireDate = null;
-    if (employeeId) {
-      const emp = await Employee.findById(employeeId).select('hireDate appointmentDate').lean();
-      hireDate = emp?.hireDate || emp?.appointmentDate || null;
+    const periodKey = `${payroll.year}-${payroll.month}`;
+    if (!contextByPeriod.has(periodKey)) {
+      contextByPeriod.set(periodKey, await loadTaxYearContextByEmployee({
+        payrollMonth: payroll.month,
+        payrollYear: payroll.year
+      }));
     }
 
-    const taxCalculation = calculatePayrollTaxWithSettings({
-      grossSalary,
-      allowances: payroll.allowances,
-      arrears,
-      employeeId,
+    // Salary cut doesn't cut tax, prorated month isn't annualized, FY arrears kept
+    const taxCalculation = await calculateTaxForExistingPayroll({
+      payroll,
+      employee: emp || { _id: employeeId },
       settings: config,
-      hireDate,
-      payrollMonth: payroll.month,
-      payrollYear: payroll.year
+      taxYearContext: taxYearContextFor(contextByPeriod.get(periodKey), employeeId)
     });
 
-    payroll.incomeTax = Math.round(taxCalculation.totalTax);
+    // Manual tax on the employee overrides the calculated figure (never overwrite it)
+    payroll.incomeTax = resolveEmployeeIncomeTax(emp, Math.round(taxCalculation.totalTax)).tax;
     payroll.taxCalculation = {
       mainTax: taxCalculation.mainTax,
       arrearsTax: taxCalculation.arrearsTax,
@@ -218,6 +222,8 @@ const syncDraftPayrollsTaxFromSettings = async (settings) => {
       annualTaxableIncome: taxCalculation.annualTaxableIncome || 0,
       annualTax: taxCalculation.annualTax || 0,
       fyMonths: taxCalculation.fyMonths || 12,
+      priorFyArrears: taxCalculation.priorFyArrears || 0,
+      normalMonthlyTaxable: taxCalculation.normalMonthlyTaxable || 0,
       usesAllowanceTaxPolicy: taxCalculation.usesAllowanceTaxPolicy
     };
 

@@ -1,7 +1,9 @@
 const Payroll = require('../models/hr/Payroll');
 const {
-  calculatePayrollTaxWithSettings,
-  loadPayrollTaxSettings
+  loadPayrollTaxSettings,
+  loadTaxYearContextByEmployee,
+  taxYearContextFor,
+  calculateTaxForExistingPayroll
 } = require('../utils/allowanceTaxCalculator');
 const { resolveEmployeeIncomeTax } = require('../utils/allowanceHelpers');
 const { isPayrollRecordLocked } = require('../utils/payrollLock');
@@ -28,7 +30,7 @@ class MonthlyTaxUpdateService {
 
       const payrolls = await Payroll.find({ month, year, status: { $in: statuses } }).populate(
         'employee',
-        'firstName lastName employeeId department salary allowances hireDate appointmentDate taxExemption isActive'
+        'firstName lastName employeeId department salary allowances hireDate appointmentDate taxExemption manualTax isActive'
       );
 
       if (payrolls.length === 0) {
@@ -44,6 +46,8 @@ class MonthlyTaxUpdateService {
       }
 
       console.log(`📊 Found ${payrolls.length} payrolls for ${month}/${year}`);
+      // Months already paid this FY and their arrears, per employee
+      const taxYearContextByEmployee = await loadTaxYearContextByEmployee({ payrollMonth: month, payrollYear: year });
 
       let updatedCount = 0;
       let unchangedCount = 0;
@@ -52,7 +56,10 @@ class MonthlyTaxUpdateService {
 
       for (const payroll of payrolls) {
         try {
-          const result = await this.updatePayrollTax(payroll, forceUpdate, taxSettings);
+          const empKey = String(payroll.employee?._id || payroll.employee);
+          const result = await this.updatePayrollTax(
+            payroll, forceUpdate, taxSettings, taxYearContextFor(taxYearContextByEmployee, empKey)
+          );
           results.push(result);
 
           if (result.success && result.updated) updatedCount++;
@@ -111,7 +118,7 @@ class MonthlyTaxUpdateService {
    * Update tax for a single payroll using Payroll Taxes settings.
    * Skips Paid / Cancelled / Rejected.
    */
-  static async updatePayrollTax(payroll, forceUpdate = false, taxSettings = null) {
+  static async updatePayrollTax(payroll, forceUpdate = false, taxSettings = null, taxYearContext = null) {
     try {
       const oldTax = Number(payroll.incomeTax) || 0;
       const employee = payroll.employee;
@@ -141,31 +148,26 @@ class MonthlyTaxUpdateService {
       }
 
       const settings = taxSettings || (await loadPayrollTaxSettings());
-      const grossSalary = Number(payroll.grossSalary) || 0;
-      const arrears = Number(payroll.arrears) || 0;
-      const allowances = payroll.allowances || {};
-
-      const taxCalculation = calculatePayrollTaxWithSettings({
-        grossSalary,
-        allowances,
-        arrears,
-        employeeId: employee._id,
+      // Salary cut doesn't cut tax, prorated month isn't annualized, FY arrears kept
+      const taxCalculation = await calculateTaxForExistingPayroll({
+        payroll,
+        employee,
         settings,
-        hireDate: employee.hireDate || employee.appointmentDate,
-        payrollMonth: payroll.month,
-        payrollYear: payroll.year
+        taxYearContext
       });
 
       const { tax: newTax, isManual } = resolveEmployeeIncomeTax(employee, taxCalculation.totalTax);
 
-      if (isManual) {
+      // Manual tax on the employee is the amount to deduct (Sidat uses it too) — set it, never
+      // overwrite it with the calculated figure
+      if (isManual && oldTax === newTax) {
         return {
           payrollId: payroll._id,
           employeeId: employee.employeeId || 'Unknown',
           success: true,
-          message: 'Skipped — employee has manual/exempt tax override',
+          message: 'Manual tax already applied',
           oldTax,
-          newTax: oldTax,
+          newTax,
           updated: false,
           fyAware: taxCalculation
         };
@@ -193,6 +195,8 @@ class MonthlyTaxUpdateService {
         payroll.taxCalculation.annualTaxableIncome = taxCalculation.annualTaxableIncome || 0;
         payroll.taxCalculation.annualTax = taxCalculation.annualTax || 0;
         payroll.taxCalculation.fyMonths = taxCalculation.fyMonths || 12;
+        payroll.taxCalculation.priorFyArrears = taxCalculation.priorFyArrears || 0;
+        payroll.taxCalculation.normalMonthlyTaxable = taxCalculation.normalMonthlyTaxable || 0;
       }
 
       payroll.totalDeductions =

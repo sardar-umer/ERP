@@ -521,7 +521,11 @@ const payrollSchema = new mongoose.Schema({
       type: Number,
       default: 12,
       min: [1, 'FY months must be at least 1']
-    }
+    },
+    /** Arrears paid in earlier months of this FY, kept in the annual taxable figure */
+    priorFyArrears: { type: Number, default: 0 },
+    /** Full-month taxable used for the rest of the FY (differs from mainTaxableIncome in a reduced month) */
+    normalMonthlyTaxable: { type: Number, default: 0 }
   },
   // Metadata
   currency: {

@@ -11,6 +11,8 @@
  *
  * Default statuses: Draft
  * --include-approved also updates "Approved by AVP" (not Paid/Cancelled)
+ * Without --apply it is a dry run: nothing is written, every payroll whose tax would change is listed
+ * (uses the same calculation as --apply: salary cut keeps tax, prorated month not annualized, FY arrears kept)
  * --current uses the latest existing payroll period when the requested month has none
  */
 require('dotenv').config({ path: require('path').join(__dirname, '../../.env') });
@@ -95,32 +97,31 @@ const statuses = includeApproved ? ['Draft', 'Approved by AVP'] : ['Draft'];
 
   if (!apply) {
     const {
-      calculatePayrollTaxWithSettings
+      loadTaxYearContextByEmployee,
+      taxYearContextFor,
+      calculateTaxForExistingPayroll
     } = require('../utils/allowanceTaxCalculator');
     const { resolveEmployeeIncomeTax } = require('../utils/allowanceHelpers');
 
     const payrolls = await Payroll.find({ month, year, status: { $in: statuses } }).populate(
       'employee',
-      'firstName lastName employeeId hireDate appointmentDate taxExemption'
+      'firstName lastName employeeId hireDate appointmentDate taxExemption manualTax allowances'
     );
+    const taxYearContextByEmployee = await loadTaxYearContextByEmployee({ payrollMonth: month, payrollYear: year });
 
     const changes = [];
     for (const p of payrolls) {
       const emp = p.employee;
       if (!emp) continue;
-      const calc = calculatePayrollTaxWithSettings({
-        grossSalary: p.grossSalary || 0,
-        allowances: p.allowances || {},
-        arrears: p.arrears || 0,
-        employeeId: emp._id,
+      const calc = await calculateTaxForExistingPayroll({
+        payroll: p,
+        employee: emp,
         settings,
-        hireDate: emp.hireDate || emp.appointmentDate,
-        payrollMonth: month,
-        payrollYear: year
+        taxYearContext: taxYearContextFor(taxYearContextByEmployee, emp._id)
       });
       const { tax: newTax, isManual } = resolveEmployeeIncomeTax(emp, calc.totalTax);
       const oldTax = Number(p.incomeTax) || 0;
-      if (isManual || oldTax === newTax) continue;
+      if (oldTax === newTax) continue;
       changes.push({
         employeeId: emp.employeeId,
         name: `${emp.firstName || ''} ${emp.lastName || ''}`.trim(),
@@ -128,8 +129,12 @@ const statuses = includeApproved ? ['Draft', 'Approved by AVP'] : ['Draft'];
         oldTax,
         newTax,
         delta: newTax - oldTax,
+        manualTax: isManual,
         fyMonths: getRemainingFYMonths(emp.hireDate || emp.appointmentDate, month, year),
         mainTaxable: calc.mainTaxableIncome,
+        normalMonthlyTaxable: calc.normalMonthlyTaxable,
+        priorFyArrears: calc.priorFyArrears,
+        salaryCut: p.salaryPercentageCut?.percentage || 0,
         allowanceTaxable: calc.allowanceTaxable
       });
     }
@@ -139,7 +144,7 @@ const statuses = includeApproved ? ['Draft', 'Approved by AVP'] : ['Draft'];
         {
           targetCount: payrolls.length,
           wouldChange: changes.length,
-          sample: changes.slice(0, 40)
+          changes
         },
         null,
         2
