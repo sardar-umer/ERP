@@ -8,6 +8,7 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon,
+  Business as CompanyIcon,
   Close as CloseIcon,
   OpenInNew as OpenIcon,
   Payments as PayIcon,
@@ -23,6 +24,7 @@ import AccountsPayable from './AccountsPayable';
 import VendorAdvance from './VendorAdvance';
 import PODocumentView from '../Procurement/Store/PODocumentView';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
+import ChangeCompanyDialog, { COMPANY_CHANGE_KIND } from './payables/ChangeCompanyDialog';
 
 const CashApprovals = lazy(() => import('../Procurement/CashApprovals'));
 
@@ -84,6 +86,8 @@ export default function PayablesHub() {
   const [advanceDialog, setAdvanceDialog] = useState({ open: false, prefill: null });
   // PO printable view opened from a row's payee
   const [poView, setPoView] = useState({ open: false, data: null, loading: false });
+  // Row whose company is being changed
+  const [companyRow, setCompanyRow] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -394,6 +398,9 @@ export default function PayablesHub() {
                           </Typography>
                         </Tooltip>
                         {(r.company || r.project) && <Typography variant="caption" color="text.secondary">{[r.company, r.project].filter(Boolean).join(' · ')}</Typography>}
+                        {!r.company && COMPANY_CHANGE_KIND[r.key.split(':')[0]] && (
+                          <Chip size="small" color="warning" variant="outlined" label="No company" sx={{ height: 18, fontSize: '0.65rem', ml: r.project ? 0.5 : 0 }} />
+                        )}
                       </TableCell>
                       <TableCell><Chip size="small" label={r.sourceLabel} variant="outlined" /></TableCell>
                       <TableCell>{r.date ? dayjs(r.date).format('DD MMM YY') : '—'}</TableCell>
@@ -412,6 +419,11 @@ export default function PayablesHub() {
                           <Button size="small" variant="contained" color={r.action === 'pay_bill' ? 'primary' : 'secondary'} onClick={() => runAction(r)}>
                             {ACTION_LABEL[r.action]}
                           </Button>
+                        )}
+                        {COMPANY_CHANGE_KIND[r.key.split(':')[0]] && r.stage !== 'paid' && (
+                          <Tooltip title="Change company">
+                            <IconButton size="small" onClick={() => setCompanyRow(r)}><CompanyIcon fontSize="small" /></IconButton>
+                          </Tooltip>
                         )}
                         <Tooltip title="Open in its own screen">
                           <IconButton size="small" onClick={() => navigate(r.link)}><OpenIcon fontSize="small" /></IconButton>
@@ -486,6 +498,13 @@ export default function PayablesHub() {
           }
         ` }} />
       )}
+
+      <ChangeCompanyDialog
+        row={companyRow}
+        companies={companies}
+        onClose={() => setCompanyRow(null)}
+        onChanged={() => { setCompanyRow(null); load(); }}
+      />
 
       <Dialog open={exceptionsOpen} onClose={() => setExceptionsOpen(false)} maxWidth="md" fullWidth>
         <DialogTitle>Documents not in the ledger</DialogTitle>

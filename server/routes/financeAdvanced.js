@@ -12479,6 +12479,44 @@ router.get('/payables-hub/document/:kind/:id',
   })
 );
 
+// GET /api/finance/payables-hub/company-change/:kind/:id?companyId= — what moving a payable to another company
+// would do (entries re-posted, accounts matched), or why it can't be moved
+router.get('/payables-hub/company-change/:kind/:id',
+  authorize('super_admin', 'admin', 'finance_manager', 'finance_controller'),
+  asyncHandler(async (req, res) => {
+    const { previewPayableCompanyChange } = require('../utils/payableCompanyChange');
+    try {
+      const { canChange, number, fromCompany, toCompany, blockers, steps, warnings } =
+        await previewPayableCompanyChange(req.params.kind, req.params.id, req.query.companyId);
+      res.json({ success: true, data: { canChange, number, fromCompany, toCompany, blockers, steps, warnings } });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  })
+);
+
+// PUT /api/finance/payables-hub/company-change/:kind/:id  { companyId, reason? } — move a payable to another company
+router.put('/payables-hub/company-change/:kind/:id',
+  authorize('super_admin', 'admin', 'finance_manager', 'finance_controller'),
+  asyncHandler(async (req, res) => {
+    const { changePayableCompany } = require('../utils/payableCompanyChange');
+    try {
+      const result = await changePayableCompany(req.params.kind, req.params.id, req.body.companyId, {
+        userId: req.user._id || req.user.id,
+        reason: String(req.body.reason || '').trim()
+      });
+      res.json({
+        success: true,
+        message: `${result.number} moved to ${result.toCompany.name}`
+          + (result.movedEntries ? ` — ${result.movedEntries} accounting entr${result.movedEntries === 1 ? 'y' : 'ies'} moved` : ''),
+        data: result
+      });
+    } catch (err) {
+      res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
+  })
+);
+
 // GET /api/finance/payables-hub/payment/:journalEntryId — a payment (its voucher) with what it paid and its entry
 router.get('/payables-hub/payment/:journalEntryId',
   authorize('super_admin', 'admin', 'finance_manager', 'accounts_officer', 'finance_controller'),
