@@ -10,6 +10,7 @@ import {
   Visibility as ViewIcon
 } from '@mui/icons-material';
 import api from '../../../services/api';
+import { getDocCompanyName } from '../../../utils/documentCompany';
 import { formatDate } from '../../../utils/dateUtils';
 
 const statusColor = (s) => {
@@ -29,7 +30,7 @@ export default function DeliveryChallans() {
   const [success, setSuccess] = useState('');
   const [rows, setRows] = useState([]);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [poFilter, setPoFilter] = useState(initialPo);
   const [statusFilter, setStatusFilter] = useState('');
@@ -296,6 +297,7 @@ export default function DeliveryChallans() {
           <TableHead>
             <TableRow>
               <TableCell>DC #</TableCell>
+              <TableCell>Company</TableCell>
               <TableCell>Gate pass</TableCell>
               <TableCell>PO</TableCell>
               <TableCell>Status</TableCell>
@@ -306,13 +308,14 @@ export default function DeliveryChallans() {
           </TableHead>
           <TableBody>
             {loading ? (
-              <TableRow><TableCell colSpan={7} align="center"><CircularProgress size={28} /></TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} align="center"><CircularProgress size={28} /></TableCell></TableRow>
             ) : rows.length === 0 ? (
-              <TableRow><TableCell colSpan={7} align="center">No delivery challans</TableCell></TableRow>
+              <TableRow><TableCell colSpan={8} align="center">No delivery challans</TableCell></TableRow>
             ) : (
               rows.map((r) => (
                 <TableRow key={r._id} hover>
                   <TableCell><Typography fontWeight="bold">{r.dcNumber}</Typography></TableCell>
+                  <TableCell>{getDocCompanyName(r)}</TableCell>
                   <TableCell><Typography variant="body2">{r.gatePassNo || '—'}</Typography></TableCell>
                   <TableCell>
                     {r.purchaseOrder?.orderNumber || '—'}
@@ -346,7 +349,7 @@ export default function DeliveryChallans() {
           onPageChange={(e, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </TableContainer>
 
@@ -435,6 +438,7 @@ export default function DeliveryChallans() {
         <DialogContent dividers>
           {viewDoc && (
             <Stack spacing={1}>
+              <Typography variant="body2"><strong>Company:</strong> {getDocCompanyName(viewDoc)}</Typography>
               <Typography variant="body2"><strong>PO:</strong> {viewDoc.purchaseOrder?.orderNumber || '—'}</Typography>
               <Typography variant="body2"><strong>Gate pass:</strong> {viewDoc.gatePassNo || '—'}</Typography>
               <Typography variant="body2"><strong>Status:</strong> {viewDoc.status}</Typography>

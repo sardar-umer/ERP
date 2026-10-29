@@ -17,7 +17,8 @@ router.get('/', asyncHandler(async (req, res) => {
   if (supplier) filter.supplier = supplier;
 
   const returns = await PurchaseReturn.find(filter)
-    .populate('goodsReceive', 'receiveNumber receiveDate')
+    .populate({ path: 'goodsReceive', select: 'receiveNumber receiveDate purchaseOrder', populate: { path: 'purchaseOrder', select: 'orderNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] } })
+    .populate({ path: 'purchaseOrder', select: 'orderNumber poNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
     .populate('supplier', 'name code')
     .populate('createdBy', 'name email')
     .sort({ createdAt: -1 });
@@ -28,9 +29,9 @@ router.get('/', asyncHandler(async (req, res) => {
 // GET /api/procurement/purchase-returns/:id
 router.get('/:id', asyncHandler(async (req, res) => {
   const pr = await PurchaseReturn.findById(req.params.id)
-    .populate('goodsReceive', 'receiveNumber receiveDate')
+    .populate({ path: 'goodsReceive', select: 'receiveNumber receiveDate purchaseOrder', populate: { path: 'purchaseOrder', select: 'orderNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] } })
     .populate('supplier', 'name code email')
-    .populate('purchaseOrder', 'poNumber')
+    .populate({ path: 'purchaseOrder', select: 'orderNumber poNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
     .populate('items.inventoryItem', 'name itemCode unit averageCost')
     .populate('journalEntry', 'entryNumber date status');
   if (!pr) return res.status(404).json({ success: false, message: 'Purchase return not found' });

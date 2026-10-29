@@ -108,7 +108,7 @@ const StockTransfers = () => {
   const [rows, setRows] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(25);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [search, setSearch] = useState('');
   const [loading, setLoading] = useState(false);
   const [stores, setStores] = useState([]);
@@ -255,7 +255,7 @@ const StockTransfers = () => {
           </Table>
         </TableContainer>
         <TablePagination
-          component="div" count={total} page={page} rowsPerPage={rowsPerPage} rowsPerPageOptions={[10, 25, 50, 100]}
+          component="div" count={total} page={page} rowsPerPage={rowsPerPage} rowsPerPageOptions={[25, 50, 100, 250, 500]}
           onPageChange={(_, p) => setPage(p)} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
         />
       </Paper>

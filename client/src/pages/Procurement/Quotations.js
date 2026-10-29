@@ -47,6 +47,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import procurementService from '../../services/procurementService';
 import { formatDate } from '../../utils/dateUtils';
 import { formatPKR } from '../../utils/currency';
@@ -72,7 +73,7 @@ const Quotations = () => {
   
   // Pagination and filters
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -600,6 +601,7 @@ const Quotations = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell><strong>Requisition</strong></TableCell>
+                    <TableCell><strong>Company</strong></TableCell>
                     <TableCell><strong>Title</strong></TableCell>
                     <TableCell><strong>Department</strong></TableCell>
                     <TableCell align="right"><strong>Action</strong></TableCell>
@@ -609,6 +611,7 @@ const Quotations = () => {
                   {indentsWithSplitAssignments.map((indent) => (
                     <TableRow key={indent._id}>
                       <TableCell>{indent.indentNumber || '-'}</TableCell>
+                      <TableCell>{getDocCompanyName(indent)}</TableCell>
                       <TableCell>{indent.title || '-'}</TableCell>
                       <TableCell>{indent.department?.name || '-'}</TableCell>
                       <TableCell align="right">
@@ -846,6 +849,7 @@ const Quotations = () => {
           page={page}
           onPageChange={(e, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
           onRowsPerPageChange={(e) => {
             setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);

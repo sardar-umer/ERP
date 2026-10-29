@@ -81,7 +81,7 @@ const Inventory = ({ openStockCheck = false }) => {
   
   // Pagination and filters
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [categoryFilter, setCategoryFilter] = useState('');
@@ -864,7 +864,7 @@ const Inventory = ({ openStockCheck = false }) => {
             setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);
           }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </Paper>
 

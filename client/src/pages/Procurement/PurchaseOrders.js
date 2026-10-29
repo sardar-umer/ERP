@@ -53,6 +53,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import { DigitalSignatureImage, ProcurementDigitalSignaturesRow } from '../../components/common/DigitalSignatureImage';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
@@ -193,7 +194,7 @@ const PurchaseOrders = () => {
   
   // Pagination and filters
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -1169,6 +1170,7 @@ const PurchaseOrders = () => {
             <TableHead>
               <TableRow>
                 <TableCell><strong>Order Number</strong></TableCell>
+                <TableCell><strong>Company</strong></TableCell>
                 <TableCell><strong>Vendor</strong></TableCell>
                 <TableCell><strong>Initiator</strong></TableCell>
                 <TableCell><strong>Order Date</strong></TableCell>
@@ -1183,13 +1185,13 @@ const PurchaseOrders = () => {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center">
+                  <TableCell colSpan={11} align="center">
                     <CircularProgress />
                   </TableCell>
                 </TableRow>
               ) : purchaseOrders.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center">
+                  <TableCell colSpan={11} align="center">
                     <Typography variant="body2" color="textSecondary">
                       No purchase orders found
                     </Typography>
@@ -1199,6 +1201,7 @@ const PurchaseOrders = () => {
                 purchaseOrders.map((order) => (
                   <TableRow key={order._id} hover>
                     <TableCell>{order.orderNumber}</TableCell>
+                    <TableCell>{getDocCompanyName(order)}</TableCell>
                     <TableCell>{order.vendor?.name || 'N/A'}</TableCell>
                     <TableCell>
                       {order.createdBy
@@ -1344,7 +1347,7 @@ const PurchaseOrders = () => {
             setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);
           }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </Paper>
 

@@ -17,6 +17,7 @@ const VendorBills = () => {
   const [vendorId, setVendorId] = useState('');
   const [grns, setGrns] = useState([]);
   const [createdBills, setCreatedBills] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [billsLoading, setBillsLoading] = useState(false);
   const [selected, setSelected] = useState({});
   const [allocations, setAllocations] = useState({});
@@ -88,6 +89,9 @@ const VendorBills = () => {
         setError('Failed to load vendors');
       }
     })();
+    api.get('/indents/companies')
+      .then((res) => setCompanies(res.data?.data || []))
+      .catch(() => setCompanies([]));
     loadGrns('');
     loadCreatedBills('');
   }, [loadGrns, loadCreatedBills]);
@@ -96,6 +100,13 @@ const VendorBills = () => {
     loadGrns(vendorId);
     loadCreatedBills(vendorId);
   }, [vendorId, loadGrns, loadCreatedBills]);
+
+  // Bill list returns the company id only; name it from the companies list
+  const billCompanyName = (b) => {
+    if (b.companyId && typeof b.companyId === 'object') return b.companyId.name || '—';
+    const id = String(b.companyId || '');
+    return companies.find((c) => String(c._id) === id)?.name || b.company || '—';
+  };
 
   const selectedIds = useMemo(() => Object.keys(selected).filter((k) => selected[k]), [selected]);
   const total = useMemo(() => grns.filter((g) => selected[g._id]).reduce((s, g) => s + (Number(allocations[g._id]) || 0), 0), [grns, selected, allocations]);
@@ -217,6 +228,7 @@ const VendorBills = () => {
                   <TableRow>
                     <TableCell />
                     <TableCell>GRN</TableCell>
+                    <TableCell>Company</TableCell>
                     <TableCell>Supplier / Vendor</TableCell>
                     <TableCell>PO</TableCell>
                     <TableCell>Status</TableCell>
@@ -246,6 +258,7 @@ const VendorBills = () => {
                         />
                       </TableCell>
                       <TableCell>{g.receiveNumber}</TableCell>
+                      <TableCell>{g.companyName || '—'}</TableCell>
                       <TableCell>{g.vendorName || '—'}</TableCell>
                       <TableCell>{g.poNumber || '-'}</TableCell>
                       <TableCell>{g.status}</TableCell>
@@ -268,7 +281,7 @@ const VendorBills = () => {
                     </TableRow>
                   ))}
                   {grns.length === 0 && (
-                    <TableRow><TableCell colSpan={10} align="center">No billable GRNs found</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={11} align="center">No billable GRNs found</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -286,6 +299,7 @@ const VendorBills = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Bill #</TableCell>
+                    <TableCell>Company</TableCell>
                     <TableCell>Vendor Invoice #</TableCell>
                     <TableCell>Supplier / Vendor</TableCell>
                     <TableCell>Bill Date</TableCell>
@@ -298,13 +312,14 @@ const VendorBills = () => {
                 </TableHead>
                 <TableBody>
                   {billsLoading ? (
-                    <TableRow><TableCell colSpan={9} align="center"><CircularProgress size={24} /></TableCell></TableRow>
+                    <TableRow><TableCell colSpan={10} align="center"><CircularProgress size={24} /></TableCell></TableRow>
                   ) : createdBills.length === 0 ? (
-                    <TableRow><TableCell colSpan={9} align="center">No vendor bills created yet</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={10} align="center">No vendor bills created yet</TableCell></TableRow>
                   ) : (
                     createdBills.map((b) => (
                       <TableRow key={b._id} hover>
                         <TableCell><Typography variant="body2" fontWeight="bold">{b.billNumber}</Typography></TableCell>
+                        <TableCell>{billCompanyName(b)}</TableCell>
                         <TableCell>{b.vendorInvoiceNumber || '—'}</TableCell>
                         <TableCell>{b.vendorName || b.supplierName || '—'}</TableCell>
                         <TableCell>{formatDate(b.billDate)}</TableCell>

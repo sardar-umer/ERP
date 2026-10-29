@@ -13,6 +13,7 @@ import {
 } from '@mui/icons-material';
 import { useLocation, useSearchParams } from 'react-router-dom';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import storeService from '../../services/storeService';
 import { formatDate } from '../../utils/dateUtils';
 import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
@@ -50,7 +51,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
   const [gatePassSin, setGatePassSin] = useState(null);
   const [returnsRefresh, setReturnsRefresh] = useState(0);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [departmentFilter, setDepartmentFilter] = useState('');
@@ -703,6 +704,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
             <TableHead>
               <TableRow>
                 <TableCell>SIN #</TableCell>
+                <TableCell>Company</TableCell>
                 <TableCell>Date</TableCell>
                 <TableCell>Department / Customer</TableCell>
                 <TableCell>Cost Center</TableCell>
@@ -715,13 +717,14 @@ const GoodsIssue = ({ initialTab = 0 }) => {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={9} align="center"><CircularProgress /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} align="center"><CircularProgress /></TableCell></TableRow>
               ) : issues.length === 0 ? (
-                <TableRow><TableCell colSpan={9} align="center">No records found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} align="center">No records found</TableCell></TableRow>
               ) : (
                 issues.map((issue) => (
                   <TableRow key={issue._id} hover>
                     <TableCell><Typography variant="body2" fontWeight="bold">{issue.sinNumber || issue.issueNumber}</Typography></TableCell>
+                    <TableCell>{getDocCompanyName(issue)}</TableCell>
                     <TableCell>{formatDate(issue.issueDate)}</TableCell>
                     <TableCell>
                       {issue.issueType === 'customer'
@@ -777,7 +780,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
           onPageChange={(e, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
         </>)}
       </Paper>

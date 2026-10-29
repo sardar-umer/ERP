@@ -23,6 +23,7 @@ import {
   Delete as DeleteIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import ComparativeStatementView from '../../components/Procurement/ComparativeStatementView';
 import ComparativeRejectionObservationsAlert from '../../components/Procurement/ComparativeRejectionObservationsAlert';
 import { useAuth } from '../../contexts/AuthContext';
@@ -645,7 +646,7 @@ const ComparativeStatements = () => {
               {requisitions.map((req) => (
                 <MenuItem key={req._id} value={req._id}>
                   <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', width: '100%', gap: 1 }}>
-                    <span>{req.indentNumber || req._id} - {req.title || 'Untitled'} ({req.department?.name || 'N/A'})</span>
+                    <span>{req.indentNumber || req._id} - {req.title || 'Untitled'} ({[getDocCompanyName(req, ''), req.department?.name || 'N/A'].filter(Boolean).join(' · ')})</span>
                     {req.status === 'Partially Fulfilled' && (
                       <Chip label="Partially Fulfilled" color="warning" size="small" sx={{ height: 20, fontSize: '0.65rem' }} />
                     )}

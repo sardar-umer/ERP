@@ -114,7 +114,7 @@ const StoreItemCatalog = () => {
   }, [search]);
 
   const pagination = usePagination({
-    defaultRowsPerPage: 25,
+    defaultRowsPerPage: 250,
     resetDependencies: [searchDebounced]
   });
 
@@ -623,7 +623,7 @@ const StoreItemCatalog = () => {
               total={filteredRows.length}
               onPageChange={pagination.handleChangePage}
               onRowsPerPageChange={pagination.handleChangeRowsPerPage}
-              rowsPerPageOptions={[25, 50, 100, 200]}
+              rowsPerPageOptions={[25, 50, 100, 250, 500]}
             />
           )}
         </CardContent>

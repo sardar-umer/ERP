@@ -93,7 +93,7 @@ const Requisitions = () => {
   
   // Pagination and filters
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
@@ -698,6 +698,7 @@ const Requisitions = () => {
           page={page}
           onPageChange={(e, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
           onRowsPerPageChange={(e) => {
             setRowsPerPage(parseInt(e.target.value, 10));
             setPage(0);

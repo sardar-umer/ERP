@@ -19,6 +19,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import toast from 'react-hot-toast';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import procurementService from '../../services/procurementService';
 import { formatDate } from '../../utils/dateUtils';
 import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
@@ -211,7 +212,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
   const [vendors, setVendors] = useState([]);
   const [total, setTotal] = useState(0);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [search, setSearch] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [priorityFilter, setPriorityFilter] = useState('');
@@ -1583,6 +1584,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
             <TableHead>
               <TableRow>
                 <TableCell><strong>CA Number</strong></TableCell>
+                <TableCell><strong>Company</strong></TableCell>
                 <TableCell><strong>Vendor</strong></TableCell>
                 <TableCell><strong>Initiator</strong></TableCell>
                 <TableCell sx={{ minWidth: 180, maxWidth: 280 }}><strong>Narration / Description</strong></TableCell>
@@ -1597,17 +1599,18 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center"><CircularProgress /></TableCell>
+                  <TableCell colSpan={11} align="center"><CircularProgress /></TableCell>
                 </TableRow>
               ) : cashApprovals.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={10} align="center">
+                  <TableCell colSpan={11} align="center">
                     <Typography variant="body2" color="textSecondary">No cash approvals found</Typography>
                   </TableCell>
                 </TableRow>
               ) : cashApprovals.map((ca) => (
                 <TableRow key={ca._id} hover>
                   <TableCell>{ca.caNumber}</TableCell>
+                  <TableCell>{getDocCompanyName(ca)}</TableCell>
                   <TableCell>{ca.vendor?.name || 'N/A'}</TableCell>
                   <TableCell>
                     {ca.createdBy
@@ -1672,7 +1675,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
           onPageChange={(e, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[10, 25, 50, 100]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </Paper>
 

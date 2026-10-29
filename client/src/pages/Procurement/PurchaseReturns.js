@@ -11,6 +11,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 
 const STATUS_COLOR = { draft: 'default', confirmed: 'info', posted: 'success' };
 const REASONS = ['defective', 'wrong_item', 'over_delivered', 'quality_issue', 'other'];
@@ -142,6 +143,7 @@ export default function PurchaseReturns() {
             <TableHead>
               <TableRow sx={{ bgcolor: 'grey.50' }}>
                 <TableCell><b>Return #</b></TableCell>
+                <TableCell><b>Company</b></TableCell>
                 <TableCell><b>GRN</b></TableCell>
                 <TableCell><b>Supplier</b></TableCell>
                 <TableCell><b>Date</b></TableCell>
@@ -153,11 +155,12 @@ export default function PurchaseReturns() {
             </TableHead>
             <TableBody>
               {returns.length === 0 && (
-                <TableRow><TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 4 }}>No purchase returns yet.</TableCell></TableRow>
+                <TableRow><TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 4 }}>No purchase returns yet.</TableCell></TableRow>
               )}
               {returns.map(r => (
                 <TableRow key={r._id} hover>
                   <TableCell><b>{r.returnNumber}</b></TableCell>
+                  <TableCell>{getDocCompanyName(r)}</TableCell>
                   <TableCell>{r.goodsReceive?.receiveNumber || '—'}</TableCell>
                   <TableCell>{r.supplierName || r.supplier?.name || '—'}</TableCell>
                   <TableCell>{r.returnDate ? new Date(r.returnDate).toLocaleDateString() : '—'}</TableCell>
@@ -230,6 +233,7 @@ export default function PurchaseReturns() {
           </DialogTitle>
           <DialogContent>
             <Stack gap={1} mb={2}>
+              <Typography variant="body2"><b>Company:</b> {getDocCompanyName(selected)}</Typography>
               <Typography variant="body2"><b>GRN:</b> {selected.goodsReceive?.receiveNumber}</Typography>
               <Typography variant="body2"><b>Return Date:</b> {selected.returnDate ? new Date(selected.returnDate).toLocaleDateString() : '—'}</Typography>
               <Typography variant="body2"><b>Reason:</b> {selected.reason?.replace('_', ' ')}</Typography>

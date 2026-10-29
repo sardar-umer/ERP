@@ -9,6 +9,7 @@ import procurementService from '../../services/procurementService';
 import { formatDate, formatDateTime } from '../../utils/dateUtils';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import { formatPKR } from '../../utils/currency';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import CashApprovalGeneralDetailShell from '../../components/CashApprovals/CashApprovalGeneralDetailShell';
 import { isGeneralModuleCashApproval } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 
@@ -94,6 +95,7 @@ const CashApprovalDocumentView = () => {
         <Grid container spacing={2} mb={2}>
           <Grid item xs={6}>
             <InfoRow label="CA Number" value={ca.caNumber} />
+            <InfoRow label="Company" value={getDocCompanyName(ca)} />
             <InfoRow label="Approval Date" value={formatDate(ca.approvalDate)} />
             <InfoRow label="Expected Purchase Date" value={formatDate(ca.expectedPurchaseDate)} />
             <InfoRow label="Priority" value={ca.priority} />

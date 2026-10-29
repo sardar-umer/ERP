@@ -27,7 +27,7 @@ export default function DeliveryChallanQA() {
   const [success, setSuccess] = useState('');
   const [rows, setRows] = useState([]);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
 
   const [viewOpen, setViewOpen] = useState(false);
@@ -199,7 +199,7 @@ export default function DeliveryChallanQA() {
           onPageChange={(e, p) => setPage(p)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </TableContainer>
 

@@ -14,6 +14,7 @@ import {
   Delete as DeleteIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import { getDocCompanyName } from '../../utils/documentCompany';
 import storeService from '../../services/storeService';
 import { formatDate } from '../../utils/dateUtils';
 import { useAuth } from '../../contexts/AuthContext';
@@ -154,7 +155,7 @@ const GoodsReceive = () => {
   const [suppliers, setSuppliers] = useState([]);
   const [projects, setProjects] = useState([]);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
   const [search, setSearch] = useState('');
   const [viewDialog, setViewDialog] = useState({ open: false, data: null });
@@ -671,6 +672,7 @@ const GoodsReceive = () => {
             <TableHead>
               <TableRow>
                 <TableCell>GRN #</TableCell>
+                <TableCell>Company</TableCell>
                 <TableCell>Date</TableCell>
                 <TableCell>Supplier</TableCell>
                 <TableCell>PO Number</TableCell>
@@ -683,13 +685,14 @@ const GoodsReceive = () => {
             </TableHead>
             <TableBody>
               {loading ? (
-                <TableRow><TableCell colSpan={9} align="center"><CircularProgress /></TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} align="center"><CircularProgress /></TableCell></TableRow>
               ) : receives.length === 0 ? (
-                <TableRow><TableCell colSpan={9} align="center">No records found</TableCell></TableRow>
+                <TableRow><TableCell colSpan={10} align="center">No records found</TableCell></TableRow>
               ) : (
                 receives.map((receive) => (
                   <TableRow key={receive._id} hover>
                     <TableCell><Typography variant="body2" fontWeight="bold">{receive.receiveNumber}</Typography></TableCell>
+                    <TableCell>{getDocCompanyName(receive)}</TableCell>
                     <TableCell>{formatDate(receive.receiveDate)}</TableCell>
                     <TableCell>{receive.supplierName || receive.supplier?.name || '-'}</TableCell>
                     <TableCell>{receive.poNumber || receive.purchaseOrder?.orderNumber || '-'}</TableCell>
@@ -743,7 +746,7 @@ const GoodsReceive = () => {
           onPageChange={(e, newPage) => setPage(newPage)}
           rowsPerPage={rowsPerPage}
           onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-          rowsPerPageOptions={[5, 10, 25, 50]}
+          rowsPerPageOptions={[25, 50, 100, 250, 500]}
         />
       </Paper>
 
@@ -1284,6 +1287,8 @@ const GoodsReceive = () => {
                 <Grid item xs={12} md={6}>
                   <Typography variant="caption" color="textSecondary">No.</Typography>
                   <Typography variant="body1" fontWeight="bold">{viewDialog.data.receiveNumber}</Typography>
+                  <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Company</Typography>
+                  <Typography variant="body2">{getDocCompanyName(viewDialog.data)}</Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Supplier</Typography>
                   <Typography variant="body2">{[viewDialog.data.supplier?.supplierId, viewDialog.data.supplierName || viewDialog.data.supplier?.name].filter(Boolean).join(' ') || '-'}</Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Address</Typography>

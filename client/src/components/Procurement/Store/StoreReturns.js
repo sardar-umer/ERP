@@ -179,7 +179,7 @@ export function StoreReturnsList({ refreshKey }) {
   const [total, setTotal] = useState(0);
   const [loading, setLoading] = useState(false);
   const [page, setPage] = useState(0);
-  const [rowsPerPage, setRowsPerPage] = useState(10);
+  const [rowsPerPage, setRowsPerPage] = useState(250);
   const [search, setSearch] = useState('');
 
   const load = useCallback(async () => {
@@ -253,7 +253,7 @@ export function StoreReturnsList({ refreshKey }) {
       <TablePagination
         component="div" count={total} page={page} onPageChange={(_, p) => setPage(p)}
         rowsPerPage={rowsPerPage} onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
-        rowsPerPageOptions={[10, 25, 50]}
+        rowsPerPageOptions={[25, 50, 100, 250, 500]}
       />
     </>
   );

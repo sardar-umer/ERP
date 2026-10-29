@@ -4575,7 +4575,7 @@ router.get('/delivery-challans',
     const q = {};
     if (purchaseOrder) q.purchaseOrder = purchaseOrder;
     if (status) q.status = status;
-    const lim = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 100);
+    const lim = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 500);
     const pg = Math.max(parseInt(page, 10) || 1, 1);
     const skip = (pg - 1) * lim;
     const [items, total] = await Promise.all([
@@ -4583,7 +4583,7 @@ router.get('/delivery-challans',
         .sort({ createdAt: -1 })
         .skip(skip)
         .limit(lim)
-        .populate('purchaseOrder', 'orderNumber poNumber status totalAmount paymentTerms items')
+        .populate({ path: 'purchaseOrder', select: 'orderNumber poNumber status totalAmount paymentTerms items companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
         .populate('createdBy', 'firstName lastName email')
         .populate('qaTestedBy', 'firstName lastName email')
         .lean(),
@@ -4604,7 +4604,7 @@ router.get('/delivery-challans/:id',
   authorize('super_admin', 'admin', 'procurement_manager', 'store_qa', 'audit_manager', 'auditor', 'finance_manager'),
   asyncHandler(async (req, res) => {
     const doc = await DeliveryChallan.findById(req.params.id)
-      .populate('purchaseOrder')
+      .populate({ path: 'purchaseOrder', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('createdBy', 'firstName lastName email')
       .populate('updatedBy', 'firstName lastName email')
       .populate('qaTestedBy', 'firstName lastName email')
@@ -4779,7 +4779,7 @@ router.get('/goods-receive',
     
     const receives = await GoodsReceive.find(query)
       .populate('supplier', 'name contactPerson supplierId address')
-      .populate('purchaseOrder', 'orderNumber')
+      .populate({ path: 'purchaseOrder', select: 'orderNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('deliveryChallan', 'dcNumber gatePassNo status')
       .populate('receivedBy', 'firstName lastName')
       .sort({ receiveDate: -1 })
@@ -4811,7 +4811,7 @@ router.get('/goods-receive/:id',
   asyncHandler(async (req, res) => {
     const receive = await GoodsReceive.findById(req.params.id)
       .populate('supplier', 'name contactPerson email phone supplierId address')
-      .populate('purchaseOrder')
+      .populate({ path: 'purchaseOrder', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('deliveryChallan', 'dcNumber gatePassNo status qaStatus')
       .populate('items.inventoryItem')
       .populate('receivedBy', 'firstName lastName email');
@@ -4838,7 +4838,7 @@ router.get('/vendor-bills/billable-grns',
     if (vendorId) query.supplier = vendorId;
 
     const grns = await GoodsReceive.find(query)
-      .populate('purchaseOrder', 'orderNumber')
+      .populate({ path: 'purchaseOrder', select: 'orderNumber companyId indent', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('supplier', 'name')
       .sort({ receiveDate: -1, createdAt: -1 })
       .lean();
@@ -4855,6 +4855,7 @@ router.get('/vendor-bills/billable-grns',
         vendorName: g.supplier?.name || g.supplierName || '—',
         poId: g.purchaseOrder?._id || g.purchaseOrder || null,
         poNumber: g.purchaseOrder?.orderNumber || g.poNumber || '',
+        companyName: g.purchaseOrder?.companyId?.name || g.purchaseOrder?.indent?.companyId?.name || '',
         amount: totalAmount,
         billedAmount,
         remainingAmount,
@@ -5435,6 +5436,7 @@ router.get('/goods-issue',
     }
 
     const issues = await GoodsIssue.find(query)
+      .populate('companyId', 'name code symbol')
       .populate('requestedBy', 'firstName lastName')
       .populate('issuedBy', 'firstName lastName')
       .populate('costCenter', 'code name department')
@@ -6664,6 +6666,7 @@ router.get('/requisitions',
       : { createdAt: -1 };
 
     const indents = await Indent.find(filter)
+      .populate('companyId', 'name code symbol')
       .populate('department', 'name code')
       .populate('requestedBy', 'firstName lastName email employeeId digitalSignature')
       .populate('approvedBy', 'firstName lastName email digitalSignature')
@@ -8621,7 +8624,8 @@ router.get('/indents-with-split-assignments',
       splitFilter['procurementAssignment.assignedTo'] = req.user.id;
     }
     const indents = await Indent.find(splitFilter)
-      .select('indentNumber title department splitPOAssignments procurementAssignment')
+      .select('indentNumber title companyId department splitPOAssignments procurementAssignment')
+      .populate('companyId', 'name code symbol')
       .populate('department', 'name')
       .sort({ updatedAt: -1 })
       .lean();
