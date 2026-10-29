@@ -525,7 +525,11 @@ const payrollSchema = new mongoose.Schema({
     /** Arrears paid in earlier months of this FY, kept in the annual taxable figure */
     priorFyArrears: { type: Number, default: 0 },
     /** Full-month taxable used for the rest of the FY (differs from mainTaxableIncome in a reduced month) */
-    normalMonthlyTaxable: { type: Number, default: 0 }
+    normalMonthlyTaxable: { type: Number, default: 0 },
+    /** Leaver's final month: the year was closed on actual pay against tax already deducted */
+    finalMonthTrueUp: { type: Boolean, default: false },
+    /** Tax deducted this FY beyond the year's tax — refundable to the leaver (final settlement) */
+    taxRefundDue: { type: Number, default: 0 }
   },
   // Metadata
   currency: {

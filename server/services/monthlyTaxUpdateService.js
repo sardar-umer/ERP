@@ -197,6 +197,8 @@ class MonthlyTaxUpdateService {
         payroll.taxCalculation.fyMonths = taxCalculation.fyMonths || 12;
         payroll.taxCalculation.priorFyArrears = taxCalculation.priorFyArrears || 0;
         payroll.taxCalculation.normalMonthlyTaxable = taxCalculation.normalMonthlyTaxable || 0;
+        payroll.taxCalculation.finalMonthTrueUp = Boolean(taxCalculation.finalMonthTrueUp);
+        payroll.taxCalculation.taxRefundDue = taxCalculation.taxRefundDue || 0;
       }
 
       payroll.totalDeductions =
