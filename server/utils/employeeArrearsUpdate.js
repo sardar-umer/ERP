@@ -43,7 +43,39 @@ const markEmployeeArrearsPaidForPeriod = async (employeeId, month, year) => {
   return true;
 };
 
+/**
+ * Undo markEmployeeArrearsPaidForPeriod when that month's Draft payroll is deleted, so regenerating the
+ * month pays the arrears again instead of skipping them as already Paid.
+ * Call only for a deleted payroll that carried arrears (payroll.arrears > 0).
+ * @returns {Promise<boolean>} true when at least one arrears entry was put back to Pending
+ */
+const markEmployeeArrearsPendingForPeriod = async (employeeId, month, year) => {
+  const m = Number(month);
+  const y = Number(year);
+  const employee = await Employee.findById(employeeId).select('employeeId arrears').lean();
+  if (!employee?.arrears) return false;
+
+  const set = {};
+  for (const arrearsType of ARREARS_TYPES) {
+    const arrearsData = employee.arrears[arrearsType];
+    if (
+      arrearsData?.isActive &&
+      Number(arrearsData.month) === m &&
+      Number(arrearsData.year) === y &&
+      arrearsData.status === 'Paid'
+    ) {
+      set[`arrears.${arrearsType}.status`] = 'Pending';
+    }
+  }
+
+  if (!Object.keys(set).length) return false;
+
+  await Employee.findByIdAndUpdate(employeeId, { $set: set }, { runValidators: false });
+  return true;
+};
+
 module.exports = {
   ARREARS_TYPES,
-  markEmployeeArrearsPaidForPeriod
+  markEmployeeArrearsPaidForPeriod,
+  markEmployeeArrearsPendingForPeriod
 };

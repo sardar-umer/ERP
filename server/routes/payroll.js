@@ -33,7 +33,7 @@ const {
   calculateTaxForExistingPayroll
 } = require('../utils/allowanceTaxCalculator');
 const { queryApproverCandidateUsers } = require('../utils/utilityBillApproverEligibility');
-const { markEmployeeArrearsPaidForPeriod } = require('../utils/employeeArrearsUpdate');
+const { markEmployeeArrearsPaidForPeriod, markEmployeeArrearsPendingForPeriod } = require('../utils/employeeArrearsUpdate');
 const { applyBulkPayrollStatusForAuthoritySlot, PAYROLL_STATUS_BY_AUTHORITY_SLOT, applyComparisonReportStatusForAuthoritySlot, isPayrollFinalApprovedStatus } = require('../utils/payrollAuthorityPayrollStatus');
 const { createAndEmitNotification } = require('../services/realtimeNotificationService');
 const { MONTH_NAMES: PAYROLL_MONTH_NAMES } = require('../utils/financePayrollQueue');
@@ -1724,6 +1724,17 @@ router.post('/', [
   try {
     console.log(`🚀 Starting payroll generation for ${month}/${year}...`);
 
+    // Regenerating replaces this month's Draft payrolls: the first run marked their arrears Paid, so put
+    // those back first (before employees are loaded) or the new payrolls would skip them
+    if (forceRegenerate) {
+      const draftsWithArrears = await Payroll.find({ month, year, status: 'Draft', arrears: { $gt: 0 } })
+        .select('employee month year')
+        .lean();
+      for (const p of draftsWithArrears) {
+        await markEmployeeArrearsPendingForPeriod(p.employee, p.month, p.year);
+      }
+    }
+
     // Get all active employees with salary information
     const activeEmployees = await Employee.find({
       employmentStatus: { $in: ['Active', 'Reinstated'] },
@@ -3057,9 +3068,17 @@ router.delete('/:id',
 
     await Payroll.findByIdAndDelete(req.params.id);
 
+    // Generation marked this month's arrears Paid; put them back so regenerating pays them again
+    let arrearsRestored = false;
+    if (Number(payroll.arrears) > 0) {
+      arrearsRestored = await markEmployeeArrearsPendingForPeriod(payroll.employee, payroll.month, payroll.year);
+    }
+
     res.json({
       success: true,
-      message: 'Payroll deleted successfully'
+      message: arrearsRestored
+        ? 'Payroll deleted — its arrears are pending again and will be included when the month is regenerated'
+        : 'Payroll deleted successfully'
     });
   })
 );
@@ -3373,15 +3392,28 @@ router.delete('/month/:year/:month',
       });
     }
 
+    // Payrolls that paid arrears: generation marked those arrears Paid — put them back after deleting
+    const withArrears = await Payroll.find({ month, year, status: 'Draft', arrears: { $gt: 0 } })
+      .select('employee month year')
+      .lean();
+
     // Delete all Draft payrolls for this month
     await Payroll.deleteMany({ month, year, status: 'Draft' });
 
     // Delete the approval document
     await PayrollMonthlyApproval.deleteMany({ month, year });
 
+    let arrearsRestored = 0;
+    for (const p of withArrears) {
+      if (await markEmployeeArrearsPendingForPeriod(p.employee, p.month, p.year)) arrearsRestored += 1;
+    }
+
     res.json({
       success: true,
-      message: 'Monthly payroll deleted successfully'
+      message: arrearsRestored
+        ? `Monthly payroll deleted — arrears of ${arrearsRestored} employee(s) are pending again and will be included when the month is regenerated`
+        : 'Monthly payroll deleted successfully',
+      arrearsRestored
     });
   })
 );
@@ -3406,8 +3438,17 @@ router.delete('/delete-all',
       });
     }
 
+    // Payrolls that paid arrears: generation marked those arrears Paid — put them back after deleting
+    const withArrears = await Payroll.find({ status: 'Draft', arrears: { $gt: 0 } })
+      .select('employee month year')
+      .lean();
+
     // Only delete Draft payrolls — locked months stay forever
     const result = await Payroll.deleteMany({ status: 'Draft' });
+
+    for (const p of withArrears) {
+      await markEmployeeArrearsPendingForPeriod(p.employee, p.month, p.year);
+    }
 
     res.json({
       success: true,
