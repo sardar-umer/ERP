@@ -1653,6 +1653,36 @@ router.post(
   })
 );
 
+// @route   GET /api/payroll/salary-percentage-cuts?month=&year=
+// @desc    Employees with a one-month salary % cut for the month
+// @access  Private (hr_manager, hr_admin, super_admin, finance_manager)
+router.get(
+  '/salary-percentage-cuts',
+  authorize('hr_manager', 'hr_admin', 'super_admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const month = Number(req.query.month);
+    const year = Number(req.query.year);
+    if (!Number.isInteger(month) || month < 1 || month > 12 || !Number.isInteger(year)) {
+      return res.status(400).json({ success: false, message: 'Valid month and year are required.' });
+    }
+    const PayrollMonthSalaryCut = require('../models/hr/PayrollMonthSalaryCut');
+    const cuts = await PayrollMonthSalaryCut.find({ month, year })
+      .populate('employee', 'employeeId firstName lastName')
+      .sort({ updatedAt: -1 })
+      .lean();
+    res.json({
+      success: true,
+      data: cuts.map((c) => ({
+        _id: c._id,
+        employeeId: c.employee?.employeeId || '',
+        name: `${c.employee?.firstName || ''} ${c.employee?.lastName || ''}`.trim(),
+        percentage: c.percentage,
+        updatedAt: c.updatedAt
+      }))
+    });
+  })
+);
+
 // @route   GET /api/payroll/:id
 // @desc    Get payroll by ID
 // @access  Private (HR and Admin)
@@ -3967,7 +3997,10 @@ router.post(
     ];
 
     const PayrollMonthSalaryCut = require('../models/hr/PayrollMonthSalaryCut');
-    const { applySalaryPercentageCutToPayrollData } = require('../utils/payrollSalaryPercentageCut');
+    const {
+      applySalaryPercentageCutToPayrollData,
+      removeSalaryPercentageCutFromPayrollData
+    } = require('../utils/payrollSalaryPercentageCut');
     const { isPayrollRecordLocked } = require('../utils/payrollLock');
 
     const normalizeEmpIdVariants = (raw) => {
@@ -4027,6 +4060,7 @@ router.post(
     const unmatchedList = [];
     const updatedDetails = [];
     const seenEmployeeIds = new Set();
+    const keptEmployees = [];
 
     for (const row of rawData) {
       const rawId = findValue(row, idCandidates);
@@ -4058,6 +4092,7 @@ router.post(
         { upsert: true, new: true }
       );
       savedCount += 1;
+      keptEmployees.push(emp._id);
 
       // Unique index is (employee, month, year, isManual) — update every Draft for the period
       const periodPayrolls = await Payroll.find({
@@ -4099,11 +4134,35 @@ router.post(
       });
     }
 
+    // Re-upload replaces the month's list: employees not in this file lose the cut (Draft payrolls restored)
+    let removedCount = 0;
+    if (keptEmployees.length) {
+      const staleCuts = await PayrollMonthSalaryCut.find({ month, year, employee: { $nin: keptEmployees } });
+      for (const cut of staleCuts) {
+        const payrolls = await Payroll.find({ employee: cut.employee, month, year });
+        for (const doc of payrolls) {
+          if (isPayrollRecordLocked(doc) || !doc.salaryPercentageCut?.percentage) continue;
+          removeSalaryPercentageCutFromPayrollData(doc);
+          doc.updatedBy = req.user.id;
+          doc.markModified('allowances');
+          doc.markModified('salaryPercentageCut');
+          doc.markModified('remarks');
+          await doc.save();
+        }
+      }
+      removedCount = staleCuts.length;
+      if (removedCount) {
+        await PayrollMonthSalaryCut.deleteMany({ _id: { $in: staleCuts.map((c) => c._id) } });
+      }
+    }
+
     res.json({
       success: true,
       message:
         `Salary cut ${percentage}% saved for ${savedCount} employee(s) for ${month}/${year}. ` +
-        `Draft payrolls updated: ${payrollUpdatedCount}. EOBI remains full.`,
+        `Draft payrolls updated: ${payrollUpdatedCount}. ` +
+        (removedCount ? `Removed from previous list: ${removedCount} employee(s) not in this file. ` : '') +
+        'EOBI remains full.',
       data: {
         month,
         year,
@@ -4113,6 +4172,7 @@ router.post(
         payrollSkippedLocked,
         payrollSkippedAlreadyCut,
         notFoundCount,
+        removedCount,
         unmatchedList,
         updatedDetails,
         totalProcessed: rawData.length

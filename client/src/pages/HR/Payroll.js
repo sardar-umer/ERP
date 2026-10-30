@@ -63,6 +63,7 @@ import MonthlyPayrollApprovalSection from '../../components/HR/MonthlyPayrollApp
 import PayrollMonthlyComparisonDialog from '../../components/HR/PayrollMonthlyComparisonDialog';
 import ImportFuelAllowanceDialog from '../../components/HR/ImportFuelAllowanceDialog';
 import ImportSalaryPercentageCutDialog from '../../components/HR/ImportSalaryPercentageCutDialog';
+import SalaryCutList from '../../components/HR/SalaryCutList';
 import { getPayrollStatusColor, getPayrollStatusLabel } from '../../utils/payrollStatusHelpers';
 import PayrollProrationBadge from '../../components/HR/PayrollProrationBadge';
 import SalaryAdvanceManagement from '../../components/HR/SalaryAdvanceManagement';
@@ -1771,10 +1772,13 @@ Do you want to:
           <Tab label="Monthly Payroll & Overview" />
           <Tab label="Salary Advances" />
           <Tab label="Manual Salary Sheet" />
+          <Tab label="Salary Cuts" />
         </Tabs>
       </Paper>
 
-      {activeTab === 2 ? (
+      {activeTab === 3 ? (
+        <SalaryCutList />
+      ) : activeTab === 2 ? (
         <ManualSalarySheet 
           manualSalaries={manualSalaries} 
           loading={manualSalariesLoading} 
