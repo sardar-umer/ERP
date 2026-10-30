@@ -245,6 +245,11 @@ const payrollSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Other bonus cannot be negative']
   },
+  // Month paid at an earlier (lower) salary: later tax keeps the tax actually deducted on it (Sidat)
+  earlierSalaryMonth: {
+    type: Boolean,
+    default: undefined
+  },
   arrears: {
     type: Number,
     default: 0,

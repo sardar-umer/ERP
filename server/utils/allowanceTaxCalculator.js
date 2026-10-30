@@ -87,10 +87,29 @@ const buildTaxResult = ({
   payrollYear,
   arrearsExemptPercent = 10
 }) => {
-  // Arrears are salary for earlier days: the medical % is exempt on them too (as Sidat does)
+  // Arrears are taxed in full (Sidat), except when they pay for a salary month that was never paid —
+  // a month of this FY with no payroll after joining this FY (joining month counts when joined by the
+  // 15th) or after an earlier paid month this FY;
+  // that is a salary month, so the medical % is exempt on it
+  const paysMissedMonth = (() => {
+    if (!hireDate || !payrollMonth || !payrollYear) return false;
+    const pkt = new Date(new Date(hireDate).getTime() + 5 * 60 * 60 * 1000);
+    if (Number.isNaN(pkt.getTime())) return false;
+    const fyIndex = (m) => (Number(m) + 5) % 12; // Jul = 0 … Jun = 11
+    const fyStartYear = Number(payrollMonth) >= 7 ? Number(payrollYear) : Number(payrollYear) - 1;
+    const joinedThisFy = pkt >= new Date(Date.UTC(fyStartYear, 6, 1));
+    const paid = new Set((Array.isArray(priorMonths) ? priorMonths : []).map((m) => fyIndex(m.month)));
+    const firstCounted = joinedThisFy
+      ? fyIndex(pkt.getUTCMonth() + 1) + (pkt.getUTCDate() > 15 ? 1 : 0)
+      : (paid.size ? Math.min(...paid) : 12);
+    for (let i = firstCounted; i < fyIndex(payrollMonth); i += 1) {
+      if (!paid.has(i)) return true;
+    }
+    return false;
+  })();
   const arrearsTaxable = (amt) => {
     const a = Math.max(0, Number(amt) || 0);
-    return a - Math.round((a * arrearsExemptPercent) / 100);
+    return paysMissedMonth ? a - Math.round((a * arrearsExemptPercent) / 100) : a;
   };
   const taxPriorMonths = Array.isArray(priorMonths)
     ? priorMonths.map((p) => ({ ...p, arrears: arrearsTaxable(p.arrears) }))
@@ -341,7 +360,8 @@ const paidMonthForTax = (payroll, settings) => {
     employeeId: payroll.employee,
     settings
   });
-  return { month: payroll.month, taxable: Math.round(mainTaxableIncome), partial, arrears };
+  return { month: payroll.month, taxable: Math.round(mainTaxableIncome), partial, arrears,
+    earlierSalary: Boolean(payroll.earlierSalaryMonth), tax: Math.round(Number(payroll.incomeTax) || 0) };
 };
 
 /**
@@ -361,7 +381,7 @@ const loadTaxYearContextByEmployee = async ({ payrollMonth, payrollYear, employe
   const match = { ...monthsFilter, status: { $ne: 'Cancelled' } };
   if (employeeIds) match.employee = { $in: employeeIds };
   const payrolls = await Payroll.find(match)
-    .select('employee month year grossSalary basicSalary houseRentAllowance medicalAllowance totalEarnings allowances arrears salaryPercentageCut proration updatedAt')
+    .select('employee month year grossSalary basicSalary houseRentAllowance medicalAllowance totalEarnings allowances arrears incomeTax earlierSalaryMonth salaryPercentageCut proration updatedAt')
     .sort({ updatedAt: 1 })
     .lean();
   const settings = await loadPayrollTaxSettings();

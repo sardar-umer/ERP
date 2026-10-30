@@ -369,7 +369,9 @@ function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arr
       const taxable = p.partial ? Math.max(0, Number(p.taxable) || 0) : normal;
       arrearsSoFar += Math.max(0, Number(p.arrears) || 0);
       const annual = paidTaxable + taxable + normal * (left - 1) + arrearsSoFar;
-      taxSoFar += Math.max(0, Math.round((yearTax(annual) - taxSoFar) / left));
+      const ruleTax = Math.max(0, Math.round((yearTax(annual) - taxSoFar) / left));
+      // A month paid at an earlier (lower) salary keeps the tax actually deducted on that salary (Sidat)
+      taxSoFar += p.earlierSalary && p.tax != null ? p.tax : ruleTax;
       paidTaxable += taxable;
     });
     // this month's arrears = FY arrears not already counted in the earlier months
