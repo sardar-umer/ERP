@@ -1,9 +1,11 @@
 import { useState, useEffect, useCallback, useMemo } from 'react';
 import { usePagination } from './usePagination';
 import { fetchAllDeposits, updateDeposit, deleteDeposit, depositMoney, createResident, fetchResidents, transferDeposit, fetchTajBanks } from '../services/tajResidentsService';
+import { fetchChargeTypes } from '../services/chargeTypeService';
 import dayjs from 'dayjs';
 
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Cheque', 'Online', 'Other'];
+const DEFAULT_CHARGE_TYPES = ['CAM', 'WATER', 'ELECTRICITY', 'RENT'];
 
 const formatCurrency = (amount) => {
   return new Intl.NumberFormat('en-PK', {
@@ -50,7 +52,8 @@ export const useDeposits = (options = {}) => {
     bank: '',
     referenceNumberExternal: '',
     description: '',
-    depositDate: ''
+    depositDate: '',
+    chargeType: ''
   });
 
   // Create deposit dialog state
@@ -62,10 +65,12 @@ export const useDeposits = (options = {}) => {
     referenceNumberExternal: '',
     description: '',
     depositDate: dayjs().format('YYYY-MM-DD'),
-    residentId: '' // For suspense account: select existing unknown resident or create new
+    residentId: '', // For suspense account: select existing unknown resident or create new
+    chargeType: ''
   });
   const [unknownResidents, setUnknownResidents] = useState([]);
   const [loadingResidents, setLoadingResidents] = useState(false);
+  const [chargeTypeOptions, setChargeTypeOptions] = useState(DEFAULT_CHARGE_TYPES);
 
   // Transfer deposit dialog state
   const [transferDialog, setTransferDialog] = useState(false);
@@ -200,6 +205,26 @@ export const useDeposits = (options = {}) => {
     loadBankOptions();
   }, [loadBankOptions]);
 
+  // Load charge types for deposit create/edit
+  const loadChargeTypes = useCallback(async () => {
+    try {
+      const response = await fetchChargeTypes({ isActive: 'true' });
+      const types = (response.data?.data || response.data || [])
+        .map((t) => (typeof t === 'string' ? t : t.name))
+        .filter(Boolean)
+        .map((n) => String(n).toUpperCase());
+      if (types.length > 0) {
+        setChargeTypeOptions([...new Set([...DEFAULT_CHARGE_TYPES, ...types])]);
+      }
+    } catch (err) {
+      setChargeTypeOptions(DEFAULT_CHARGE_TYPES);
+    }
+  }, []);
+
+  useEffect(() => {
+    loadChargeTypes();
+  }, [loadChargeTypes]);
+
   // Handle edit
   const handleEdit = useCallback((deposit) => {
     setEditingDeposit(deposit);
@@ -212,7 +237,8 @@ export const useDeposits = (options = {}) => {
       bank: deposit.bank || '',
       referenceNumberExternal: deposit.referenceNumberExternal || '',
       description: deposit.description || '',
-      depositDate: depositDate
+      depositDate: depositDate,
+      chargeType: deposit.chargeType || ''
     });
     setEditDialog(true);
   }, []);
@@ -234,7 +260,8 @@ export const useDeposits = (options = {}) => {
         bank: '',
         referenceNumberExternal: '',
         description: '',
-        depositDate: ''
+        depositDate: '',
+        chargeType: ''
       });
       loadDeposits();
       loadBankOptions();
@@ -313,7 +340,8 @@ export const useDeposits = (options = {}) => {
       referenceNumberExternal: '',
       description: '',
       depositDate: dayjs().format('YYYY-MM-DD'),
-      residentId: ''
+      residentId: '',
+      chargeType: ''
     });
     loadUnknownResidents();
     setCreateDialog(true);
@@ -356,7 +384,8 @@ export const useDeposits = (options = {}) => {
         paymentMethod: createForm.paymentMethod,
         referenceNumberExternal: createForm.referenceNumberExternal,
         description: createForm.description || '',
-        depositDate: createForm.depositDate
+        depositDate: createForm.depositDate,
+        chargeType: createForm.chargeType || null
       };
       
       if (createForm.paymentMethod !== 'Cash' && createForm.bank) {
@@ -373,7 +402,8 @@ export const useDeposits = (options = {}) => {
         referenceNumberExternal: '',
         description: '',
         depositDate: dayjs().format('YYYY-MM-DD'),
-        residentId: ''
+        residentId: '',
+        chargeType: ''
       });
       loadDeposits();
       loadBankOptions();
@@ -684,6 +714,7 @@ export const useDeposits = (options = {}) => {
     exportMonthToExcel,
     // Constants
     PAYMENT_METHODS,
+    chargeTypeOptions,
     formatCurrency,
     renderBankField
   };

@@ -78,6 +78,7 @@ const Deposits = () => {
     unknownResidents,
     loadingResidents,
     PAYMENT_METHODS,
+    chargeTypeOptions,
     bankOptions,
     formatCurrency,
     renderBankField,
@@ -261,6 +262,7 @@ const Deposits = () => {
                           <TableCell><strong>Date</strong></TableCell>
                           <TableCell><strong>Resident</strong></TableCell>
                           <TableCell><strong>Resident ID</strong></TableCell>
+                          <TableCell><strong>Charge Type</strong></TableCell>
                           <TableCell align="right"><strong>Amount</strong></TableCell>
                           <TableCell align="right"><strong>Remaining</strong></TableCell>
                           <TableCell><strong>Payment Method</strong></TableCell>
@@ -276,6 +278,7 @@ const Deposits = () => {
                             <TableCell>{dayjs(deposit.createdAt).format('DD MMM YYYY HH:mm')}</TableCell>
                             <TableCell>{deposit.resident?.name || '-'}</TableCell>
                             <TableCell>{deposit.resident?.residentId || '-'}</TableCell>
+                            <TableCell>{deposit.chargeType || '-'}</TableCell>
                             <TableCell align="right">{formatCurrency(deposit.amount)}</TableCell>
                             <TableCell align="right">
                               <Typography
@@ -346,7 +349,8 @@ const Deposits = () => {
           bank: '',
           referenceNumberExternal: '',
           description: '',
-          depositDate: ''
+          depositDate: '',
+          chargeType: ''
         });
       }} maxWidth="sm" fullWidth>
         <DialogTitle>
@@ -379,6 +383,25 @@ const Deposits = () => {
                 InputLabelProps={{ shrink: true }}
                 required
               />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel>Charge Type</InputLabel>
+                <Select
+                  value={editForm.chargeType || ''}
+                  label="Charge Type"
+                  onChange={(e) => setEditForm({ ...editForm, chargeType: e.target.value })}
+                >
+                  <MenuItem value="">
+                    <em>None</em>
+                  </MenuItem>
+                  {chargeTypeOptions.map((type) => (
+                    <MenuItem key={type} value={type}>
+                      {type}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
@@ -445,7 +468,8 @@ const Deposits = () => {
               bank: '',
               referenceNumberExternal: '',
               description: '',
-              depositDate: ''
+              depositDate: '',
+              chargeType: ''
             });
           }}>Cancel</Button>
           <Button onClick={handleUpdate} variant="contained" disabled={loading || !editForm.amount || !editForm.referenceNumberExternal || !editForm.depositDate}>
@@ -464,7 +488,8 @@ const Deposits = () => {
           referenceNumberExternal: '',
           description: '',
           depositDate: dayjs().format('YYYY-MM-DD'),
-          residentId: ''
+          residentId: '',
+          chargeType: ''
         });
       }} maxWidth="sm" fullWidth>
         <DialogTitle>Create Deposit</DialogTitle>
@@ -508,6 +533,25 @@ const Deposits = () => {
                 InputLabelProps={{ shrink: true }}
                 required
               />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <InputLabel>Charge Type</InputLabel>
+                <Select
+                  value={createForm.chargeType || ''}
+                  label="Charge Type"
+                  onChange={(e) => setCreateForm({ ...createForm, chargeType: e.target.value })}
+                >
+                  <MenuItem value="">
+                    <em>None</em>
+                  </MenuItem>
+                  {chargeTypeOptions.map((type) => (
+                    <MenuItem key={type} value={type}>
+                      {type}
+                    </MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
             </Grid>
             <Grid item xs={12} md={6}>
               <FormControl fullWidth>
@@ -574,7 +618,8 @@ const Deposits = () => {
               referenceNumberExternal: '',
               description: '',
               depositDate: dayjs().format('YYYY-MM-DD'),
-              residentId: ''
+              residentId: '',
+              chargeType: ''
             });
           }}>Cancel</Button>
           <Button 

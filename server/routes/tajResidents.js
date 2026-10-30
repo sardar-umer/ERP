@@ -834,7 +834,7 @@ router.post(
       return res.status(404).json({ success: false, message: 'Resident not found' });
     }
 
-    const { amount, description, paymentMethod, bank, referenceNumberExternal, depositDate } = req.body;
+    const { amount, description, paymentMethod, bank, referenceNumberExternal, depositDate, chargeType } = req.body;
     const amountNum = parseFloat(amount) || 0;
     if (amountNum <= 0) {
       return res.status(400).json({ success: false, message: 'Amount must be greater than 0' });
@@ -874,6 +874,7 @@ router.post(
       paymentMethod,
       bank: bank || null,
       referenceNumberExternal,
+      chargeType: chargeType ? String(chargeType).trim().toUpperCase() : null,
       createdBy: req.user.id
     };
     
@@ -935,7 +936,7 @@ router.put(
       return res.status(403).json({ success: false, message: 'Transaction does not belong to this resident' });
     }
 
-    const { amount, description, paymentMethod, bank, referenceNumberExternal, depositDate } = req.body;
+    const { amount, description, paymentMethod, bank, referenceNumberExternal, depositDate, chargeType } = req.body;
     const oldAmount = transaction.amount;
     const amountChanged = amount !== undefined && parseFloat(amount) !== oldAmount;
 
@@ -983,6 +984,9 @@ router.put(
     if (paymentMethod !== undefined) transaction.paymentMethod = paymentMethod;
     if (bank !== undefined) transaction.bank = bank;
     if (referenceNumberExternal !== undefined) transaction.referenceNumberExternal = referenceNumberExternal;
+    if (chargeType !== undefined) {
+      transaction.chargeType = chargeType ? String(chargeType).trim().toUpperCase() : null;
+    }
     
     // Validate bank is provided for bank-related payment methods
     if ((transaction.paymentMethod === 'Bank Transfer' || transaction.paymentMethod === 'Cheque' || transaction.paymentMethod === 'Online') && !transaction.bank) {
@@ -1992,7 +1996,7 @@ router.get('/deposits/all', authMiddleware, asyncHandler(async (req, res) => {
 
   // Get deposits with pagination
   const deposits = await TajTransaction.find(query)
-    .select('_id amount description paymentMethod bank referenceNumberExternal createdAt balanceBefore balanceAfter')
+    .select('_id amount description paymentMethod bank referenceNumberExternal chargeType createdAt balanceBefore balanceAfter')
     .populate('resident', 'name residentId accountType')
     .populate('createdBy', 'firstName lastName')
     .populate('updatedBy', 'firstName lastName')

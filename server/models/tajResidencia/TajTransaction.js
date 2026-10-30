@@ -72,6 +72,14 @@ const tajTransactionSchema = new mongoose.Schema(
       type: String,
       trim: true // External transaction reference (bank reference, cheque number, etc.)
     },
+
+    // Charge type for deposits (CAM, WATER, ELECTRICITY, RENT, etc.)
+    chargeType: {
+      type: String,
+      trim: true,
+      uppercase: true,
+      default: null
+    },
     
     // For tracking deposit usage in bill payments (array to handle multiple deposits per payment)
     depositUsages: [{

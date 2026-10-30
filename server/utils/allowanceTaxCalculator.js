@@ -84,8 +84,18 @@ const buildTaxResult = ({
   usesAllowanceTaxPolicy,
   hireDate,
   payrollMonth,
-  payrollYear
+  payrollYear,
+  arrearsExemptPercent = 10
 }) => {
+  // Arrears are salary for earlier days: the medical % is exempt on them too (as Sidat does)
+  const arrearsTaxable = (amt) => {
+    const a = Math.max(0, Number(amt) || 0);
+    return a - Math.round((a * arrearsExemptPercent) / 100);
+  };
+  const taxPriorMonths = Array.isArray(priorMonths)
+    ? priorMonths.map((p) => ({ ...p, arrears: arrearsTaxable(p.arrears) }))
+    : priorMonths;
+  const taxArrears = arrearsTaxable(arrearsAmt) + arrearsTaxable(priorFyArrears);
   const {
     monthlyTax,
     fyMonths,
@@ -93,10 +103,10 @@ const buildTaxResult = ({
     annualTax
   } = priorPaidMonths != null && payrollMonth
     // Tax-year context known: the year is the months actually paid + months to come (Sidat method)
-    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, arrearsAmt + priorFyArrears, priorPaidMonths, payrollMonth, priorMonths)
+    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, taxArrears, priorPaidMonths, payrollMonth, taxPriorMonths)
     : calculateMonthlyTaxFYAwareWithOneTimeArrears(
       salaryBase,
-      arrearsAmt + priorFyArrears,
+      taxArrears,
       hireDate,
       payrollMonth,
       payrollYear,
@@ -111,7 +121,7 @@ const buildTaxResult = ({
     // Recurring monthly taxable (gross−medical + taxable allowances) — NOT including arrears
     mainTaxableIncome: Math.round(salaryBase),
     // One-time arrears added to annual only (not × FY months)
-    arrearsTaxableIncome: Math.round(arrearsAmt),
+    arrearsTaxableIncome: arrearsTaxable(arrearsAmt),
     // Arrears paid in earlier months of this FY — stay in the annual figure until June
     priorFyArrears: Math.round(priorFyArrears),
     // Full-month taxable used for the rest of the FY when this month's pay is reduced
@@ -277,6 +287,7 @@ const calculatePayrollTaxWithSettings = ({
     allowanceExempt,
     allowanceBreakdown,
     usesAllowanceTaxPolicy: true,
+    arrearsExemptPercent: salaryExemptPercent,
     hireDate,
     payrollMonth,
     payrollYear
