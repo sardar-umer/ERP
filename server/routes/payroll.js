@@ -1880,9 +1880,10 @@ router.post('/', [
           const effectiveAllowances = prorationResult.allowances;
 
           // 🔧 SALARY BREAKDOWN CALCULATION (66.66% basic, 10% medical, 23.34% house rent)
-          const basicSalary = Math.round(grossSalary * 0.6666);
+          // Basic takes the rounding remainder so basic + house rent + medical = gross exactly
           const medicalAllowance = Math.round(grossSalary * 0.10);
           const houseRentAllowance = Math.round(grossSalary * 0.2334);
+          const basicSalary = Math.round(grossSalary) - medicalAllowance - houseRentAllowance;
 
           // Calculate additional allowances from employee master data (prorated in join month)
           const additionalAllowances = additionalAllowancesTotal(effectiveAllowances);

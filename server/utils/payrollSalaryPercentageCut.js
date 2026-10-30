@@ -46,6 +46,10 @@ const scaleAllowances = (allowances, factor) => {
 };
 
 const recalcTotals = (data) => {
+  // Scaling rounds each part on its own: basic takes the remainder so the parts add up to gross
+  if (data.grossSalary != null && data.basicSalary != null) {
+    data.basicSalary = roundPKR(data.grossSalary) - roundPKR(data.houseRentAllowance) - roundPKR(data.medicalAllowance);
+  }
   // Provident Fund is display-only (not deducted) — same as bulk generation
   data.totalDeductions = roundPKR(
     (data.incomeTax || 0) +
