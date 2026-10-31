@@ -1,4 +1,5 @@
 const express = require('express');
+const mongoose = require('mongoose');
 const router = express.Router();
 const { body, validationResult } = require('express-validator');
 const TajResident = require('../models/tajResidencia/TajResident');
@@ -1950,6 +1951,191 @@ const buildDepositsSummary = async (query, timezone) => {
 
   return summary;
 };
+
+// Deposits whose resident has no name or residentId sit in the Suspense Account
+const findUnknownResidentIds = async () => {
+  const unknownResidents = await TajResident.find({
+    $or: [
+      { name: { $exists: false } },
+      { name: null },
+      { name: '' },
+      { residentId: { $exists: false } },
+      { residentId: null },
+      { residentId: '' }
+    ]
+  }).select('_id').lean();
+  return unknownResidents.map(r => r._id);
+};
+
+// Same rows as the Dashboard charge summary
+const COLLECTION_CHARGE_KEYS = ['ELECTRICITY', 'CAM', 'RENT', 'WATER', 'GROUND', 'OTHER'];
+
+const collectionChargeKey = (chargeType) => {
+  const raw = String(chargeType == null ? '' : chargeType).trim();
+  const t = raw.toUpperCase().replace(/\s+/g, '_');
+  if (t.includes('GROUND')) return 'GROUND';
+  if (t === 'RENT' || t === 'REN') return 'RENT';
+  if (t === 'CAM' || t === 'CMC') return 'CAM';
+  if (t === 'WATER' || t === 'WTR') return 'WATER';
+  if (t === 'ELECTRICITY' || t === 'ELC') return 'ELECTRICITY';
+  return 'OTHER';
+};
+
+// Split an amount paid on an invoice across its charge lines (by line total)
+const splitAmountByCharge = (invoice, amount) => {
+  const lines = Array.isArray(invoice?.charges) ? invoice.charges : [];
+  const weights = {};
+  let totalWeight = 0;
+  lines.forEach(line => {
+    const weight = Math.max(0, Number(line.total) || (Number(line.amount) || 0) + (Number(line.arrears) || 0));
+    if (weight <= 0) return;
+    const key = collectionChargeKey(line.type);
+    weights[key] = (weights[key] || 0) + weight;
+    totalWeight += weight;
+  });
+  if (totalWeight <= 0) {
+    const firstType = (invoice?.chargeTypes || [])[0];
+    return { [collectionChargeKey(firstType)]: amount };
+  }
+  const split = {};
+  Object.entries(weights).forEach(([key, weight]) => {
+    split[key] = amount * (weight / totalWeight);
+  });
+  return split;
+};
+
+/**
+ * Cash received per month, matching the Deposits page cards (deposits + suspense, used, remaining),
+ * with "used" broken down by charge type and by the billing month of the invoice it paid.
+ * Read-only.
+ */
+router.get('/deposits/collections', authMiddleware, asyncHandler(async (req, res) => {
+  const { startMonth, endMonth } = req.query;
+  const timezone = resolveTimezone(req.query.timezone);
+  const monthPattern = /^\d{4}-\d{2}$/;
+  if (!monthPattern.test(String(startMonth || '')) || !monthPattern.test(String(endMonth || ''))) {
+    return res.status(400).json({ success: false, message: 'startMonth and endMonth (YYYY-MM) are required' });
+  }
+  const [fromMonth, toMonth] = startMonth <= endMonth ? [startMonth, endMonth] : [endMonth, startMonth];
+
+  const unknownResidentIds = await findUnknownResidentIds();
+  const suspenseIdSet = new Set(unknownResidentIds.map(id => id.toString()));
+
+  // Pad the date range by a day on each side, then bucket exactly by month in the requested timezone
+  const rangeStart = new Date(`${fromMonth}-01T00:00:00Z`);
+  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1);
+  const rangeEnd = new Date(`${toMonth}-01T00:00:00Z`);
+  rangeEnd.setUTCMonth(rangeEnd.getUTCMonth() + 1);
+  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 1);
+
+  const deposits = await TajTransaction.aggregate([
+    {
+      $match: {
+        transactionType: 'deposit',
+        createdAt: { $gte: rangeStart, $lt: rangeEnd },
+        $or: [
+          { referenceNumberExternal: { $not: /^REV-/ } },
+          { referenceNumberExternal: { $exists: false } },
+          { referenceNumberExternal: null }
+        ]
+      }
+    },
+    { $addFields: { monthKey: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone } } } },
+    { $match: { monthKey: { $gte: fromMonth, $lte: toMonth } } },
+    { $project: { amount: 1, resident: 1, monthKey: 1 } }
+  ]);
+
+  const emptyCharges = () => COLLECTION_CHARGE_KEYS.reduce((acc, key) => ({ ...acc, [key]: 0 }), {});
+  const months = {};
+  const ensureMonth = (monthKey) => {
+    if (!months[monthKey]) {
+      months[monthKey] = {
+        depositAmount: 0,
+        suspenseAmount: 0,
+        totalAmount: 0,
+        totalUsed: 0,
+        totalRemaining: 0,
+        suspenseRemaining: 0,
+        usedByCharge: emptyCharges(),
+        usedByBillMonth: {},
+        usedNotLinked: 0
+      };
+    }
+    return months[monthKey];
+  };
+
+  const depositMonth = {};
+  deposits.forEach(d => {
+    const month = ensureMonth(d.monthKey);
+    const amount = Number(d.amount) || 0;
+    if (suspenseIdSet.has(String(d.resident))) month.suspenseAmount += amount;
+    else month.depositAmount += amount;
+    month.totalAmount += amount;
+    depositMonth[d._id.toString()] = d.monthKey;
+  });
+
+  const depositIds = deposits.map(d => d._id);
+  const payments = depositIds.length > 0
+    ? await TajTransaction.find({ transactionType: 'bill_payment', 'depositUsages.depositId': { $in: depositIds } })
+      .select('depositUsages referenceId')
+      .lean()
+    : [];
+
+  const invoiceIds = [...new Set(payments
+    .map(p => p.referenceId)
+    .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+    .map(String))];
+  const invoices = invoiceIds.length > 0
+    ? await PropertyInvoice.find({ _id: { $in: invoiceIds } })
+      .select('charges chargeTypes periodTo invoiceDate')
+      .lean()
+    : [];
+  const invoiceById = new Map(invoices.map(inv => [inv._id.toString(), inv]));
+
+  const usedByDeposit = {};
+  payments.forEach(payment => {
+    const invoice = payment.referenceId ? invoiceById.get(String(payment.referenceId)) : null;
+    (payment.depositUsages || []).forEach(usage => {
+      const depositId = usage.depositId?.toString();
+      const monthKey = depositId && depositMonth[depositId];
+      const amount = Number(usage.amount) || 0;
+      if (!monthKey || amount <= 0) return;
+      usedByDeposit[depositId] = (usedByDeposit[depositId] || 0) + amount;
+      const month = months[monthKey];
+      if (!invoice) {
+        month.usedNotLinked += amount;
+        return;
+      }
+      const billDate = invoice.periodTo || invoice.invoiceDate;
+      const billMonth = billDate ? new Date(billDate).toISOString().slice(0, 7) : 'unknown';
+      month.usedByBillMonth[billMonth] = (month.usedByBillMonth[billMonth] || 0) + amount;
+      Object.entries(splitAmountByCharge(invoice, amount)).forEach(([key, share]) => {
+        month.usedByCharge[key] = (month.usedByCharge[key] || 0) + share;
+      });
+    });
+  });
+
+  // Used / remaining per deposit, capped like the Deposits page
+  deposits.forEach(d => {
+    const month = months[d.monthKey];
+    const amount = Number(d.amount) || 0;
+    const used = usedByDeposit[d._id.toString()] || 0;
+    const remaining = Math.max(0, amount - used);
+    month.totalUsed += used;
+    month.totalRemaining += remaining;
+    if (suspenseIdSet.has(String(d.resident))) month.suspenseRemaining += remaining;
+  });
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  Object.values(months).forEach(month => {
+    ['depositAmount', 'suspenseAmount', 'totalAmount', 'totalUsed', 'totalRemaining', 'suspenseRemaining', 'usedNotLinked']
+      .forEach(field => { month[field] = round2(month[field]); });
+    Object.keys(month.usedByCharge).forEach(key => { month.usedByCharge[key] = round2(month.usedByCharge[key]); });
+    Object.keys(month.usedByBillMonth).forEach(key => { month.usedByBillMonth[key] = round2(month.usedByBillMonth[key]); });
+  });
+
+  res.json({ success: true, data: { timezone, months } });
+}));
 
 // Get all deposits across all residents (for Deposits page)
 router.get('/deposits/all', authMiddleware, asyncHandler(async (req, res) => {

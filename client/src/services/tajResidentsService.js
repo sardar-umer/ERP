@@ -53,6 +53,10 @@ export const getUnassignedProperties = (params = {}) =>
 export const fetchAllDeposits = (params = {}) =>
   api.get(`${base}/deposits/all`, { params });
 
+/** Cash received per month (deposits + suspense, used, remaining) with used split by charge type and bill month. */
+export const fetchDepositCollections = (params = {}) =>
+  api.get(`${base}/deposits/collections`, { params });
+
 export const transferDeposit = (transactionId, data) =>
   api.post(`${base}/deposits/${transactionId}/transfer`, data);
 

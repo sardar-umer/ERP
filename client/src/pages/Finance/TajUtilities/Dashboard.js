@@ -51,7 +51,7 @@ import {
 import { fetchProperties as fetchTajProperties } from '../../../services/tajPropertiesService';
 import { fetchResidents } from '../../../services/tajResidentsService';
 import { fetchProperties as fetchRentalProperties } from '../../../services/tajRentalManagementService';
-import { fetchAllDeposits } from '../../../services/tajResidentsService';
+import { fetchAllDeposits, fetchDepositCollections } from '../../../services/tajResidentsService';
 
 const PRIMARY_BLUE = '#1565C0';
 const LIGHT_BLUE = '#64B5F6';
@@ -72,15 +72,31 @@ const formatCompactMoney = (value) => {
   return Math.round(v).toLocaleString('en-PK');
 };
 
-/** Count style like 1.648K */
-const formatCompactCount = (value) => {
-  const v = Number(value) || 0;
-  if (v >= 1000) return `${(v / 1000).toFixed(3)}K`;
-  return String(Math.round(v));
-};
-
 const formatTableNumber = (value) =>
   Math.round(Number(value) || 0).toLocaleString('en-PK');
+
+const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
+
+const formatMonthKey = (monthKey) => {
+  const [year, month] = String(monthKey).split('-').map(Number);
+  if (!year || !month) return String(monthKey);
+  return formatDateFns(new Date(year, month - 1, 1), 'MMM yyyy');
+};
+
+/** Where a month's used deposits went: this month's bills, last month's bills, and everything older. */
+const splitUsedByBillMonth = (usedByBillMonth = {}, monthKey) => {
+  const [year, month] = String(monthKey).split('-').map(Number);
+  const prevKey = formatDateFns(new Date(year, month - 2, 1), 'yyyy-MM');
+  const parts = { current: 0, previous: 0, older: 0, later: 0 };
+  Object.entries(usedByBillMonth).forEach(([billMonth, amount]) => {
+    const value = Number(amount) || 0;
+    if (billMonth === monthKey) parts.current += value;
+    else if (billMonth === prevKey) parts.previous += value;
+    else if (billMonth > monthKey && billMonth !== 'unknown') parts.later += value;
+    else parts.older += value;
+  });
+  return { ...parts, prevKey };
+};
 
 const CHART_BLUE = LIGHT_BLUE;
 const CHART_BLUE_DARK = DEEP_BLUE;
@@ -136,6 +152,63 @@ const KpiCard = ({ title, value, loading }) => (
   </Paper>
 );
 
+const CashFigure = ({ label, value, strong }) => (
+  <Box sx={{ flex: '1 1 150px', minWidth: 140 }}>
+    <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+      {label}
+    </Typography>
+    <Typography variant="body1" sx={{ fontWeight: strong ? 700 : 600, color: strong ? PRIMARY_BLUE : 'text.primary' }}>
+      Rs {formatTableNumber(value)}
+    </Typography>
+  </Box>
+);
+
+/** Same five figures as the Deposits page month cards, plus where the used amount went. */
+const CashReceivedPanel = ({ monthKey, monthLabel, cash }) => {
+  if (!cash) {
+    return (
+      <Box sx={{ px: 2, py: 1.5, borderTop: BORDER }}>
+        <Typography variant="body2" color="text.secondary">
+          Cash received in {monthLabel}: no deposits recorded.
+        </Typography>
+      </Box>
+    );
+  }
+  const split = splitUsedByBillMonth(cash.usedByBillMonth, monthKey);
+  const usedParts = [
+    { label: `${monthLabel} bills`, value: split.current },
+    { label: `${formatMonthKey(split.prevKey)} bills`, value: split.previous },
+    { label: 'older bills', value: split.older },
+    { label: 'later bills', value: split.later },
+    { label: 'not linked to a bill', value: cash.usedNotLinked }
+  ].filter((part) => Math.round(part.value) !== 0);
+
+  return (
+    <Box sx={{ px: 2, py: 1.5, borderTop: BORDER, bgcolor: '#f8fbff' }}>
+      <Typography variant="subtitle2" fontWeight={700} color={PRIMARY_BLUE} sx={{ mb: 1 }}>
+        Cash received in {monthLabel} (matches the Deposits page for {monthLabel})
+      </Typography>
+      <Stack direction="row" flexWrap="wrap" useFlexGap spacing={2}>
+        <CashFigure label="Deposits" value={cash.depositAmount} />
+        <CashFigure label="Suspense Account" value={cash.suspenseAmount} />
+        <CashFigure label="Total Amount (Suspense + Deposits)" value={cash.totalAmount} strong />
+        <CashFigure label="Used" value={cash.totalUsed} />
+        <CashFigure label="Remaining" value={cash.totalRemaining} />
+      </Stack>
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+        Total {formatTableNumber(cash.totalAmount)} = Used {formatTableNumber(cash.totalUsed)} + Remaining {formatTableNumber(cash.totalRemaining)}
+        {cash.suspenseRemaining > 0 ? ` (of which ${formatTableNumber(cash.suspenseRemaining)} is unapplied suspense)` : ''}.
+      </Typography>
+      {usedParts.length > 0 && (
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+          Used went to: {usedParts.map((part) => `${part.label} ${formatTableNumber(part.value)}`).join(' · ')}.
+          The Collected column above splits this Used amount by charge type.
+        </Typography>
+      )}
+    </Box>
+  );
+};
+
 const Dashboard = () => {
   const navigate = useNavigate();
   const [loading, setLoading] = useState(true);
@@ -170,6 +243,7 @@ const Dashboard = () => {
 
   const [activeMonthTab, setActiveMonthTab] = useState(0);
   const [monthlyChargeData, setMonthlyChargeData] = useState({});
+  const [collectionsByMonth, setCollectionsByMonth] = useState({});
   const monthKeys = useMemo(() => Object.keys(monthlyChargeData).sort(), [monthlyChargeData]);
 
   const loadDashboard = useCallback(async () => {
@@ -194,7 +268,8 @@ const Dashboard = () => {
         residentsRes,
         rentalRes,
         suspenseRes,
-        residentsByBalanceRes
+        residentsByBalanceRes,
+        collectionsRes
       ] = await Promise.all([
         fetchReports({ ...reportParams, chargeType: 'all' }).catch(() => ({ data: { data: { totals: {}, byMonth: [] } } })),
         fetchReports({ ...reportParams, chargeType: 'CAM' }).catch(() => ({ data: { data: { totals: {}, byMonth: [] } } })),
@@ -210,8 +285,11 @@ const Dashboard = () => {
         fetchDashboardResidentsOutstanding({
           limit: 12,
           ...(chargeFilterKey ? { chargeTypes: chargeFilterKey } : {})
-        }).catch(() => ({ data: { data: [] } }))
+        }).catch(() => ({ data: { data: [] } })),
+        fetchDepositCollections({ startMonth: sm, endMonth: em, timezone: BROWSER_TIMEZONE }).catch(() => ({ data: { data: { months: {} } } }))
       ]);
+
+      setCollectionsByMonth(collectionsRes.data?.data?.months || {});
 
       const allData = allReportRes.data?.data || {};
       const byMonthAll = allData.byMonth || [];
@@ -379,7 +457,7 @@ const Dashboard = () => {
   }, [loadDashboard]);
 
   const monthlyChargeTables = useMemo(() => {
-    const mk = (id, label, s) => {
+    const mk = (id, label, s, collected) => {
       const invoiced = Math.round(Number(s?.totalAmountAllPages ?? s?.totalAmount ?? 0));
       const arrears = Math.round(Number(s?.totalArrears ?? 0));
       const total = invoiced + arrears;
@@ -393,19 +471,21 @@ const Dashboard = () => {
         arrears,
         total,
         paid,
-        balances
+        balances,
+        collected: Math.round(Number(collected) || 0)
       };
     };
 
     return monthKeys.map((monthKey) => {
       const mData = monthlyChargeData[monthKey] || {};
+      const usedByCharge = collectionsByMonth[monthKey]?.usedByCharge || {};
       const rows = [
-        mk('ELECTRICITY', 'ELECTRICITY', mData.electricity),
-        mk('CAM', 'CAM', mData.cam),
-        mk('RENT', 'RENT', mData.rentRollup),
-        mk('WATER', 'WATER', mData.water),
-        mk('GROUND', 'GROUND BOOKING', mData.groundRollup),
-        mk('OTHER', 'OTHER', mData.otherRollup)
+        mk('ELECTRICITY', 'ELECTRICITY', mData.electricity, usedByCharge.ELECTRICITY),
+        mk('CAM', 'CAM', mData.cam, usedByCharge.CAM),
+        mk('RENT', 'RENT', mData.rentRollup, usedByCharge.RENT),
+        mk('WATER', 'WATER', mData.water, usedByCharge.WATER),
+        mk('GROUND', 'GROUND BOOKING', mData.groundRollup, usedByCharge.GROUND),
+        mk('OTHER', 'OTHER', mData.otherRollup, usedByCharge.OTHER)
       ];
 
       const filtered =
@@ -420,19 +500,21 @@ const Dashboard = () => {
           arrears: acc.arrears + r.arrears,
           total: acc.total + r.total,
           paid: acc.paid + r.paid,
-          balances: acc.balances + r.balances
+          balances: acc.balances + r.balances,
+          collected: acc.collected + r.collected
         }),
-        { no: 0, invoiced: 0, arrears: 0, total: 0, paid: 0, balances: 0 }
+        { no: 0, invoiced: 0, arrears: 0, total: 0, paid: 0, balances: 0, collected: 0 }
       );
 
       return {
         monthKey,
         monthLabel: mData.monthLabel || monthKey,
         rows: filtered,
-        totals
+        totals,
+        cash: collectionsByMonth[monthKey] || null
       };
     });
-  }, [monthlyChargeData, monthKeys, chargeFilter]);
+  }, [monthlyChargeData, monthKeys, chargeFilter, collectionsByMonth]);
 
   const filteredByMonthSummary = useMemo(() => {
     return monthlyChargeTables.map((mTable) => ({
@@ -440,6 +522,7 @@ const Dashboard = () => {
       monthLabel: mTable.monthLabel,
       invoiceAmount: mTable.totals.invoiced,
       paymentsReceived: mTable.totals.paid,
+      cashReceived: Number(mTable.cash?.totalAmount) || 0,
       invoiceCount: mTable.totals.no
     }));
   }, [monthlyChargeTables]);
@@ -448,9 +531,10 @@ const Dashboard = () => {
     if (monthlyChargeTables.length > 0) {
       // Use latest month for top KPI metrics
       const latest = monthlyChargeTables[monthlyChargeTables.length - 1];
-      return { rows: latest.rows, totals: latest.totals, kpiTotals: latest.totals };
+      return { rows: latest.rows, totals: latest.totals, kpiTotals: latest.totals, monthLabel: latest.monthLabel };
     }
     return {
+      monthLabel: '',
       rows: [],
       totals: { no: 0, invoiced: 0, arrears: 0, total: 0, paid: 0, balances: 0 },
       kpiTotals: { no: 0, invoiced: 0, arrears: 0, total: 0, paid: 0, balances: 0 }
@@ -465,13 +549,14 @@ const Dashboard = () => {
     const receivedAmount = kpiTotals.paid;
     const totalArrears = kpiTotals.arrears;
     return {
-      totalInvoices: stats.invoices,
+      monthLabel: chargeRows.monthLabel,
+      totalInvoices: kpiTotals.no,
       invoicedAmount,
       receivedAmount,
       balances,
       totalArrears
     };
-  }, [chargeRows, stats.invoices]);
+  }, [chargeRows]);
 
   const barChartData = useMemo(
     () =>
@@ -500,12 +585,12 @@ const Dashboard = () => {
     const rest = Math.max(0, inv - rec);
     if (inv === 0 && rec === 0) {
       return [
-        { name: 'Payments Received', value: 1 },
+        { name: 'Paid against bills', value: 1 },
         { name: 'Invoiced (remaining)', value: 1 }
       ];
     }
     return [
-      { name: 'Payments Received', value: rec },
+      { name: 'Paid against bills', value: rec },
       { name: 'Invoiced (remaining)', value: rest }
     ];
   }, [kpis.invoicedAmount, kpis.receivedAmount]);
@@ -574,13 +659,19 @@ const Dashboard = () => {
               />
             </Stack>
             <Stack direction="row" spacing={1.5} flexWrap="wrap" useFlexGap sx={{ flex: 1, '& > *': { flex: '1 1 140px', minWidth: 120 } }}>
-              <KpiCard title="Total Invoices" value={formatCompactCount(kpis.totalInvoices)} loading={loading} />
+              <KpiCard title="Invoices" value={formatTableNumber(kpis.totalInvoices)} loading={loading} />
               <KpiCard title="Invoiced Amount" value={formatCompactMoney(kpis.invoicedAmount)} loading={loading} />
-              <KpiCard title="Payments Received" value={formatCompactMoney(kpis.receivedAmount)} loading={loading} />
+              <KpiCard title="Arrears (included in Balances)" value={formatCompactMoney(kpis.totalArrears)} loading={loading} />
+              <KpiCard title="Paid against these bills" value={formatCompactMoney(kpis.receivedAmount)} loading={loading} />
               <KpiCard title="Balances" value={formatCompactMoney(kpis.balances)} loading={loading} />
-              <KpiCard title="Total Arrears" value={formatCompactMoney(kpis.totalArrears)} loading={loading} />
             </Stack>
           </Stack>
+          {kpis.monthLabel && (
+            <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+              Cards show {kpis.monthLabel} bills (the last month in the range), same as the {kpis.monthLabel} Charge Summary below.
+              Cash received in each month is shown under that month's Charge Summary and matches the Deposits page.
+            </Typography>
+          )}
         </Paper>
 
         {/* Charge type filters */}
@@ -658,10 +749,17 @@ const Dashboard = () => {
                               Total
                             </TableCell>
                             <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#fafafa' }}>
-                              Payments Received
+                              <MuiTooltip title="Payments recorded against this month's bills, whenever they were paid">
+                                <span>Paid against these bills</span>
+                              </MuiTooltip>
                             </TableCell>
                             <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#fafafa' }}>
                               Balances
+                            </TableCell>
+                            <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#fafafa' }}>
+                              <MuiTooltip title="This month's deposits applied to bills of any month (the Deposits page 'Used' amount, split by charge type)">
+                                <span>Collected (this month's deposits)</span>
+                              </MuiTooltip>
                             </TableCell>
                           </TableRow>
                         </TableHead>
@@ -713,6 +811,7 @@ const Dashboard = () => {
                                   <span>{formatTableNumber(row.balances)}</span>
                                 </MuiTooltip>
                               </TableCell>
+                              <TableCell align="right">{formatTableNumber(row.collected)}</TableCell>
                             </TableRow>
                           ))}
                           <TableRow sx={{ bgcolor: '#eeeeee', '& td': { fontWeight: 700 } }}>
@@ -743,10 +842,12 @@ const Dashboard = () => {
                                 <span>{formatTableNumber(mTable.totals.balances)}</span>
                               </MuiTooltip>
                             </TableCell>
+                            <TableCell align="right">{formatTableNumber(mTable.totals.collected)}</TableCell>
                           </TableRow>
                         </TableBody>
                       </Table>
                     </TableContainer>
+                    <CashReceivedPanel monthKey={mTable.monthKey} monthLabel={mTable.monthLabel} cash={mTable.cash} />
                   </Paper>
                 ))
               )}
@@ -755,7 +856,7 @@ const Dashboard = () => {
           <Grid item xs={12} lg={5}>
             <Paper elevation={0} sx={{ border: BORDER, bgcolor: '#fff', p: 2, height: 380 }}>
               <Typography fontWeight={700} color={PRIMARY_BLUE} sx={{ mb: 1 }}>
-                By charge type
+                By charge type{kpis.monthLabel ? ` — ${kpis.monthLabel}` : ''}
               </Typography>
               <ResponsiveContainer width="100%" height="90%">
                 <BarChart data={barChartData} margin={{ top: 8, right: 8, left: 0, bottom: 0 }}>
@@ -768,7 +869,7 @@ const Dashboard = () => {
                   <RTooltip formatter={(val) => formatTableNumber(val)} />
                   <Legend wrapperStyle={{ fontSize: 12 }} />
                   <Bar dataKey="invoiced" name="Invoiced" fill={CHART_BLUE} radius={[2, 2, 0, 0]} />
-                  <Bar dataKey="paid" name="Payments Received" fill={CHART_BLUE_DARK} radius={[2, 2, 0, 0]} />
+                  <Bar dataKey="paid" name="Paid against these bills" fill={CHART_BLUE_DARK} radius={[2, 2, 0, 0]} />
                   <Bar dataKey="balances" name="Balances" fill={ORANGE} radius={[2, 2, 0, 0]} />
                 </BarChart>
               </ResponsiveContainer>
@@ -791,7 +892,8 @@ const Dashboard = () => {
                     <TableRow>
                       <TableCell sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Month</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Invoiced</TableCell>
-                      <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Received</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Paid against bills</TableCell>
+                      <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Cash received</TableCell>
                       <TableCell align="right" sx={{ fontWeight: 700, bgcolor: '#f5f5f5' }}>Invoices</TableCell>
                     </TableRow>
                   </TableHead>
@@ -799,14 +901,14 @@ const Dashboard = () => {
                     {loading ? (
                       Array.from({ length: 5 }).map((_, i) => (
                         <TableRow key={i}>
-                          {Array.from({ length: 4 }).map((__, j) => (
+                          {Array.from({ length: 5 }).map((__, j) => (
                             <TableCell key={j}><Skeleton /></TableCell>
                           ))}
                         </TableRow>
                       ))
                     ) : filteredByMonthSummary.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={4}>
+                        <TableCell colSpan={5}>
                           <Typography variant="body2" color="text.secondary" sx={{ py: 2, textAlign: 'center' }}>
                             No data for selected period
                           </Typography>
@@ -826,6 +928,7 @@ const Dashboard = () => {
                               <span>{formatTableNumber(row.paymentsReceived)}</span>
                             </MuiTooltip>
                           </TableCell>
+                          <TableCell align="right">{formatTableNumber(row.cashReceived)}</TableCell>
                           <TableCell align="right">{row.invoiceCount || 0}</TableCell>
                         </TableRow>
                       ))
@@ -841,7 +944,7 @@ const Dashboard = () => {
                 Monthly collection
               </Typography>
               <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-                Deposit + suspense per month (same as Reconciliation Amount). Shows the last three months in the selected range.
+                Cash received: deposits + suspense per month (same as the Deposits page Total and the Reconciliation Amount). Shows the last three months in the selected range.
               </Typography>
               <ResponsiveContainer width="100%" height={300}>
                 <AreaChart data={monthlyCollection} margin={{ top: 10, right: 10, left: 0, bottom: 0 }}>
@@ -866,7 +969,7 @@ const Dashboard = () => {
           <Grid item xs={12} md={4}>
             <Paper elevation={0} sx={{ border: BORDER, bgcolor: '#fff', p: 2, height: 360 }}>
               <Typography fontWeight={700} color={PRIMARY_BLUE} sx={{ mb: 1 }}>
-                Invoiced vs received
+                Invoiced vs paid{kpis.monthLabel ? ` — ${kpis.monthLabel} bills` : ''}
               </Typography>
               <ResponsiveContainer width="100%" height={280}>
                 <PieChart>
@@ -890,7 +993,7 @@ const Dashboard = () => {
               <Stack direction="row" justifyContent="center" spacing={3} sx={{ mt: -1 }}>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                   <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: DEEP_BLUE }} />
-                  <Typography variant="caption">Payments Received {formatCompactMoney(donutData[0]?.value)}</Typography>
+                  <Typography variant="caption">Paid against bills {formatCompactMoney(donutData[0]?.value)}</Typography>
                 </Stack>
                 <Stack direction="row" alignItems="center" spacing={0.5}>
                   <Box sx={{ width: 12, height: 12, borderRadius: '50%', bgcolor: LIGHT_BLUE }} />

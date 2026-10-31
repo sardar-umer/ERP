@@ -2565,7 +2565,11 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
     if (unknownResidentIds.length > 0) {
       depositQuery.resident = { $nin: unknownResidentIds };
     }
-    depositQuery.createdAt = { $gte: monthStart, $lte: monthEnd };
+    // Deposits are bucketed by Pakistan month (same as the Deposits page), not the server's local month
+    const depositRangeStart = new Date(`${start.format('YYYY-MM')}-01T00:00:00+05:00`);
+    const depositRangeEnd = new Date(`${end.add(1, 'month').format('YYYY-MM')}-01T00:00:00+05:00`);
+    const depositMonthKey = (date) => new Date(new Date(date).getTime() + 5 * 60 * 60 * 1000).toISOString().slice(0, 7);
+    depositQuery.createdAt = { $gte: depositRangeStart, $lt: depositRangeEnd };
 
     const deposits = await TajTransaction.find(depositQuery)
       .select('amount createdAt')
@@ -2574,13 +2578,8 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
       .lean();
 
     for (const key of Object.keys(monthMap)) {
-      const monthStartKey = dayjs(key + '-01').startOf('month').toDate();
-      const monthEndKey = dayjs(key + '-01').endOf('month').toDate();
       monthMap[key].deposits = (deposits || [])
-        .filter(d => {
-          const dDate = d.createdAt ? new Date(d.createdAt) : null;
-          return dDate && dDate >= monthStartKey && dDate <= monthEndKey;
-        })
+        .filter(d => d.createdAt && depositMonthKey(d.createdAt) === key)
         .map(d => ({
           depositDate: d.createdAt,
           residentId: d.resident?.residentId || '—',
@@ -2595,7 +2594,7 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
       const suspenseDeposits = await TajTransaction.find({
         transactionType: 'deposit',
         resident: { $in: unknownResidentIds },
-        createdAt: { $gte: monthStart, $lte: monthEnd },
+        createdAt: { $gte: depositRangeStart, $lt: depositRangeEnd },
         $or: [
           { referenceNumberExternal: { $not: /^REV-/ } },
           { referenceNumberExternal: { $exists: false } },
@@ -2605,9 +2604,8 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
         .select('amount createdAt')
         .lean();
       for (const d of suspenseDeposits || []) {
-        const dDate = d.createdAt ? new Date(d.createdAt) : null;
-        if (!dDate) continue;
-        const monthKey = dayjs(dDate).format('YYYY-MM');
+        if (!d.createdAt) continue;
+        const monthKey = depositMonthKey(d.createdAt);
         if (monthMap[monthKey]) {
           monthMap[monthKey].suspenseAmount = (monthMap[monthKey].suspenseAmount || 0) + (d.amount || 0);
         }
