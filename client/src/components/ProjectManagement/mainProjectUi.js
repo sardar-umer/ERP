@@ -6,6 +6,10 @@ export const ACCENT = '#0f766e';
 export const INK = '#0f172a';
 export const BORDER = '#e2e8f0';
 export const SOFT = '#f8fafc';
+// Soft teal surface shared by the sub project sidebar and the header chart card
+export const TEAL_SURFACE = '#e3f1ee';
+export const TEAL_BORDER = '#c5e2dc';
+export const TEAL_TEXT = '#3f6b63';
 
 export const fmt = (v) =>
   new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 })

@@ -12,32 +12,21 @@ import {
 import dayjs from 'dayjs';
 import { getProjectSummary, getProjectTree } from '../../services/projectManagementService';
 import {
-  ACCENT, BORDER, INK, Label, PROJECT_STATUS_COLOR, STATUS_DOT, fmt, plural, progressColor
+  ACCENT, BORDER, INK, PROJECT_STATUS_COLOR, STATUS_DOT, TEAL_BORDER, TEAL_SURFACE, TEAL_TEXT, fmt, plural, progressColor
 } from './mainProjectUi';
 import SubProjectPanel from './SubProjectPanel';
 import ProjectSummaryPanel from './ProjectSummaryPanel';
+import ProjectHeaderGraphics from './ProjectHeaderGraphics';
 
 const SUMMARY = 'summary';
+// Sidebar sits on the shared soft teal surface (matches ACCENT); the selected item is a white card
+const SIDEBAR_BG = TEAL_SURFACE;
+const SIDEBAR_BORDER = TEAL_BORDER;
+const SIDEBAR_TRACK = '#c9e3dd';
 // The app's sticky top bar is 96px tall; the sidebar sticks just under it
 const STICKY_TOP = 104;
 
 const fmtDate = (d) => (d ? dayjs(d).format('DD MMM YYYY') : '—');
-
-const HeaderStat = ({ label, value, sub, progress, valueColor }) => (
-  <Box sx={{ p: 1.75, borderRadius: 2, bgcolor: '#f8fafc', border: `1px solid ${BORDER}` }}>
-    <Label>{label}</Label>
-    <Typography variant="h6" fontWeight={800} sx={{ color: valueColor || INK, lineHeight: 1.3 }}>{value}</Typography>
-    {progress !== undefined && (
-      <LinearProgress
-        variant="determinate"
-        value={Math.min(100, Math.max(0, progress))}
-        color={progressColor(progress)}
-        sx={{ mt: 0.75, height: 5, borderRadius: 3, bgcolor: '#e2e8f0' }}
-      />
-    )}
-    {sub && <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>{sub}</Typography>}
-  </Box>
-);
 
 /** Left sidebar: Project Summary, then each Sub Project */
 const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
@@ -45,10 +34,12 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
     <Box
       onClick={() => onSelect(id)}
       sx={{
-        px: 1.5, py: 1.25, borderRadius: 2, cursor: 'pointer', borderLeft: '3px solid',
+        px: 1.5, py: 1.25, mb: 0.5, borderRadius: 2, cursor: 'pointer', borderLeft: '3px solid',
         borderLeftColor: active ? ACCENT : 'transparent',
-        bgcolor: active ? 'rgba(15,118,110,0.08)' : 'transparent',
-        '&:hover': { bgcolor: active ? 'rgba(15,118,110,0.1)' : '#f1f5f9' }
+        bgcolor: active ? '#fff' : 'transparent',
+        boxShadow: active ? '0 1px 3px rgba(15,23,42,0.12)' : 'none',
+        transition: 'background-color .15s, box-shadow .15s',
+        '&:hover': { bgcolor: active ? '#fff' : 'rgba(255,255,255,0.55)' }
       }}
     >
       {children}
@@ -58,21 +49,31 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
     <Paper
       elevation={0}
       sx={{
-        p: 1, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff',
+        p: 1, borderRadius: 3, border: `1px solid ${SIDEBAR_BORDER}`, bgcolor: SIDEBAR_BG,
         position: { md: 'sticky' }, top: { md: STICKY_TOP },
         maxHeight: { xs: 320, md: `calc(100vh - ${STICKY_TOP + 16}px)` }, overflowY: 'auto'
       }}
     >
       <Item id={SUMMARY} active={selected === SUMMARY}>
         <Stack direction="row" alignItems="center" gap={1}>
-          <SummaryIcon fontSize="small" sx={{ color: selected === SUMMARY ? ACCENT : 'text.secondary' }} />
+          <Box
+            sx={{
+              width: 30, height: 30, flexShrink: 0, borderRadius: 1.5, display: 'grid', placeItems: 'center',
+              bgcolor: selected === SUMMARY ? 'rgba(15,118,110,0.1)' : '#fff'
+            }}
+          >
+            <SummaryIcon fontSize="small" sx={{ color: selected === SUMMARY ? ACCENT : '#64748b' }} />
+          </Box>
           <Box>
             <Typography variant="body2" fontWeight={800} sx={{ color: INK }}>Project Summary</Typography>
             <Typography variant="caption" color="text.secondary">Money flow, charts, details, photos</Typography>
           </Box>
         </Stack>
       </Item>
-      <Typography variant="overline" sx={{ display: 'block', px: 1.5, pt: 1.5, pb: 0.5, color: 'text.secondary', fontWeight: 800, letterSpacing: 1 }}>
+      <Typography
+        variant="overline"
+        sx={{ display: 'block', mx: 1.5, mt: 1, mb: 0.5, pt: 1, color: TEAL_TEXT, fontWeight: 800, letterSpacing: 1, borderTop: `1px solid ${SIDEBAR_BORDER}` }}
+      >
         Sub projects ({subs.length})
       </Typography>
       {!subs.length && (
@@ -89,7 +90,7 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
                   sx={{
                     width: 22, height: 22, flexShrink: 0, borderRadius: '50%', display: 'grid', placeItems: 'center',
                     fontSize: 11, fontWeight: 800,
-                    bgcolor: selected === id ? ACCENT : '#e2e8f0', color: selected === id ? '#fff' : INK
+                    bgcolor: selected === id ? ACCENT : '#fff', color: selected === id ? '#fff' : INK
                   }}
                 >
                   {i + 1}
@@ -107,7 +108,7 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
               variant="determinate"
               value={Math.min(100, s.progress)}
               color={progressColor(s.progress)}
-              sx={{ my: 0.75, ml: 3.75, height: 4, borderRadius: 2, bgcolor: '#e2e8f0' }}
+              sx={{ my: 0.75, ml: 3.75, height: 4, borderRadius: 2, bgcolor: selected === id ? '#e2e8f0' : SIDEBAR_TRACK }}
             />
             <Typography variant="caption" color="text.secondary" sx={{ display: 'block', pl: 3.75 }}>
               {plural(s.totals.contracts, 'contract')} · Spent {fmt(money?.spent ?? s.totals.billed)}
@@ -162,7 +163,6 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
 
   const totals = summary?.totals;
   const location = [project.society, project.sector].filter(Boolean).join(', ');
-  const overBudget = totals && totals.budget > 0 && totals.spent > totals.budget;
   const currentView = view === 'boq' || view === 'cost' ? view : 'overview';
 
   return (
@@ -213,25 +213,7 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
           </Box>
         </Stack>
 
-        {totals && (
-          <Box sx={{ mt: 2, display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)' } }}>
-            <HeaderStat
-              label="Budget"
-              value={fmt(totals.budget)}
-              sub={totals.budget > 0 ? 'Sum of sub project BOQs' : 'No BOQ lines yet'}
-            />
-            <HeaderStat
-              label="Spent"
-              value={fmt(totals.spent)}
-              valueColor={overBudget ? 'error.main' : undefined}
-              sub={totals.budget > 0
-                ? `${Math.round((totals.spent / totals.budget) * 100)}% of budget`
-                : 'Certified work billed'}
-            />
-            <HeaderStat label="Progress" value={`${totals.progress}%`} progress={totals.progress} />
-            <HeaderStat label="Paid" value={fmt(totals.paid)} sub={`of ${fmt(totals.approved)} CEO approved`} />
-          </Box>
-        )}
+        {totals && <ProjectHeaderGraphics totals={totals} />}
 
         <ToggleButtonGroup
           exclusive

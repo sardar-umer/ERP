@@ -41,6 +41,7 @@ import PermanentDeleteProjectDialog from '../../components/ProjectManagement/Per
 import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
 import CostReportTab from '../../components/ProjectManagement/CostReportTab';
 import MainProjectPage from '../../components/ProjectManagement/MainProjectPage';
+import MainCostReport from '../../components/ProjectManagement/MainCostReport';
 import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -2022,7 +2023,7 @@ const ProjectDetail = () => {
           onRefresh={loadProject}
           onDelete={user?.role === 'developer' ? () => setPermanentDeleteOpen(true) : null}
           boqView={<BOQTab projectId={id} project={project} />}
-          costView={<CostReportTab project={project} />}
+          costView={<MainCostReport project={project} />}
         />
         {deleteDialog}
       </Box>
