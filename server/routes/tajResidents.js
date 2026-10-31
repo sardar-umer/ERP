@@ -1893,10 +1893,69 @@ router.post(
   })
 );
 
+const DEFAULT_DEPOSITS_TIMEZONE = 'Asia/Karachi';
+
+// Month buckets must match how the client groups rows, so use the caller's timezone when it is valid
+const resolveTimezone = (timezone) => {
+  if (!timezone) return DEFAULT_DEPOSITS_TIMEZONE;
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+    return timezone;
+  } catch (err) {
+    return DEFAULT_DEPOSITS_TIMEZONE;
+  }
+};
+
+// Totals for every deposit matching the filters (not just one page), overall and per month (YYYY-MM)
+const buildDepositsSummary = async (query, timezone) => {
+  const monthGroups = await TajTransaction.aggregate([
+    { $match: query },
+    {
+      $group: {
+        _id: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone } },
+        count: { $sum: 1 },
+        deposits: { $push: { _id: '$_id', amount: '$amount' } }
+      }
+    }
+  ]);
+
+  const depositIds = monthGroups.flatMap(group => group.deposits.map(d => d._id));
+  const usageByDeposit = {};
+  if (depositIds.length > 0) {
+    const usages = await TajTransaction.aggregate([
+      { $match: { transactionType: 'bill_payment', 'depositUsages.depositId': { $in: depositIds } } },
+      { $unwind: '$depositUsages' },
+      { $match: { 'depositUsages.depositId': { $in: depositIds } } },
+      { $group: { _id: '$depositUsages.depositId', used: { $sum: '$depositUsages.amount' } } }
+    ]);
+    usages.forEach(u => { usageByDeposit[u._id.toString()] = u.used || 0; });
+  }
+
+  const summary = { count: 0, totalAmount: 0, totalRemaining: 0, totalUsed: 0, months: {} };
+  monthGroups.forEach(group => {
+    const month = { count: group.count, totalAmount: 0, totalRemaining: 0, totalUsed: 0 };
+    group.deposits.forEach(d => {
+      const amount = d.amount || 0;
+      const used = usageByDeposit[d._id.toString()] || 0;
+      month.totalAmount += amount;
+      month.totalUsed += used;
+      month.totalRemaining += Math.max(0, amount - used);
+    });
+    summary.months[group._id] = month;
+    summary.count += month.count;
+    summary.totalAmount += month.totalAmount;
+    summary.totalRemaining += month.totalRemaining;
+    summary.totalUsed += month.totalUsed;
+  });
+
+  return summary;
+};
+
 // Get all deposits across all residents (for Deposits page)
 router.get('/deposits/all', authMiddleware, asyncHandler(async (req, res) => {
   const { page = 1, limit = 50, search, startDate, endDate, suspenseAccount } = req.query;
   const skip = (parseInt(page) - 1) * parseInt(limit);
+  const timezone = resolveTimezone(req.query.timezone);
 
   // Build query (exclude reversal transactions)
   const query = {
@@ -2039,10 +2098,13 @@ router.get('/deposits/all', authMiddleware, asyncHandler(async (req, res) => {
     });
   }
 
+  const summary = await buildDepositsSummary(query, timezone);
+
   res.json({
     success: true,
     data: {
       deposits,
+      summary,
       pagination: {
         currentPage: parseInt(page),
         totalPages: Math.ceil(total / parseInt(limit)),

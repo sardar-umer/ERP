@@ -5,6 +5,7 @@ import { fetchChargeTypes } from '../services/chargeTypeService';
 import dayjs from 'dayjs';
 
 const PAYMENT_METHODS = ['Cash', 'Bank Transfer', 'Cheque', 'Online', 'Other'];
+const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 const DEFAULT_CHARGE_TYPES = ['CAM', 'WATER', 'ELECTRICITY', 'RENT'];
 
 const formatCurrency = (amount) => {
@@ -26,7 +27,8 @@ export const useDeposits = (options = {}) => {
   const [startDate, setStartDate] = useState('');
   const [endDate, setEndDate] = useState('');
   const [expandedMonths, setExpandedMonths] = useState([]);
-  const [suspenseAccountDeposits, setSuspenseAccountDeposits] = useState([]);
+  const [depositsSummary, setDepositsSummary] = useState(null);
+  const [suspenseSummary, setSuspenseSummary] = useState(null);
   const [suspenseAccountTotals, setSuspenseAccountTotals] = useState({
     totalAmount: 0,
     totalRemaining: 0,
@@ -96,6 +98,7 @@ export const useDeposits = (options = {}) => {
       if (startDate) params.startDate = startDate;
       if (endDate) params.endDate = endDate;
       if (suspenseAccount) params.suspenseAccount = 'true';
+      params.timezone = BROWSER_TIMEZONE;
 
       const response = await fetchAllDeposits(params);
       const depositsData = response.data?.data?.deposits || [];
@@ -112,71 +115,27 @@ export const useDeposits = (options = {}) => {
         setTotal(depositsData.length);
       }
 
-      // Calculate totals from ALL deposits (not just current page)
-      if (suspenseAccount) {
-        // When in suspense account mode, all deposits shown are suspense deposits
-        // No need to fetch separately - suspenseAccountDeposits stays empty
-        setSuspenseAccountDeposits([]);
-        // When in suspense account mode, fetch all deposits to calculate totals
-        try {
-          const allDepositsParams = {
-            page: 1,
-            limit: 10000 // Get all suspense account deposits to calculate totals
-          };
-          if (startDate) allDepositsParams.startDate = startDate;
-          if (endDate) allDepositsParams.endDate = endDate;
-          allDepositsParams.suspenseAccount = 'true';
-          // Don't include search in totals calculation - totals should be from all deposits
-          // if (search) allDepositsParams.search = search; // Commented out - totals should ignore search filter
+      // Card totals come from the server's summary, which covers every page for the active filters
+      setDepositsSummary(response.data?.data?.summary || null);
 
-          const allDepositsResponse = await fetchAllDeposits(allDepositsParams);
-          const allDeposits = allDepositsResponse.data?.data?.deposits || [];
-          
-          // Calculate totals from ALL deposits
-          const totalAmount = allDeposits.reduce((sum, d) => sum + (d.amount || 0), 0);
-          const totalRemaining = allDeposits.reduce((sum, d) => sum + (d.remainingAmount || 0), 0);
-          const totalUsed = allDeposits.reduce((sum, d) => sum + (d.totalUsed || 0), 0);
-          
-          setSuspenseAccountTotals({
-            totalAmount,
-            totalRemaining,
-            totalUsed
-          });
-        } catch (totalsErr) {
-          console.error('Failed to load suspense account totals:', totalsErr);
-          setSuspenseAccountTotals({ totalAmount: 0, totalRemaining: 0, totalUsed: 0 });
-        }
-      } else {
-        // If not in suspense account mode, fetch suspense account totals separately
-        try {
-          const suspenseParams = {
-            page: 1,
-            limit: 10000 // Get all suspense account deposits to calculate totals
-          };
-          if (startDate) suspenseParams.startDate = startDate;
-          if (endDate) suspenseParams.endDate = endDate;
-          suspenseParams.suspenseAccount = 'true';
+      // Suspense totals for the same dates (search is not applied to them)
+      try {
+        const suspenseParams = { page: 1, limit: 1, suspenseAccount: 'true', timezone: BROWSER_TIMEZONE };
+        if (startDate) suspenseParams.startDate = startDate;
+        if (endDate) suspenseParams.endDate = endDate;
 
-          const suspenseResponse = await fetchAllDeposits(suspenseParams);
-          const suspenseDeposits = suspenseResponse.data?.data?.deposits || [];
-          
-          // Store suspense account deposits for per-month calculation
-          setSuspenseAccountDeposits(suspenseDeposits);
-          
-          // Calculate suspense account totals (for backward compatibility)
-          const suspenseTotalAmount = suspenseDeposits.reduce((sum, d) => sum + (d.amount || 0), 0);
-          const suspenseTotalRemaining = suspenseDeposits.reduce((sum, d) => sum + (d.remainingAmount || 0), 0);
-          const suspenseTotalUsed = suspenseDeposits.reduce((sum, d) => sum + (d.totalUsed || 0), 0);
-          
-          setSuspenseAccountTotals({
-            totalAmount: suspenseTotalAmount,
-            totalRemaining: suspenseTotalRemaining,
-            totalUsed: suspenseTotalUsed
-          });
-        } catch (suspenseErr) {
-          console.error('Failed to load suspense account totals:', suspenseErr);
-          setSuspenseAccountTotals({ totalAmount: 0, totalRemaining: 0, totalUsed: 0 });
-        }
+        const suspenseResponse = await fetchAllDeposits(suspenseParams);
+        const summary = suspenseResponse.data?.data?.summary;
+        setSuspenseSummary(suspenseAccount ? null : summary || null);
+        setSuspenseAccountTotals({
+          totalAmount: summary?.totalAmount || 0,
+          totalRemaining: summary?.totalRemaining || 0,
+          totalUsed: summary?.totalUsed || 0
+        });
+      } catch (suspenseErr) {
+        console.error('Failed to load suspense account totals:', suspenseErr);
+        setSuspenseSummary(null);
+        setSuspenseAccountTotals({ totalAmount: 0, totalRemaining: 0, totalUsed: 0 });
       }
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load deposits');
@@ -509,64 +468,44 @@ export const useDeposits = (options = {}) => {
     return deposits;
   }, [deposits]);
 
-  // Group deposits by month
+  // Group deposits by month; card totals use the server summary so they cover every page of the month
   const depositsByMonth = useMemo(() => {
     const grouped = {};
-    filteredDeposits.forEach((deposit) => {
-      const depositDate = deposit.createdAt ? dayjs(deposit.createdAt) : dayjs();
-      const monthKey = depositDate.format('YYYY-MM');
-      const monthLabel = depositDate.format('MMMM YYYY');
-      
+    const emptyTotals = { count: 0, totalAmount: 0, totalRemaining: 0, totalUsed: 0 };
+    const ensureMonth = (monthKey) => {
       if (!grouped[monthKey]) {
+        const monthTotals = depositsSummary?.months?.[monthKey] || emptyTotals;
+        const suspenseTotals = suspenseSummary?.months?.[monthKey] || emptyTotals;
         grouped[monthKey] = {
-          label: monthLabel,
+          label: dayjs(`${monthKey}-01`).format('MMMM YYYY'),
           deposits: [],
-          totalAmount: 0,
-          totalRemaining: 0,
-          totalUsed: 0,
-          suspenseTotalAmount: 0,
-          suspenseTotalRemaining: 0,
-          suspenseTotalUsed: 0
+          depositCount: monthTotals.count,
+          totalAmount: monthTotals.totalAmount,
+          totalRemaining: monthTotals.totalRemaining,
+          totalUsed: monthTotals.totalUsed,
+          suspenseTotalAmount: suspenseTotals.totalAmount,
+          suspenseTotalRemaining: suspenseTotals.totalRemaining,
+          suspenseTotalUsed: suspenseTotals.totalUsed
         };
       }
-      
-      grouped[monthKey].deposits.push(deposit);
-      grouped[monthKey].totalAmount += deposit.amount || 0;
-      grouped[monthKey].totalRemaining += deposit.remainingAmount || 0;
-      grouped[monthKey].totalUsed += deposit.totalUsed || 0;
+      return grouped[monthKey];
+    };
+
+    filteredDeposits.forEach((deposit) => {
+      const depositDate = deposit.createdAt ? dayjs(deposit.createdAt) : dayjs();
+      ensureMonth(depositDate.format('YYYY-MM')).deposits.push(deposit);
     });
-    
-    // Group suspense account deposits by month and add to each month group (only if not in suspense account mode)
-    if (!suspenseAccount && suspenseAccountDeposits.length > 0) {
-      suspenseAccountDeposits.forEach((deposit) => {
-        const depositDate = deposit.createdAt ? dayjs(deposit.createdAt) : dayjs();
-        const monthKey = depositDate.format('YYYY-MM');
-        const monthLabel = depositDate.format('MMMM YYYY');
-        
-        if (!grouped[monthKey]) {
-          grouped[monthKey] = {
-            label: monthLabel,
-            deposits: [],
-            totalAmount: 0,
-            totalRemaining: 0,
-            totalUsed: 0,
-            suspenseTotalAmount: 0,
-            suspenseTotalRemaining: 0,
-            suspenseTotalUsed: 0
-          };
-        }
-        
-        grouped[monthKey].suspenseTotalAmount += deposit.amount || 0;
-        grouped[monthKey].suspenseTotalRemaining += deposit.remainingAmount || 0;
-        grouped[monthKey].suspenseTotalUsed += deposit.totalUsed || 0;
-      });
+
+    // Months that only have suspense account deposits still get a group (only if not in suspense account mode)
+    if (!suspenseAccount && suspenseSummary?.months) {
+      Object.keys(suspenseSummary.months).forEach(ensureMonth);
     }
-    
+
     // Sort months in descending order (newest first)
     return Object.entries(grouped)
       .sort(([a], [b]) => b.localeCompare(a))
       .map(([key, value]) => ({ key, ...value }));
-  }, [filteredDeposits, suspenseAccountDeposits, suspenseAccount]);
+  }, [filteredDeposits, depositsSummary, suspenseSummary, suspenseAccount]);
 
   const toggleMonth = useCallback((monthKey) => {
     setExpandedMonths(prev => {

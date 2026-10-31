@@ -318,7 +318,7 @@ const SuspenseAccount = () => {
                           {monthGroup.label}
                         </Typography>
                         <Chip
-                          label={`${monthGroup.deposits.length} deposit${monthGroup.deposits.length !== 1 ? 's' : ''}`}
+                          label={`${monthGroup.depositCount} deposit${monthGroup.depositCount !== 1 ? 's' : ''}`}
                           size="small"
                           color="primary"
                           variant="outlined"
