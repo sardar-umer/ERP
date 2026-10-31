@@ -226,6 +226,7 @@ const Sidebar = () => {
       '/general/centralized-store/bill': 'centralized_store',
       '/general/project-management': 'project_management',
       '/general/project-management/overview': 'project_management',
+      '/general/project-management/dashboard': 'project_management',
       '/general/project-management/projects': 'project_management',
       '/general/project-management/workspace': 'project_management',
       '/general/project-management/approvals': 'project_management',

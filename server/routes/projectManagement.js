@@ -242,6 +242,156 @@ router.get('/projects/statistics', asyncHandler(async (req, res) => {
   });
 }));
 
+/** IPC approval stages still waiting on someone */
+const PENDING_IPC_STAGES = ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO'];
+
+/**
+ * Portfolio dashboard for management: every non-cancelled Main Project with its money flow
+ * (same figures as each project's summary / cost report), health, approvals waiting and a cover photo,
+ * plus portfolio totals and 12 months of certified work billed per Main Project.
+ */
+router.get('/portfolio', asyncHandler(async (req, res) => {
+  const mains = await ConstructionProject.find({ parentProject: null, status: { $ne: 'Cancelled' } })
+    .select('name projectNumber projectType status society sector address clientName startDate expectedEndDate actualEndDate lumpSumBudget overallProgress projectManager createdAt')
+    .populate('projectManager', 'firstName lastName')
+    .sort({ createdAt: -1 }).lean();
+  const mainIds = mains.map((m) => m._id);
+  const subs = await ConstructionProject.find({ parentProject: { $in: mainIds }, status: { $ne: 'Cancelled' } })
+    .select('name parentProject status overallProgress').lean();
+  const subIds = subs.map((s) => s._id);
+  const mainOfSub = new Map(subs.map((s) => [String(s._id), String(s.parentProject)]));
+  const mainOf = (projectId) => mainOfSub.get(String(projectId)) || String(projectId);
+
+  const since = new Date(); since.setDate(1); since.setHours(0, 0, 0, 0); since.setMonth(since.getMonth() - 11);
+  const [reports, contracts, pendingIpcs, monthly, inspections] = await Promise.all([
+    Promise.all(subs.map((s) => buildSubCostReport(s._id))),
+    SubletContract.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } }).select('project contractor status').lean(),
+    ProjectInvoice.find({ project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' }, approvalStatus: { $in: PENDING_IPC_STAGES } })
+      .select('project approvalStatus netPayableAmount grossAmount').lean(),
+    ProjectInvoice.aggregate([
+      { $match: { project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', ipcKind: { $nin: NON_WORK_IPC_KINDS }, status: { $ne: 'Cancelled' }, issueDate: { $gte: since } } },
+      { $group: { _id: { p: '$project', y: { $year: '$issueDate' }, m: { $month: '$issueDate' } }, amount: { $sum: { $ifNull: ['$grossAmount', 0] } } } }
+    ]),
+    InspectionReport.find({ project: { $in: subIds }, 'inspectors.attachments.0': { $exists: true } })
+      .select('project inspectionDate inspectors').sort({ inspectionDate: -1 }).limit(200).lean()
+  ]);
+
+  const coverByMain = new Map();
+  inspections.forEach((ir) => {
+    const key = mainOf(ir.project);
+    if (coverByMain.has(key)) return;
+    const img = (ir.inspectors || []).flatMap((i) => i.attachments || []).find((a) => a.kind === 'image');
+    if (img) coverByMain.set(key, img.url);
+  });
+
+  const now = new Date();
+  const projects = mains.map((m) => {
+    const id = String(m._id);
+    const mySubs = subs.filter((s) => String(s.parentProject) === id);
+    const mySummaries = mySubs.map((s) => reports[subs.indexOf(s)].summary);
+    const sum = (f) => round2(mySummaries.reduce((t, r) => t + (Number(r[f]) || 0), 0));
+    const budget = sum('budget');
+    const spent = sum('billed');
+    const progress = Number(m.overallProgress) || 0;
+    const myContracts = contracts.filter((c) => mainOf(c.project) === id);
+    const myPending = pendingIpcs.filter((i) => mainOf(i.project) === id);
+    const overdue = Boolean(m.expectedEndDate && new Date(m.expectedEndDate) < now && m.status !== 'Completed');
+    // Planned progress from the timeline, so a project can be flagged as behind schedule
+    let plannedProgress = null;
+    if (m.startDate && m.expectedEndDate) {
+      const span = new Date(m.expectedEndDate) - new Date(m.startDate);
+      if (span > 0) plannedProgress = Math.max(0, Math.min(100, Math.round(((now - new Date(m.startDate)) / span) * 100)));
+    }
+    let health = 'On Track';
+    if (budget > 0 && spent > budget) health = 'Over Budget';
+    else if (overdue || (plannedProgress !== null && m.status === 'Active' && plannedProgress - progress > 25)) health = 'Behind Schedule';
+    else if (sum('linesOverBudget') > 0) health = 'Needs Attention';
+    const earnedValue = round2((budget * progress) / 100);
+    return {
+      _id: m._id,
+      name: m.name,
+      projectNumber: m.projectNumber,
+      projectType: m.projectType,
+      status: m.status,
+      location: [m.society, m.sector].filter(Boolean).join(', '),
+      clientName: m.clientName || '',
+      projectManager: m.projectManager ? `${m.projectManager.firstName || ''} ${m.projectManager.lastName || ''}`.trim() : '',
+      startDate: m.startDate,
+      expectedEndDate: m.expectedEndDate,
+      actualEndDate: m.actualEndDate,
+      cover: coverByMain.get(id) || null,
+      progress,
+      plannedProgress,
+      overdue,
+      health,
+      lumpSumBudget: Number(m.lumpSumBudget) || 0,
+      budget,
+      contracted: sum('contracted'),
+      verified: sum('verified'),
+      spent,
+      approved: sum('approved'),
+      paid: sum('paid'),
+      retentionHeld: sum('retentionHeld'),
+      advanceOutstanding: sum('advanceOutstanding'),
+      linesOverBudget: sum('linesOverBudget'),
+      variance: round2(spent - budget),
+      cpi: spent > 0 && budget > 0 ? Math.round((earnedValue / spent) * 100) / 100 : null,
+      subProjects: mySubs.length,
+      activeSubProjects: mySubs.filter((s) => s.status === 'Active').length,
+      contracts: myContracts.length,
+      contractors: new Set(myContracts.map((c) => String(c.contractor)).filter(Boolean)).size,
+      pendingApprovals: myPending.length,
+      pendingAmount: round2(myPending.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0))
+    };
+  });
+
+  const total = (f) => round2(projects.reduce((t, p) => t + (Number(p[f]) || 0), 0));
+  const budget = total('budget');
+  const totals = {
+    projects: projects.length,
+    active: projects.filter((p) => p.status === 'Active').length,
+    completed: projects.filter((p) => p.status === 'Completed').length,
+    subProjects: total('subProjects'),
+    contractors: new Set(contracts.map((c) => String(c.contractor)).filter(Boolean)).size,
+    lumpSumBudget: total('lumpSumBudget'),
+    budget,
+    contracted: total('contracted'),
+    verified: total('verified'),
+    spent: total('spent'),
+    approved: total('approved'),
+    paid: total('paid'),
+    retentionHeld: total('retentionHeld'),
+    pendingApprovals: total('pendingApprovals'),
+    pendingAmount: total('pendingAmount'),
+    // Budget-weighted progress, so big projects count for more
+    progress: budget > 0
+      ? Math.round(projects.reduce((t, p) => t + p.progress * p.budget, 0) / budget)
+      : Math.round(projects.reduce((t, p) => t + p.progress, 0) / (projects.length || 1)),
+    health: ['On Track', 'Needs Attention', 'Behind Schedule', 'Over Budget']
+      .map((h) => ({ health: h, count: projects.filter((p) => p.health === h).length }))
+  };
+
+  const approvalStages = PENDING_IPC_STAGES.map((stage) => {
+    const list = pendingIpcs.filter((i) => i.approvalStatus === stage);
+    return { stage, count: list.length, amount: round2(list.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0)) };
+  });
+
+  // Certified work billed per month, one key per Main Project id
+  const monthlySpend = Array.from({ length: 12 }, (_, i) => {
+    const d = new Date(since.getFullYear(), since.getMonth() + i, 1);
+    return { month: d.toLocaleString('en-US', { month: 'short', year: '2-digit' }), total: 0 };
+  });
+  monthly.forEach((r) => {
+    const idx = (r._id.y - since.getFullYear()) * 12 + (r._id.m - 1 - since.getMonth());
+    if (idx < 0 || idx > 11) return;
+    const key = mainOf(r._id.p);
+    monthlySpend[idx][key] = round2((monthlySpend[idx][key] || 0) + r.amount);
+    monthlySpend[idx].total = round2(monthlySpend[idx].total + r.amount);
+  });
+
+  res.json({ success: true, data: { totals, projects, approvalStages, monthlySpend } });
+}));
+
 // ─── COST REPORT (budget vs actual) ──────────────────────────────────────────
 
 /**
@@ -360,6 +510,167 @@ const buildSubCostReport = async (projectId) => {
   summary.variance = round2(summary.contracted - summary.budget);
   return { lines, slabContracts, summary };
 };
+
+/**
+ * Cost detail of one Sub Project below the cost report: per sublet contract (its BOQ lines or slabs),
+ * per check request (claimed → verified → billed per line) and per IPC (gross → deductions → net → paid).
+ * Used by the portfolio drill-down so every level has its own cost report.
+ */
+router.get('/projects/:id/cost-detail', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!project) return notFound(res, 'Project');
+  if (!project.parentProject) return badRequest(res, 'Cost detail is for Sub Projects');
+  const pid = project._id;
+
+  const [report, contracts, crs, ipcs] = await Promise.all([
+    buildSubCostReport(pid),
+    SubletContract.find({ project: pid, status: { $ne: 'Cancelled' } }).select('contractNumber contractType totalAmount items slabs').lean(),
+    CheckRequest.find({ project: pid, status: { $ne: 'Cancelled' } }).select('subletContract claimType slab items claimedTotal verifiedTotal status').lean(),
+    ProjectInvoice.find({ project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
+      .select('subletContract checkRequest ipcKind ipcNumber issueDate approvalStatus items grossAmount retentionPercentage retentionAmount advanceRecoveryAmount whtPercentage whtAmount netPayableAmount paidAmount payments.amount payments.paidDate payments.paymentMethod payments.paymentReference')
+      .sort({ issueDate: 1, ipcNumber: 1 }).lean()
+  ]);
+
+  const budgetByLine = new Map(report.lines.map((l) => [l.boqItem, l]));
+  const isWork = (i) => !NON_WORK_IPC_KINDS.includes(i.ipcKind);
+  const approvedOnly = (list) => list.filter((i) => i.approvalStatus === 'Approved');
+  const sum = (list, f) => round2(list.reduce((t, x) => t + (Number(typeof f === 'function' ? f(x) : x[f]) || 0), 0));
+
+  // IPC money per check request
+  const ipcsByCr = new Map();
+  ipcs.filter((i) => i.checkRequest).forEach((i) => {
+    const key = String(i.checkRequest);
+    ipcsByCr.set(key, [...(ipcsByCr.get(key) || []), i]);
+  });
+  const ipcMoney = (list) => {
+    const work = list.filter(isWork);
+    return {
+      billed: sum(work, 'grossAmount'),
+      approved: sum(approvedOnly(work), 'grossAmount'),
+      netPayable: sum(list, 'netPayableAmount'),
+      paid: sum(list, 'paidAmount')
+    };
+  };
+
+  const checkRequests = {};
+  crs.forEach((cr) => {
+    const crIpcs = ipcsByCr.get(String(cr._id)) || [];
+    const billedByLine = new Map();
+    crIpcs.filter(isWork).forEach((i) => (i.items || []).forEach((it) => {
+      const k = String(it.boqItem);
+      const prev = billedByLine.get(k) || { qty: 0, amount: 0 };
+      billedByLine.set(k, { qty: prev.qty + (Number(it.currentQuantity) || 0), amount: prev.amount + (Number(it.currentAmount) || 0) });
+    }));
+    checkRequests[String(cr._id)] = {
+      claimType: cr.claimType,
+      slab: cr.claimType === 'Slab' ? { name: cr.slab?.name, percentage: cr.slab?.percentage, amount: round2(cr.slab?.amount) } : null,
+      claimed: round2(cr.claimedTotal),
+      verified: round2(cr.verifiedTotal),
+      ...ipcMoney(crIpcs),
+      lines: (cr.items || []).map((it) => {
+        const billed = billedByLine.get(String(it.boqItem)) || { qty: 0, amount: 0 };
+        return {
+          title: it.title || it.description, unit: it.unit, unitPrice: round2(it.unitPrice),
+          claimedQty: Number(it.claimedQuantity) || 0, claimed: round2(it.claimedAmount || (it.claimedQuantity * it.unitPrice)),
+          verifiedQty: Number(it.verifiedQuantity) || 0, verified: round2(it.verifiedAmount),
+          billedQty: billed.qty, billed: round2(billed.amount)
+        };
+      })
+    };
+  });
+
+  const contractDetail = contracts.map((c) => {
+    const cid = String(c._id);
+    const cCrs = crs.filter((cr) => String(cr.subletContract) === cid);
+    const cIpcs = ipcs.filter((i) => String(i.subletContract) === cid
+      || (i.checkRequest && cCrs.some((cr) => String(cr._id) === String(i.checkRequest))));
+    const work = cIpcs.filter(isWork);
+    const advances = approvedOnly(cIpcs.filter((i) => i.ipcKind === 'Advance'));
+    const money = {
+      value: round2(c.totalAmount),
+      verified: sum(cCrs, 'verifiedTotal'),
+      ...ipcMoney(cIpcs),
+      retentionHeld: round2(sum(approvedOnly(work), 'retentionAmount') - sum(cIpcs.filter((i) => i.ipcKind === 'Retention Release'), 'grossAmount')),
+      advancePaid: sum(advances, 'grossAmount'),
+      advanceRecovered: sum(work, 'advanceRecoveryAmount'),
+      wht: sum(cIpcs, 'whtAmount')
+    };
+    money.advanceOutstanding = Math.max(0, round2(money.advancePaid - money.advanceRecovered));
+    money.remaining = round2(money.value - money.billed);
+
+    let lines = [];
+    let slabs = [];
+    if (c.contractType === 'Slab') {
+      slabs = (c.slabs || []).map((sl) => {
+        const cr = cCrs.find((x) => x.claimType === 'Slab' && String(x.slab?.slabId) === String(sl._id));
+        const m = cr ? ipcMoney(ipcsByCr.get(String(cr._id)) || []) : { billed: 0, approved: 0, paid: 0 };
+        return {
+          _id: sl._id, name: sl.name, percentage: sl.percentage, amount: round2(sl.amount),
+          verified: cr ? round2(cr.verifiedTotal) : 0, billed: m.billed, approved: m.approved, paid: m.paid
+        };
+      });
+    } else {
+      const add = (map, key, qty, amount) => {
+        const prev = map.get(key) || { qty: 0, amount: 0 };
+        map.set(key, { qty: prev.qty + (Number(qty) || 0), amount: prev.amount + (Number(amount) || 0) });
+      };
+      const verified = new Map(); const billed = new Map(); const approved = new Map();
+      cCrs.forEach((cr) => (cr.items || []).forEach((it) => add(verified, String(it.boqItem), it.verifiedQuantity, it.verifiedAmount)));
+      work.forEach((i) => (i.items || []).forEach((it) => {
+        add(billed, String(it.boqItem), it.currentQuantity, it.currentAmount);
+        if (i.approvalStatus === 'Approved') add(approved, String(it.boqItem), it.currentQuantity, it.currentAmount);
+      }));
+      lines = (c.items || []).map((it) => {
+        const k = String(it.boqItem);
+        const contracted = round2(it.amount || (it.quantity * it.unitPrice));
+        const b = billed.get(k) || { qty: 0, amount: 0 };
+        const line = budgetByLine.get(k);
+        return {
+          title: it.title || it.description || line?.title, unit: it.unit || line?.unit,
+          budget: line ? line.budget : null, scopeQty: line ? line.scopeQty : null,
+          contractedQty: Number(it.quantity) || 0, rate: round2(it.unitPrice), contracted,
+          verifiedQty: (verified.get(k) || {}).qty || 0, verified: round2((verified.get(k) || {}).amount),
+          billedQty: b.qty, billed: round2(b.amount), approved: round2((approved.get(k) || {}).amount),
+          remaining: round2(contracted - b.amount)
+        };
+      });
+    }
+    return { _id: c._id, contractNumber: c.contractNumber, contractType: c.contractType, money, lines, slabs };
+  });
+
+  // Each IPC with its deductions and where it leaves the contract
+  const ipcDetail = {};
+  // Work IPCs usually link their contract only through the check request
+  const contractOf = (i) => String(i.subletContract || crs.find((cr) => String(cr._id) === String(i.checkRequest))?.subletContract || '');
+  ipcs.forEach((i) => {
+    const cid = contractOf(i);
+    const sameContract = cid ? ipcs.filter((x) => contractOf(x) === cid && isWork(x)) : [];
+    const upTo = sameContract.slice(0, sameContract.findIndex((x) => String(x._id) === String(i._id)) + 1);
+    const contract = contracts.find((c) => String(c._id) === cid);
+    ipcDetail[String(i._id)] = {
+      gross: round2(i.grossAmount),
+      retentionPercentage: Number(i.retentionPercentage) || 0,
+      retention: round2(i.retentionAmount),
+      advanceRecovery: round2(i.advanceRecoveryAmount),
+      whtPercentage: Number(i.whtPercentage) || 0,
+      wht: round2(i.whtAmount),
+      net: round2(i.netPayableAmount),
+      paid: round2(i.paidAmount),
+      balance: Math.max(0, round2((i.netPayableAmount || 0) - (i.paidAmount || 0))),
+      contractValue: contract ? round2(contract.totalAmount) : null,
+      billedToDate: isWork(i) && upTo.length ? sum(upTo, 'grossAmount') : null,
+      lines: (i.items || []).map((it) => ({
+        title: it.title || it.description, unit: it.unit,
+        previousQty: Number(it.previousQuantity) || 0, currentQty: Number(it.currentQuantity) || 0,
+        cumulativeQty: Number(it.cumulativeQuantity) || 0, unitPrice: round2(it.unitPrice), amount: round2(it.currentAmount)
+      })),
+      payments: (i.payments || []).map((p) => ({ amount: round2(p.amount), paidDate: p.paidDate, method: p.paymentMethod, reference: p.paymentReference }))
+    };
+  });
+
+  res.json({ success: true, data: { contracts: contractDetail, checkRequests, ipcs: ipcDetail } });
+}));
 
 // GET /api/project-management/projects/:id/cost-report — Sub: per line + per slab; Main: per Sub Project
 router.get('/projects/:id/cost-report', asyncHandler(async (req, res) => {
@@ -480,7 +791,7 @@ router.get('/projects/:id/summary', asyncHandler(async (req, res) => {
 }));
 
 /**
- * Main Project tree: Sub Projects → Sublet Contracts → Check Requests → IPCs.
+ * Main Project tree: Sub Projects → Sublet Contracts → Check Requests (with their inspection reports) → IPCs.
  * Slab-wise contracts list every slab with the check request / IPC that claimed it.
  * Advance and Retention Release IPCs hang off their contract; anything not linked to a contract is returned per Sub as `unlinked`.
  */
@@ -494,7 +805,7 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
     .select('name projectNumber sector status overallProgress').sort({ name: 1 }).lean();
   const subIds = subs.map((s) => s._id);
 
-  const [contracts, crs, ipcs] = await Promise.all([
+  const [contracts, crs, ipcs, inspections] = await Promise.all([
     SubletContract.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
       .populate('contractor', 'name')
       .select('project contractNumber title contractor contractType status totalAmount slabs createdAt')
@@ -505,8 +816,17 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
       .sort({ createdAt: 1 }).lean(),
     ProjectInvoice.find({ project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
       .select('project invoiceNumber ipcNumber ipcKind checkRequest subletContract grossAmount netPayableAmount paidAmount approvalStatus status issueDate')
-      .sort({ issueDate: 1 }).lean()
+      .sort({ issueDate: 1 }).lean(),
+    InspectionReport.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
+      .select('checkRequest reportNumber inspectionDate location remarks claimType items slab inspectedTotal inspectors.name inspectors.designation inspectors.status inspectors.observations inspectors.signature inspectors.attachments inspectors.actedAt status completedAt')
+      .sort({ inspectionDate: 1 }).lean()
   ]);
+
+  const inspectionsByCr = new Map();
+  inspections.forEach((ir) => {
+    const key = String(ir.checkRequest);
+    inspectionsByCr.set(key, [...(inspectionsByCr.get(key) || []), { ...ir, inspectedTotal: round2(ir.inspectedTotal) }]);
+  });
 
   const ipcView = (i) => ({
     _id: i._id, invoiceNumber: i.invoiceNumber, ipcNumber: i.ipcNumber, ipcKind: i.ipcKind,
@@ -521,7 +841,8 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
   const crView = (c) => ({
     _id: c._id, checkRequestNumber: c.checkRequestNumber, title: c.title, contractor: c.contractor?.name || '',
     claimType: c.claimType, status: c.status, claimedTotal: round2(c.claimedTotal), verifiedTotal: round2(c.verifiedTotal),
-    slabName: c.slab?.name || '', ipcs: ipcsByCr.get(String(c._id)) || []
+    slabName: c.slab?.name || '', ipcs: ipcsByCr.get(String(c._id)) || [],
+    inspections: inspectionsByCr.get(String(c._id)) || []
   });
 
   const contractIds = new Set(contracts.map((c) => String(c._id)));

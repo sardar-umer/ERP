@@ -1083,7 +1083,7 @@ export const MODULES = {
         path: '/general/project-management',
         subItems: [
           // Daily work: open a project; its BOQ → Contracts → Check Requests → IPCs live in tabs there
-          { name: 'Overview', path: '/general/project-management/overview' },
+          { name: 'Dashboard', path: '/general/project-management/dashboard' },
           { name: 'Projects', path: '/general/project-management/projects' },
           { name: 'Approvals', path: '/general/project-management/approvals' },
           { name: 'Subcontractor Statement', path: '/general/project-management/subcontractor-statement' },
@@ -1524,6 +1524,7 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/general/user-tracking': 'user_tracking',
       '/general/project-management': 'project_management',
       '/general/project-management/overview': 'project_management',
+      '/general/project-management/dashboard': 'project_management',
       '/general/project-management/projects': 'project_management',
       '/general/project-management/approvals': 'project_management',
       '/general/project-management/subcontractor-statement': 'project_management',

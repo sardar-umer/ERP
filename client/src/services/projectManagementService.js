@@ -269,3 +269,11 @@ const projectManagementService = {
 };
 
 export default projectManagementService;
+
+// ─── Portfolio dashboard (management) ─────────────────────────────────────────
+export const getPortfolio = () =>
+  api.get(`${BASE}/portfolio`);
+
+/** Sub Project: cost per contract (lines / slabs), per check request and per IPC */
+export const getProjectCostDetail = (id) =>
+  api.get(`${BASE}/projects/${id}/cost-detail`);

@@ -240,6 +240,7 @@ import IndentDetail from './pages/General/Indents/IndentDetail';
 import IndentPrintView from './pages/General/Indents/IndentPrintView';
 import Payments from './pages/General/Payments';
 import ProjectManagement from './pages/General/ProjectManagement';
+import ProjectPortfolioDashboard from './pages/General/ProjectPortfolioDashboard';
 import ProjectDetail from './pages/General/ProjectDetail';
 import ProjectWorkspaceRedirect from './pages/General/ProjectWorkspaceRedirect';
 import WbsActivities from './pages/General/WbsActivities';
@@ -890,7 +891,11 @@ function App() {
                     />
                     <Route
                       path="/general/project-management/overview"
-                      element={<ProtectedRoute><ProjectManagement /></ProtectedRoute>}
+                      element={<Navigate to="/general/project-management/projects" replace />}
+                    />
+                    <Route
+                      path="/general/project-management/dashboard"
+                      element={<ProtectedRoute><ProjectPortfolioDashboard /></ProtectedRoute>}
                     />
                     <Route
                       path="/general/project-management/projects"
