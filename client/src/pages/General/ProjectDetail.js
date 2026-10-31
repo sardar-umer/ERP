@@ -39,7 +39,6 @@ import CheckRequestsTab from './CheckRequestsTab';
 import SubletContractsTab from './SubletContractsTab';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
-import CostReportTab from '../../components/ProjectManagement/CostReportTab';
 import MainProjectPage from '../../components/ProjectManagement/MainProjectPage';
 import MainCostReport from '../../components/ProjectManagement/MainCostReport';
 import { useAuth } from '../../contexts/AuthContext';
@@ -2262,7 +2261,7 @@ const ProjectDetail = () => {
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} onGoToTab={goToTab} />}
-          {activeTab?.id === 'cost' && <CostReportTab project={project} />}
+          {activeTab?.id === 'cost' && <MainCostReport project={project} />}
         </Box>
       </Paper>
 

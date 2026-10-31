@@ -6,10 +6,13 @@ export const ACCENT = '#0f766e';
 export const INK = '#0f172a';
 export const BORDER = '#e2e8f0';
 export const SOFT = '#f8fafc';
-// Soft teal surface shared by the sub project sidebar and the header chart card
-export const TEAL_SURFACE = '#e3f1ee';
-export const TEAL_BORDER = '#c5e2dc';
-export const TEAL_TEXT = '#3f6b63';
+// Frosted pastel surface (blue → lavender → peach) shared by the header chart card and the sub project sidebar
+export const PASTEL_BG = 'linear-gradient(120deg, #dbeafe 0%, #e5e1fb 45%, #f3e3f1 70%, #fde7dc 100%)';
+export const PASTEL_BG_TALL = 'linear-gradient(170deg, #dbeafe 0%, #e5e1fb 40%, #f3e3f1 72%, #fde7dc 100%)';
+export const GLASS = 'rgba(255,255,255,0.62)';
+export const GLASS_EDGE = 'rgba(255,255,255,0.85)';
+export const PASTEL_SHADOW = '0 12px 32px rgba(99,102,241,0.12), inset 0 1px 0 rgba(255,255,255,0.9)';
+export const MUTED = '#475569';
 
 export const fmt = (v) =>
   new Intl.NumberFormat('en-PK', { style: 'currency', currency: 'PKR', maximumFractionDigits: 0 })

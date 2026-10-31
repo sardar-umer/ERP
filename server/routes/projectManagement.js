@@ -585,19 +585,25 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
 }));
 
 /**
- * Main Project cost analysis: one flat row per sublet contract (plus a "no contract" row per Sub / contractor
+ * Cost analysis (Main or Sub Project): one flat row per sublet contract (plus a "no contract" row per Sub / contractor
  * for check requests and IPCs raised without one), each with its Sub Project, contractor, check request and
  * IPC counts and money. Sub Project budget figures come from the cost report so every view agrees.
  * The client groups these rows by Sub Project, contractor, contract, etc.
  */
 router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-  const project = await ConstructionProject.findById(req.params.id).select('name projectNumber parentProject lumpSumBudget').lean();
+  const project = await ConstructionProject.findById(req.params.id)
+    .select('name projectNumber parentProject lumpSumBudget sector projectType status overallProgress').lean();
   if (!project) return notFound(res, 'Project');
-  if (project.parentProject) return badRequest(res, 'Cost analysis is for Main Projects');
+  const isSub = Boolean(project.parentProject);
 
-  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
-    .select('name projectNumber sector status overallProgress').sort({ name: 1 }).lean();
+  // A Sub Project reports on itself; a Main Project on all its non-cancelled Sub Projects
+  const subs = isSub
+    ? [project]
+    : await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
+      .select('name projectNumber sector projectType status overallProgress').sort({ name: 1 }).lean();
+  // Legacy type names (Villa, Infrastructure…) are reported under the three master types
+  const typeOf = (sub) => normalizeProjectType(sub.projectType) || sub.projectType || 'Other';
   const subIds = subs.map((s) => s._id);
 
   const [reports, contracts, crs, ipcs] = await Promise.all([
@@ -633,7 +639,7 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
           value: round2(c.totalAmount), slabs: (c.slabs || []).length
         } : null,
         contractor: c ? party(c.contractor) : contractor,
-        subProject: sub ? { _id: sub._id, name: sub.name, projectNumber: sub.projectNumber } : null,
+        subProject: sub ? { _id: sub._id, name: sub.name, projectNumber: sub.projectNumber, projectType: typeOf(sub), sector: sub.sector || '' } : null,
         checkRequests: { count: 0, byStatus: {}, byStatusAmount: {}, claimed: 0, verified: 0 },
         ipcs: { count: 0, byApproval: {}, byApprovalAmount: {}, byKind: {}, billed: 0, approved: 0, approvedNet: 0, paid: 0, retention: 0 }
       });
@@ -684,16 +690,16 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
   }));
 
   const subProjects = subs.map((s, i) => ({
-    _id: s._id, name: s.name, projectNumber: s.projectNumber, sector: s.sector, status: s.status,
+    _id: s._id, name: s.name, projectNumber: s.projectNumber, sector: s.sector || '', projectType: typeOf(s), status: s.status,
     progress: Number(s.overallProgress) || 0,
     ...reports[i].summary
   }));
   const keys = ['budget', 'contracted', 'verified', 'billed', 'approved', 'paid', 'retentionHeld', 'advanceOutstanding', 'variance'];
   const totals = Object.fromEntries(keys.map((k) => [k, round2(subProjects.reduce((t, r) => t + (Number(r[k]) || 0), 0))]));
-  totals.lumpSumBudget = Number(project.lumpSumBudget) || 0;
+  totals.lumpSumBudget = isSub ? 0 : Number(project.lumpSumBudget) || 0;
   totals.outstanding = round2(rows.reduce((t, r) => t + r.outstanding, 0));
 
-  res.json({ success: true, data: { project: { _id: project._id, name: project.name, projectNumber: project.projectNumber }, totals, subProjects, rows } });
+  res.json({ success: true, data: { level: isSub ? 'sub' : 'main', project: { _id: project._id, name: project.name, projectNumber: project.projectNumber }, totals, subProjects, rows } });
 }));
 
 // GET /api/project-management/projects/:id/workflow — step-by-step status for the Sub Project workflow strip

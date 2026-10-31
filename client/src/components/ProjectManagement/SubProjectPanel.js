@@ -7,8 +7,11 @@ import {
 import { OpenInNew as OpenIcon } from '@mui/icons-material';
 import {
   ACCENT, BORDER, CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, Empty, HEALTH_COLOR, INK,
-  IPC_APPROVAL_COLOR, Label, PROJECT_STATUS_COLOR, SOFT, fmt, plural, progressColor
+  GLASS_EDGE, IPC_APPROVAL_COLOR, Label, PASTEL_BG_TALL, PASTEL_SHADOW, PROJECT_STATUS_COLOR, SOFT, fmt, plural, progressColor
 } from './mainProjectUi';
+
+// Cards sit on the pastel panel as frosted white glass so tables stay easy to read
+const CARD_BG = 'rgba(255,255,255,0.88)';
 
 const Dash = () => <Typography variant="body2" color="text.disabled">—</Typography>;
 
@@ -128,8 +131,8 @@ const ContractCard = ({ contract, go, unlinked = false }) => {
     <Paper
       elevation={0}
       sx={{
-        borderRadius: 3, border: `1px solid ${BORDER}`, borderLeft: `4px solid ${unlinked ? '#94a3b8' : ACCENT}`,
-        bgcolor: '#fff', overflow: 'hidden'
+        borderRadius: 3, border: `1px solid ${GLASS_EDGE}`, borderLeft: `4px solid ${unlinked ? '#94a3b8' : ACCENT}`,
+        bgcolor: CARD_BG, backdropFilter: 'blur(6px)', boxShadow: '0 4px 14px rgba(15,23,42,0.06)', overflow: 'hidden'
       }}
     >
       <Box sx={{ px: 2.5, py: 2, borderBottom: `1px solid ${BORDER}` }}>
@@ -204,7 +207,12 @@ export default function SubProjectPanel({ sub, money, index = 0, count = 1 }) {
   } : null;
 
   return (
-    <Box>
+    <Box
+      sx={{
+        p: { xs: 1.5, sm: 2.5 }, borderRadius: 3, background: PASTEL_BG_TALL,
+        border: `1px solid ${GLASS_EDGE}`, boxShadow: PASTEL_SHADOW
+      }}
+    >
       {/* "Sub Project 1 of 3" heading, same style as the contract headings */}
       <Stack direction="row" alignItems="center" gap={1.25} sx={{ mb: 1 }}>
         <Box sx={{ width: 34, height: 34, flexShrink: 0, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: INK, color: '#fff', fontWeight: 800, fontSize: 15 }}>
@@ -224,7 +232,7 @@ export default function SubProjectPanel({ sub, money, index = 0, count = 1 }) {
       </Stack>
 
       {/* Sub Project header */}
-      <Paper elevation={0} sx={{ mb: 2, p: 2.5, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff' }}>
+      <Paper elevation={0} sx={{ mb: 2, p: 2.5, borderRadius: 3, border: `1px solid ${GLASS_EDGE}`, bgcolor: CARD_BG, backdropFilter: 'blur(6px)', boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}>
         <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} gap={1.5}>
           <Box>
             <Stack direction="row" alignItems="center" gap={1} flexWrap="wrap">
@@ -258,18 +266,18 @@ export default function SubProjectPanel({ sub, money, index = 0, count = 1 }) {
         Sublet contracts ({sub.contracts.length})
       </Typography>
       {!sub.contracts.length && !unlinkedContract && (
-        <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff' }}>
+        <Paper elevation={0} sx={{ p: 2.5, borderRadius: 3, border: `1px solid ${GLASS_EDGE}`, bgcolor: CARD_BG }}>
           <Empty>No sublet contracts yet. Open the sub project to add one.</Empty>
         </Paper>
       )}
       {sub.contracts.map((c, i) => (
-        <Box key={c._id} sx={{ mb: 3 }}>
+        <Box key={c._id} sx={{ mb: 3, '&:last-child': { mb: 0 } }}>
           <ContractHeading index={i} count={sub.contracts.length} contract={c} />
           <ContractCard contract={c} go={go} />
         </Box>
       ))}
       {unlinkedContract && (
-        <Box sx={{ mb: 3 }}>
+        <Box sx={{ mb: 3, '&:last-child': { mb: 0 } }}>
           <ContractHeading contract={unlinkedContract} unlinked />
           <ContractCard contract={unlinkedContract} go={go} unlinked />
         </Box>

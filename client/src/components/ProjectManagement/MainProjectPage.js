@@ -12,17 +12,16 @@ import {
 import dayjs from 'dayjs';
 import { getProjectSummary, getProjectTree } from '../../services/projectManagementService';
 import {
-  ACCENT, BORDER, INK, PROJECT_STATUS_COLOR, STATUS_DOT, TEAL_BORDER, TEAL_SURFACE, TEAL_TEXT, fmt, plural, progressColor
+  ACCENT, BORDER, GLASS_EDGE, INK, MUTED, PASTEL_BG_TALL, PASTEL_SHADOW, PROJECT_STATUS_COLOR, STATUS_DOT, fmt, plural, progressColor
 } from './mainProjectUi';
 import SubProjectPanel from './SubProjectPanel';
 import ProjectSummaryPanel from './ProjectSummaryPanel';
 import ProjectHeaderGraphics from './ProjectHeaderGraphics';
 
 const SUMMARY = 'summary';
-// Sidebar sits on the shared soft teal surface (matches ACCENT); the selected item is a white card
-const SIDEBAR_BG = TEAL_SURFACE;
-const SIDEBAR_BORDER = TEAL_BORDER;
-const SIDEBAR_TRACK = '#c9e3dd';
+// Sidebar sits on the same frosted pastel surface as the header chart; the selected item is a white card
+const SIDEBAR_DIVIDER = 'rgba(100,116,139,0.18)';
+const SIDEBAR_TRACK = 'rgba(255,255,255,0.75)';
 // The app's sticky top bar is 96px tall; the sidebar sticks just under it
 const STICKY_TOP = 104;
 
@@ -49,7 +48,7 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
     <Paper
       elevation={0}
       sx={{
-        p: 1, borderRadius: 3, border: `1px solid ${SIDEBAR_BORDER}`, bgcolor: SIDEBAR_BG,
+        p: 1, borderRadius: 3, border: `1px solid ${GLASS_EDGE}`, background: PASTEL_BG_TALL, boxShadow: PASTEL_SHADOW,
         position: { md: 'sticky' }, top: { md: STICKY_TOP },
         maxHeight: { xs: 320, md: `calc(100vh - ${STICKY_TOP + 16}px)` }, overflowY: 'auto'
       }}
@@ -72,7 +71,7 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
       </Item>
       <Typography
         variant="overline"
-        sx={{ display: 'block', mx: 1.5, mt: 1, mb: 0.5, pt: 1, color: TEAL_TEXT, fontWeight: 800, letterSpacing: 1, borderTop: `1px solid ${SIDEBAR_BORDER}` }}
+        sx={{ display: 'block', mx: 1.5, mt: 1, mb: 0.5, pt: 1, color: MUTED, fontWeight: 800, letterSpacing: 1, borderTop: `1px solid ${SIDEBAR_DIVIDER}` }}
       >
         Sub projects ({subs.length})
       </Typography>
@@ -262,7 +261,7 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
                     count={subs.length}
                   />
                 )
-                : summary && <ProjectSummaryPanel project={project} summary={summary} />}
+                : summary && <ProjectSummaryPanel project={project} summary={summary} tree={tree} />}
             </Box>
           </Box>
         )

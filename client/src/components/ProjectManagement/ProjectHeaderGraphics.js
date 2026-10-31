@@ -1,85 +1,90 @@
 import React from 'react';
-import { Box, LinearProgress, Stack, Tooltip, Typography } from '@mui/material';
+import { Box, Stack, Tooltip, Typography } from '@mui/material';
 import { keyframes } from '@mui/material/styles';
-import { TEAL_BORDER, TEAL_SURFACE, TEAL_TEXT, fmt, plural } from './mainProjectUi';
+import {
+  AccountBalanceWallet as WalletIcon, Payments as PaidIcon, Verified as BadgeIcon
+} from '@mui/icons-material';
+import { GLASS, GLASS_EDGE, INK, MUTED, PASTEL_BG, PASTEL_SHADOW, fmt, plural } from './mainProjectUi';
 
-// Each money step in its own clean, distinct colour
+// Frosted-glass card on a pastel blue → lavender → peach wash; each money step is a glossy pill bar
 const BARS = [
-  { key: 'budget', label: 'Budget', from: '#64748b', to: '#94a3b8', note: 'Sum of sub project BOQs' },
-  { key: 'contracted', label: 'Contracted', from: '#4f46e5', to: '#818cf8', note: 'Sublet contracts signed' },
-  { key: 'verified', label: 'Verified', from: '#0284c7', to: '#38bdf8', note: 'Work verified on check requests' },
-  { key: 'spent', label: 'Spent', from: '#d97706', to: '#fbbf24', note: 'Certified work billed (IPCs)' },
-  { key: 'approved', label: 'CEO Approved', from: '#7c3aed', to: '#a78bfa', note: 'IPCs cleared for payment' },
-  { key: 'paid', label: 'Paid', from: '#059669', to: '#34d399', note: 'Paid to contractors by Finance' }
+  { key: 'budget', label: 'Budget', from: '#94a3b8', to: '#cbd5e1', glow: '#94a3b8', tone: '#64748b', Icon: BadgeIcon, note: 'Sum of sub project BOQs' },
+  { key: 'contracted', label: 'Contracted', from: '#60a5fa', to: '#4f46e5', glow: '#6366f1', tone: '#4f46e5', Icon: BadgeIcon, note: 'Sublet contracts signed' },
+  { key: 'verified', label: 'Verified', from: '#3b82f6', to: '#5eead4', glow: '#38bdf8', tone: '#0ea5e9', Icon: BadgeIcon, note: 'Work verified on check requests' },
+  { key: 'spent', label: 'Spent', from: '#f59e0b', to: '#fcd34d', glow: '#f59e0b', tone: '#d97706', Icon: WalletIcon, note: 'Certified work billed (IPCs)' },
+  { key: 'approved', label: 'CEO Approved', from: '#4c1d95', to: '#c026d3', glow: '#9333ea', tone: '#9333ea', Icon: BadgeIcon, note: 'IPCs cleared for payment' },
+  { key: 'paid', label: 'Paid', from: '#16a34a', to: '#86efac', glow: '#22c55e', tone: '#16a34a', Icon: PaidIcon, note: 'Paid to contractors by Finance' }
 ];
-// Same soft teal surface as the sub project sidebar, a touch richer at the top; white tracks so the bars stand out
-const THEME = {
-  card: `linear-gradient(180deg, #d7ece7 0%, ${TEAL_SURFACE} 55%, ${TEAL_SURFACE} 100%)`,
-  border: TEAL_BORDER,
-  shadow: '0 6px 20px rgba(15,118,110,0.10)',
-  glow: 'rgba(255,255,255,0.55)',
-  track: '#ffffff',
-  dashed: '#9cc9bf',
-  text: '#0f172a',
-  muted: TEAL_TEXT,
-  pill: '#ffffff',
-  pillBorder: TEAL_BORDER,
-  progress: 'linear-gradient(90deg, #0f766e, #2dd4bf)'
-};
 
 // Bars grow from the left one after another; amounts fade in once their bar lands
 const grow = keyframes`from { transform: scaleX(0); } to { transform: scaleX(1); }`;
-const fadeIn = keyframes`from { opacity: 0; transform: translateX(-6px); } to { opacity: 1; transform: none; }`;
+const fadeIn = keyframes`from { opacity: 0; } to { opacity: 1; }`;
 const STAGGER = 0.12;
 
 const share = (value, base) => (base > 0 ? Math.round((value / base) * 100) : 0);
 
-/** One bar: label | track with gradient fill | amount. On phones the label and amount sit above the bar. */
+/** Label with icon | glass pill track holding the bar and, at its right end, the amount + %. */
 const BarRow = ({ row, width, index }) => {
   const delay = `${index * STAGGER}s`;
-  const amount = (
-    <Typography
-      component="span"
-      sx={{ fontWeight: 800, fontSize: 14, color: THEME.text, whiteSpace: 'nowrap', opacity: 0, animation: `${fadeIn} .5s ease-out forwards`, animationDelay: `calc(${delay} + .6s)` }}
-    >
-      {row.missing ? 'Not set' : fmt(row.value)}
-      {!row.missing && (
-        <Box component="span" sx={{ ml: 0.75, fontSize: 11, fontWeight: 800, color: row.key === 'budget' ? THEME.muted : row.from }}>{row.pct}%</Box>
-      )}
-    </Typography>
-  );
+  const { Icon } = row;
   return (
     <Tooltip title={row.note} placement="top-start">
       <Box
         sx={{
-          display: 'grid', alignItems: 'center', columnGap: 1.5, rowGap: 0.5,
-          gridTemplateColumns: { xs: '1fr auto', sm: '120px minmax(0, 1fr) 150px' },
-          gridTemplateAreas: { xs: '"label amount" "bar bar"', sm: '"label bar amount"' }
+          display: 'grid', alignItems: 'center', columnGap: 2, rowGap: 0.75,
+          gridTemplateColumns: { xs: '1fr', sm: '150px minmax(0, 1fr)' }
         }}
       >
-        <Stack direction="row" alignItems="center" justifyContent={{ sm: 'flex-end' }} gap={1} sx={{ gridArea: 'label' }}>
-          <Box sx={{ width: 9, height: 9, borderRadius: '50%', flexShrink: 0, background: `linear-gradient(135deg, ${row.from}, ${row.to})` }} />
-          <Typography sx={{ fontSize: 13, fontWeight: 700, color: THEME.text }}>{row.label}</Typography>
+        <Stack direction="row" alignItems="center" justifyContent={{ sm: 'flex-end' }} gap={1}>
+          <Icon sx={{ fontSize: 20, color: row.tone }} />
+          <Typography sx={{ fontSize: 15, fontWeight: 600, color: INK }}>{row.label}</Typography>
         </Stack>
-        <Box sx={{ gridArea: 'bar', height: 22, borderRadius: 2, bgcolor: THEME.track, overflow: 'hidden', border: row.missing ? `1px dashed ${THEME.dashed}` : '1px solid rgba(15,118,110,0.08)' }}>
+        <Box
+          sx={{
+            height: 40, borderRadius: 999, display: 'flex', alignItems: 'center', overflow: 'hidden',
+            bgcolor: GLASS, backdropFilter: 'blur(6px)',
+            border: row.missing ? '1.5px dashed rgba(100,116,139,0.45)' : `1px solid ${GLASS_EDGE}`,
+            boxShadow: 'inset 0 1px 2px rgba(15,23,42,0.06), 0 1px 2px rgba(255,255,255,0.8)'
+          }}
+        >
+          {/* bar area */}
+          <Box sx={{ flex: 1, height: '100%', position: 'relative' }}>
+            {!row.missing && width > 0 && (
+              <Box
+                sx={{
+                  position: 'absolute', left: 0, top: 0, bottom: 0, width: `${width}%`, borderRadius: 999,
+                  background: row.danger ? 'linear-gradient(90deg, #dc2626, #f87171)' : `linear-gradient(90deg, ${row.from}, ${row.to})`,
+                  boxShadow: `0 4px 14px ${row.glow}55, inset 0 2px 0 rgba(255,255,255,0.35), inset 0 -2px 4px rgba(0,0,0,0.08)`,
+                  transformOrigin: 'left', transform: 'scaleX(0)',
+                  animation: `${grow} .9s cubic-bezier(.22,1,.36,1) forwards`, animationDelay: delay
+                }}
+              />
+            )}
+          </Box>
+          {/* amount at the right end of the track */}
           <Box
             sx={{
-              height: '100%', width: `${width}%`, borderRadius: 2,
-              background: row.danger ? 'linear-gradient(90deg, #dc2626, #f87171)' : `linear-gradient(90deg, ${row.from}, ${row.to})`,
-              boxShadow: width > 0 ? `0 2px 8px ${row.from}40, inset 0 1px 0 rgba(255,255,255,0.35)` : 'none',
-              transformOrigin: 'left', transform: 'scaleX(0)',
-              animation: `${grow} .9s cubic-bezier(.22,1,.36,1) forwards`, animationDelay: delay
+              px: { xs: 1.25, sm: 2 }, whiteSpace: 'nowrap', display: 'flex', alignItems: 'baseline', gap: { xs: 0.5, sm: 1 },
+              opacity: 0, animation: `${fadeIn} .5s ease-out forwards`, animationDelay: `calc(${delay} + .5s)`
             }}
-          />
+          >
+            {row.missing ? (
+              <Typography sx={{ fontSize: { xs: 13, sm: 15 }, fontStyle: 'italic', color: INK }}>Not set</Typography>
+            ) : (
+              <>
+                <Typography sx={{ fontSize: { xs: 13, sm: 15 }, fontWeight: 700, color: INK }}>{fmt(row.value)}</Typography>
+                <Typography sx={{ fontSize: { xs: 12, sm: 15 }, fontWeight: 700, color: row.tone }}>{row.pct}%</Typography>
+              </>
+            )}
+          </Box>
         </Box>
-        <Box sx={{ gridArea: 'amount', textAlign: { xs: 'right', sm: 'left' } }}>{amount}</Box>
       </Box>
     </Tooltip>
   );
 };
 
 /**
- * Header chart: one horizontal bar per money step (budget → paid) that grows in on load, plus a progress pill.
+ * Header chart: one glossy pill bar per money step (budget → paid) that grows in on load, plus a progress pill.
  * Bars are sized against the largest amount; the % is against the budget, or the contract value while no budget is set.
  */
 export default function ProjectHeaderGraphics({ totals }) {
@@ -99,45 +104,57 @@ export default function ProjectHeaderGraphics({ totals }) {
   return (
     <Box
       sx={{
-        mt: 2, p: { xs: 2, md: 3 }, borderRadius: 3, color: THEME.text, position: 'relative', overflow: 'hidden',
-        background: THEME.card, border: `1px solid ${THEME.border}`,
-        boxShadow: THEME.shadow
+        mt: 2, p: { xs: 2, md: 3.5 }, borderRadius: 4, position: 'relative', overflow: 'hidden',
+        background: PASTEL_BG,
+        border: `1px solid ${GLASS_EDGE}`,
+        boxShadow: PASTEL_SHADOW
       }}
     >
-      {/* soft glow */}
-      <Box sx={{ position: 'absolute', right: -80, top: -80, width: 260, height: 260, borderRadius: '50%', background: `radial-gradient(circle, ${THEME.glow}, transparent 70%)`, pointerEvents: 'none' }} />
+      {/* soft light blooms */}
+      <Box sx={{ position: 'absolute', left: -120, bottom: -140, width: 360, height: 360, borderRadius: '50%', background: 'radial-gradient(circle, rgba(255,255,255,0.7), transparent 70%)', pointerEvents: 'none' }} />
+      <Box sx={{ position: 'absolute', right: -100, top: -120, width: 320, height: 320, borderRadius: '50%', background: 'radial-gradient(circle, rgba(196,181,253,0.45), transparent 70%)', pointerEvents: 'none' }} />
 
-      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'center' }} gap={1.5} sx={{ mb: 2.5, position: 'relative' }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'stretch', sm: 'flex-start' }} gap={2} sx={{ mb: 3, position: 'relative' }}>
         <Box>
-          <Typography variant="overline" sx={{ color: THEME.muted, fontWeight: 800, letterSpacing: 1.2, lineHeight: 1.4 }}>
-            Project at a glance
-          </Typography>
-          <Typography variant="body2" sx={{ color: THEME.muted }}>
+          <Stack direction="row" alignItems="center" gap={1.25}>
+            <Typography sx={{ fontSize: { xs: 20, md: 26 }, fontWeight: 900, color: INK, letterSpacing: 0.3, lineHeight: 1.15 }}>
+              PROJECT AT A GLANCE
+            </Typography>
+            <Box sx={{ width: 30, height: 22, borderRadius: 1.5, flexShrink: 0, background: 'linear-gradient(135deg, #60a5fa, #a78bfa 50%, #f472b6)', boxShadow: '0 2px 6px rgba(167,139,250,0.5)' }} />
+          </Stack>
+          <Typography sx={{ mt: 0.75, fontSize: 15, color: MUTED }}>
             {hasBudget
               ? `% shown against budget ${fmt(totals.budget)}`
               : pctBase > 0 ? `No budget yet · % shown against contract value ${fmt(pctBase)}` : 'Nothing contracted yet'}
           </Typography>
         </Box>
-        <Box sx={{ px: 2, py: 1.25, borderRadius: 2.5, bgcolor: THEME.pill, border: `1px solid ${THEME.pillBorder}`, boxShadow: '0 1px 3px rgba(15,23,42,0.06)', minWidth: { sm: 240 } }}>
+        <Box
+          sx={{
+            px: 2.5, py: 1.75, borderRadius: 3, minWidth: { sm: 230 },
+            bgcolor: GLASS, backdropFilter: 'blur(8px)', border: `1px solid ${GLASS_EDGE}`,
+            boxShadow: '0 6px 18px rgba(15,23,42,0.08)'
+          }}
+        >
           <Stack direction="row" alignItems="baseline" justifyContent="space-between" gap={2}>
-            <Typography variant="caption" sx={{ color: THEME.muted, fontWeight: 800 }}>PROGRESS</Typography>
-            <Typography variant="h5" fontWeight={900} sx={{ lineHeight: 1 }}>{progress}%</Typography>
+            <Typography sx={{ fontSize: 13, fontWeight: 700, color: MUTED, letterSpacing: 0.4 }}>PROGRESS</Typography>
+            <Typography sx={{ fontSize: 24, fontWeight: 800, color: '#0d9488', lineHeight: 1 }}>{progress}%</Typography>
           </Stack>
-          <LinearProgress
-            variant="determinate"
-            value={progress}
-            sx={{
-              mt: 1, height: 8, borderRadius: 4, bgcolor: TEAL_SURFACE,
-              '& .MuiLinearProgress-bar': { borderRadius: 4, background: THEME.progress }
-            }}
-          />
-          <Typography variant="caption" sx={{ color: THEME.muted, display: 'block', mt: 0.5 }}>
+          <Box sx={{ mt: 1.25, height: 8, borderRadius: 999, bgcolor: 'rgba(13,148,136,0.15)', overflow: 'hidden' }}>
+            <Box
+              sx={{
+                height: '100%', width: `${progress}%`, borderRadius: 999,
+                background: 'linear-gradient(90deg, #0d9488, #5eead4)',
+                transformOrigin: 'left', transform: 'scaleX(0)', animation: `${grow} 1s cubic-bezier(.22,1,.36,1) forwards`
+              }}
+            />
+          </Box>
+          <Typography sx={{ mt: 1, fontSize: 13, color: MUTED }}>
             {plural(totals.subProjects, 'sub project')} · {totals.activeSubProjects} active
           </Typography>
         </Box>
       </Stack>
 
-      <Stack gap={{ xs: 1.5, sm: 1.25 }} sx={{ position: 'relative' }}>
+      <Stack gap={1.75} sx={{ position: 'relative' }}>
         {rows.map((row, i) => (
           <BarRow key={row.key} row={row} index={i} width={base > 0 ? Math.min(100, (row.value / base) * 100) : 0} />
         ))}

@@ -8,9 +8,11 @@ import {
 import {
   AccountTree as SubIcon, ArrowForward as ArrowIcon, ChevronRight as CollapsedIcon, Description as ContractIcon,
   Download as DownloadIcon, ExpandMore as ExpandIcon, Engineering as ContractorIcon, FilterAltOff as ClearIcon,
-  Refresh as RefreshIcon, Search as SearchIcon, Timeline as PipelineIcon
+  Refresh as RefreshIcon, Search as SearchIcon, Timeline as PipelineIcon, Category as TypeIcon, Place as SectorIcon,
+  ListAlt as LinesIcon
 } from '@mui/icons-material';
-import { getProjectCostAnalysis } from '../../services/projectManagementService';
+import { getProjectCostAnalysis, getProjectCostReport } from '../../services/projectManagementService';
+import SubCostLines from './SubCostLines';
 import {
   ACCENT, BORDER, CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, Empty, INK, IPC_APPROVAL_COLOR,
   Label, SOFT, fmt, plural, progressColor
@@ -21,6 +23,9 @@ const sumBy = (list, f) => Math.round(list.reduce((t, x) => t + (Number(f(x)) ||
 const contractorKey = (r) => (r.contractor?._id ? String(r.contractor._id) : 'none');
 const contractorName = (r) => r.contractor?.name || 'No contractor';
 const typeLabel = (r) => (!r.contract ? 'No contract' : r.contract.type === 'Slab' ? 'Slab-wise' : 'BOQ-wise');
+const PROJECT_TYPE_LABEL = { 'INFRASTRUCTURE DEVELOPMENT': 'Infrastructure Development', COMMERCIAL: 'Commercial', VILLAS: 'Villas' };
+const projectTypeLabel = (t) => PROJECT_TYPE_LABEL[t] || t || 'Other';
+const sectorLabel = (s) => s || 'No sector';
 
 const CR_STAGES = ['Draft', 'Submitted', 'Verified', 'Billed'];
 const IPC_STAGES = ['Draft', 'Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO', 'Approved'];
@@ -578,32 +583,198 @@ const Pipeline = ({ stages, onOpen }) => {
   );
 };
 
+/**
+ * Roll Sub Project groups up into a bigger bucket (Project Type or Sector).
+ * Money comes from each Sub Project's row, so it matches the By Sub Project view.
+ */
+const buildCategoryGroups = (subGroups, keyOf, labelOf) => {
+  const byKey = new Map();
+  subGroups.forEach((g) => {
+    const key = keyOf(g.sub) || '';
+    if (!byKey.has(key)) byKey.set(key, { key, label: labelOf(key), subs: [] });
+    byKey.get(key).subs.push(g);
+  });
+  const sumMoney = (subs, f) => (subs.some((g) => g.money[f] === null) ? null : sumBy(subs, (g) => g.money[f]));
+  return [...byKey.values()]
+    .map((c) => ({
+      ...c,
+      ...rollup(c.subs.flatMap((g) => g.rows)),
+      contractors: [...new Set(c.subs.flatMap((g) => g.contractors))],
+      money: Object.fromEntries(['budget', 'contracted', 'verified', 'billed', 'approved', 'paid', 'variance'].map((f) => [f, sumMoney(c.subs, f)]))
+    }))
+    .sort((a, b) => (b.money.billed || 0) - (a.money.billed || 0) || a.label.localeCompare(b.label));
+};
+
+/** By Project Type / By Sector: one row per bucket, expanding into its Sub Projects */
+const ByCategory = ({ groups, heading, emptyText, onPickSub }) => {
+  const [open, toggle] = useToggleSet();
+  if (!groups.length) return <Empty>{emptyText}</Empty>;
+  const total = (f) => sumBy(groups, f);
+  const money = (v) => (v === null ? '—' : fmt(v));
+  const totalMoney = (f) => (groups.some((g) => g.money[f] === null) ? '—' : fmt(total((g) => g.money[f])));
+
+  return (
+    <TableContainer sx={{ border: `1px solid ${BORDER}`, borderRadius: 2 }}>
+      <Table size="small" sx={{ minWidth: 1100 }}>
+        <TableHead>
+          <TableRow sx={headSx}>
+            <TableCell padding="checkbox" />
+            <TableCell>{heading}</TableCell>
+            <TableCell>Sub Projects</TableCell>
+            <TableCell>Contractors</TableCell>
+            <TableCell>Contracts</TableCell>
+            <TableCell align="right">Check Req.</TableCell>
+            <TableCell align="right">IPCs</TableCell>
+            <TableCell align="right">Budget</TableCell>
+            <TableCell align="right">Contracted</TableCell>
+            <TableCell align="right">Billed</TableCell>
+            <TableCell align="right">Approved</TableCell>
+            <TableCell align="right">Paid</TableCell>
+            <TableCell align="right">Outstanding</TableCell>
+            <TableCell align="right">Variance</TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {groups.map((c) => {
+            const isOpen = open.has(c.key);
+            return (
+              <React.Fragment key={c.key}>
+                <TableRow hover onClick={() => toggle(c.key)} sx={{ cursor: 'pointer', verticalAlign: 'top', '& > td': { borderBottom: isOpen ? 0 : undefined } }}>
+                  <ExpandCell open={isOpen} onClick={() => toggle(c.key)} />
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={800} sx={{ color: INK }}>{c.label}</Typography>
+                    <Typography variant="caption" color="text.secondary">{pct(c.money.paid || 0, c.money.billed || 0)}% of billed paid</Typography>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={700}>{c.subs.length}</Typography>
+                    <Stack direction="row" gap={0.5} flexWrap="wrap" sx={{ mt: 0.5 }}>
+                      {c.subs.map((g) => <Chip key={g.sub._id} size="small" label={g.sub.name} sx={{ height: 20, fontSize: 11 }} />)}
+                    </Stack>
+                  </TableCell>
+                  <TableCell>
+                    <Typography variant="body2" fontWeight={700}>{c.contractors.length}</Typography>
+                    <Typography variant="caption" color="text.secondary">{c.contractors.join(', ')}</Typography>
+                  </TableCell>
+                  <ContractsCell r={c} />
+                  <TableCell align="right">{c.checkRequests}</TableCell>
+                  <TableCell align="right">{c.ipcs}</TableCell>
+                  <TableCell align="right">{money(c.money.budget)}</TableCell>
+                  <TableCell align="right">{fmt(c.money.contracted)}</TableCell>
+                  <TableCell align="right">{fmt(c.money.billed)}</TableCell>
+                  <TableCell align="right">{fmt(c.money.approved)}</TableCell>
+                  <TableCell align="right">{fmt(c.money.paid)}</TableCell>
+                  <TableCell align="right" sx={{ color: c.outstanding > 0 ? 'warning.dark' : undefined }}>{fmt(c.outstanding)}</TableCell>
+                  <TableCell align="right" sx={{ color: c.money.variance === null ? undefined : c.money.variance > 0 ? 'error.main' : 'success.main' }}>{money(c.money.variance)}</TableCell>
+                </TableRow>
+                <TableRow>
+                  <TableCell colSpan={14} sx={{ p: 0, bgcolor: SOFT, borderBottom: isOpen ? undefined : 0 }}>
+                    <Collapse in={isOpen} unmountOnExit>
+                      <Box sx={{ m: 1.5, mt: 0.5, borderRadius: 2, border: `1px solid ${BORDER}`, overflow: 'hidden', bgcolor: '#fff' }}>
+                        <Table size="small">
+                          <TableHead>
+                            <TableRow sx={headSx}>
+                              <TableCell>Sub Project</TableCell>
+                              <TableCell>Progress</TableCell>
+                              <TableCell>Contracts</TableCell>
+                              <TableCell align="right">Contracted</TableCell>
+                              <TableCell align="right">Billed</TableCell>
+                              <TableCell align="right">Approved</TableCell>
+                              <TableCell align="right">Paid</TableCell>
+                              <TableCell align="right">Outstanding</TableCell>
+                            </TableRow>
+                          </TableHead>
+                          <TableBody>
+                            {c.subs.map((g) => (
+                              <TableRow key={g.sub._id} hover sx={{ cursor: 'pointer' }} onClick={() => onPickSub(g.sub)}>
+                                <TableCell>
+                                  <Typography variant="body2" fontWeight={700}>{g.sub.name}</Typography>
+                                  <Typography variant="caption" color="text.secondary">{[g.sub.projectNumber, g.sub.sector, projectTypeLabel(g.sub.projectType)].filter(Boolean).join(' · ')}</Typography>
+                                </TableCell>
+                                <TableCell sx={{ minWidth: 120 }}>
+                                  <LinearProgress variant="determinate" value={Math.min(100, g.sub.progress)} color={progressColor(g.sub.progress)} sx={{ height: 6, borderRadius: 3, mt: 0.75 }} />
+                                  <Typography variant="caption" fontWeight={700}>{g.sub.progress}%</Typography>
+                                </TableCell>
+                                <ContractsCell r={g} />
+                                <TableCell align="right">{fmt(g.money.contracted)}</TableCell>
+                                <TableCell align="right">{fmt(g.money.billed)}</TableCell>
+                                <TableCell align="right">{fmt(g.money.approved)}</TableCell>
+                                <TableCell align="right">{fmt(g.money.paid)}</TableCell>
+                                <TableCell align="right" sx={{ color: g.outstanding > 0 ? 'warning.dark' : undefined }}>{fmt(g.outstanding)}</TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </Box>
+                    </Collapse>
+                  </TableCell>
+                </TableRow>
+              </React.Fragment>
+            );
+          })}
+        </TableBody>
+        <TableFooter>
+          <TableRow sx={footSx}>
+            <TableCell />
+            <TableCell>Total ({plural(groups.length, heading.toLowerCase())})</TableCell>
+            <TableCell>{total((c) => c.subs.length)}</TableCell>
+            <TableCell>{new Set(groups.flatMap((c) => c.contractors)).size}</TableCell>
+            <TableCell>{total((c) => c.contracts)}</TableCell>
+            <TableCell align="right">{total((c) => c.checkRequests)}</TableCell>
+            <TableCell align="right">{total((c) => c.ipcs)}</TableCell>
+            <TableCell align="right">{totalMoney('budget')}</TableCell>
+            <TableCell align="right">{totalMoney('contracted')}</TableCell>
+            <TableCell align="right">{totalMoney('billed')}</TableCell>
+            <TableCell align="right">{totalMoney('approved')}</TableCell>
+            <TableCell align="right">{totalMoney('paid')}</TableCell>
+            <TableCell align="right">{fmt(total((c) => c.outstanding))}</TableCell>
+            <TableCell align="right">{totalMoney('variance')}</TableCell>
+          </TableRow>
+        </TableFooter>
+      </Table>
+    </TableContainer>
+  );
+};
+
 const VIEWS = [
-  { id: 'sub', label: 'By Sub Project', icon: <SubIcon fontSize="small" /> },
+  { id: 'lines', label: 'By BOQ Line', icon: <LinesIcon fontSize="small" />, subOnly: true },
+  { id: 'sub', label: 'By Sub Project', icon: <SubIcon fontSize="small" />, mainOnly: true },
+  { id: 'type', label: 'By Project Type', icon: <TypeIcon fontSize="small" />, mainOnly: true },
+  { id: 'sector', label: 'By Sector', icon: <SectorIcon fontSize="small" />, mainOnly: true },
   { id: 'contractor', label: 'By Contractor', icon: <ContractorIcon fontSize="small" /> },
   { id: 'contract', label: 'By Contract', icon: <ContractIcon fontSize="small" /> },
   { id: 'pipeline', label: 'Approval Pipeline', icon: <PipelineIcon fontSize="small" /> }
 ];
-const NO_FILTERS = { sub: 'all', contractor: 'all', type: 'all' };
+const NO_FILTERS = { sub: 'all', projectType: 'all', sector: 'all', contractor: 'all', type: 'all' };
 
-/** Main Project cost report: totals, then the same money by Sub Project, contractor, contract or approval stage. */
+/**
+ * Cost report for a Main or Sub Project: totals, then the same money seen from different angles.
+ * Main: by Sub Project, Project Type, Sector, contractor, contract, approval stage.
+ * Sub: by BOQ line (with slab-wise contracts), contractor, contract, approval stage.
+ */
 export default function MainCostReport({ project }) {
   const navigate = useNavigate();
+  const isSub = Boolean(project.parentProject);
+  const views = VIEWS.filter((v) => (isSub ? !v.mainOnly : !v.subOnly));
   const [data, setData] = useState(null);
+  const [lineData, setLineData] = useState(null);
   const [error, setError] = useState('');
-  const [view, setView] = useState('sub');
+  const [view, setView] = useState(isSub ? 'lines' : 'sub');
   const [query, setQuery] = useState('');
   const [filters, setFilters] = useState(NO_FILTERS);
 
   const load = useCallback(async () => {
     try {
       setError('');
-      const res = await getProjectCostAnalysis(project._id);
+      const [res, lines] = await Promise.all([
+        getProjectCostAnalysis(project._id),
+        isSub ? getProjectCostReport(project._id) : Promise.resolve(null)
+      ]);
       setData(res.data?.data || null);
+      setLineData(lines?.data?.data || null);
     } catch (err) {
       setError(err.response?.data?.message || 'Could not load the cost report');
     }
-  }, [project._id]);
+  }, [project._id, isSub]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -612,19 +783,31 @@ export default function MainCostReport({ project }) {
     return [...m].sort((a, b) => a[1].localeCompare(b[1]));
   }, [data]);
 
+  const projectTypeOptions = useMemo(() => [...new Set((data?.subProjects || []).map((s) => s.projectType))].sort(), [data]);
+  const sectorOptions = useMemo(() => [...new Set((data?.subProjects || []).map((s) => sectorLabel(s.sector)))].sort(), [data]);
+
   if (error) return <Alert severity="error" action={<Button color="inherit" size="small" onClick={load}>Retry</Button>}>{error}</Alert>;
   if (!data) return <Skeleton height={300} />;
 
   // Filters apply to every view; search narrows by name
   const q = query.trim().toLowerCase();
   const narrowed = filters.contractor !== 'all' || filters.type !== 'all';
-  const filtersOn = narrowed || filters.sub !== 'all';
-  const rows = data.rows.filter((r) => (filters.sub === 'all' || String(r.subProject?._id) === filters.sub)
+  const filtersOn = narrowed || filters.sub !== 'all' || filters.projectType !== 'all' || filters.sector !== 'all';
+  // Project Type / Sector / Sub Project filters pick whole Sub Projects
+  const subMatches = (s) => s && (filters.sub === 'all' || String(s._id) === filters.sub)
+    && (filters.projectType === 'all' || s.projectType === filters.projectType)
+    && (filters.sector === 'all' || sectorLabel(s.sector) === filters.sector);
+  const rows = data.rows.filter((r) => subMatches(r.subProject)
     && (filters.contractor === 'all' || contractorKey(r) === filters.contractor)
     && (filters.type === 'all' || (filters.type === 'none' ? !r.contract : r.contract?.type === filters.type)));
-  const subs = data.subProjects.filter((s) => filters.sub === 'all' || String(s._id) === filters.sub);
+  const subs = data.subProjects.filter(subMatches);
+  const allSubGroups = buildSubGroups(subs, rows, narrowed);
+  const typeGroups = buildCategoryGroups(allSubGroups, (s) => s.projectType, projectTypeLabel)
+    .filter((c) => !q || c.label.toLowerCase().includes(q));
+  const sectorGroups = buildCategoryGroups(allSubGroups, (s) => sectorLabel(s.sector), (k) => k)
+    .filter((c) => !q || c.label.toLowerCase().includes(q));
 
-  const subGroups = buildSubGroups(subs, rows, narrowed)
+  const subGroups = allSubGroups
     .filter((g) => !q || g.sub.name.toLowerCase().includes(q) || (g.sub.projectNumber || '').toLowerCase().includes(q));
   const contractorGroups = buildContractorGroups(rows).filter((g) => !q || g.name.toLowerCase().includes(q));
   const contractRows = sortContracts(rows).filter((r) => !q || [r.contract?.contractNumber, r.subProject?.name, contractorName(r)]
@@ -635,14 +818,27 @@ export default function MainCostReport({ project }) {
   const f = rollup(rows);
   const openRow = (r) => r.subProject && navigate(`/general/project-management/${r.subProject._id}?tab=${r.contract ? 'sublet-contracts' : 'check-requests'}`);
   const setFilter = (key) => (e) => setFilters((prev) => ({ ...prev, [key]: e.target.value }));
+  const pickSub = (sub) => { setFilters((prev) => ({ ...prev, sub: String(sub._id) })); setQuery(''); setView('sub'); };
 
   const exportView = () => {
     const name = `${project.projectNumber || 'project'}-cost-${view}.csv`;
-    if (view === 'sub') {
+    if (view === 'lines') {
+      const lineRows = (lineData?.lines || []).map((l) => ['BOQ line', l.title, l.contractors.join('; '), `${l.scopeQty} ${l.unit || ''}`.trim(),
+        l.budget, l.contracted, l.verified, l.billed, l.approved, l.variance]);
+      const slabRows = (lineData?.slabContracts || []).flatMap((c) => c.slabs.map((sl) => [`Slab · ${c.contractNumber}`, sl.name, c.contractor, `${sl.percentage}%`,
+        sl.amount, '', sl.verified, sl.billed, sl.approved, '']));
+      downloadCsv(name, ['Kind', 'Item / Slab', 'Contractors', 'Scope / Share', 'Budget / Amount', 'Contracted', 'Verified', 'Billed', 'Approved', 'Variance'], [...lineRows, ...slabRows]);
+    } else if (view === 'sub') {
       downloadCsv(name,
         ['Sub Project', 'Code', 'Progress %', 'Contractors', 'Contracts', 'BOQ-wise', 'Slab-wise', 'Check Requests', 'IPCs', 'Budget', 'Contracted', 'Verified', 'Billed', 'Approved', 'Paid', 'Outstanding', 'Variance'],
         subGroups.map((g) => [g.sub.name, g.sub.projectNumber, g.sub.progress, g.contractors.join('; '), g.contracts, g.boq, g.slab, g.checkRequests, g.ipcs,
           g.money.budget ?? '', g.money.contracted, g.money.verified, g.money.billed, g.money.approved, g.money.paid, g.outstanding, g.money.variance ?? '']));
+    } else if (view === 'type' || view === 'sector') {
+      const list = view === 'type' ? typeGroups : sectorGroups;
+      downloadCsv(name,
+        [view === 'type' ? 'Project Type' : 'Sector', 'Sub Projects', 'Contractors', 'Contracts', 'BOQ-wise', 'Slab-wise', 'Check Requests', 'IPCs', 'Budget', 'Contracted', 'Verified', 'Billed', 'Approved', 'Paid', 'Outstanding', 'Variance'],
+        list.map((c) => [c.label, c.subs.map((g) => g.sub.name).join('; '), c.contractors.join('; '), c.contracts, c.boq, c.slab, c.checkRequests, c.ipcs,
+          c.money.budget ?? '', c.money.contracted, c.money.verified, c.money.billed, c.money.approved, c.money.paid, c.outstanding, c.money.variance ?? '']));
     } else if (view === 'contractor') {
       downloadCsv(name,
         ['Contractor', 'Sub Projects', 'Contracts', 'BOQ-wise', 'Slab-wise', 'Check Requests', 'Check Request status', 'IPCs', 'IPC approval', 'Contract Value', 'Billed', 'Approved', 'Paid', 'Outstanding'],
@@ -666,7 +862,8 @@ export default function MainCostReport({ project }) {
     <Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1} sx={{ mb: 2 }}>
         <Box>
-          <Typography variant="h6" fontWeight={800} sx={{ color: INK }}>Cost Report</Typography>
+          {/* The Sub Project tab bar already titles this "Cost Report" */}
+          {!isSub && <Typography variant="h6" fontWeight={800} sx={{ color: INK }}>Cost Report</Typography>}
           <Typography variant="body2" color="text.secondary">
             Budget (BOQ) → contracted (sublet) → verified (check requests) → billed (IPCs) → approved (CEO) → paid (Finance)
           </Typography>
@@ -677,7 +874,7 @@ export default function MainCostReport({ project }) {
       </Stack>
 
       <Box sx={{ display: 'grid', gap: 1.25, mb: 1.5, gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', xl: 'repeat(7, 1fr)' } }}>
-        <Kpi label="Budget" value={t.budget} hint={t.lumpSumBudget ? `Lump sum ${fmt(t.lumpSumBudget)}` : 'Sum of sub project BOQs'} />
+        <Kpi label="Budget" value={t.budget} hint={t.lumpSumBudget ? `Lump sum ${fmt(t.lumpSumBudget)}` : isSub ? 'This sub project\'s BOQ' : 'Sum of sub project BOQs'} />
         <Kpi label="Contracted" value={t.contracted} color={t.budget > 0 && t.contracted > t.budget ? 'error.main' : undefined} hint={t.budget > 0 ? `${pct(t.contracted, t.budget)}% of budget` : null} />
         <Kpi label="Verified work" value={t.verified} hint={`${pct(t.verified, t.contracted)}% of contracted`} />
         <Kpi label="Billed (IPCs)" value={t.billed} />
@@ -704,7 +901,7 @@ export default function MainCostReport({ project }) {
             '& .Mui-selected': { bgcolor: 'rgba(15,118,110,0.1) !important', color: `${ACCENT} !important` }
           }}
         >
-          {VIEWS.map((v) => <ToggleButton key={v.id} value={v.id}>{v.icon} {v.label}</ToggleButton>)}
+          {views.map((v) => <ToggleButton key={v.id} value={v.id}>{v.icon} {v.label}</ToggleButton>)}
         </ToggleButtonGroup>
         <Button variant="outlined" startIcon={<DownloadIcon />} onClick={exportView} sx={{ textTransform: 'none', color: ACCENT, borderColor: ACCENT, alignSelf: { xs: 'flex-start', md: 'center' } }}>
           Export CSV
@@ -713,15 +910,24 @@ export default function MainCostReport({ project }) {
 
       {/* Filters: apply to every view */}
       <Paper elevation={0} sx={{ p: 1.5, mb: 1.5, borderRadius: 2, border: `1px solid ${BORDER}`, bgcolor: SOFT }}>
-        <Box sx={{ display: 'grid', gap: 1.25, alignItems: 'center', gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr', lg: '2fr 1.5fr 1.5fr 1.2fr auto' } }}>
+        <Box
+          sx={{
+            display: 'grid', gap: 1.25, alignItems: 'center',
+            gridTemplateColumns: isSub
+              ? { xs: '1fr', sm: '1fr 1fr', md: '2fr 1.4fr 1.2fr auto' }
+              : { xs: '1fr', sm: '1fr 1fr', md: 'repeat(3, 1fr)', xl: '1.8fr repeat(5, 1.1fr) auto' }
+          }}
+        >
           <TextField
             size="small"
-            placeholder="Search sub project, contractor or contract no…"
+            placeholder={isSub ? 'Search BOQ line, contractor or contract no…' : 'Search name, type, sector or contract no…'}
             value={query}
             onChange={(e) => setQuery(e.target.value)}
             sx={{ bgcolor: '#fff' }}
             InputProps={{ startAdornment: <InputAdornment position="start"><SearchIcon fontSize="small" /></InputAdornment> }}
           />
+          {!isSub && (
+          <>
           <FormControl size="small" sx={{ bgcolor: '#fff' }}>
             <InputLabel>Sub Project</InputLabel>
             <Select label="Sub Project" value={filters.sub} onChange={setFilter('sub')}>
@@ -729,6 +935,22 @@ export default function MainCostReport({ project }) {
               {data.subProjects.map((s) => <MenuItem key={s._id} value={String(s._id)}>{s.name}</MenuItem>)}
             </Select>
           </FormControl>
+          <FormControl size="small" sx={{ bgcolor: '#fff' }}>
+            <InputLabel>Project Type</InputLabel>
+            <Select label="Project Type" value={filters.projectType} onChange={setFilter('projectType')}>
+              <MenuItem value="all">All project types</MenuItem>
+              {projectTypeOptions.map((t) => <MenuItem key={t} value={t}>{projectTypeLabel(t)}</MenuItem>)}
+            </Select>
+          </FormControl>
+          <FormControl size="small" sx={{ bgcolor: '#fff' }}>
+            <InputLabel>Sector</InputLabel>
+            <Select label="Sector" value={filters.sector} onChange={setFilter('sector')}>
+              <MenuItem value="all">All sectors</MenuItem>
+              {sectorOptions.map((sec) => <MenuItem key={sec} value={sec}>{sec}</MenuItem>)}
+            </Select>
+          </FormControl>
+          </>
+          )}
           <FormControl size="small" sx={{ bgcolor: '#fff' }}>
             <InputLabel>Contractor</InputLabel>
             <Select label="Contractor" value={filters.contractor} onChange={setFilter('contractor')}>
@@ -759,21 +981,30 @@ export default function MainCostReport({ project }) {
           <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
             Filtered: {plural(f.contracts, 'contract')} · {plural(f.checkRequests, 'check request')} · {plural(f.ipcs, 'IPC')}
             {' · '}Billed {fmt(f.billed)} · Approved {fmt(f.approved)} · Paid {fmt(f.paid)} · Outstanding {fmt(f.outstanding)}
-            {narrowed && view === 'sub' && ' · Budget and variance are hidden because they belong to the whole sub project.'}
-            {' '}The boxes above are always for the whole project.
+            {narrowed && ['sub', 'type', 'sector'].includes(view) && ' · Budget and variance are hidden because they belong to the whole sub project.'}
+            {' '}The boxes above are always for the whole {isSub ? 'sub project' : 'project'}.
           </Typography>
         )}
       </Paper>
 
       <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mb: 1 }}>
-        {view === 'pipeline'
+        {view === 'lines'
+          ? 'Budget per BOQ line and per slab, with what has been contracted, verified, billed and approved against it.'
+          : view === 'pipeline'
           ? 'Each box is a stage. Click one to list the contracts with work at that stage.'
           : view === 'contract'
             ? 'Click a contract to open it in its sub project.'
+            : view === 'type' || view === 'sector'
+              ? 'Click a row to see its sub projects. Click a sub project to see its contracts.'
             : 'Click a row to see its sublet contracts. Click a contract to open it in its sub project.'}
       </Typography>
 
+      {view === 'lines' && (lineData
+        ? <SubCostLines data={lineData} query={query} type={filters.type} contractor={filters.contractor === 'all' ? null : contractorOptions.find(([k]) => k === filters.contractor)?.[1]} />
+        : <Skeleton height={200} />)}
       {view === 'sub' && <BySubProject groups={subGroups} narrowed={narrowed} onOpen={openRow} />}
+      {view === 'type' && <ByCategory groups={typeGroups} heading="Project Type" emptyText="No project types match." onPickSub={pickSub} />}
+      {view === 'sector' && <ByCategory groups={sectorGroups} heading="Sector" emptyText="No sectors match." onPickSub={pickSub} />}
       {view === 'contractor' && <ByContractor groups={contractorGroups} onOpen={openRow} />}
       {view === 'contract' && <ByContract rows={contractRows} onOpen={openRow} />}
       {view === 'pipeline' && <Pipeline stages={stages} onOpen={openRow} />}

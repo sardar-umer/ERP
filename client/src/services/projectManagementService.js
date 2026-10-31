@@ -53,6 +53,9 @@ export const getProjectTree = (id) =>
 export const getProjectCostAnalysis = (id) =>
   api.get(`${BASE}/projects/${id}/cost-analysis`);
 
+export const getProjectCostReport = (id) =>
+  api.get(`${BASE}/projects/${id}/cost-report`);
+
 // ─── Milestones ───────────────────────────────────────────────────────────────
 export const addMilestone = (projectId, data) =>
   api.post(`${BASE}/projects/${projectId}/milestones`, data);
