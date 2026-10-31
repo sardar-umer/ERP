@@ -37,6 +37,57 @@ const documentSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now }
 }, { _id: true });
 
+/** One person in a Main Project budget's approval chain, signed with their profile signature when they act */
+const budgetApproverSchema = new mongoose.Schema({
+  role: { type: String, trim: true, default: '' }, // shown on the document, e.g. "Chief Operating Officer"
+  user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+  name: { type: String, trim: true, default: '' },
+  designation: { type: String, trim: true, default: '' },
+  status: { type: String, enum: ['Pending', 'Approved', 'Rejected'], default: 'Pending' },
+  remarks: { type: String, trim: true, default: '' },
+  signature: { type: String, trim: true, default: '' },
+  actedAt: { type: Date },
+  /** Amounts this approver cut or added before approving */
+  changes: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, from: Number, to: Number }]
+}, { _id: true });
+
+/**
+ * Budget request of a Main Project: what the money is for, its split per Sub Project and who approves it
+ * (one after another). Once the last approver signs, each line becomes that Sub Project's budget.
+ */
+const budgetRequestSchema = new mongoose.Schema({
+  purpose: { type: String, trim: true, default: '' },
+  notes: { type: String, trim: true, default: '' },
+  lines: [{
+    _id: false,
+    subProject: { type: mongoose.Schema.Types.ObjectId, ref: 'ConstructionProject', required: true },
+    name: { type: String, trim: true, default: '' },
+    scope: { type: String, trim: true, default: '' },
+    amount: { type: Number, default: 0, min: 0 }
+  }],
+  approvers: { type: [budgetApproverSchema], default: [] },
+  /** Amounts as the project team sent them, before any approver changed them */
+  submittedLines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, amount: Number }],
+  currentStep: { type: Number, default: -1 }, // index of the approver whose turn it is; -1 when not in approval
+  revision: { type: Number, default: 0 },
+  preparedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  preparedByName: { type: String, trim: true, default: '' },
+  submittedAt: { type: Date },
+  returned: {
+    name: { type: String, trim: true, default: '' },
+    role: { type: String, trim: true, default: '' },
+    remarks: { type: String, trim: true, default: '' },
+    at: { type: Date }
+  },
+  history: [{
+    _id: false,
+    action: { type: String, trim: true },
+    name: { type: String, trim: true, default: '' },
+    remarks: { type: String, trim: true, default: '' },
+    at: { type: Date, default: Date.now }
+  }]
+}, { _id: false });
+
 const constructionProjectSchema = new mongoose.Schema({
   projectNumber: {
     type: String,
@@ -67,6 +118,12 @@ const constructionProjectSchema = new mongoose.Schema({
     enum: ['Draft', 'Planning', 'Active', 'On Hold', 'Completed', 'Cancelled'],
     default: 'Draft'
   },
+  /**
+   * How the work is contracted: BOQ-wise (quantities × rates) or Slab-wise (stage payments).
+   * Chosen on the Main Project and copied to every Sub Project (like projectType);
+   * every sublet contract under it must be of this kind. null = legacy project, either kind allowed.
+   */
+  contractBasis: { type: String, enum: ['BOQ', 'Slab', null], default: null },
 
   // Project Hierarchy
   isMasterProject: {
@@ -99,6 +156,8 @@ const constructionProjectSchema = new mongoose.Schema({
 
   // Team
   projectManager: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+  /** Project Manager on site, picked from HR employees (most managers have no ERP login) */
+  projectManagerEmployee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', default: null },
 
   // Timeline
   startDate: { type: Date },
@@ -125,6 +184,29 @@ const constructionProjectSchema = new mongoose.Schema({
     default: 'Draft'
   },
   budgetSubmittedAt: { type: Date },
+  /** Main Project only: the detailed budget request and its approval chain */
+  budgetRequest: { type: budgetRequestSchema, default: undefined },
+  /**
+   * Main Project only: the budget currently in force — a copy of the request as it was finally approved.
+   * A later revision is prepared and approved in budgetRequest while this one stays in force.
+   */
+  approvedBudget: {
+    type: new mongoose.Schema({
+      amount: { type: Number, default: 0 },
+      revision: { type: Number, default: 0 },
+      approvedAt: { type: Date },
+      submittedAt: { type: Date },
+      purpose: { type: String, default: '' },
+      notes: { type: String, default: '' },
+      preparedByName: { type: String, default: '' },
+      lines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, scope: String, amount: Number, requested: Number }],
+      approvers: [{
+        _id: false, role: String, user: mongoose.Schema.Types.ObjectId, name: String, designation: String, status: String, remarks: String, signature: String, actedAt: Date,
+        changes: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, from: Number, to: Number }]
+      }]
+    }, { _id: false }),
+    default: undefined
+  },
   budgetApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
   budgetApprovedAt: { type: Date },
   budgetNotes: { type: String, trim: true },

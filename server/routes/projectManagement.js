@@ -20,6 +20,8 @@ const NotificationService = require('../services/notificationService');
 const WbsActivity = require('../models/projectManagement/WbsActivity');
 const { WBS_PROJECT_TYPES, normalizeProjectType } = require('../models/projectManagement/WbsActivity');
 const SlabSchedule = require('../models/projectManagement/SlabSchedule');
+const Employee = require('../models/hr/Employee');
+require('../models/hr/Designation');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 const { syncProjectMetrics } = require('../services/projectMetricsService');
@@ -70,6 +72,31 @@ const withInspectionUpload = (req, res, next) => inspectionUpload(req, res, (err
   const message = err.code === 'LIMIT_FILE_SIZE' ? 'Each video must be under 200 MB' : err.message;
   return res.status(400).json({ success: false, message });
 });
+
+// Check request supporting documents: photos, PDFs and office files
+const CR_ATTACHMENT_PREFIX = '/uploads/project-management/check-requests/';
+const crAttachmentDir = path.join(uploadDir, 'check-requests');
+if (!fs.existsSync(crAttachmentDir)) fs.mkdirSync(crAttachmentDir, { recursive: true });
+const CR_ATTACHMENT_TYPES = /^(image\/|application\/pdf$|application\/msword$|application\/vnd\.openxmlformats-officedocument\.|application\/vnd\.ms-excel$|text\/csv$)/;
+const crAttachmentUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => cb(null, crAttachmentDir),
+    filename: (req, file, cb) => cb(null, `${Date.now()}-${Math.random().toString(36).slice(2)}${path.extname(file.originalname)}`)
+  }),
+  limits: { fileSize: 20 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    const ok = CR_ATTACHMENT_TYPES.test(file.mimetype);
+    if (!ok) (req.rejectedFiles = req.rejectedFiles || []).push(file.originalname);
+    cb(null, ok);
+  }
+}).array('files', 10);
+
+/** Attachments sent with a check request: only files uploaded through the check request upload */
+const cleanCrAttachments = (list) => (Array.isArray(list) ? list : [])
+  .filter((a) => a && typeof a.url === 'string' && a.url.startsWith(CR_ATTACHMENT_PREFIX) && !a.url.includes('..'))
+  .slice(0, 20)
+  .map((a) => ({ url: a.url, originalName: String(a.originalName || '').slice(0, 200), mimeType: String(a.mimeType || ''), size: Number(a.size) || 0, uploadedAt: a.uploadedAt || new Date() }));
+const CR_ATTACHMENT_REQUIRED = 'Attach at least one supporting document (measurement sheet, photos or the contractor’s bill)';
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 const isValidId = (id) => mongoose.Types.ObjectId.isValid(id);
@@ -129,7 +156,27 @@ const syncProjectBOQBudget = async (projectId) => {
   await ConstructionProject.findByIdAndUpdate(projectId, { $set: update }, { new: true });
 };
 
-/** Build Main ↔ Sub monetary allocation summary */
+/** Amount of the Main Project budget currently in force (the last fully approved version) */
+const approvedBudgetAmount = (main) => {
+  if (main?.approvedBudget?.amount > 0) return Number(main.approvedBudget.amount);
+  return main?.budgetStatus === 'Approved' ? Number(main.lumpSumBudget) || 0 : 0;
+};
+
+/** Sum of sublet contract values per Sub Project (Draft, Active and Completed all hold budget) */
+const committedBySub = async (subIds, excludeContractId = null) => {
+  const match = { project: { $in: subIds }, status: { $ne: 'Cancelled' } };
+  if (excludeContractId) match._id = { $ne: new mongoose.Types.ObjectId(String(excludeContractId)) };
+  const rows = await SubletContract.aggregate([
+    { $match: match },
+    { $group: { _id: '$project', amount: { $sum: { $ifNull: ['$totalAmount', 0] } }, contracts: { $sum: 1 } } }
+  ]);
+  return new Map(rows.map((r) => [String(r._id), { amount: Math.round(r.amount * 100) / 100, contracts: r.contracts }]));
+};
+
+/**
+ * Main ↔ Sub budget: the Main Project's CEO-approved budget, what has been distributed to each Sub Project,
+ * and how much of each Sub's share is already committed to sublet contracts.
+ */
 const buildBudgetAllocationSummary = async (mainProject) => {
   const lumpSumBudget = Number(mainProject.lumpSumBudget) || 0;
   const subs = await ConstructionProject.find({
@@ -139,31 +186,102 @@ const buildBudgetAllocationSummary = async (mainProject) => {
     .select('name projectNumber sector projectType allocatedBudget totalEstimatedCost totalApprovedBudget budgetStatus status')
     .sort({ name: 1 })
     .lean();
+  const committed = await committedBySub(subs.map((s) => s._id));
 
   const totalAllocated = subs.reduce((s, c) => s + (Number(c.allocatedBudget) || 0), 0);
   const remaining = Math.max(0, lumpSumBudget - totalAllocated);
+  const approver = mainProject.budgetApprovedBy && isValidId(mainProject.budgetApprovedBy._id || mainProject.budgetApprovedBy)
+    ? await User.findById(mainProject.budgetApprovedBy._id || mainProject.budgetApprovedBy).select('firstName lastName').lean()
+    : null;
 
   return {
     lumpSumBudget,
     totalAllocated,
     remaining,
+    totalCommitted: Math.round([...committed.values()].reduce((t, c) => t + c.amount, 0) * 100) / 100,
     budgetStatus: mainProject.budgetStatus,
-    subProjects: subs.map((s) => ({
-      _id: s._id,
-      name: s.name,
-      projectNumber: s.projectNumber,
-      sector: s.sector,
-      projectType: s.projectType,
-      allocatedBudget: Number(s.allocatedBudget) || 0,
-      totalEstimatedCost: Number(s.totalEstimatedCost) || 0,
-      totalApprovedBudget: Number(s.totalApprovedBudget) || 0,
-      budgetStatus: s.budgetStatus,
-      status: s.status
-    }))
+    // A revision can be in approval while the last approved budget stays in force
+    inForce: approvedBudgetAmount(mainProject) > 0,
+    approvedAmount: approvedBudgetAmount(mainProject),
+    budgetSubmittedAt: mainProject.budgetSubmittedAt || null,
+    budgetApprovedAt: mainProject.budgetApprovedAt || null,
+    budgetApprovedBy: approver ? `${approver.firstName || ''} ${approver.lastName || ''}`.trim() : null,
+    budgetNotes: mainProject.budgetNotes || '',
+    subProjects: subs.map((s) => {
+      const c = committed.get(String(s._id)) || { amount: 0, contracts: 0 };
+      const allocated = Number(s.allocatedBudget) || 0;
+      return {
+        _id: s._id,
+        name: s.name,
+        projectNumber: s.projectNumber,
+        sector: s.sector,
+        projectType: s.projectType,
+        allocatedBudget: allocated,
+        committed: c.amount,
+        contracts: c.contracts,
+        available: Math.round((allocated - c.amount) * 100) / 100,
+        totalEstimatedCost: Number(s.totalEstimatedCost) || 0,
+        totalApprovedBudget: Number(s.totalApprovedBudget) || 0,
+        budgetStatus: s.budgetStatus,
+        status: s.status
+      };
+    })
   };
 };
 
+const fmtPkr = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-PK')}`;
+
+/**
+ * Budget gate for sublet contracts: the Main Project's budget must be fully approved (COO → AVP → CEO), the Sub Project must have
+ * budget distributed to it, and all its contracts together must fit inside that budget. Returns an error message or null.
+ */
+const checkContractBudget = async (subProjectId, amount, excludeContractId = null) => {
+  const sub = await ConstructionProject.findById(subProjectId).select('name parentProject allocatedBudget').lean();
+  if (!sub?.parentProject) return null;
+  const main = await ConstructionProject.findById(sub.parentProject).select('name lumpSumBudget budgetStatus approvedBudget.amount').lean();
+  if (!main) return null;
+  if (approvedBudgetAmount(main) <= 0) {
+    return `${main.name}'s budget is ${main.budgetStatus === 'Submitted' ? 'still in approval' : 'not approved yet'} — contracts can be made once it is approved`;
+  }
+  const allocated = Number(sub.allocatedBudget) || 0;
+  if (allocated <= 0) return `${sub.name} is not in ${main.name}'s approved budget yet — add it to the budget (revise it) and get the revision approved`;
+  const used = (await committedBySub([sub._id], excludeContractId)).get(String(sub._id))?.amount || 0;
+  const value = Number(amount) || 0;
+  if (used + value > allocated + 0.5) {
+    return `${sub.name} has ${fmtPkr(Math.max(0, allocated - used))} of its ${fmtPkr(allocated)} budget left — this contract is ${fmtPkr(value)}. Ask for more budget to be distributed to it`;
+  }
+  return null;
+};
+
 // ─── PROJECTS ────────────────────────────────────────────────────────────────
+
+/** Name new Sub Projects are given as Project Manager unless someone else is picked */
+const DEFAULT_PROJECT_MANAGER = process.env.PM_DEFAULT_PROJECT_MANAGER || 'Zia Ullah Khan';
+const employeeOption = (e) => ({
+  _id: e._id,
+  name: `${e.firstName || ''} ${e.lastName || ''}`.trim(),
+  employeeId: e.employeeId || '',
+  designation: e.placementDesignation?.title || ''
+});
+const escapeRegex = (v) => String(v).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+
+// GET /api/project-management/employee-options?q= — active employees to pick as Project Manager (+ the default one)
+router.get('/employee-options', asyncHandler(async (req, res) => {
+  const active = { isActive: { $ne: false }, employmentStatus: { $in: ['Active', 'Reinstated'] } };
+  const q = String(req.query.q || '').trim();
+  const filter = { ...active };
+  if (q) {
+    const parts = q.split(/\s+/).map((p) => new RegExp(escapeRegex(p), 'i'));
+    filter.$and = parts.map((re) => ({ $or: [{ firstName: re }, { lastName: re }, { employeeId: re }] }));
+  }
+  const [options, defaults] = await Promise.all([
+    Employee.find(filter).select('firstName lastName employeeId placementDesignation').populate('placementDesignation', 'title')
+      .sort({ firstName: 1, lastName: 1 }).limit(25).lean(),
+    q ? [] : Employee.find(active).select('firstName lastName employeeId placementDesignation').populate('placementDesignation', 'title').lean()
+      .then((list) => list.filter((e) => `${e.firstName || ''} ${e.lastName || ''}`.trim().toLowerCase() === DEFAULT_PROJECT_MANAGER.toLowerCase()))
+  ]);
+  res.json({ success: true, data: { options: options.map(employeeOption), defaultManager: defaults[0] ? employeeOption(defaults[0]) : null } });
+}));
 
 // GET /api/project-management/projects — list with filters + pagination
 router.get('/projects', asyncHandler(async (req, res) => {
@@ -180,6 +298,7 @@ router.get('/projects', asyncHandler(async (req, res) => {
   const [projects, total] = await Promise.all([
     ConstructionProject.find(filter)
       .populate('projectManager', 'firstName lastName email')
+      .populate('projectManagerEmployee', 'firstName lastName employeeId')
       .populate('budgetApprovedBy', 'firstName lastName')
       .populate('parentProject', 'name projectNumber isMasterProject projectType status')
       .sort({ createdAt: -1 })
@@ -242,8 +361,25 @@ router.get('/projects/statistics', asyncHandler(async (req, res) => {
   });
 }));
 
+/** Project types a Main Project can be created with (legacy values stay valid on old records) */
+const MAIN_PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
+const CONTRACT_BASES = ['BOQ', 'Slab'];
+const contractBasisLabel = (b) => (b === 'Slab' ? 'Slab-wise' : 'BOQ-wise');
+
 /** IPC approval stages still waiting on someone */
 const PENDING_IPC_STAGES = ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO'];
+
+// Dates on the portfolio are judged in Pakistan time (UTC+5, no DST)
+const PK_TZ = 'Asia/Karachi';
+const PK_OFFSET_MS = 5 * 3600 * 1000;
+/** End of the Pakistan calendar day that `date` falls on */
+const pkEndOfDay = (date) => {
+  const pk = new Date(new Date(date).getTime() + PK_OFFSET_MS);
+  return new Date(Date.UTC(pk.getUTCFullYear(), pk.getUTCMonth(), pk.getUTCDate() + 1) - PK_OFFSET_MS - 1);
+};
+const DAY_MS = 24 * 3600 * 1000;
+const daysSince = (date, now) => (date ? Math.max(0, Math.floor((now - new Date(date)) / DAY_MS)) : null);
+const HEALTH_RANK = { 'On Track': 0, 'Needs Attention': 1, 'Behind Schedule': 2, 'Over Budget': 3 };
 
 /**
  * Portfolio dashboard for management: every non-cancelled Main Project with its money flow
@@ -252,28 +388,41 @@ const PENDING_IPC_STAGES = ['Pending Audit', 'Forwarded to Audit Director', 'Sen
  */
 router.get('/portfolio', asyncHandler(async (req, res) => {
   const mains = await ConstructionProject.find({ parentProject: null, status: { $ne: 'Cancelled' } })
-    .select('name projectNumber projectType status society sector address clientName startDate expectedEndDate actualEndDate lumpSumBudget overallProgress projectManager createdAt')
+    .select('name projectNumber projectType contractBasis status society sector address clientName startDate expectedEndDate actualEndDate lumpSumBudget budgetStatus budgetSubmittedAt approvedBudget.amount budgetRequest.revision budgetRequest.approvers.name budgetRequest.approvers.role budgetRequest.currentStep overallProgress projectManager createdAt')
     .populate('projectManager', 'firstName lastName')
     .sort({ createdAt: -1 }).lean();
   const mainIds = mains.map((m) => m._id);
   const subs = await ConstructionProject.find({ parentProject: { $in: mainIds }, status: { $ne: 'Cancelled' } })
-    .select('name parentProject status overallProgress').lean();
+    .select('name parentProject status overallProgress allocatedBudget').lean();
   const subIds = subs.map((s) => s._id);
   const mainOfSub = new Map(subs.map((s) => [String(s._id), String(s.parentProject)]));
   const mainOf = (projectId) => mainOfSub.get(String(projectId)) || String(projectId);
 
-  const since = new Date(); since.setDate(1); since.setHours(0, 0, 0, 0); since.setMonth(since.getMonth() - 11);
-  const [reports, contracts, pendingIpcs, monthly, inspections] = await Promise.all([
+  // First day of the month 11 months back, in Pakistan time
+  const pkNow = new Date(Date.now() + PK_OFFSET_MS);
+  const sinceY = pkNow.getUTCFullYear();
+  const sinceM = pkNow.getUTCMonth() - 11;
+  const since = new Date(Date.UTC(sinceY, sinceM, 1) - PK_OFFSET_MS);
+  const [reports, contracts, openIpcs, monthly, inspections, clientInvoices] = await Promise.all([
     Promise.all(subs.map((s) => buildSubCostReport(s._id))),
     SubletContract.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } }).select('project contractor status').lean(),
-    ProjectInvoice.find({ project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' }, approvalStatus: { $in: PENDING_IPC_STAGES } })
-      .select('project approvalStatus netPayableAmount grossAmount').lean(),
+    // Pending, plus Draft (not submitted yet) and Rejected (sent back), so every certified rupee is accounted for
+    ProjectInvoice.find({ project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' }, approvalStatus: { $in: [...PENDING_IPC_STAGES, 'Draft', 'Rejected'] } })
+      .select('project approvalStatus netPayableAmount grossAmount submittedAt createdAt').lean(),
     ProjectInvoice.aggregate([
       { $match: { project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', ipcKind: { $nin: NON_WORK_IPC_KINDS }, status: { $ne: 'Cancelled' }, issueDate: { $gte: since } } },
-      { $group: { _id: { p: '$project', y: { $year: '$issueDate' }, m: { $month: '$issueDate' } }, amount: { $sum: { $ifNull: ['$grossAmount', 0] } } } }
+      {
+        $group: {
+          _id: { p: '$project', y: { $year: { date: '$issueDate', timezone: PK_TZ } }, m: { $month: { date: '$issueDate', timezone: PK_TZ } } },
+          amount: { $sum: { $ifNull: ['$grossAmount', 0] } }
+        }
+      }
     ]),
     InspectionReport.find({ project: { $in: subIds }, 'inspectors.attachments.0': { $exists: true } })
-      .select('project inspectionDate inspectors').sort({ inspectionDate: -1 }).limit(200).lean()
+      .select('project inspectionDate inspectors').sort({ inspectionDate: -1 }).limit(200).lean(),
+    // Revenue side: invoices raised to the client, on the Main Project or any of its Sub Projects
+    ProjectInvoice.find({ project: { $in: [...mainIds, ...subIds] }, invoiceType: 'Client_Invoice', status: { $ne: 'Cancelled' } })
+      .select('project invoiceAmount grossAmount paidAmount').lean()
   ]);
 
   const coverByMain = new Map();
@@ -284,34 +433,90 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
     if (img) coverByMain.set(key, img.url);
   });
 
+  const pendingIpcs = openIpcs.filter((i) => PENDING_IPC_STAGES.includes(i.approvalStatus));
   const now = new Date();
+  const waitingDays = (i) => daysSince(i.submittedAt || i.createdAt, now);
   const projects = mains.map((m) => {
     const id = String(m._id);
     const mySubs = subs.filter((s) => String(s.parentProject) === id);
-    const mySummaries = mySubs.map((s) => reports[subs.indexOf(s)].summary);
+    const myReports = mySubs.map((s) => reports[subs.indexOf(s)]);
+    const mySummaries = myReports.map((r) => r.summary);
+    // Slab-wise progress (stages claimed / billed) and BOQ-wise coverage (lines contracted)
+    const slabRows = myReports.flatMap((r) => r.slabContracts.flatMap((c) => c.slabs));
+    const boqLines = myReports.flatMap((r) => r.lines);
+    const slabs = {
+      total: slabRows.length,
+      verified: slabRows.filter((x) => x.verified > 0).length,
+      billed: slabRows.filter((x) => x.billed > 0).length,
+      approved: slabRows.filter((x) => x.approved > 0).length,
+      value: round2(slabRows.reduce((t, x) => t + (Number(x.amount) || 0), 0))
+    };
+    const lines = {
+      total: boqLines.length,
+      contracted: boqLines.filter((l) => l.contracted > 0).length,
+      billed: boqLines.filter((l) => l.billed > 0).length
+    };
     const sum = (f) => round2(mySummaries.reduce((t, r) => t + (Number(r[f]) || 0), 0));
-    const budget = sum('budget');
+    // Budget = the Main Project budget the CEO approved; the BOQ total is kept as the estimate
+    const boqEstimate = sum('budget');
+    const budgetStatus = m.budgetStatus || 'Draft';
+    const budget = approvedBudgetAmount(m);
+    const revisionPending = budget > 0 && budgetStatus === 'Submitted';
+    const distributed = round2(mySubs.reduce((t, x) => t + (Number(x.allocatedBudget) || 0), 0));
     const spent = sum('billed');
     const progress = Number(m.overallProgress) || 0;
     const myContracts = contracts.filter((c) => mainOf(c.project) === id);
     const myPending = pendingIpcs.filter((i) => mainOf(i.project) === id);
-    const overdue = Boolean(m.expectedEndDate && new Date(m.expectedEndDate) < now && m.status !== 'Completed');
+    const contracted = sum('contracted');
+    const linesOverBudget = sum('linesOverBudget');
+    const completed = m.status === 'Completed';
+    const started = !['Draft', 'Planning'].includes(m.status);
+    // A project is overdue only once its whole end date (Pakistan time) has passed
+    const overdue = Boolean(m.expectedEndDate && !completed && now > pkEndOfDay(m.expectedEndDate));
+    const daysOverdue = overdue ? Math.max(1, Math.ceil((now - pkEndOfDay(m.expectedEndDate)) / DAY_MS)) : 0;
     // Planned progress from the timeline, so a project can be flagged as behind schedule
     let plannedProgress = null;
     if (m.startDate && m.expectedEndDate) {
-      const span = new Date(m.expectedEndDate) - new Date(m.startDate);
+      const span = pkEndOfDay(m.expectedEndDate) - new Date(m.startDate);
       if (span > 0) plannedProgress = Math.max(0, Math.min(100, Math.round(((now - new Date(m.startDate)) / span) * 100)));
     }
-    let health = 'On Track';
-    if (budget > 0 && spent > budget) health = 'Over Budget';
-    else if (overdue || (plannedProgress !== null && m.status === 'Active' && plannedProgress - progress > 25)) health = 'Behind Schedule';
-    else if (sum('linesOverBudget') > 0) health = 'Needs Attention';
+
+    // Every reason the project is not simply "on track", worst first, so management sees why
+    const reasons = [];
+    const flag = (level, text) => reasons.push({ level, text });
+    if (budget > 0 && spent > budget) flag('Over Budget', `Certified work is ${round2(spent - budget).toLocaleString('en-PK')} above the approved budget`);
+    if (!completed) {
+      if (budget <= 0 && budgetStatus === 'Submitted') {
+        const wait = daysSince(m.budgetSubmittedAt, now);
+        const withWhom = m.budgetRequest?.approvers?.[m.budgetRequest.currentStep];
+        flag('Needs Attention', `Budget waiting for approval${withWhom ? ` by ${withWhom.name} (${withWhom.role})` : ''}${wait ? ` for ${wait} day${wait === 1 ? '' : 's'}` : ''} — no new contracts until approved`);
+      } else if (budget <= 0) {
+        flag('Needs Attention', m.budgetRequest?.approvers?.length ? 'Budget not sent for approval yet — no new contracts until approved' : 'No budget prepared yet — no contracts can be made until one is approved');
+      } else if (mySubs.length && mySubs.some((x) => !(Number(x.allocatedBudget) > 0) && x.status !== 'Completed')) {
+        const n = mySubs.filter((x) => !(Number(x.allocatedBudget) > 0) && x.status !== 'Completed').length;
+        flag('Needs Attention', `${n} sub project${n === 1 ? ' is' : 's are'} not in the approved budget — ${revisionPending ? 'a budget revision is in approval' : 'add them with a budget revision'}; no contracts until then`);
+      }
+    }
+    if (!completed && progress >= 100) flag('Needs Attention', 'Work is 100% done but the project is not marked Completed');
+    else if (overdue && !started) flag('Behind Schedule', `Still ${m.status} ${daysOverdue} day${daysOverdue === 1 ? '' : 's'} after its planned end date`);
+    else if (overdue) flag('Behind Schedule', `${daysOverdue} day${daysOverdue === 1 ? '' : 's'} past its end date at ${progress}% done`);
+    else if (!started && m.startDate && now > new Date(m.startDate)) flag('Needs Attention', `Start date has passed but the project is still ${m.status}`);
+    else if (started && plannedProgress !== null && plannedProgress - progress > 25) flag('Behind Schedule', `${progress}% done while ${plannedProgress}% of the planned time has passed`);
+    if (budget > 0 && contracted > budget) flag('Needs Attention', `Contracts are ${round2(contracted - budget).toLocaleString('en-PK')} above the approved budget`);
+    if (m.contractBasis !== 'Slab' && linesOverBudget > 0) flag('Needs Attention', `${linesOverBudget} BOQ line${linesOverBudget === 1 ? '' : 's'} over the BOQ estimate or quantity`);
+    if (!m.startDate || !m.expectedEndDate) flag('Needs Attention', 'Start or end date missing, so schedule cannot be tracked');
+    reasons.sort((a, b) => HEALTH_RANK[b.level] - HEALTH_RANK[a.level]);
+    const health = reasons[0]?.level || 'On Track';
+    const myClient = clientInvoices.filter((i) => mainOf(i.project) === id);
     const earnedValue = round2((budget * progress) / 100);
     return {
       _id: m._id,
       name: m.name,
       projectNumber: m.projectNumber,
       projectType: m.projectType,
+      contractBasis: m.contractBasis || null,
+      slabs,
+      lines,
       status: m.status,
       location: [m.society, m.sector].filter(Boolean).join(', '),
       clientName: m.clientName || '',
@@ -323,17 +528,25 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
       progress,
       plannedProgress,
       overdue,
+      daysOverdue,
       health,
+      healthReasons: reasons.map((r) => r.text),
       lumpSumBudget: Number(m.lumpSumBudget) || 0,
+      budgetStatus,
       budget,
-      contracted: sum('contracted'),
+      revisionPending,
+      boqEstimate,
+      distributed,
+      contracted,
       verified: sum('verified'),
       spent,
       approved: sum('approved'),
       paid: sum('paid'),
       retentionHeld: sum('retentionHeld'),
       advanceOutstanding: sum('advanceOutstanding'),
-      linesOverBudget: sum('linesOverBudget'),
+      linesOverBudget,
+      clientBilled: round2(myClient.reduce((t, i) => t + (Number(i.invoiceAmount) || Number(i.grossAmount) || 0), 0)),
+      clientReceived: round2(myClient.reduce((t, i) => t + (Number(i.paidAmount) || 0), 0)),
       variance: round2(spent - budget),
       cpi: spent > 0 && budget > 0 ? Math.round((earnedValue / spent) * 100) / 100 : null,
       subProjects: mySubs.length,
@@ -341,7 +554,8 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
       contracts: myContracts.length,
       contractors: new Set(myContracts.map((c) => String(c.contractor)).filter(Boolean)).size,
       pendingApprovals: myPending.length,
-      pendingAmount: round2(myPending.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0))
+      pendingAmount: round2(myPending.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0)),
+      oldestPendingDays: myPending.length ? Math.max(...myPending.map(waitingDays)) : null
     };
   });
 
@@ -351,10 +565,15 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
     projects: projects.length,
     active: projects.filter((p) => p.status === 'Active').length,
     completed: projects.filter((p) => p.status === 'Completed').length,
+    boqWise: projects.filter((p) => p.contractBasis === 'BOQ').length,
+    slabWise: projects.filter((p) => p.contractBasis === 'Slab').length,
     subProjects: total('subProjects'),
     contractors: new Set(contracts.map((c) => String(c.contractor)).filter(Boolean)).size,
     lumpSumBudget: total('lumpSumBudget'),
     budget,
+    boqEstimate: total('boqEstimate'),
+    distributed: total('distributed'),
+    budgetsPending: projects.filter((p) => !(p.budget > 0) && p.status !== 'Completed').length,
     contracted: total('contracted'),
     verified: total('verified'),
     spent: total('spent'),
@@ -363,6 +582,8 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
     retentionHeld: total('retentionHeld'),
     pendingApprovals: total('pendingApprovals'),
     pendingAmount: total('pendingAmount'),
+    clientBilled: total('clientBilled'),
+    clientReceived: total('clientReceived'),
     // Budget-weighted progress, so big projects count for more
     progress: budget > 0
       ? Math.round(projects.reduce((t, p) => t + p.progress * p.budget, 0) / budget)
@@ -373,23 +594,35 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
 
   const approvalStages = PENDING_IPC_STAGES.map((stage) => {
     const list = pendingIpcs.filter((i) => i.approvalStatus === stage);
-    return { stage, count: list.length, amount: round2(list.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0)) };
+    return {
+      stage,
+      count: list.length,
+      amount: round2(list.reduce((t, i) => t + (Number(i.netPayableAmount) || Number(i.grossAmount) || 0), 0)),
+      oldestDays: list.length ? Math.max(...list.map(waitingDays)) : null
+    };
   });
+  const outside = (status) => {
+    const list = openIpcs.filter((i) => i.approvalStatus === status);
+    return { count: list.length, amount: round2(list.reduce((t, i) => t + (Number(i.grossAmount) || 0), 0)) };
+  };
+  const ipcNotInChain = { draft: outside('Draft'), rejected: outside('Rejected') };
 
   // Certified work billed per month, one key per Main Project id
+  // Pakistan calendar months, oldest first
   const monthlySpend = Array.from({ length: 12 }, (_, i) => {
-    const d = new Date(since.getFullYear(), since.getMonth() + i, 1);
-    return { month: d.toLocaleString('en-US', { month: 'short', year: '2-digit' }), total: 0 };
+    const d = new Date(Date.UTC(sinceY, sinceM + i, 1));
+    return { month: d.toLocaleString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }), total: 0 };
   });
+  const firstMonth = new Date(Date.UTC(sinceY, sinceM, 1));
   monthly.forEach((r) => {
-    const idx = (r._id.y - since.getFullYear()) * 12 + (r._id.m - 1 - since.getMonth());
+    const idx = (r._id.y - firstMonth.getUTCFullYear()) * 12 + (r._id.m - 1 - firstMonth.getUTCMonth());
     if (idx < 0 || idx > 11) return;
     const key = mainOf(r._id.p);
     monthlySpend[idx][key] = round2((monthlySpend[idx][key] || 0) + r.amount);
     monthlySpend[idx].total = round2(monthlySpend[idx].total + r.amount);
   });
 
-  res.json({ success: true, data: { totals, projects, approvalStages, monthlySpend } });
+  res.json({ success: true, data: { totals, projects, approvalStages, ipcNotInChain, monthlySpend } });
 }));
 
 // ─── COST REPORT (budget vs actual) ──────────────────────────────────────────
@@ -815,7 +1048,7 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
       .select('project checkRequestNumber title contractor claimType subletContract slab status claimedTotal verifiedTotal createdAt')
       .sort({ createdAt: 1 }).lean(),
     ProjectInvoice.find({ project: { $in: subIds }, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
-      .select('project invoiceNumber ipcNumber ipcKind checkRequest subletContract grossAmount netPayableAmount paidAmount approvalStatus status issueDate')
+      .select('project invoiceNumber ipcNumber ipcKind checkRequest subletContract grossAmount netPayableAmount paidAmount approvalStatus status issueDate submittedAt createdAt')
       .sort({ issueDate: 1 }).lean(),
     InspectionReport.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
       .select('checkRequest reportNumber inspectionDate location remarks claimType items slab inspectedTotal inspectors.name inspectors.designation inspectors.status inspectors.observations inspectors.signature inspectors.attachments inspectors.actedAt status completedAt')
@@ -831,7 +1064,7 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
   const ipcView = (i) => ({
     _id: i._id, invoiceNumber: i.invoiceNumber, ipcNumber: i.ipcNumber, ipcKind: i.ipcKind,
     grossAmount: round2(i.grossAmount), netPayableAmount: round2(i.netPayableAmount), paidAmount: round2(i.paidAmount),
-    approvalStatus: i.approvalStatus, status: i.status, issueDate: i.issueDate
+    approvalStatus: i.approvalStatus, status: i.status, issueDate: i.issueDate, submittedAt: i.submittedAt || null
   });
   const ipcsByCr = new Map();
   ipcs.filter((i) => i.checkRequest).forEach((i) => {
@@ -1083,6 +1316,7 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
 
   const project = await ConstructionProject.findById(req.params.id)
     .populate('projectManager', 'firstName lastName email')
+    .populate({ path: 'projectManagerEmployee', select: 'firstName lastName employeeId placementDesignation', populate: { path: 'placementDesignation', select: 'title' } })
     .populate('budgetApprovedBy', 'firstName lastName')
     .populate('createdBy', 'firstName lastName')
     .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget society sector')
@@ -1104,126 +1338,22 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
 }));
 
 // PUT /api/project-management/projects/:id/lump-sum-budget — set Main lump-sum envelope
-router.put('/projects/:id/lump-sum-budget', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const project = await ConstructionProject.findById(req.params.id);
-  if (!project) return notFound(res, 'Project');
-  if (project.parentProject) {
-    return badRequest(res, 'Lump-sum budget can only be set on a Main Project');
-  }
-
-  const amount = Math.max(0, Number(req.body.lumpSumBudget) || 0);
-  const summary = await buildBudgetAllocationSummary(project);
-  if (amount < summary.totalAllocated) {
-    return badRequest(
-      res,
-      `Lump-sum budget (${amount}) cannot be less than already allocated to sub projects (${summary.totalAllocated})`
-    );
-  }
-
-  project.lumpSumBudget = amount;
-  project.updatedBy = req.user?._id;
-  // Changing the envelope returns budget to Draft so it can be re-submitted
-  if (project.budgetStatus === 'Approved' || project.budgetStatus === 'Submitted') {
-    project.budgetStatus = 'Draft';
-    project.budgetApprovedBy = null;
-    project.budgetApprovedAt = null;
-  }
-  await project.save();
-
-  const populated = await ConstructionProject.findById(project._id)
-    .populate('projectManager', 'firstName lastName email')
-    .lean();
-  populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
-
-  res.json({ success: true, message: 'Lump-sum budget updated', data: populated });
-}));
+router.put('/projects/:id/lump-sum-budget', asyncHandler(async (req, res) => (
+  // Retired: the total now comes from the budget request (sum of its sub project lines) and is approved there
+  badRequest(res, 'The budget is set through the budget request — its total is the sum of the sub project lines')
+)));
 
 // PUT /api/project-management/projects/:id/budget-allocations — allocate Main pool to Subs
-router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
-
-  const main = await ConstructionProject.findById(req.params.id);
-  if (!main) return notFound(res, 'Project');
-  if (main.parentProject) {
-    return badRequest(res, 'Budget allocation can only be done from a Main Project');
-  }
-
-  const lump = Number(main.lumpSumBudget) || 0;
-  if (lump <= 0) {
-    return badRequest(res, 'Set a lump-sum budget on the Main Project first');
-  }
-
-  let allocations = req.body.allocations;
-  // Allow single-item shorthand
-  if (!Array.isArray(allocations) && req.body.subProjectId !== undefined) {
-    allocations = [{ subProjectId: req.body.subProjectId, amount: req.body.amount }];
-  }
-  if (!Array.isArray(allocations) || !allocations.length) {
-    return badRequest(res, 'Provide allocations: [{ subProjectId, amount }]');
-  }
-
-  const subs = await ConstructionProject.find({
-    parentProject: main._id,
-    status: { $ne: 'Cancelled' }
-  });
-  const byId = new Map(subs.map((s) => [String(s._id), s]));
-
-  // Start from current allocations, then apply updates
-  const nextAmounts = new Map(subs.map((s) => [String(s._id), Number(s.allocatedBudget) || 0]));
-
-  for (const row of allocations) {
-    const sid = String(row.subProjectId || '');
-    if (!byId.has(sid)) {
-      return badRequest(res, `Sub project not found under this Main: ${row.subProjectId}`);
-    }
-    const amount = Math.max(0, Number(row.amount) || 0);
-    const sub = byId.get(sid);
-    const catEst = (sub.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
-    if (amount > 0 && catEst > amount) {
-      return badRequest(
-        res,
-        `${sub.name}: allocated amount (${amount}) cannot be less than category estimates (${catEst})`
-      );
-    }
-    nextAmounts.set(sid, amount);
-  }
-
-  const totalAllocated = [...nextAmounts.values()].reduce((s, v) => s + v, 0);
-  if (totalAllocated > lump) {
-    return badRequest(
-      res,
-      `Total allocation (${totalAllocated}) exceeds Main lump-sum budget (${lump}). Remaining would be negative.`
-    );
-  }
-
-  for (const [sid, amount] of nextAmounts.entries()) {
-    const sub = byId.get(sid);
-    if ((Number(sub.allocatedBudget) || 0) === amount) continue;
-    sub.allocatedBudget = amount;
-    sub.updatedBy = req.user?._id;
-    // If no category breakdown yet, keep totals aligned with allocation
-    const catEst = (sub.budgetCategories || []).reduce((s, c) => s + (c.estimatedAmount || 0), 0);
-    if (catEst === 0) {
-      // leave budgetStatus as-is; pre-save will set totalEstimatedCost from allocatedBudget
-    }
-    await sub.save();
-  }
-
-  const populated = await ConstructionProject.findById(main._id)
-    .populate('projectManager', 'firstName lastName email')
-    .lean();
-  populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
-
-  res.json({ success: true, message: 'Budget allocated to sub projects', data: populated });
-}));
+router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => (
+  // Retired: the split per Sub Project is approved with the budget request; revise the request to change it
+  badRequest(res, 'The split per sub project is approved with the budget — revise the budget request to change it')
+)));
 
 
 // POST /api/project-management/projects — create
 router.post('/projects', asyncHandler(async (req, res) => {
   const { name, projectType, description, society, sector, street, side, plotNumber, address,
-    clientName, clientContact, projectManager, startDate, expectedEndDate,
+    clientName, clientContact, projectManager, projectManagerEmployee, startDate, expectedEndDate,
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
   if (!name || !name.trim()) return badRequest(res, 'Project name is required');
@@ -1232,14 +1362,30 @@ router.post('/projects', asyncHandler(async (req, res) => {
     return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
   }
 
+  // Project type and contract basis are chosen on the Main Project; Sub Projects take them from it
+  let type = projectType;
+  let contractBasis = null;
+  if (!parentProject) {
+    if (!MAIN_PROJECT_TYPES.includes(projectType)) return badRequest(res, 'Select the Project Type');
+    if (!CONTRACT_BASES.includes(req.body.contractBasis)) return badRequest(res, 'Select whether this project is BOQ-wise or Slab-wise');
+    contractBasis = req.body.contractBasis;
+  } else {
+    if (!isValidId(parentProject)) return badRequest(res, 'Invalid Main Project');
+    const parent = await ConstructionProject.findById(parentProject).select('projectType contractBasis').lean();
+    if (!parent) return notFound(res, 'Main Project');
+    type = parent.projectType || projectType;
+    contractBasis = parent.contractBasis || null;
+  }
+
   const project = new ConstructionProject({
     name: name.trim(),
-    projectType, description, society, sector, plotNumber, address,
+    projectType: type, contractBasis, description, society, sector, plotNumber, address,
     street: street || '',
     side: ['Left', 'Right'].includes(side) ? side : '',
     clientName, clientContact, notes, tags,
     companyId: !parentProject && companyId && isValidId(companyId) ? companyId : null,
     projectManager: projectManager || null,
+    projectManagerEmployee: projectManagerEmployee && isValidId(projectManagerEmployee) ? projectManagerEmployee : null,
     startDate: startDate ? new Date(startDate) : undefined,
     expectedEndDate: expectedEndDate ? new Date(expectedEndDate) : undefined,
     budgetCategories: budgetCategories?.length ? budgetCategories : undefined,
@@ -1281,7 +1427,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     'plotNumber', 'street', 'side', 'address', 'clientName', 'clientContact', 'projectManager',
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
-    'parentProject', 'contractValue', 'companyId'
+    'parentProject', 'contractValue', 'companyId', 'contractBasis', 'projectManagerEmployee'
   ];
 
   const updates = {};
@@ -1290,16 +1436,55 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   updates.updatedBy = req.user?._id;
 
   // Convert empty string refs to null to avoid CastError
-  ['parentProject', 'linkedProperty', 'projectManager'].forEach(k => {
+  ['parentProject', 'linkedProperty', 'projectManager', 'projectManagerEmployee'].forEach(k => {
     if (updates[k] === '') {
       updates[k] = null;
     }
   });
 
   const oldProject = await ConstructionProject.findById(req.params.id)
-    .select('name parentProject overallProgress allocatedBudget companyId')
+    .select('name parentProject overallProgress allocatedBudget companyId projectType contractBasis status actualEndDate')
     .lean();
   if (!oldProject) return notFound(res, 'Project');
+
+  // Project type and contract basis live on the Main Project and flow down to its Sub Projects
+  const nextParent = updates.parentProject !== undefined ? updates.parentProject : oldProject.parentProject;
+  let cascade = null;
+  if (nextParent) {
+    delete updates.contractBasis;
+    if (updates.parentProject !== undefined && String(updates.parentProject || '') !== String(oldProject.parentProject || '')) {
+      // Moved under another Main Project: take that project's type and basis
+      const parent = await ConstructionProject.findById(nextParent).select('projectType contractBasis').lean();
+      if (!parent) return notFound(res, 'Main Project');
+      updates.projectType = parent.projectType;
+      updates.contractBasis = parent.contractBasis || null;
+    } else {
+      delete updates.projectType;
+    }
+  } else {
+    if (updates.projectType !== undefined && !MAIN_PROJECT_TYPES.includes(updates.projectType) && updates.projectType !== oldProject.projectType) {
+      return badRequest(res, 'Select a valid Project Type');
+    }
+    if (updates.contractBasis !== undefined && !CONTRACT_BASES.includes(updates.contractBasis)) {
+      return badRequest(res, 'Select whether this project is BOQ-wise or Slab-wise');
+    }
+    const basisChanged = updates.contractBasis !== undefined && updates.contractBasis !== oldProject.contractBasis;
+    const typeChanged = updates.projectType !== undefined && updates.projectType !== oldProject.projectType;
+    if (basisChanged || typeChanged) {
+      const subIds = (await ConstructionProject.find({ parentProject: oldProject._id }).select('_id').lean()).map((s) => s._id);
+      if (basisChanged) {
+        // Cannot switch once contracts of the other kind exist under it
+        const otherKind = updates.contractBasis === 'Slab' ? { $ne: 'Slab' } : 'Slab';
+        const clash = await SubletContract.countDocuments({ project: { $in: subIds }, status: { $ne: 'Cancelled' }, contractType: otherKind });
+        if (clash) {
+          return badRequest(res, `${oldProject.name} already has ${clash} ${contractBasisLabel(updates.contractBasis === 'Slab' ? 'BOQ' : 'Slab')} contract(s) — cancel them before making it ${contractBasisLabel(updates.contractBasis)}`);
+        }
+      }
+      cascade = { subIds, set: {} };
+      if (basisChanged) cascade.set.contractBasis = updates.contractBasis;
+      if (typeChanged) cascade.set.projectType = updates.projectType;
+    }
+  }
 
   // Main Project must keep a Finance company; once its IPCs / invoices posted to Finance it cannot move company
   const willBeMain = !(updates.parentProject !== undefined ? updates.parentProject : oldProject.parentProject);
@@ -1336,6 +1521,15 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     }
   }
 
+  // Record when a project was completed, unless a date was given
+  if (updates.status === 'Completed' && oldProject.status !== 'Completed' && updates.actualEndDate === undefined && !oldProject.actualEndDate) {
+    updates.actualEndDate = new Date();
+  }
+  // Re-opened: it is no longer finished, so it has no completion date
+  if (updates.status && updates.status !== 'Completed' && oldProject.status === 'Completed' && updates.actualEndDate === undefined) {
+    updates.actualEndDate = null;
+  }
+
   const project = await ConstructionProject.findByIdAndUpdate(
     req.params.id,
     { $set: updates },
@@ -1343,6 +1537,19 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   ).populate('projectManager', 'firstName lastName email').lean();
 
   if (!project) return notFound(res, 'Project');
+  if (cascade && cascade.subIds.length) {
+    await ConstructionProject.updateMany({ _id: { $in: cascade.subIds } }, { $set: cascade.set });
+  }
+
+  // Quick status change on a Main Project can carry its (non-cancelled) Sub Projects along
+  let subsUpdated = 0;
+  if (req.body.applyStatusToSubs === true && updates.status && !project.parentProject && updates.status !== 'Cancelled') {
+    const subFilter = { parentProject: project._id, status: { $ne: 'Cancelled' } };
+    subsUpdated = (await ConstructionProject.updateMany(subFilter, { $set: { status: updates.status, updatedBy: req.user?._id } })).modifiedCount || 0;
+    if (updates.status === 'Completed') {
+      await ConstructionProject.updateMany({ ...subFilter, actualEndDate: null }, { $set: { actualEndDate: new Date() } });
+    }
+  }
 
   // Trigger sync of parent project progress
   if (project.parentProject) {
@@ -1354,7 +1561,11 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   }
   await syncProjectMetrics(project._id);
 
-  res.json({ success: true, message: 'Project updated successfully', data: project });
+  res.json({
+    success: true,
+    message: subsUpdated ? `Project and ${subsUpdated} sub project(s) updated` : 'Project updated successfully',
+    data: project
+  });
 }));
 
 // PUT /api/project-management/projects/:id/budget-status — submit or approve budget
@@ -1368,6 +1579,15 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
   project.updatedBy = req.user?._id;
 
   const isMain = !project.parentProject;
+  if (isMain && action !== 'reset') {
+    return badRequest(res, 'Main Project budgets go through the budget request (details + COO, AVP Taj and CEO approval)');
+  }
+  if (isMain && ['approve', 'reset'].includes(action) && !isDesignatedCeoApprover(req.user)) {
+    return res.status(403).json({ success: false, message: 'Only the CEO can approve or reopen a Main Project budget' });
+  }
+  if (isMain && action === 'approve' && project.budgetStatus !== 'Submitted') {
+    return badRequest(res, 'The budget must be submitted for approval first');
+  }
 
   if (action === 'submit') {
     if (isMain && !(Number(project.lumpSumBudget) > 0)) {
@@ -1415,6 +1635,34 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
 
   await project.save();
 
+  if (isMain && (action === 'submit' || action === 'approve')) {
+    const ceoSide = action === 'submit';
+    const recipients = ceoSide
+      ? await userIdsByRoles(['higher_management', 'admin', 'super_admin'])
+      : [project.createdBy, project.projectManager].filter(Boolean).map(String);
+    const ids = [...new Set(recipients)].filter((rid) => rid !== String(req.user?._id || ''));
+    if (ids.length) {
+      try {
+        await createAndEmitNotification({
+          recipientIds: ids,
+          title: ceoSide ? `Budget for approval: ${project.name}` : `Budget approved: ${project.name}`,
+          message: ceoSide
+            ? `${fmtPkr(project.lumpSumBudget)} budget submitted for CEO approval`
+            : `${fmtPkr(project.lumpSumBudget)} approved — it can now be distributed to sub projects`,
+          type: 'info',
+          category: 'approval',
+          priority: ceoSide ? 'high' : 'medium',
+          actionUrl: `/general/project-management/${project._id}?tab=budget`,
+          entityId: project._id,
+          entityType: 'ConstructionProject',
+          module: 'project_management'
+        });
+      } catch (err) {
+        console.error('Budget notification failed:', err.message);
+      }
+    }
+  }
+
   const populated = await ConstructionProject.findById(project._id)
     .populate('projectManager', 'firstName lastName email')
     .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget')
@@ -1424,7 +1672,374 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
     populated.budgetAllocation = await buildBudgetAllocationSummary(populated);
   }
 
-  res.json({ success: true, message: `Budget ${action}d successfully`, data: populated });
+  const done = { submit: 'Budget submitted to the CEO', approve: 'Budget approved', reset: 'Budget reopened' }[action];
+  res.json({ success: true, message: done, data: populated });
+}));
+
+// ─── MAIN PROJECT BUDGET REQUEST (details + approval chain) ───────────────────
+
+/** Default approval chain, in order; people are found by their designation and can be changed before sending */
+const DEFAULT_BUDGET_APPROVERS = [
+  { role: 'Chief Operating Officer', match: /chief operating officer|^coo$/i },
+  { role: 'AVP Taj', match: /^assistant vice president$|^avp$|avp.*taj|assistant vice president.*taj/i },
+  { role: 'Chief Executive Officer', match: /^ceo$|chief executive/i }
+];
+const personName = (u) => (u ? `${u.firstName || ''} ${u.lastName || ''}`.trim() : '');
+
+const suggestBudgetApprovers = async () => {
+  const people = await User.find({ isActive: true, position: { $exists: true, $ne: '' } })
+    .select('firstName lastName position role').lean();
+  return DEFAULT_BUDGET_APPROVERS.map((d) => {
+    const u = people.find((p) => d.match.test(String(p.position || '').trim()));
+    return { role: d.role, user: u ? String(u._id) : '', name: personName(u), designation: u?.position || '' };
+  });
+};
+
+/** People who can be picked as budget approvers: management by role or designation */
+const budgetApproverCandidates = async () => {
+  const users = await User.find({
+    isActive: true,
+    $or: [
+      { role: { $in: ['super_admin', 'higher_management'] } },
+      { position: /president|chief|director|ceo|coo|cfo|head/i }
+    ]
+  }).select('firstName lastName position role').sort({ firstName: 1 }).lean();
+  return users.map((u) => ({ _id: String(u._id), name: personName(u), designation: u.position || '' }));
+};
+
+/** A draft shows the revision number it will get when sent */
+const budgetDocNo = (p) => `BUD-${p.projectNumber || String(p._id).slice(-6).toUpperCase()}-R${(p.budgetRequest?.revision || 0) + (p.budgetStatus === 'Draft' || !p.budgetStatus ? 1 : 0)}`;
+
+/** Budget request view: the request, the Sub Projects it can split into (with what each has in contracts) and who may act */
+const buildBudgetRequestView = async (project, user) => {
+  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
+    .select('name projectNumber sector street allocatedBudget status').sort({ name: 1 }).lean();
+  const committed = await committedBySub(subs.map((s) => s._id));
+  const req = project.budgetRequest || null;
+  const current = req && project.budgetStatus === 'Submitted' ? req.approvers?.[req.currentStep] : null;
+  // Letterhead for the budget document: the Main Project's Finance company
+  const company = project.companyId
+    ? await mongoose.model('PlacementCompany').findById(project.companyId).select('name contactInfo').lean().catch(() => null)
+    : null;
+  return {
+    company,
+    project: {
+      _id: project._id, name: project.name, projectNumber: project.projectNumber, projectType: project.projectType,
+      contractBasis: project.contractBasis, society: project.society, sector: project.sector, address: project.address,
+      startDate: project.startDate, expectedEndDate: project.expectedEndDate, clientName: project.clientName
+    },
+    status: project.budgetStatus || 'Draft',
+    // Total of the request being prepared / in approval; `approved` is the budget in force
+    amount: req?.lines?.length ? round2(req.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0)) : Number(project.lumpSumBudget) || 0,
+    approvedAt: project.budgetApprovedAt || null,
+    documentNo: budgetDocNo(project),
+    request: req,
+    approved: project.approvedBudget?.amount > 0 ? project.approvedBudget : null,
+    approvedAmount: approvedBudgetAmount(project),
+    approvedDocumentNo: project.approvedBudget?.revision
+      ? `BUD-${project.projectNumber || String(project._id).slice(-6).toUpperCase()}-R${project.approvedBudget.revision}` : null,
+    suggestedApprovers: req?.approvers?.length ? null : await suggestBudgetApprovers(),
+    subProjects: subs.map((s) => ({
+      _id: s._id, name: s.name, projectNumber: s.projectNumber, sector: s.sector, status: s.status,
+      allocatedBudget: Number(s.allocatedBudget) || 0,
+      committed: committed.get(String(s._id))?.amount || 0,
+      contracts: committed.get(String(s._id))?.contracts || 0
+    })),
+    // Sub Projects with no share in the budget in force (e.g. created after it was approved)
+    newSubProjects: approvedBudgetAmount(project) > 0
+      ? subs.filter((s) => !(Number(s.allocatedBudget) > 0) && s.status !== 'Completed').map((s) => ({ _id: s._id, name: s.name }))
+      : [],
+    canApprove: Boolean(current && user && String(current.user) === String(user._id)),
+    currentApprover: current ? { name: current.name, role: current.role } : null
+  };
+};
+
+const notifyBudget = async (recipientIds, actorId, title, message, project) => {
+  const ids = [...new Set((recipientIds || []).filter(Boolean).map(String))].filter((rid) => rid !== String(actorId || ''));
+  if (!ids.length) return;
+  try {
+    await createAndEmitNotification({
+      recipientIds: ids, title, message, type: 'info', category: 'approval', priority: 'high',
+      actionUrl: `/budget-approvals?project=${project._id}`,
+      entityId: project._id, entityType: 'ConstructionProject', module: 'project_management'
+    });
+  } catch (err) {
+    console.error('Budget notification failed:', err.message);
+  }
+};
+
+const loadMainForBudget = async (req, res) => {
+  if (!isValidId(req.params.id)) { badRequest(res, 'Invalid project ID'); return null; }
+  const project = await ConstructionProject.findById(req.params.id);
+  if (!project) { notFound(res, 'Project'); return null; }
+  if (project.parentProject) { badRequest(res, 'Budgets are requested on the Main Project'); return null; }
+  return project;
+};
+
+// GET /api/project-management/projects/:id/budget-request
+router.get('/projects/:id/budget-request', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  const view = await buildBudgetRequestView(project.toObject(), req.user);
+  view.candidates = await budgetApproverCandidates();
+  res.json({ success: true, data: view });
+}));
+
+// PUT /api/project-management/projects/:id/budget-request — save the draft (purpose, split per Sub Project, approvers)
+router.put('/projects/:id/budget-request', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  if (project.budgetStatus === 'Submitted') return badRequest(res, 'The budget is with the approvers — it cannot be changed until they approve or return it');
+
+  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } }).select('name').lean();
+  const subById = new Map(subs.map((s) => [String(s._id), s]));
+  const lines = (Array.isArray(req.body.lines) ? req.body.lines : [])
+    .filter((l) => subById.has(String(l.subProject)))
+    .map((l) => ({ subProject: l.subProject, name: subById.get(String(l.subProject)).name, scope: String(l.scope || '').trim(), amount: Math.max(0, round2(l.amount)) }));
+  const approvers = [];
+  for (const a of Array.isArray(req.body.approvers) ? req.body.approvers : []) {
+    if (!a.user || !isValidId(a.user)) continue;
+    const u = await User.findById(a.user).select('firstName lastName position').lean();
+    if (u) approvers.push({ role: String(a.role || u.position || 'Approver').trim(), user: u._id, name: personName(u), designation: u.position || '' });
+  }
+
+  const wasApproved = project.budgetStatus === 'Approved';
+  const prev = project.budgetRequest ? project.budgetRequest.toObject() : {};
+  project.budgetRequest = {
+    ...prev,
+    purpose: String(req.body.purpose || '').trim(),
+    notes: String(req.body.notes || '').trim(),
+    lines,
+    approvers,
+    currentStep: -1,
+    preparedBy: req.user?._id || prev.preparedBy || null,
+    preparedByName: personName(req.user) || prev.preparedByName || ''
+  };
+  if (wasApproved) {
+    // Revising: the approved budget stays in force (existing shares keep working) until the revision is approved
+    project.budgetStatus = 'Draft';
+    project.budgetRequest.history = [...(prev.history || []), { action: 'Revision started', name: personName(req.user), at: new Date() }];
+  }
+  project.updatedBy = req.user?._id;
+  await project.save();
+  const inForce = approvedBudgetAmount(project) > 0;
+  res.json({
+    success: true,
+    message: wasApproved || (inForce && project.budgetStatus === 'Draft')
+      ? 'Revision saved — the approved budget stays in force until the revision is approved'
+      : 'Budget draft saved',
+    data: await buildBudgetRequestView(project.toObject(), req.user)
+  });
+}));
+
+// POST /api/project-management/projects/:id/budget-request/submit — send to the first approver
+router.post('/projects/:id/budget-request/submit', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  if (project.budgetStatus === 'Submitted') return badRequest(res, 'The budget is already with the approvers');
+  const br = project.budgetRequest;
+  if (!br) return badRequest(res, 'Fill in the budget details first');
+  if (String(br.purpose || '').trim().length < 10) return badRequest(res, 'Describe what the budget is for (purpose and scope)');
+  const total = round2((br.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0));
+  if (total <= 0) return badRequest(res, 'Enter the budget for at least one sub project');
+  if (!br.approvers?.length) return badRequest(res, 'Choose who approves the budget');
+  const userIds = br.approvers.map((a) => String(a.user));
+  if (new Set(userIds).size !== userIds.length) return badRequest(res, 'The same person is listed twice as an approver');
+
+  // A Sub Project's new budget cannot be below what it already has in contracts
+  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } }).select('name').lean();
+  const committed = await committedBySub(subs.map((s) => s._id));
+  for (const s of subs) {
+    const used = committed.get(String(s._id))?.amount || 0;
+    const line = br.lines.find((l) => String(l.subProject) === String(s._id));
+    if (used > 0 && (Number(line?.amount) || 0) + 0.5 < used) {
+      return badRequest(res, `${s.name} already has ${fmtPkr(used)} in sublet contracts — its budget cannot be less than that`);
+    }
+  }
+
+  // lumpSumBudget / approval stamps stay those of the budget in force until this one is approved
+  project.budgetStatus = 'Submitted';
+  project.budgetSubmittedAt = new Date();
+  br.approvers.forEach((a) => { a.status = 'Pending'; a.remarks = ''; a.signature = ''; a.actedAt = undefined; a.changes = []; });
+  br.submittedLines = br.lines.map((l) => ({ subProject: l.subProject, amount: Number(l.amount) || 0 }));
+  br.currentStep = 0;
+  br.revision = (br.revision || 0) + 1;
+  br.submittedAt = new Date();
+  br.returned = undefined;
+  br.history.push({ action: `Submitted for approval (revision ${br.revision})`, name: personName(req.user), at: new Date() });
+  project.updatedBy = req.user?._id;
+  await project.save();
+
+  await notifyBudget([br.approvers[0].user], req.user?._id, `Budget for your approval: ${project.name}`,
+    `${fmtPkr(total)} budget for ${project.name} is waiting for your approval`, project);
+  res.json({ success: true, message: `Sent to ${br.approvers[0].name} (${br.approvers[0].role})`, data: await buildBudgetRequestView(project.toObject(), req.user) });
+}));
+
+/** The approver whose turn it is must be the signed-in user */
+const currentBudgetApprover = (project, user) => {
+  const br = project.budgetRequest;
+  if (project.budgetStatus !== 'Submitted' || !br) return { error: 'This budget is not waiting for approval' };
+  const step = br.approvers[br.currentStep];
+  if (!step) return { error: 'This budget is not waiting for approval' };
+  if (!user || String(step.user) !== String(user._id)) return { error: `It is ${step.name}'s turn (${step.role}) to approve this budget`, forbidden: true };
+  return { step };
+};
+
+// POST /api/project-management/projects/:id/budget-request/approve
+router.post('/projects/:id/budget-request/approve', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  const { step, error, forbidden } = currentBudgetApprover(project, req.user);
+  if (error) return res.status(forbidden ? 403 : 400).json({ success: false, message: error });
+  const br = project.budgetRequest;
+  const remarks = String(req.body.remarks || '').trim();
+
+  // The approver may cut or add amounts; the next approver sees the changed figures
+  const changes = [];
+  if (Array.isArray(req.body.lines)) {
+    const committed = await committedBySub(br.lines.map((l) => l.subProject));
+    for (const row of req.body.lines) {
+      const line = br.lines.find((l) => String(l.subProject) === String(row.subProject));
+      if (!line) continue;
+      const to = Math.max(0, round2(row.amount));
+      const from = Number(line.amount) || 0;
+      if (Math.abs(to - from) < 0.005) continue;
+      const used = committed.get(String(line.subProject))?.amount || 0;
+      if (to + 0.5 < used) return badRequest(res, `${line.name} already has ${fmtPkr(used)} in sublet contracts — its budget cannot be less than that`);
+      changes.push({ subProject: line.subProject, name: line.name, from, to });
+    }
+    if (changes.length && remarks.length < 3) return badRequest(res, 'Write why the amounts were changed');
+    const newTotal = round2(br.lines.reduce((t, l) => {
+      const c = changes.find((x) => String(x.subProject) === String(l.subProject));
+      return t + (c ? c.to : Number(l.amount) || 0);
+    }, 0));
+    if (newTotal <= 0) return badRequest(res, 'The budget cannot be zero — return it instead');
+    changes.forEach((c) => { br.lines.find((l) => String(l.subProject) === String(c.subProject)).amount = c.to; });
+  }
+
+  const me = await User.findById(req.user._id).select('digitalSignature').lean();
+  step.status = 'Approved';
+  step.changes = changes;
+  step.remarks = remarks;
+  step.signature = me?.digitalSignature || '';
+  step.actedAt = new Date();
+  const changeText = changes.map((c) => `${c.name} ${fmtPkr(c.from)} → ${fmtPkr(c.to)}`).join('; ');
+  br.history.push({ action: `Approved by ${step.role}${changes.length ? ' with changes' : ''}`, name: step.name, remarks: [changeText, step.remarks].filter(Boolean).join(' — '), at: new Date() });
+
+  const last = br.currentStep >= br.approvers.length - 1;
+  if (!last) {
+    br.currentStep += 1;
+    project.updatedBy = req.user._id;
+    await project.save();
+    const next = br.approvers[br.currentStep];
+    await notifyBudget([next.user], req.user._id, `Budget for your approval: ${project.name}`,
+      `${fmtPkr(br.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0))} budget for ${project.name}, approved by ${step.name}${changes.length ? ` with changes (${changeText})` : ''} — now waiting for you`, project);
+    return res.json({ success: true, message: `Approved${changes.length ? ' with your changes' : ''} — sent on to ${next.name} (${next.role})`, data: await buildBudgetRequestView(project.toObject(), req.user) });
+  }
+
+  // Final approval: this version is now the budget in force and each line becomes that Sub Project's budget
+  br.currentStep = -1;
+  const total = round2(br.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0));
+  project.lumpSumBudget = total;
+  project.approvedBudget = {
+    amount: total,
+    revision: br.revision,
+    approvedAt: new Date(),
+    submittedAt: br.submittedAt,
+    purpose: br.purpose,
+    notes: br.notes,
+    preparedByName: br.preparedByName,
+    lines: br.lines.map((l) => ({
+      subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount,
+      requested: (br.submittedLines || []).find((x) => String(x.subProject) === String(l.subProject))?.amount ?? l.amount
+    })),
+    approvers: br.approvers.map((a) => ({
+      role: a.role, user: a.user, name: a.name, designation: a.designation, status: a.status, remarks: a.remarks, signature: a.signature, actedAt: a.actedAt,
+      changes: (a.changes || []).map((c) => ({ subProject: c.subProject, name: c.name, from: c.from, to: c.to }))
+    }))
+  };
+  project.budgetStatus = 'Approved';
+  project.budgetApprovedBy = req.user._id;
+  project.budgetApprovedAt = new Date();
+  project.budgetNotes = step.remarks;
+  project.updatedBy = req.user._id;
+  await project.save();
+  const amounts = new Map(br.lines.map((l) => [String(l.subProject), Number(l.amount) || 0]));
+  const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } });
+  for (const sub of subs) {
+    const amount = amounts.get(String(sub._id)) || 0;
+    if ((Number(sub.allocatedBudget) || 0) === amount) continue;
+    sub.allocatedBudget = amount;
+    sub.updatedBy = req.user._id;
+    await sub.save();
+  }
+  await notifyBudget([br.preparedBy, project.createdBy, project.projectManager], req.user._id, `Budget approved: ${project.name}`,
+    `${fmtPkr(project.lumpSumBudget)} approved by ${br.approvers.map((a) => a.role).join(', ')} — sub projects can now make contracts within their share`, project);
+  res.json({ success: true, message: 'Budget approved — each sub project now has its share', data: await buildBudgetRequestView(project.toObject(), req.user) });
+}));
+
+// POST /api/project-management/projects/:id/budget-request/return — the current approver sends it back with remarks
+router.post('/projects/:id/budget-request/return', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  const { step, error, forbidden } = currentBudgetApprover(project, req.user);
+  if (error) return res.status(forbidden ? 403 : 400).json({ success: false, message: error });
+  const remarks = String(req.body.remarks || '').trim();
+  if (remarks.length < 3) return badRequest(res, 'Write why the budget is being returned');
+  const br = project.budgetRequest;
+  step.status = 'Rejected';
+  step.remarks = remarks;
+  step.actedAt = new Date();
+  br.returned = { name: step.name, role: step.role, remarks, at: new Date() };
+  br.currentStep = -1;
+  br.history.push({ action: `Returned by ${step.role}`, name: step.name, remarks, at: new Date() });
+  project.budgetStatus = 'Draft';
+  project.updatedBy = req.user._id;
+  await project.save();
+  await notifyBudget([br.preparedBy, project.createdBy, project.projectManager], req.user._id, `Budget returned: ${project.name}`,
+    `${step.name} (${step.role}) returned the budget: ${remarks}`, project);
+  res.json({ success: true, message: 'Budget returned to the project team', data: await buildBudgetRequestView(project.toObject(), req.user) });
+}));
+
+// POST /api/project-management/projects/:id/budget-request/discard — drop a revision, back to the budget in force
+router.post('/projects/:id/budget-request/discard', asyncHandler(async (req, res) => {
+  const project = await loadMainForBudget(req, res); if (!project) return;
+  const ab = project.approvedBudget;
+  if (!(ab?.amount > 0)) return badRequest(res, 'There is no approved budget to go back to');
+  if (project.budgetStatus === 'Submitted') return badRequest(res, 'The revision is with the approvers — it can be returned by the approver whose turn it is');
+  if (project.budgetStatus === 'Approved') return badRequest(res, 'There is no revision to discard');
+  const br = project.budgetRequest;
+  br.purpose = ab.purpose;
+  br.notes = ab.notes;
+  br.lines = ab.lines.map((l) => ({ subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount }));
+  br.approvers = ab.approvers.filter((a) => a.user).map((a) => ({ ...a }));
+  br.revision = ab.revision;
+  br.currentStep = -1;
+  br.returned = undefined;
+  br.history.push({ action: 'Revision discarded', name: personName(req.user), at: new Date() });
+  project.budgetStatus = 'Approved';
+  project.updatedBy = req.user?._id;
+  await project.save();
+  res.json({ success: true, message: 'Revision discarded — the approved budget is unchanged', data: await buildBudgetRequestView(project.toObject(), req.user) });
+}));
+
+// GET /api/project-management/budget-approvals — budgets waiting for me, and ones I acted on recently
+router.get('/budget-approvals', asyncHandler(async (req, res) => {
+  const me = String(req.user?._id || '');
+  const mains = await ConstructionProject.find({ parentProject: null, 'budgetRequest.approvers.user': req.user?._id })
+    .select('name projectNumber projectType contractBasis society sector lumpSumBudget budgetStatus budgetSubmittedAt budgetApprovedAt budgetRequest')
+    .sort({ budgetSubmittedAt: -1 }).lean();
+  const rows = mains.map((p) => {
+    const br = p.budgetRequest || {};
+    const current = p.budgetStatus === 'Submitted' ? br.approvers?.[br.currentStep] : null;
+    const mine = (br.approvers || []).find((a) => String(a.user) === me);
+    return {
+      _id: p._id, name: p.name, projectNumber: p.projectNumber, projectType: p.projectType, contractBasis: p.contractBasis,
+      location: [p.society, p.sector].filter(Boolean).join(', '),
+      amount: (br.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0) || Number(p.lumpSumBudget) || 0,
+      status: p.budgetStatus, submittedAt: br.submittedAt || p.budgetSubmittedAt,
+      revision: br.revision || 0, documentNo: budgetDocNo(p),
+      waitingForMe: Boolean(current && String(current.user) === me),
+      waitingFor: current ? `${current.name} (${current.role})` : null,
+      myStatus: mine?.status || null, myActedAt: mine?.actedAt || null
+    };
+  });
+  res.json({ success: true, data: { waiting: rows.filter((r) => r.waitingForMe), others: rows.filter((r) => !r.waitingForMe) } });
 }));
 
 // PUT /api/project-management/projects/:id/milestones/:milestoneId — update milestone
@@ -3936,6 +4551,27 @@ router.get('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
 }));
 
 // POST /api/project-management/projects/:id/check-requests
+// POST /api/project-management/projects/:id/check-requests/attachments — upload supporting documents (field "files")
+router.post('/projects/:id/check-requests/attachments', (req, res, next) => crAttachmentUpload(req, res, (err) => {
+  if (!err) return next();
+  (req.files || []).forEach((f) => fs.unlink(f.path, () => {}));
+  return badRequest(res, err.code === 'LIMIT_FILE_SIZE' ? 'Each file must be under 20 MB' : err.message);
+}), asyncHandler(async (req, res) => {
+  const files = req.files || [];
+  if (!files.length) {
+    return badRequest(res, req.rejectedFiles?.length
+      ? `Not allowed: ${req.rejectedFiles.join(', ')} — attach photos, PDF, Word or Excel files`
+      : 'Choose at least one file');
+  }
+  res.status(201).json({
+    success: true,
+    message: req.rejectedFiles?.length ? `Skipped (wrong type): ${req.rejectedFiles.join(', ')}` : 'Uploaded',
+    data: files.map((f) => ({
+      url: `${CR_ATTACHMENT_PREFIX}${f.filename}`, originalName: f.originalname, mimeType: f.mimetype, size: f.size, uploadedAt: new Date()
+    }))
+  });
+}));
+
 router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
@@ -3948,6 +4584,8 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
   const { title, contractor, task, items = [], notes } = req.body;
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
   const claimType = req.body.claimType === 'Slab' ? 'Slab' : 'BOQ';
+  const attachments = cleanCrAttachments(req.body.attachments);
+  if (!attachments.length) return badRequest(res, CR_ATTACHMENT_REQUIRED);
 
   const { contractorId, types, error: contractorError } = await resolveCheckRequestContractor(req.params.id, contractor);
   if (contractorError) return badRequest(res, contractorError);
@@ -3964,6 +4602,7 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
     task: task && isValidId(task) ? task : null,
     verifiedTotal: 0,
     notes: notes || '',
+    attachments,
     status: 'Draft',
     createdBy: req.user?._id,
     updatedBy: req.user?._id
@@ -4011,6 +4650,11 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
   const claimType = req.body.claimType
     ? (req.body.claimType === 'Slab' ? 'Slab' : 'BOQ')
     : (cr.claimType || 'BOQ');
+  if (req.body.attachments !== undefined) {
+    const attachments = cleanCrAttachments(req.body.attachments);
+    if (!attachments.length) return badRequest(res, CR_ATTACHMENT_REQUIRED);
+    cr.attachments = attachments;
+  }
 
   if (title !== undefined) {
     if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
@@ -4101,6 +4745,7 @@ router.post('/projects/:id/check-requests/:crId/submit', asyncHandler(async (req
     return badRequest(res, 'Only Draft or Rejected Check Requests can be submitted');
   }
   if (cr.claimType !== 'Slab' && !cr.items?.length) return badRequest(res, 'Check Request has no items');
+  if (!cr.attachments?.length) return badRequest(res, `${CR_ATTACHMENT_REQUIRED} — edit the check request to add it`);
 
   cr.status = 'Submitted';
   cr.submittedAt = new Date();
@@ -4733,6 +5378,9 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
 
   const { title, contractor, items = [], notes, startDate, endDate, activate } = req.body;
   const contractType = req.body.contractType === 'Slab' ? 'Slab' : 'BOQ';
+  if (project.contractBasis && contractType !== project.contractBasis) {
+    return badRequest(res, `${project.name} is ${contractBasisLabel(project.contractBasis)} — only ${contractBasisLabel(project.contractBasis)} contracts can be made here`);
+  }
   const clientValue = contractType === 'Slab' ? Math.max(0, Number(req.body.clientValue) || 0) : 0;
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
   if (!contractor || !isValidId(contractor)) return badRequest(res, 'Subcontractor is required');
@@ -4753,6 +5401,9 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     if (err.statusCode === 400) return badRequest(res, err.message);
     throw err;
   }
+
+  const budgetError = await checkContractBudget(req.params.id, typeFields.totalAmount);
+  if (budgetError) return badRequest(res, budgetError);
 
   const contract = await SubletContract.create({
     project: req.params.id,
@@ -4800,11 +5451,14 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
     return badRequest(res, 'Only Draft sublet contracts can be edited');
   }
 
-  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
+  const project = await ConstructionProject.findById(req.params.id).select('name parentProject projectType contractBasis').lean();
   const { title, contractor, items, notes, startDate, endDate } = req.body;
   const contractType = req.body.contractType === 'Slab' || req.body.contractType === 'BOQ'
     ? req.body.contractType
     : (contract.contractType || 'BOQ');
+  if (project?.contractBasis && contractType !== project.contractBasis) {
+    return badRequest(res, `${project.name} is ${contractBasisLabel(project.contractBasis)} — only ${contractBasisLabel(project.contractBasis)} contracts can be made here`);
+  }
 
   if (title !== undefined) {
     if (!String(title).trim()) return badRequest(res, 'Title cannot be empty');
@@ -4861,6 +5515,9 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
   }
   contract.contractType = contractType;
 
+  const budgetError = await checkContractBudget(req.params.id, contract.totalAmount, contract._id);
+  if (budgetError) return badRequest(res, budgetError);
+
   contract.updatedBy = req.user?._id;
   await contract.save();
   await syncProjectMetrics(req.params.id);
@@ -4916,6 +5573,9 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
     if (err.statusCode === 400) return badRequest(res, err.message);
     throw err;
   }
+
+  const budgetError = await checkContractBudget(req.params.id, contract.totalAmount, contract._id);
+  if (budgetError) return badRequest(res, budgetError);
 
   contract.status = 'Active';
   contract.activatedAt = new Date();

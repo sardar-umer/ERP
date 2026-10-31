@@ -7,6 +7,8 @@ import { getIpcDossier } from '../../services/projectManagementService';
 import { getImageUrl } from '../../utils/imageService';
 import { DigitalSignatureImage } from '../common/DigitalSignatureImage';
 import IpcApprovalTrail, { ipcStageText } from './IpcApprovalTrail';
+import { BudgetDocumentFrame } from './ProjectBudgetPanel';
+import { CheckRequestAttachmentsList } from './CheckRequestAttachments';
 import { certificateTitle, day, ipcCertificateHtml, money, pkr, printIpcCertificate } from './ipcCertificateDocument';
 
 // Same quiet document style as the certificate: hairline rules, small uppercase labels, no colour
@@ -143,6 +145,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
     { key: 'check', label: 'Check Request', hide: !dossier.checkRequest },
     { key: 'inspection', label: `Inspection${evidenceCount ? ` · ${evidenceCount} files` : ''}`, hide: !dossier.inspections.length },
     { key: 'history', label: `Payment history · ${dossier.previousIpcs.length}` },
+    { key: 'budget', label: `Project budget${dossier.budget?.status === 'Approved' ? '' : ' · not approved'}`, hide: !dossier.budget },
     { key: 'project', label: `Project & documents${documents.length ? ` · ${documents.length}` : ''}` },
     { key: 'approvals', label: 'Approvals' }
   ].filter((t) => !t.hide) : [];
@@ -188,13 +191,15 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
 
       {/* Grey canvas with the document pages */}
       <CompanyContext.Provider value={dossier?.company?.name || ''}>
-      <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: '#eceef1', p: tab === 'certificate' ? 0 : { xs: 1.5, sm: 3.5 } }}>
+      <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: '#eceef1', p: tab === 'certificate' || tab === 'budget' ? 0 : { xs: 1.5, sm: 3.5 } }}>
         {error && <Alert severity="error" sx={{ m: 2 }}>{error}</Alert>}
         {!dossier && !error && (
           <Box sx={{ maxWidth: 820, mx: 'auto', mt: 4, bgcolor: '#fff', p: 6 }}><Skeleton height={40} /><Skeleton height={160} /><Skeleton height={220} /></Box>
         )}
 
         {dossier && tab === 'certificate' && <CertificateFrame dossier={dossier} />}
+        {/* The Main Project budget this IPC is paid from, as approved by COO / AVP / CEO */}
+        {dossier && tab === 'budget' && dossier.budget && <BudgetDocumentFrame doc={{ ...dossier.budget, company: dossier.company }} />}
 
         {dossier && tab === 'contract' && dossier.contract && (
           <Sheet kicker="Sublet contract" title={`${dossier.contract.contractNumber} · ${dossier.contract.title}`}>
@@ -260,6 +265,8 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
                 ['Amount verified', pkr(cr.verifiedTotal)]
               ]} />
               {cr.verificationNotes && (<><Heading>Verification notes</Heading><Typography sx={{ fontSize: 13.5, color: INK }}>{cr.verificationNotes}</Typography></>)}
+              <Heading>Supporting documents</Heading>
+              <CheckRequestAttachmentsList attachments={cr.attachments || []} emptyText="None attached (raised before documents were required)" />
               {cr.items.length > 0 && (
                 <>
                   <Heading>Quantities</Heading>

@@ -16,13 +16,15 @@ const plural = (n, word) => `${n} ${word}${n === 1 ? '' : 's'}`;
  * Each step: done (green), attention (amber — something is waiting), or pending (grey).
  * `hint` tells the user what to do next on that step.
  */
-const buildSteps = (w) => {
+const buildSteps = (w, basis) => {
   const { boq, contracts, checkRequests: cr, ipcs } = w;
+  const isSlab = basis === 'Slab';
   const liveContracts = contracts.active + contracts.completed;
   const crWaiting = cr.draft + cr.rejected;
 
   return [
-    {
+    // Slab-wise projects have no BOQ step: work is contracted as stages
+    !isSlab && {
       tab: 'boq',
       title: 'BOQ',
       state: boq.lines > 0 ? 'done' : 'pending',
@@ -39,7 +41,7 @@ const buildSteps = (w) => {
       ].filter(Boolean).join(' · ') || 'None yet',
       hint: contracts.draft > 0
         ? 'Activate the draft contract so work can be claimed'
-        : 'Award BOQ lines to a subcontractor at agreed rates'
+        : isSlab ? 'Award the work to a subcontractor as stages (slabs) with a fixed amount each' : 'Award BOQ lines to a subcontractor at agreed rates'
     },
     {
       tab: 'check-requests',
@@ -54,7 +56,7 @@ const buildSteps = (w) => {
         ? 'Raise an inspection report and get every inspector to sign it'
         : crWaiting > 0
           ? 'Submit draft / rejected requests for verification'
-          : 'Claim completed work for an active contract'
+          : isSlab ? 'Claim a completed slab (stage) of an active contract' : 'Claim completed work for an active contract'
     },
     {
       tab: 'invoices',
@@ -83,7 +85,7 @@ const buildSteps = (w) => {
         ? 'Waiting on the approval chain — track it on the IPC'
         : 'Approved IPCs are paid by Finance from their Accounts Payable bill'
     }
-  ];
+  ].filter(Boolean);
 };
 
 const STATE_STYLE = {
@@ -93,7 +95,7 @@ const STATE_STYLE = {
 };
 
 /** Sub Project workflow: BOQ → Contract → Check Request → IPC → Payment, with the next action highlighted. */
-export default function ProjectWorkflowStrip({ projectId, activeTabId, onGoToTab }) {
+export default function ProjectWorkflowStrip({ projectId, activeTabId, onGoToTab, basis }) {
   const [workflow, setWorkflow] = useState(null);
 
   // Refetch on tab change so the strip reflects what was just done in a tab
@@ -109,7 +111,7 @@ export default function ProjectWorkflowStrip({ projectId, activeTabId, onGoToTab
     return <Skeleton variant="rounded" height={84} sx={{ mb: 2, borderRadius: 2 }} />;
   }
 
-  const steps = buildSteps(workflow);
+  const steps = buildSteps(workflow, basis);
   const nextIdx = steps.findIndex((s) => s.state !== 'done');
   const next = steps[nextIdx];
 

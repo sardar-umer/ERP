@@ -754,7 +754,10 @@ const NO_FILTERS = { sub: 'all', projectType: 'all', sector: 'all', contractor: 
 export default function MainCostReport({ project }) {
   const navigate = useNavigate();
   const isSub = Boolean(project.parentProject);
-  const views = VIEWS.filter((v) => (isSub ? !v.mainOnly : !v.subOnly));
+  // A BOQ-wise project shows only BOQ lines, a Slab-wise one only its slabs
+  const basis = project.contractBasis || null;
+  const views = VIEWS.filter((v) => (isSub ? !v.mainOnly : !v.subOnly))
+    .map((v) => (v.id === 'lines' && basis === 'Slab' ? { ...v, label: 'By Slab' } : v));
   const [data, setData] = useState(null);
   const [lineData, setLineData] = useState(null);
   const [error, setError] = useState('');
@@ -1000,7 +1003,7 @@ export default function MainCostReport({ project }) {
       </Typography>
 
       {view === 'lines' && (lineData
-        ? <SubCostLines data={lineData} query={query} type={filters.type} contractor={filters.contractor === 'all' ? null : contractorOptions.find(([k]) => k === filters.contractor)?.[1]} />
+        ? <SubCostLines data={lineData} query={query} type={filters.type !== 'all' ? filters.type : (basis || 'all')} contractor={filters.contractor === 'all' ? null : contractorOptions.find(([k]) => k === filters.contractor)?.[1]} />
         : <Skeleton height={200} />)}
       {view === 'sub' && <BySubProject groups={subGroups} narrowed={narrowed} onOpen={openRow} />}
       {view === 'type' && <ByCategory groups={typeGroups} heading="Project Type" emptyText="No project types match." onPickSub={pickSub} />}

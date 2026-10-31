@@ -38,8 +38,9 @@ export const signatories = (ipc) => [
 
 /** Supporting documents that travel with the certificate */
 export const enclosures = (d) => [
+  d.budget && `Project Budget Approval ${d.budget.documentNo}, ${pkr(d.budget.amount)}${d.budget.status === 'Approved' ? `, approved ${day(d.budget.approvedAt)}` : ' (not yet approved)'}`,
   d.contract && `Sublet Contract ${d.contract.contractNumber}, ${d.contract.title} (${d.contract.contractType}-wise, ${pkr(d.contract.totalAmount)})`,
-  d.checkRequest && `Check Request ${d.checkRequest.checkRequestNumber}, verified ${day(d.checkRequest.verifiedAt)}${d.checkRequest.verifiedBy ? ` by ${d.checkRequest.verifiedBy}` : ''}`,
+  d.checkRequest && `Check Request ${d.checkRequest.checkRequestNumber}, verified ${day(d.checkRequest.verifiedAt)}${d.checkRequest.verifiedBy ? ` by ${d.checkRequest.verifiedBy}` : ''}${d.checkRequest.attachments?.length ? `, with ${d.checkRequest.attachments.length} supporting document(s)` : ''}`,
   ...d.inspections.map((r) => {
     const files = r.inspectors.reduce((t, i) => t + i.attachments.length, 0);
     return `Inspection Report ${r.reportNumber}, ${r.status.toLowerCase()} ${day(r.inspectionDate)}${files ? `, with ${files} site photographs / videos` : ''}`;

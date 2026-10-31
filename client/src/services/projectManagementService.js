@@ -277,3 +277,39 @@ export const getPortfolio = () =>
 /** Sub Project: cost per contract (lines / slabs), per check request and per IPC */
 export const getProjectCostDetail = (id) =>
   api.get(`${BASE}/projects/${id}/cost-detail`);
+
+// ─── Main Project budget request (details + COO → AVP Taj → CEO approval) ─────
+export const getBudgetRequest = (id) =>
+  api.get(`${BASE}/projects/${id}/budget-request`);
+
+export const saveBudgetRequest = (id, data) =>
+  api.put(`${BASE}/projects/${id}/budget-request`, data);
+
+export const submitBudgetRequest = (id) =>
+  api.post(`${BASE}/projects/${id}/budget-request/submit`);
+
+/** `lines` (optional): [{ subProject, amount }] — the approver's cut / added amounts */
+export const approveBudgetRequest = (id, remarks = '', lines) =>
+  api.post(`${BASE}/projects/${id}/budget-request/approve`, { remarks, lines });
+
+export const returnBudgetRequest = (id, remarks) =>
+  api.post(`${BASE}/projects/${id}/budget-request/return`, { remarks });
+
+/** Budgets waiting for the signed-in approver, and ones they acted on */
+export const getBudgetApprovals = () =>
+  api.get(`${BASE}/budget-approvals`);
+
+/** Drop a budget revision that is not in approval; the approved budget stays as it is */
+export const discardBudgetRevision = (id) =>
+  api.post(`${BASE}/projects/${id}/budget-request/discard`);
+
+/** Upload check request supporting documents; returns [{ url, originalName, mimeType, size }] */
+export const uploadCheckRequestAttachments = (projectId, files) => {
+  const form = new FormData();
+  [...files].forEach((f) => form.append('files', f));
+  return api.post(`${BASE}/projects/${projectId}/check-requests/attachments`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
+};
+
+/** Active employees to pick as Project Manager; with no `q`, also the default manager */
+export const getEmployeeOptions = (q = '') =>
+  api.get(`${BASE}/employee-options`, { params: { q } });

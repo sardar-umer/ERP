@@ -10,6 +10,38 @@ const mongoose = require('mongoose');
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const NON_WORK = ['Advance', 'Retention Release'];
 
+/**
+ * The Main Project's approved budget document, so every desk reviewing an IPC sees the budget it is paid from.
+ * null when the project has no budget request.
+ */
+const budgetSummary = (main) => {
+  // The approved version in force; only when nothing is approved yet, the request as it stands
+  const approved = main?.approvedBudget?.amount > 0 ? main.approvedBudget : null;
+  const br = approved || main?.budgetRequest;
+  if (!br || !(br.lines || []).length) return null;
+  return {
+    documentNo: `BUD-${main.projectNumber || String(main._id).slice(-6).toUpperCase()}-R${br.revision || 1}`,
+    status: approved ? 'Approved' : main.budgetStatus || 'Draft',
+    amount: approved ? approved.amount : (br.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0),
+    purpose: br.purpose,
+    notes: br.notes,
+    revision: br.revision || 0,
+    preparedByName: br.preparedByName,
+    submittedAt: br.submittedAt,
+    approvedAt: approved ? approved.approvedAt : main.budgetApprovedAt,
+    revisionInApproval: Boolean(approved && main.budgetStatus === 'Submitted'),
+    lines: br.lines.map((l) => ({
+      subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount,
+      requested: l.requested ?? (br.submittedLines || []).find((x) => String(x.subProject) === String(l.subProject))?.amount ?? l.amount
+    })),
+    approvers: (br.approvers || []).map((a) => ({ role: a.role, name: a.name, designation: a.designation, status: a.status, remarks: a.remarks, signature: a.signature, actedAt: a.actedAt, changes: a.changes || [] })),
+    project: {
+      name: main.name, projectNumber: main.projectNumber, projectType: main.projectType, contractBasis: main.contractBasis,
+      society: main.society, sector: main.sector, address: main.address, startDate: main.startDate, expectedEndDate: main.expectedEndDate, clientName: main.clientName
+    }
+  };
+};
+
 const projectSummary = (p) => (p ? {
   _id: p._id,
   name: p.name,
@@ -106,6 +138,7 @@ const buildIpcDossier = async (ipc, { subcontractorBalances, resolveProjectCompa
     company,
     contractor,
     mainProject: projectSummary(mainProject && String(mainProject._id) !== String(subProject?._id) ? mainProject : null),
+    budget: budgetSummary(mainProject && String(mainProject._id) !== String(subProject?._id) ? mainProject : null),
     subProject: projectSummary(subProject),
     contract: contract ? {
       _id: contract._id,
@@ -147,6 +180,7 @@ const buildIpcDossier = async (ipc, { subcontractorBalances, resolveProjectCompa
       verifiedBy: checkRequest.verifiedBy || (checkRequest.verifiedByUser ? [checkRequest.verifiedByUser.firstName, checkRequest.verifiedByUser.lastName].filter(Boolean).join(' ') : ''),
       verificationNotes: checkRequest.verificationNotes,
       verificationPhotoUrl: checkRequest.verificationPhotoUrl,
+      attachments: checkRequest.attachments || [],
       notes: checkRequest.notes,
       items: (checkRequest.items || []).map((i) => ({
         title: i.title || i.description, unit: i.unit,

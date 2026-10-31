@@ -1086,6 +1086,7 @@ export const MODULES = {
           { name: 'Dashboard', path: '/general/project-management/dashboard' },
           { name: 'Projects', path: '/general/project-management/projects' },
           { name: 'Approvals', path: '/general/project-management/approvals' },
+          { name: 'Budget Approvals', path: '/budget-approvals' },
           { name: 'Subcontractor Statement', path: '/general/project-management/subcontractor-statement' },
           // Setup / master data
           { name: 'Subcontractors', path: '/general/subcontractors' },
@@ -1423,6 +1424,9 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
 
   // General cash approval document (shared view from audit, CEO, notifications).
   if (/^\/cash-approvals\/[^/]+\/view/.test(path)) return true;
+
+  // Project budget approvals (COO / AVP / CEO, from notifications) — the API lists only budgets the user approves
+  if (path === '/budget-approvals') return true;
   
   // Super Admin, Higher Management, and Developer have access to everything
   if (userRole === 'super_admin' || userRole === 'higher_management' || userRole === 'developer') {

@@ -5,14 +5,14 @@ import {
 import { keyframes } from '@mui/material/styles';
 import {
   AccountTree as TreeIcon, ArrowForward as ArrowIcon, Engineering as ContractorIcon, ErrorOutline as AlertIcon,
-  HourglassTop as PendingIcon, Place as PlaceIcon, Refresh as RefreshIcon, Search as SearchIcon, TaskAlt as OkIcon
+  HourglassTop as PendingIcon, AccountBalance as BudgetIcon, Handshake as ContractIcon, TrendingUp as SpentIcon, Payments as PaidIcon, Place as PlaceIcon, Refresh as RefreshIcon, Search as SearchIcon, TaskAlt as OkIcon, Download as DownloadIcon
 } from '@mui/icons-material';
 import {
   Area, AreaChart, CartesianGrid, Cell, Pie, PieChart, ResponsiveContainer, Tooltip as ChartTooltip, XAxis, YAxis
 } from 'recharts';
 import dayjs from 'dayjs';
 import { getPortfolio } from '../../services/projectManagementService';
-import { fmt, fmtShort, plural } from '../../components/ProjectManagement/mainProjectUi';
+import { ContractTypeTag, PASTEL_BG, PASTEL_SHADOW, fmt, fmtShort, plural } from '../../components/ProjectManagement/mainProjectUi';
 import { HEALTH_STYLE, PROJECT_COLORS, ProgressRing, useCountUp } from '../../components/ProjectManagement/portfolioUi';
 import PortfolioProjectDialog from '../../components/ProjectManagement/PortfolioProjectDialog';
 import { getImageUrl } from '../../utils/imageService';
@@ -24,7 +24,11 @@ const LINE = '#e2e8f0';
 const drift = keyframes`0% { transform: translate(0,0) scale(1); } 50% { transform: translate(40px,-20px) scale(1.15); } 100% { transform: translate(0,0) scale(1); }`;
 const rise = keyframes`from { opacity: 0; transform: translateY(14px); } to { opacity: 1; transform: none; }`;
 const grow = keyframes`from { transform: scaleX(0); } to { transform: scaleX(1); }`;
+const livePulse = keyframes`0% { box-shadow: 0 0 0 0 rgba(45,212,191,0.6); } 70% { box-shadow: 0 0 0 8px rgba(45,212,191,0); } 100% { box-shadow: 0 0 0 0 rgba(45,212,191,0); }`;
+const spin = keyframes`to { transform: rotate(360deg); }`;
 const pulse = keyframes`0%,100% { box-shadow: 0 0 0 0 rgba(239,68,68,0.45); } 50% { box-shadow: 0 0 0 6px rgba(239,68,68,0); }`;
+
+const STATUS_TONE = { Active: '#15803d', Planning: '#0369a1', 'On Hold': '#c2410c', Completed: '#4338ca' };
 
 const pct = (part, whole) => (whole > 0 ? Math.round((part / whole) * 100) : 0);
 
@@ -46,14 +50,39 @@ const SORTS = [
 ];
 const RISK = { 'Over Budget': 0, 'Behind Schedule': 1, 'Needs Attention': 2, 'On Track': 3 };
 
+// What each money figure means, shown on hover so every number can be explained
+const DEFINITIONS = {
+  budget: 'Budget of each main project, approved by the COO, AVP Taj and CEO. A project whose budget is not approved yet counts as 0 and cannot make new contracts.',
+  distributed: 'Part of the approved budget that has been given to the sub projects. Each sub project can only make contracts up to its share.',
+  contracted: 'Value of the sublet contracts signed with contractors.',
+  verified: 'Work the contractors claimed on check requests that site inspection confirmed.',
+  spent: 'Work certified for payment on IPCs (interim payment certificates), gross before deductions. Advances are not counted.',
+  approved: 'IPCs that went through Pre-Audit, Audit Director and CEO and were approved for payment.',
+  paid: 'Cash Finance has actually paid to contractors against IPCs (net of retention, advance recovery and tax). Includes advances paid.',
+  clientBilled: 'Invoices raised to the client for this work.',
+  clientReceived: 'Money the client has paid against those invoices.'
+};
+
 const FLOW = [
-  { key: 'budget', label: 'Budget', color: '#94a3b8' },
+  { key: 'budget', label: 'Approved budget', color: '#94a3b8' },
+  { key: 'distributed', label: 'Distributed to sub projects', color: '#64748b' },
   { key: 'contracted', label: 'Contracted', color: '#6366f1' },
   { key: 'verified', label: 'Verified', color: '#0ea5e9' },
   { key: 'spent', label: 'Certified (Spent)', color: '#f59e0b' },
   { key: 'approved', label: 'CEO Approved', color: '#a855f7' },
   { key: 'paid', label: 'Paid', color: '#22c55e' }
 ];
+const CLIENT_FLOW = [
+  { key: 'clientBilled', label: 'Billed to client', color: '#0f766e' },
+  { key: 'clientReceived', label: 'Received from client', color: '#14b8a6' }
+];
+
+const HEALTH_MEANING = {
+  'On Track': 'Within budget and on schedule',
+  'Needs Attention': 'Something needs a decision: e.g. work done but not closed, contracts above budget, missing budget or dates',
+  'Behind Schedule': 'Past its end date, or progress well behind the time used',
+  'Over Budget': 'Certified work is above the BOQ budget'
+};
 
 /** White card with a heading */
 const Card = ({ title, subtitle, action, children, sx, delay = 0 }) => (
@@ -77,27 +106,174 @@ const Card = ({ title, subtitle, action, children, sx, delay = 0 }) => (
   </Box>
 );
 
-/** Headline number on the hero, counts up */
-const HeroKpi = ({ label, value, note, tone, delay }) => {
+// Frosted white tiles on the pastel header, same look as the project page header
+const GLASS = { bgcolor: 'rgba(255,255,255,0.68)', border: '1px solid rgba(255,255,255,0.9)', backdropFilter: 'blur(10px)', boxShadow: '0 4px 14px rgba(99,102,241,0.08)' };
+
+const greeting = () => {
+  const h = new Date().getHours();
+  return h < 12 ? 'Good morning' : h < 17 ? 'Good afternoon' : 'Good evening';
+};
+
+/** Tiny trend line for a hero tile */
+const Sparkline = ({ values, color, width = 84, height = 26 }) => {
+  if (!values.length || !values.some((v) => v > 0)) return null;
+  const max = Math.max(...values) || 1;
+  const step = width / Math.max(1, values.length - 1);
+  const pts = values.map((v, i) => [i * step, height - 3 - (v / max) * (height - 6)]);
+  const line = pts.map(([x, y], i) => `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`).join(' ');
+  const gid = `spark-${color.replace('#', '')}`;
+  return (
+    <svg width={width} height={height} style={{ display: 'block', overflow: 'visible' }}>
+      <defs>
+        <linearGradient id={gid} x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor={color} stopOpacity={0.3} />
+          <stop offset="100%" stopColor={color} stopOpacity={0} />
+        </linearGradient>
+      </defs>
+      <path d={`${line} L${width},${height} L0,${height} Z`} fill={`url(#${gid})`} />
+      <path d={line} fill="none" stroke={color} strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" />
+      <circle cx={pts[pts.length - 1][0]} cy={pts[pts.length - 1][1]} r={2.5} fill={color} />
+    </svg>
+  );
+};
+
+/** Headline number on the header: icon, counted-up value, share bar and an optional trend */
+const HeroKpi = ({ label, value, tone, icon, share, note, trend, delay, hint }) => {
   const n = useCountUp(value);
   return (
     <Box
       sx={{
-        p: 2, borderRadius: 3, minWidth: 0,
-        bgcolor: 'rgba(255,255,255,0.06)', border: '1px solid rgba(255,255,255,0.1)', backdropFilter: 'blur(8px)',
-        animation: `${rise} .7s ${delay}s both`
+        ...GLASS, p: 1.5, borderRadius: 3, minWidth: 0,
+        animation: `${rise} .6s ${delay}s both`, transition: 'transform .2s, box-shadow .2s',
+        '&:hover': { transform: 'translateY(-2px)', boxShadow: `0 8px 20px -8px ${tone}66` }
       }}
     >
       <Stack direction="row" alignItems="center" gap={0.75}>
-        <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: tone, boxShadow: `0 0 10px ${tone}` }} />
-        <Typography sx={{ fontSize: 11, fontWeight: 800, letterSpacing: 1, textTransform: 'uppercase', color: 'rgba(255,255,255,0.6)' }}>{label}</Typography>
+        <Box sx={{ width: 24, height: 24, borderRadius: 1.5, display: 'grid', placeItems: 'center', bgcolor: `${tone}1f`, color: tone, '& svg': { fontSize: 15 } }}>{icon}</Box>
+        <Tooltip title={hint || ''} placement="top-start">
+          <Typography sx={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: MUTED, cursor: hint ? 'help' : 'default' }} noWrap>{label}</Typography>
+        </Tooltip>
       </Stack>
-      <Tooltip title={fmt(value)} placement="bottom-start">
-        <Typography sx={{ mt: 0.75, fontSize: { xs: 20, md: 26 }, fontWeight: 900, color: '#fff', letterSpacing: -0.5, whiteSpace: 'nowrap' }}>
-          {fmtCompact(n)}
-        </Typography>
-      </Tooltip>
-      {note && <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.55)', mt: 0.25 }}>{note}</Typography>}
+      <Stack direction="row" alignItems="flex-end" justifyContent="space-between" gap={1} sx={{ mt: 0.75 }}>
+        <Tooltip title={fmt(value)} placement="bottom-start">
+          <Typography sx={{ fontSize: { xs: 18, md: 22 }, fontWeight: 900, color: INK, letterSpacing: -0.5, whiteSpace: 'nowrap', lineHeight: 1.15 }}>
+            {fmtCompact(n)}
+          </Typography>
+        </Tooltip>
+        {trend && <Box sx={{ display: { xs: 'none', sm: 'block' } }}>{trend}</Box>}
+      </Stack>
+      {share !== undefined && (
+        <Box sx={{ mt: 0.75, height: 4, borderRadius: 2, bgcolor: 'rgba(100,116,139,0.15)', overflow: 'hidden' }}>
+          <Box sx={{ height: '100%', width: `${Math.min(100, share)}%`, bgcolor: tone, borderRadius: 2, transformOrigin: 'left', animation: `${grow} 1s ${delay + 0.3}s cubic-bezier(.2,.8,.2,1) both` }} />
+        </Box>
+      )}
+      {note && <Typography sx={{ fontSize: 11.5, color: MUTED, mt: 0.5 }} noWrap title={note}>{note}</Typography>}
+    </Box>
+  );
+};
+
+/** Pastel portfolio header: greeting and counts, then overall progress and the headline money */
+const PortfolioHero = ({ totals: t, monthlySpend, projects, loadedAt, loading, onRefresh }) => {
+  const trend = monthlySpend.map((m) => m.total);
+  const thisMonth = trend[trend.length - 1] || 0;
+  const statusCounts = ['Active', 'Planning', 'On Hold', 'Completed']
+    .map((st) => ({ st, n: projects.filter((p) => p.status === st).length })).filter((x) => x.n);
+  const attention = projects.filter((p) => p.health !== 'On Track').length;
+  return (
+    <Box
+      sx={{
+        position: 'relative', overflow: 'hidden', borderRadius: 4, mb: 2.5, px: { xs: 2, md: 3 }, py: { xs: 2, md: 2.5 },
+        background: PASTEL_BG, border: '1px solid rgba(255,255,255,0.85)', boxShadow: PASTEL_SHADOW
+      }}
+    >
+      {/* Soft drifting light */}
+      {[['#5eead4', '-8%', '-60%', 0], ['#a5b4fc', '60%', '-80%', 5]].map(([c, l, tp, d]) => (
+        <Box key={c} sx={{ position: 'absolute', left: l, top: tp, width: 380, height: 380, borderRadius: '50%', background: `radial-gradient(circle, ${c}55 0%, transparent 65%)`, animation: `${drift} 16s ${d}s ease-in-out infinite`, pointerEvents: 'none' }} />
+      ))}
+
+      <Box sx={{ position: 'relative' }}>
+        {/* Title row */}
+        <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} gap={1.5}>
+          <Box sx={{ minWidth: 0 }}>
+            <Stack direction="row" alignItems="center" gap={0.75}>
+              <Box sx={{ width: 7, height: 7, borderRadius: '50%', bgcolor: '#14b8a6', animation: `${livePulse} 2s infinite` }} />
+              <Typography sx={{ fontSize: 11, fontWeight: 800, letterSpacing: 1.5, textTransform: 'uppercase', color: '#0f766e' }}>
+                Project Portfolio · {dayjs().format('ddd, DD MMM YYYY')}
+              </Typography>
+            </Stack>
+            <Typography sx={{ fontSize: { xs: 22, md: 26 }, fontWeight: 900, letterSpacing: -0.5, lineHeight: 1.2, mt: 0.5, color: INK }}>
+              {greeting()},{' '}
+              <Box component="span" sx={{ background: 'linear-gradient(90deg, #0f766e, #4f46e5)', WebkitBackgroundClip: 'text', backgroundClip: 'text', color: 'transparent' }}>
+                every project at a glance
+              </Box>
+            </Typography>
+          </Box>
+          <Stack direction="row" alignItems="center" gap={1} sx={{ flexShrink: 0 }}>
+            <Typography sx={{ fontSize: 12, color: MUTED }}>{loadedAt ? `Updated ${dayjs(loadedAt).format('h:mm A')}` : ''}</Typography>
+            <Tooltip title="Refresh">
+              <IconButton size="small" onClick={onRefresh} disabled={loading} sx={{ ...GLASS, color: INK, '&:hover': { bgcolor: '#fff' } }}>
+                <RefreshIcon fontSize="small" sx={{ animation: loading ? `${spin} 1s linear infinite` : 'none' }} />
+              </IconButton>
+            </Tooltip>
+          </Stack>
+        </Stack>
+
+        <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mt: 1.25 }}>
+          {t ? (
+            <>
+              {[
+                [plural(t.projects, 'main project'), INK],
+                [plural(t.subProjects, 'sub project'), INK],
+                [plural(t.contractors, 'contractor'), INK],
+                ...statusCounts.map(({ st, n }) => [`${n} ${st.toLowerCase()}`, STATUS_TONE[st]])
+              ].map(([label, c]) => (
+                <Chip key={label} size="small" label={label} sx={{ height: 22, fontSize: 12, fontWeight: 700, color: c, bgcolor: 'rgba(255,255,255,0.7)', border: '1px solid rgba(255,255,255,0.95)' }} />
+              ))}
+              <Chip
+                size="small"
+                label={attention ? `${attention} need attention` : 'All on track'}
+                sx={{ height: 22, fontSize: 12, fontWeight: 800, color: attention ? '#b91c1c' : '#15803d', bgcolor: attention ? '#fee2e2' : '#dcfce7' }}
+              />
+            </>
+          ) : <Skeleton width={320} height={24} />}
+        </Stack>
+
+        {/* Progress + money */}
+        <Box sx={{ mt: 2, display: 'grid', gap: 1.25, alignItems: 'stretch', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', lg: '190px repeat(4, minmax(0,1fr))' } }}>
+          <Box sx={{ ...GLASS, gridColumn: { xs: '1 / -1', lg: 'auto' }, p: 1.5, borderRadius: 3, display: 'flex', alignItems: 'center', gap: 1.5, animation: `${rise} .6s both` }}>
+            {t ? <ProgressRing value={t.progress} size={72} stroke={7} color="#0f766e" track="rgba(100,116,139,0.15)" label="done" />
+              : <Skeleton variant="circular" width={72} height={72} />}
+            <Box>
+              <Typography sx={{ fontSize: 10.5, fontWeight: 800, letterSpacing: 0.8, textTransform: 'uppercase', color: MUTED }}>Overall</Typography>
+              <Typography sx={{ fontSize: 13, color: INK, fontWeight: 800 }}>{t ? `${t.active} active` : '–'}</Typography>
+              <Typography sx={{ fontSize: 12.5, color: '#15803d', fontWeight: 700 }}>{t ? `${t.completed} completed` : ''}</Typography>
+            </Box>
+          </Box>
+          {t ? (
+            <>
+              <HeroKpi
+                hint={DEFINITIONS.budget} label="Total budget" value={t.budget} tone="#64748b" icon={<BudgetIcon />} delay={0.1}
+                note={t.budgetsPending ? `${plural(t.budgetsPending, 'project')} without an approved budget` : `${fmtCompact(t.distributed)} distributed`}
+              />
+              <HeroKpi
+                hint={DEFINITIONS.contracted} label="Contracted" value={t.contracted} tone="#4f46e5" icon={<ContractIcon />} delay={0.2}
+                share={pct(t.contracted, t.budget)} note={t.budget ? `${pct(t.contracted, t.budget)}% of budget` : 'No budget set yet'}
+              />
+              <HeroKpi
+                hint={DEFINITIONS.spent} label="Spent (certified)" value={t.spent} tone="#d97706" icon={<SpentIcon />} delay={0.3}
+                share={pct(t.spent, t.contracted || t.budget)}
+                note={thisMonth ? `${fmtCompact(thisMonth)} this month` : `${pct(t.spent, t.contracted || t.budget)}% of ${t.contracted ? 'contracted' : 'budget'}`}
+                trend={<Sparkline values={trend} color="#d97706" />}
+              />
+              <HeroKpi
+                hint={DEFINITIONS.paid} label="Paid to contractors" value={t.paid} tone="#16a34a" icon={<PaidIcon />} delay={0.4}
+                share={pct(t.paid, t.approved || t.spent)}
+                note={t.pendingApprovals ? `${plural(t.pendingApprovals, 'IPC')} · ${fmtCompact(t.pendingAmount)} awaiting approval` : 'No IPCs awaiting approval'}
+              />
+            </>
+          ) : [0, 1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={96} sx={{ borderRadius: 3 }} />)}
+        </Box>
+      </Box>
     </Box>
   );
 };
@@ -105,28 +281,47 @@ const HeroKpi = ({ label, value, note, tone, delay }) => {
 /** Budget → … → Paid as horizontal bars, each against the budget */
 const MoneyFlow = ({ totals }) => {
   const base = Math.max(totals.budget, ...FLOW.map((f) => totals[f.key] || 0)) || 1;
+  const hasClient = totals.clientBilled > 0 || totals.clientReceived > 0;
+  const Bar = ({ f, i, of }) => (
+    <Box>
+      <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
+        <Tooltip title={DEFINITIONS[f.key]} placement="top-start">
+          <Typography variant="body2" fontWeight={700} sx={{ color: INK, cursor: 'help', borderBottom: `1px dotted ${MUTED}` }}>{f.label}</Typography>
+        </Tooltip>
+        <Tooltip title={fmt(totals[f.key])}>
+          <Typography variant="body2" sx={{ color: MUTED }}>
+            <Box component="span" sx={{ fontWeight: 800, color: INK }}>{fmtCompact(totals[f.key])}</Box>
+            {of && ` · ${of}`}
+          </Typography>
+        </Tooltip>
+      </Stack>
+      <Box sx={{ height: 10, borderRadius: 5, bgcolor: '#f1f5f9', overflow: 'hidden' }}>
+        <Box
+          sx={{
+            height: '100%', width: `${Math.max(1, ((totals[f.key] || 0) / base) * 100)}%`, borderRadius: 5,
+            background: `linear-gradient(90deg, ${f.color}aa, ${f.color})`, transformOrigin: 'left',
+            animation: `${grow} 1s ${0.2 + i * 0.1}s cubic-bezier(.2,.8,.2,1) both`
+          }}
+        />
+      </Box>
+    </Box>
+  );
   return (
     <Stack gap={1.5}>
       {FLOW.map((f, i) => (
-        <Box key={f.key}>
-          <Stack direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-            <Typography variant="body2" fontWeight={700} sx={{ color: INK }}>{f.label}</Typography>
-            <Typography variant="body2" sx={{ color: MUTED }}>
-              <Box component="span" sx={{ fontWeight: 800, color: INK }}>{fmtCompact(totals[f.key])}</Box>
-              {f.key !== 'budget' && totals.budget > 0 && ` · ${pct(totals[f.key], totals.budget)}%`}
-            </Typography>
-          </Stack>
-          <Box sx={{ height: 10, borderRadius: 5, bgcolor: '#f1f5f9', overflow: 'hidden' }}>
-            <Box
-              sx={{
-                height: '100%', width: `${Math.max(1, ((totals[f.key] || 0) / base) * 100)}%`, borderRadius: 5,
-                background: `linear-gradient(90deg, ${f.color}aa, ${f.color})`, transformOrigin: 'left',
-                animation: `${grow} 1s ${0.2 + i * 0.1}s cubic-bezier(.2,.8,.2,1) both`
-              }}
-            />
-          </Box>
-        </Box>
+        <Bar key={f.key} f={f} i={i} of={f.key !== 'budget' && totals.budget > 0 ? `${pct(totals[f.key], totals.budget)}%` : null} />
       ))}
+      {!totals.budget && totals.contracted > 0 && (
+        <Typography variant="caption" sx={{ color: '#b45309' }}>No budget approved yet, so bars are compared to the largest figure.</Typography>
+      )}
+      {hasClient && (
+        <>
+          <Typography sx={{ mt: 0.5, pt: 1.25, borderTop: `1px dashed ${LINE}`, fontSize: 12, fontWeight: 800, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.6 }}>Client side</Typography>
+          {CLIENT_FLOW.map((f, i) => (
+            <Bar key={f.key} f={f} i={FLOW.length + i} of={f.key === 'clientReceived' && totals.clientBilled > 0 ? `${pct(totals.clientReceived, totals.clientBilled)}% of billed` : null} />
+          ))}
+        </>
+      )}
     </Stack>
   );
 };
@@ -154,13 +349,15 @@ const HealthDonut = ({ health, total }) => {
       </Box>
       <Stack gap={1} sx={{ width: '100%' }}>
         {health.map((h) => (
-          <Stack key={h.health} direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75, borderRadius: 2, bgcolor: HEALTH_STYLE[h.health].bg }}>
+          <Tooltip key={h.health} title={HEALTH_MEANING[h.health]} placement="left">
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ px: 1.25, py: 0.75, borderRadius: 2, bgcolor: HEALTH_STYLE[h.health].bg, cursor: 'help' }}>
             <Stack direction="row" alignItems="center" gap={1}>
               <Box sx={{ width: 8, height: 8, borderRadius: '50%', bgcolor: HEALTH_STYLE[h.health].dot }} />
               <Typography variant="body2" fontWeight={700} sx={{ color: HEALTH_STYLE[h.health].fg }}>{h.health}</Typography>
             </Stack>
             <Typography variant="body2" fontWeight={900} sx={{ color: HEALTH_STYLE[h.health].fg }}>{h.count}</Typography>
           </Stack>
+          </Tooltip>
         ))}
       </Stack>
     </Stack>
@@ -168,7 +365,7 @@ const HealthDonut = ({ health, total }) => {
 };
 
 /** IPC approval chain with what is waiting at each stage */
-const ApprovalPipeline = ({ stages }) => {
+const ApprovalPipeline = ({ stages, notInChain }) => {
   const max = Math.max(1, ...stages.map((s) => s.count));
   return (
     <Stack gap={1.25}>
@@ -188,12 +385,28 @@ const ApprovalPipeline = ({ stages }) => {
               <Typography variant="body2" fontWeight={700} noWrap sx={{ color: INK }}>{s.stage}</Typography>
               <Typography variant="caption" fontWeight={800} sx={{ color: MUTED, whiteSpace: 'nowrap' }}>{s.count ? fmtCompact(s.amount) : '—'}</Typography>
             </Stack>
+            {s.count > 0 && s.oldestDays !== null && (
+              <Typography sx={{ fontSize: 11, fontWeight: 700, color: s.oldestDays > 7 ? '#dc2626' : MUTED }}>
+                Oldest waiting {s.oldestDays === 0 ? 'since today' : `${s.oldestDays} day${s.oldestDays === 1 ? '' : 's'}`}
+              </Typography>
+            )}
             <Box sx={{ mt: 0.5, height: 5, borderRadius: 3, bgcolor: '#f1f5f9', overflow: 'hidden' }}>
               <Box sx={{ height: '100%', width: `${(s.count / max) * 100}%`, bgcolor: '#f59e0b', borderRadius: 3, transformOrigin: 'left', animation: `${grow} .9s ${0.3 + i * 0.1}s both` }} />
             </Box>
           </Box>
         </Stack>
       ))}
+      {notInChain && (notInChain.draft.count > 0 || notInChain.rejected.count > 0) && (
+        <Box sx={{ mt: 0.5, pt: 1.25, borderTop: `1px dashed ${LINE}` }}>
+          <Typography sx={{ fontSize: 11.5, fontWeight: 800, color: MUTED, textTransform: 'uppercase', letterSpacing: 0.5, mb: 0.75 }}>Not in the approval chain</Typography>
+          {[['Draft, not submitted yet', notInChain.draft, MUTED], ['Rejected, sent back for revision', notInChain.rejected, '#b91c1c']].filter(([, v]) => v.count).map(([label, v, c]) => (
+            <Stack key={label} direction="row" justifyContent="space-between" sx={{ py: 0.25 }}>
+              <Typography variant="body2" sx={{ color: c, fontWeight: 600 }}>{v.count} · {label}</Typography>
+              <Typography variant="caption" fontWeight={800} sx={{ color: MUTED }}>{fmtCompact(v.amount)}</Typography>
+            </Stack>
+          ))}
+        </Box>
+      )}
     </Stack>
   );
 };
@@ -201,7 +414,18 @@ const ApprovalPipeline = ({ stages }) => {
 /** One Main Project card */
 const ProjectCard = ({ p, color, index, onOpen }) => {
   const health = HEALTH_STYLE[p.health] || HEALTH_STYLE['On Track'];
-  const spentPct = pct(p.spent, p.budget);
+  const isSlab = p.contractBasis === 'Slab';
+  // Slab-wise work is measured against the slab contracts; BOQ-wise against the BOQ budget
+  const base = isSlab ? p.contracted : p.budget;
+  const spentPct = pct(p.spent, base);
+  const figures = isSlab
+    ? [['Contract value', p.contracted], ['Billed', p.spent], ['Paid', p.paid]]
+    : [['Budget', p.budgetStatus === 'Approved' ? p.budget : (p.budgetStatus === 'Submitted' ? 'With CEO' : 'Not set')], ['Spent', p.spent], ['Paid', p.paid]];
+  const scope = isSlab
+    ? (p.slabs?.total ? `${p.slabs.billed} of ${plural(p.slabs.total, 'slab')} billed · ${p.slabs.verified} verified` : 'No slabs contracted yet')
+    : p.contractBasis === 'BOQ'
+      ? (p.lines?.total ? `${p.lines.contracted} of ${plural(p.lines.total, 'BOQ line')} contracted · ${p.lines.billed} billed` : 'No BOQ lines yet')
+      : null;
   const daysLeft = p.expectedEndDate ? dayjs(p.expectedEndDate).diff(dayjs(), 'day') : null;
   return (
     <Box
@@ -225,7 +449,13 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
           <Box sx={{ position: 'absolute', inset: 0, backgroundImage: `linear-gradient(180deg, rgba(15,23,42,0.2), rgba(15,23,42,0.85)), url(${getImageUrl(p.cover)})`, backgroundSize: 'cover', backgroundPosition: 'center' }} />
         )}
         <Stack direction="row" justifyContent="space-between" alignItems="flex-start" sx={{ position: 'relative' }}>
-          <Chip size="small" label={p.health} sx={{ height: 22, bgcolor: health.bg, color: health.fg, fontWeight: 800, fontSize: 11 }} />
+          <Tooltip
+            title={p.healthReasons?.length
+              ? <Box component="ul" sx={{ m: 0, pl: 2 }}>{p.healthReasons.map((r) => <li key={r}>{r}</li>)}</Box>
+              : HEALTH_MEANING[p.health]}
+          >
+            <Chip size="small" label={p.health} sx={{ height: 22, bgcolor: health.bg, color: health.fg, fontWeight: 800, fontSize: 11, cursor: 'help' }} />
+          </Tooltip>
           {p.pendingApprovals > 0 && (
             <Tooltip title={`${plural(p.pendingApprovals, 'IPC')} waiting for approval · ${fmt(p.pendingAmount)}`}>
               <Chip size="small" icon={<PendingIcon sx={{ fontSize: '14px !important', color: '#fff !important' }} />} label={p.pendingApprovals}
@@ -247,21 +477,29 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
         <Stack direction="row" alignItems="center" gap={0.5} sx={{ color: MUTED, mb: 1.5, pr: 10, minHeight: 20 }}>
           {p.location && <><PlaceIcon sx={{ fontSize: 15 }} /><Typography variant="caption" noWrap>{p.location}</Typography></>}
         </Stack>
+        {p.contractBasis && (
+          <Stack direction="row" alignItems="center" gap={1} sx={{ mt: -0.75, mb: 1.25, pr: 10, minWidth: 0 }}>
+            <ContractTypeTag type={p.contractBasis} />
+            {scope && <Typography sx={{ fontSize: 11.5, color: MUTED, fontWeight: 600 }} noWrap>{scope}</Typography>}
+          </Stack>
+        )}
 
         <Stack direction="row" justifyContent="space-between" alignItems="baseline">
-          <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700 }}>SPENT OF BUDGET</Typography>
+          <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700 }}>{isSlab ? 'BILLED OF CONTRACT VALUE' : 'SPENT OF BUDGET'}</Typography>
           <Typography variant="caption" sx={{ fontWeight: 900, color: spentPct > 100 ? '#dc2626' : INK }}>{spentPct}%</Typography>
         </Stack>
         <Box sx={{ position: 'relative', mt: 0.5, height: 8, borderRadius: 4, bgcolor: '#f1f5f9', overflow: 'hidden' }}>
-          <Box sx={{ position: 'absolute', inset: 0, width: `${Math.min(100, pct(p.contracted, p.budget))}%`, bgcolor: `${color}33` }} />
+          {!isSlab && <Box sx={{ position: 'absolute', inset: 0, width: `${Math.min(100, pct(p.contracted, p.budget))}%`, bgcolor: `${color}33` }} />}
           <Box sx={{ position: 'absolute', inset: 0, width: `${Math.min(100, spentPct)}%`, background: spentPct > 100 ? '#ef4444' : `linear-gradient(90deg, ${color}bb, ${color})`, borderRadius: 4, transformOrigin: 'left', animation: `${grow} 1s .3s both` }} />
         </Box>
 
         <Box sx={{ mt: 1.75, display: 'grid', gridTemplateColumns: 'repeat(3, minmax(0,1fr))', gap: 1 }}>
-          {[['Budget', p.budget], ['Spent', p.spent], ['Paid', p.paid]].map(([label, v]) => (
+          {figures.map(([label, v]) => (
             <Box key={label} sx={{ minWidth: 0 }}>
               <Typography sx={{ fontSize: 10.5, fontWeight: 800, color: MUTED, letterSpacing: 0.5, textTransform: 'uppercase' }}>{label}</Typography>
-              <Tooltip title={fmt(v)}><Typography sx={{ fontSize: 14, fontWeight: 800, color: INK, whiteSpace: 'nowrap' }}>{fmtCompact(v)}</Typography></Tooltip>
+              {typeof v === 'string'
+                ? <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#b45309', whiteSpace: 'nowrap' }}>{v}</Typography>
+                : <Tooltip title={fmt(v)}><Typography sx={{ fontSize: 14, fontWeight: 800, color: INK, whiteSpace: 'nowrap' }}>{fmtCompact(v)}</Typography></Tooltip>}
             </Box>
           ))}
         </Box>
@@ -302,12 +540,13 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
 /** Things management should look at first */
 const Attention = ({ projects, onOpen }) => {
   const items = [];
-  projects.forEach((p) => {
-    if (p.health === 'Over Budget') items.push({ p, tone: '#dc2626', text: `Over budget by ${fmtCompact(p.spent - p.budget)}` });
-    if (p.overdue && p.status !== 'Completed') items.push({ p, tone: '#ea580c', text: `Past its end date (${dayjs(p.expectedEndDate).format('DD MMM YYYY')})` });
-    else if (p.health === 'Behind Schedule') items.push({ p, tone: '#ea580c', text: `${p.progress}% done but ${p.plannedProgress}% of the time is gone` });
-    if (p.linesOverBudget > 0) items.push({ p, tone: '#ca8a04', text: `${plural(p.linesOverBudget, 'BOQ line')} over budget or over quantity` });
-    if (p.pendingApprovals > 0) items.push({ p, tone: '#b45309', text: `${plural(p.pendingApprovals, 'IPC')} awaiting approval · ${fmtCompact(p.pendingAmount)}` });
+  [...projects].sort((a, b) => RISK[a.health] - RISK[b.health]).forEach((p) => {
+    const tone = HEALTH_STYLE[p.health]?.fg || '#b45309';
+    (p.healthReasons || []).forEach((text) => items.push({ p, tone, text }));
+    if (p.pendingApprovals > 0) {
+      const wait = p.oldestPendingDays ? ` · oldest waiting ${p.oldestPendingDays} day${p.oldestPendingDays === 1 ? '' : 's'}` : '';
+      items.push({ p, tone: '#b45309', text: `${plural(p.pendingApprovals, 'IPC')} awaiting approval · ${fmtCompact(p.pendingAmount)}${wait}` });
+    }
   });
   if (!items.length) {
     return (
@@ -346,8 +585,10 @@ export default function ProjectPortfolioDashboard() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [status, setStatus] = useState('All');
+  const [basis, setBasis] = useState('All');
   const [sort, setSort] = useState('budget');
   const [openId, setOpenId] = useState(null);
+  const [loadedAt, setLoadedAt] = useState(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -355,6 +596,7 @@ export default function ProjectPortfolioDashboard() {
     try {
       const res = await getPortfolio();
       setData(res.data?.data || null);
+      setLoadedAt(new Date());
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to load the portfolio');
     } finally {
@@ -373,6 +615,7 @@ export default function ProjectPortfolioDashboard() {
   const shown = useMemo(() => {
     const q = search.trim().toLowerCase();
     const list = projects.filter((p) => (status === 'All' || p.status === status)
+      && (basis === 'All' || p.contractBasis === basis)
       && (!q || [p.name, p.projectNumber, p.location, p.clientName].some((v) => (v || '').toLowerCase().includes(q))));
     const by = {
       budget: (a, b) => b.budget - a.budget,
@@ -382,12 +625,35 @@ export default function ProjectPortfolioDashboard() {
       name: (a, b) => a.name.localeCompare(b.name)
     };
     return [...list].sort(by[sort]);
-  }, [projects, search, status, sort]);
+  }, [projects, search, status, basis, sort]);
 
   const openIndex = shown.findIndex((p) => String(p._id) === openId);
   const openItem = openIndex >= 0 ? shown[openIndex] : null;
   const prev = openIndex > 0 ? () => setOpenId(String(shown[openIndex - 1]._id)) : null;
   const next = openIndex >= 0 && openIndex < shown.length - 1 ? () => setOpenId(String(shown[openIndex + 1]._id)) : null;
+
+  // Spreadsheet of the projects in view, for handing over after a meeting
+  const exportCsv = () => {
+    const d = (v) => (v ? dayjs(v).format('DD-MMM-YYYY') : '');
+    const headers = ['Project', 'Number', 'Contract Basis', 'Status', 'Health', 'Why', 'Location', 'Manager', 'Start', 'End', 'Progress %', 'Planned %',
+      'Sub Projects', 'Contracts', 'Contractors', 'Budget Status', 'Approved Budget', 'Distributed', 'BOQ Estimate', 'Contracted', 'Verified', 'Certified (Spent)', 'CEO Approved', 'Paid',
+      'Retention Held', 'Advance Outstanding', 'IPCs Awaiting Approval', 'Awaiting Amount', 'Oldest Wait (days)', 'Billed to Client', 'Received from Client'];
+    const rows = shown.map((p) => [p.name, p.projectNumber, p.contractBasis ? (p.contractBasis === 'Slab' ? 'Slab-wise' : 'BOQ-wise') : 'Not set', p.status, p.health, (p.healthReasons || []).join('; '), p.location, p.projectManager,
+      d(p.startDate), d(p.expectedEndDate), p.progress, p.plannedProgress ?? '', p.subProjects, p.contracts, p.contractors,
+      p.budgetStatus, p.budget, p.distributed, p.boqEstimate, p.contracted, p.verified, p.spent, p.approved, p.paid, p.retentionHeld, p.advanceOutstanding,
+      p.pendingApprovals, p.pendingAmount, p.oldestPendingDays ?? '', p.clientBilled, p.clientReceived]);
+    const cell = (v) => {
+      const str = v === null || v === undefined ? '' : String(v);
+      return /[",\n]/.test(str) ? `"${str.replace(/"/g, '""')}"` : str;
+    };
+    const csv = [headers, ...rows].map((r) => r.map(cell).join(',')).join('\n');
+    const url = URL.createObjectURL(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }));
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `project-portfolio-${dayjs().format('YYYY-MM-DD')}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   const t = data?.totals;
   const hasSpend = (data?.monthlySpend || []).some((m) => m.total > 0);
@@ -395,57 +661,7 @@ export default function ProjectPortfolioDashboard() {
 
   return (
     <Box sx={{ pb: 4 }}>
-      {/* Hero */}
-      <Box
-        sx={{
-          position: 'relative', overflow: 'hidden', borderRadius: 5, mb: 2.5, px: { xs: 2, md: 4 }, py: { xs: 2.5, md: 3.5 }, color: '#fff',
-          background: 'linear-gradient(135deg, #020617 0%, #0f172a 45%, #111827 100%)'
-        }}
-      >
-        {/* Drifting light */}
-        {[['#14b8a6', '-10%', '-40%', 0], ['#6366f1', '55%', '-60%', 4], ['#f59e0b', '80%', '40%', 8]].map(([c, l, tp, d]) => (
-          <Box key={c} sx={{ position: 'absolute', left: l, top: tp, width: 420, height: 420, borderRadius: '50%', background: `radial-gradient(circle, ${c}55 0%, transparent 65%)`, filter: 'blur(10px)', animation: `${drift} 14s ${d}s ease-in-out infinite`, pointerEvents: 'none' }} />
-        ))}
-        <Box sx={{ position: 'absolute', inset: 0, backgroundImage: 'radial-gradient(rgba(255,255,255,0.07) 1px, transparent 1px)', backgroundSize: '22px 22px', pointerEvents: 'none' }} />
-
-        <Box sx={{ position: 'relative' }}>
-          <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={2}>
-            <Box>
-              <Typography sx={{ fontSize: 12, fontWeight: 800, letterSpacing: 2, textTransform: 'uppercase', color: '#5eead4' }}>Project Portfolio</Typography>
-              <Typography sx={{ fontSize: { xs: 26, md: 36 }, fontWeight: 900, letterSpacing: -1, lineHeight: 1.1, mt: 0.5 }}>
-                Every project, one view
-              </Typography>
-              <Typography sx={{ color: 'rgba(255,255,255,0.6)', mt: 0.75, fontSize: 14 }}>
-                {t ? `${plural(t.projects, 'main project')} · ${plural(t.subProjects, 'sub project')} · ${plural(t.contractors, 'contractor')}` : 'Loading…'}
-                {' · '}as of {dayjs().format('DD MMM YYYY')}
-              </Typography>
-            </Box>
-            <Tooltip title="Refresh">
-              <IconButton onClick={load} sx={{ color: '#fff', bgcolor: 'rgba(255,255,255,0.08)', '&:hover': { bgcolor: 'rgba(255,255,255,0.16)' } }}><RefreshIcon /></IconButton>
-            </Tooltip>
-          </Stack>
-
-          <Box sx={{ mt: 3, display: 'grid', gap: 1.5, alignItems: 'stretch', gridTemplateColumns: { xs: 'repeat(2, minmax(0,1fr))', md: 'auto repeat(4, minmax(0,1fr))' } }}>
-            <Box sx={{ gridColumn: { xs: '1 / -1', md: 'auto' }, display: 'flex', alignItems: 'center', gap: 2, pr: { md: 2 } }}>
-              {t ? <ProgressRing value={t.progress} size={110} stroke={10} color="#2dd4bf" track="rgba(255,255,255,0.1)" textColor="#fff" label="overall" />
-                : <Skeleton variant="circular" width={110} height={110} sx={{ bgcolor: 'rgba(255,255,255,0.1)' }} />}
-              <Box>
-                <Typography sx={{ fontSize: 28, fontWeight: 900 }}>{t?.active ?? '–'}</Typography>
-                <Typography sx={{ fontSize: 12, color: 'rgba(255,255,255,0.6)', fontWeight: 700 }}>active now</Typography>
-                <Typography sx={{ fontSize: 13, color: '#86efac', fontWeight: 800, mt: 0.5 }}>{t ? `${t.completed} completed` : ''}</Typography>
-              </Box>
-            </Box>
-            {t ? (
-              <>
-                <HeroKpi label="Total budget" value={t.budget} note={t.lumpSumBudget ? `Lump sum ${fmtCompact(t.lumpSumBudget)}` : 'Sum of all BOQs'} tone="#94a3b8" delay={0.1} />
-                <HeroKpi label="Contracted" value={t.contracted} note={`${pct(t.contracted, t.budget)}% of budget`} tone="#818cf8" delay={0.2} />
-                <HeroKpi label="Spent (certified)" value={t.spent} note={`${pct(t.spent, t.budget)}% of budget`} tone="#fbbf24" delay={0.3} />
-                <HeroKpi label="Paid to contractors" value={t.paid} note={t.pendingApprovals ? `${t.pendingApprovals} IPCs · ${fmtCompact(t.pendingAmount)} awaiting approval` : 'No IPCs waiting'} tone="#4ade80" delay={0.4} />
-              </>
-            ) : [0, 1, 2, 3].map((i) => <Skeleton key={i} variant="rounded" height={100} sx={{ bgcolor: 'rgba(255,255,255,0.08)', borderRadius: 3 }} />)}
-          </Box>
-        </Box>
-      </Box>
+      <PortfolioHero totals={t} monthlySpend={data?.monthlySpend || []} projects={projects} loadedAt={loadedAt} loading={loading} onRefresh={load} />
 
       {error && <Alert severity="error" sx={{ mb: 2 }} action={<Button color="inherit" size="small" onClick={load}>Retry</Button>}>{error}</Alert>}
 
@@ -455,7 +671,7 @@ export default function ProjectPortfolioDashboard() {
           <Box sx={{ display: 'grid', gap: 2, mb: 2, gridTemplateColumns: { xs: '1fr', md: 'repeat(2, minmax(0,1fr))', xl: 'repeat(4, minmax(0,1fr))' } }}>
             <Card title="Money flow" subtitle="From budget to cash paid, all projects" delay={0.1}><MoneyFlow totals={t} /></Card>
             <Card title="Project health" subtitle="Budget and schedule" delay={0.15}><HealthDonut health={t.health} total={t.projects} /></Card>
-            <Card title="IPC approvals" subtitle="Waiting at each stage" delay={0.2}><ApprovalPipeline stages={data.approvalStages} /></Card>
+            <Card title="IPC approvals" subtitle="Waiting at each stage" delay={0.2}><ApprovalPipeline stages={data.approvalStages} notInChain={data.ipcNotInChain} /></Card>
             <Card title="Needs attention" subtitle="Click to open the project" delay={0.25}><Attention projects={projects} onOpen={(p) => setOpenId(String(p._id))} /></Card>
           </Box>
 
@@ -505,6 +721,16 @@ export default function ProjectPortfolioDashboard() {
           <TextField select size="small" value={sort} onChange={(e) => setSort(e.target.value)} sx={{ minWidth: 200, '& .MuiOutlinedInput-root': { borderRadius: 3, bgcolor: '#fff' } }}>
             {SORTS.map((s) => <MenuItem key={s.value} value={s.value}>{s.label}</MenuItem>)}
           </TextField>
+          <Tooltip title="Download the projects in view as a spreadsheet (CSV)">
+            <span>
+              <Button
+                variant="outlined" startIcon={<DownloadIcon />} onClick={exportCsv} disabled={!shown.length}
+                sx={{ borderRadius: 3, textTransform: 'none', fontWeight: 700, bgcolor: '#fff', color: INK, borderColor: LINE, height: 40, whiteSpace: 'nowrap', '&:hover': { borderColor: INK, bgcolor: '#fff' } }}
+              >
+                Export
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Stack>
       <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 2 }}>
@@ -519,6 +745,23 @@ export default function ProjectPortfolioDashboard() {
             />
           );
         })}
+        {projects.some((p) => p.contractBasis) && (
+          <>
+            <Box sx={{ width: '1px', bgcolor: LINE, mx: 0.5 }} />
+            {[['All', 'All bases'], ['BOQ', 'BOQ-wise'], ['Slab', 'Slab-wise']].map(([value, label]) => {
+              const count = value === 'All' ? projects.length : projects.filter((p) => p.contractBasis === value).length;
+              if (value !== 'All' && !count) return null;
+              const on = basis === value;
+              const tone = value === 'Slab' ? '#6d28d9' : value === 'BOQ' ? '#0369a1' : INK;
+              return (
+                <Chip
+                  key={value} label={`${label} · ${count}`} onClick={() => setBasis(value)}
+                  sx={{ fontWeight: 800, bgcolor: on ? tone : '#fff', color: on ? '#fff' : tone, border: `1px solid ${on ? tone : LINE}`, '&:hover': { bgcolor: on ? tone : '#f1f5f9' } }}
+                />
+              );
+            })}
+          </>
+        )}
       </Stack>
 
       {loading && !data ? (

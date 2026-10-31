@@ -12,14 +12,15 @@ import {
   Add as AddIcon, ArrowBack as BackIcon,
   BarChart as ChartIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon, Edit as EditIcon,
-  Flag as FlagIcon,
   Refresh as RefreshIcon, Search as SearchIcon,
   ShoppingCart as POIcon, Receipt as InvoiceIcon,
   Visibility as ViewIcon,
   AccountTree as TreeIcon,
   FactCheck as CheckRequestIcon,
   Handshake as SubletIcon,
-  DeleteForever as DeleteForeverIcon
+  DeleteForever as DeleteForeverIcon,
+  Place as PlaceIcon, Person as PersonIcon, Event as EventIcon, Notes as NotesIcon,
+  AccountBalanceWallet as WalletIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -30,9 +31,8 @@ import {
   getBOQHeaders, createBOQHeader, updateBOQHeader, deleteBOQHeader, allocateBOQItem,
   getBOQ, addBOQItem, updateBOQItem, deleteBOQItem,
   updateBoqDiscount,
-  addMilestone, updateMilestone, deleteMilestone,
   createPOFromBOQ, getProjectPurchaseOrders,
-  generateMilestoneInvoice
+  getProjectWorkflow
 } from '../../services/projectManagementService';
 import api from '../../services/api';
 import CheckRequestsTab from './CheckRequestsTab';
@@ -40,7 +40,10 @@ import SubletContractsTab from './SubletContractsTab';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
 import MainProjectPage from '../../components/ProjectManagement/MainProjectPage';
+import { ProjectStatusMenu } from '../../components/ProjectManagement/ProjectQuickMenus';
+import ProjectBudgetPanel from '../../components/ProjectManagement/ProjectBudgetPanel';
 import MainCostReport from '../../components/ProjectManagement/MainCostReport';
+import { ContractTypeTag } from '../../components/ProjectManagement/mainProjectUi';
 import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -71,15 +74,6 @@ const BUDGET_CATEGORY_GROUPS = [
 
 const BUDGET_CATEGORIES = BUDGET_CATEGORY_GROUPS.flatMap((g) => g.categories);
 
-const STATUS_COLOR = {
-  Draft: 'default', Planning: 'info', Active: 'success',
-  'On Hold': 'warning', Completed: 'primary', Cancelled: 'error'
-};
-
-const MS_STATUS_COLOR = {
-  Pending: 'default', 'In Progress': 'info', Completed: 'success', Delayed: 'error'
-};
-
 /** Main projects only show portfolio tabs; Subs get the full execution suite. */
 const ALL_TABS = [
   { id: 'overview', label: 'Overview', icon: <ViewIcon fontSize="small" />, onMain: true, onSub: true },
@@ -87,10 +81,14 @@ const ALL_TABS = [
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true },
-  { id: 'cost', label: 'Cost Report', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: true }
+  { id: 'cost', label: 'Cost Report', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: true },
+  { id: 'budget', label: 'Budget', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: false }
 ];
 
-const getVisibleTabs = (isMain) => ALL_TABS.filter((t) => (isMain ? t.onMain : t.onSub));
+/** Slab-wise projects have no Bill of Quantities: their contracts are paid by stage, not by measured quantities */
+const getVisibleTabs = (isMain, basis) => ALL_TABS
+  .filter((t) => (isMain ? t.onMain : t.onSub))
+  .filter((t) => !(basis === 'Slab' && t.id === 'boq'));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (v) =>
@@ -1480,395 +1478,205 @@ const BOQTab = ({ projectId, project }) => {
   );
 };
 
-const OverviewTab = ({ project, onRefresh }) => <SubProjectOverview project={project} onRefresh={onRefresh} />;
+const OverviewTab = ({ project, onGoToTab }) => <SubProjectOverview project={project} onGoToTab={onGoToTab} />;
 
-const SubProjectOverview = ({ project, onRefresh }) => {
-  const [msDialogOpen, setMsDialogOpen] = useState(false);
-  const [editMs, setEditMs] = useState(null);
-  const [viewMs, setViewMs] = useState(null);
-  const [msForm, setMsForm] = useState({ title: '', description: '', plannedDate: '', billingTrigger: false, billingPercentage: 0, notes: '' });
-  const [msError, setMsError] = useState('');
-  const [saving, setSaving] = useState(false);
-  const [genInvLoading, setGenInvLoading] = useState(null);
-  const [genInvSuccess, setGenInvSuccess] = useState('');
-  const [genInvError, setGenInvError] = useState('');
+/** Label above a value; empty values show a dash so every field keeps its place */
+// Labels: semi-bold grey. Values: large, bold and dark — so the eye lands on the information
+const DetailField = ({ label, children, span = 1 }) => (
+  <Box sx={{ gridColumn: { sm: `span ${span}` }, minWidth: 0 }}>
+    <Typography sx={{ fontSize: 13, fontWeight: 600, color: '#64748b' }}>{label}</Typography>
+    <Box sx={{ fontSize: 17, fontWeight: 700, color: '#0f172a', mt: 0.5, lineHeight: 1.35, wordBreak: 'break-word' }}>
+      {children || <Typography component="span" sx={{ fontSize: 17, color: '#cbd5e1', fontWeight: 600 }}>—</Typography>}
+    </Box>
+  </Box>
+);
 
-  const openAddMs = () => {
-    setEditMs(null);
-    setMsForm({ title: '', description: '', plannedDate: '', billingTrigger: false, billingPercentage: 0, notes: '' });
-    setMsDialogOpen(true);
-  };
+/** One overview section as its own card: tinted icon, title, then its fields in a grid */
+const DetailSection = ({ title, icon, tone = '#1976d2', cols = 3, action, children, sx }) => (
+  <Paper
+    elevation={0}
+    sx={{
+      p: { xs: 2, sm: 2.75 }, borderRadius: 3, border: '1px solid #e8edf3', bgcolor: '#fff',
+      boxShadow: '0 1px 2px rgba(15,23,42,0.04)', transition: 'box-shadow .2s', '&:hover': { boxShadow: '0 6px 20px rgba(15,23,42,0.06)' }, ...sx
+    }}
+  >
+    <Stack direction="row" alignItems="center" gap={1.5} sx={{ mb: 2.25 }}>
+      <Box sx={{ width: 40, height: 40, borderRadius: 2.5, display: 'grid', placeItems: 'center', bgcolor: `${tone}14`, color: tone, flexShrink: 0, '& svg': { fontSize: 22 } }}>{icon}</Box>
+      <Typography sx={{ fontSize: 18, fontWeight: 800, color: '#0f172a', flex: 1 }}>{title}</Typography>
+      {action}
+    </Stack>
+    <Box sx={{ display: 'grid', columnGap: 3, rowGap: 2.5, gridTemplateColumns: { xs: '1fr', sm: `repeat(${cols}, minmax(0,1fr))` } }}>{children}</Box>
+  </Paper>
+);
 
-  const openEditMs = (ms) => {
-    setEditMs(ms);
-    setMsForm({
-      title: ms.title, description: ms.description || '',
-      plannedDate: ms.plannedDate ? dayjs(ms.plannedDate).format('YYYY-MM-DD') : '',
-      status: ms.status, completionPercentage: ms.completionPercentage || 0,
-      billingTrigger: ms.billingTrigger || false,
-      billingPercentage: ms.billingPercentage || 0, notes: ms.notes || ''
-    });
-    setMsDialogOpen(true);
-  };
+/** Sub Project overview: who / where / when, its budget and the work so far */
+const SubProjectOverview = ({ project, onGoToTab }) => {
+  const navigate = useNavigate();
+  const [work, setWork] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    getProjectWorkflow(project._id)
+      .then((res) => { if (!cancelled) setWork(res.data?.data || null); })
+      .catch(() => { if (!cancelled) setWork(null); });
+    return () => { cancelled = true; };
+  }, [project._id]);
 
-  const handleSaveMs = async () => {
-    if (!msForm.title) { setMsError('Title is required'); return; }
-    setSaving(true);
-    try {
-      if (editMs) {
-        await updateMilestone(project._id, editMs._id, msForm);
-      } else {
-        await addMilestone(project._id, msForm);
-      }
-      setMsDialogOpen(false);
-      onRefresh();
-    } catch (err) {
-      setMsError(err.response?.data?.message || 'Failed to save milestone');
-    } finally { setSaving(false); }
-  };
+  const isSlab = project.contractBasis === 'Slab';
+  const main = project.parentProject;
+  const day = (d) => (d ? dayjs(d).format('DD MMM YYYY') : null);
+  const daysLeft = project.expectedEndDate ? dayjs(project.expectedEndDate).endOf('day').diff(dayjs(), 'day') : null;
+  const timeLeft = project.status === 'Completed'
+    ? <Chip color="success" label={`Completed${project.actualEndDate ? ` ${day(project.actualEndDate)}` : ''}`} sx={{ fontWeight: 700 }} />
+    : daysLeft === null ? null
+      : daysLeft < 0 ? <Box component="span" sx={{ color: 'error.main' }}>{Math.abs(daysLeft)} days overdue</Box>
+        : <Box component="span" sx={{ color: daysLeft <= 7 ? 'warning.dark' : '#15803d' }}>{daysLeft} days left</Box>;
+  // Project Manager: the HR employee picked on the Sub Project (older projects may have an ERP user instead)
+  const pm = project.projectManagerEmployee;
+  const managerName = pm ? `${pm.firstName || ''} ${pm.lastName || ''}`.trim()
+    : project.projectManager ? `${project.projectManager.firstName || ''} ${project.projectManager.lastName || ''}`.trim() : null;
+  const managerMeta = pm ? [pm.employeeId && `ID ${pm.employeeId}`, pm.placementDesignation?.title].filter(Boolean).join(' · ') : '';
+  const initials = (managerName || '').split(' ').filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
 
-  const handleDeleteMs = async (msId) => {
-    if (!window.confirm('Delete this milestone?')) return;
-    try {
-      await deleteMilestone(project._id, msId);
-      onRefresh();
-    } catch { /* silent */ }
-  };
+  // Its share of the Main Project budget
+  const b = project.budgetAllocation;
+  const mine = b?.subProjects?.find((s) => String(s._id) === String(project._id));
+  const share = mine?.allocatedBudget || 0;
+  const committed = mine?.committed || 0;
+  const inForce = b ? (b.inForce ?? b.budgetStatus === 'Approved') : false;
+  const used = share > 0 ? Math.round((committed / share) * 100) : 0;
 
-  const handleGenerateInvoice = async (ms) => {
-    if (!project.contractValue) {
-      setGenInvError('Set the project contract value first before generating invoices.');
-      return;
-    }
-    setGenInvLoading(ms._id);
-    setGenInvError(''); setGenInvSuccess('');
-    try {
-      const res = await generateMilestoneInvoice(project._id, ms._id);
-      setGenInvSuccess(res.data?.message || 'Invoice generated');
-    } catch (err) {
-      setGenInvError(err.response?.data?.message || 'Failed to generate invoice');
-    } finally { setGenInvLoading(null); }
-  };
-
-  const setMs = (field) => (e) => setMsForm(prev => ({ ...prev, [field]: e.target.value }));
-
-  const daysLeft = project.expectedEndDate
-    ? dayjs(project.expectedEndDate).diff(dayjs(), 'day')
-    : null;
+  const Stat = ({ label, value, sub, tab }) => (
+    <Box
+      onClick={tab ? () => onGoToTab?.(tab) : undefined}
+      sx={{
+        p: 1.75, borderRadius: 2.5, bgcolor: '#f8fafc', border: '1px solid #e8edf3', cursor: tab ? 'pointer' : 'default', transition: 'all .15s',
+        '&:hover': tab ? { borderColor: 'primary.main', bgcolor: '#fff', transform: 'translateY(-1px)' } : {}
+      }}
+    >
+      <Typography sx={{ fontSize: 13, fontWeight: 600, color: '#64748b' }}>{label}</Typography>
+      <Typography sx={{ fontSize: 26, fontWeight: 800, lineHeight: 1.15, color: '#0f172a', mt: 0.25 }}>{value}</Typography>
+      {sub && <Typography sx={{ fontSize: 12.5, color: '#64748b', mt: 0.25 }}>{sub}</Typography>}
+    </Box>
+  );
 
   return (
-    <Grid container spacing={3}>
-      {/* Key Metrics */}
-      <Grid item xs={12} md={8}>
-        <Grid container spacing={2}>
-          <Grid item xs={12} sm={4}>
-            <Card variant="outlined">
-              <CardContent sx={{ py: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">Progress</Typography>
-                <Typography variant="h5" fontWeight={700} color="primary.main">
-                  {project.overallProgress || 0}%
-                </Typography>
-                <LinearProgress variant="determinate" value={project.overallProgress || 0} sx={{ mt: 0.5, height: 6, borderRadius: 3 }} />
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <Card variant="outlined">
-              <CardContent sx={{ py: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">Spent</Typography>
-                <Typography variant="h6" fontWeight={700}>
-                  {fmt(project.totalActualSpent)}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-          <Grid item xs={12} sm={4}>
-            <Card variant="outlined">
-              <CardContent sx={{ py: 1.5 }}>
-                <Typography variant="caption" color="text.secondary">Days Remaining</Typography>
-                <Typography variant="h6" fontWeight={700} color={daysLeft !== null && daysLeft < 0 ? 'error.main' : 'text.primary'}>
-                  {daysLeft !== null ? (daysLeft < 0 ? `${Math.abs(daysLeft)} overdue` : daysLeft) : '—'}
-                </Typography>
-              </CardContent>
-            </Card>
-          </Grid>
-        </Grid>
-
-      </Grid>
-
-      {/* Project Details */}
-      <Grid item xs={12} md={4}>
-        <Card variant="outlined">
-          <CardContent>
-            <Typography variant="subtitle2" fontWeight={600} gutterBottom>Project Details</Typography>
-            <Divider sx={{ mb: 1.5 }} />
-            {[
-              ['Type', project.projectType],
-              ['Client', project.clientName],
-              ['Contact', project.clientContact],
-              ['Society', project.society],
-              ['Sector', project.sector],
-              ['Street', project.street],
-              ['Side', project.side],
-              ['Plot #', project.plotNumber],
-              ['Address', project.address],
-              ['Manager', project.projectManager ? `${project.projectManager.firstName} ${project.projectManager.lastName}` : null],
-              ['Start Date', project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : null],
-              ['Expected End', project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : null],
-            ].filter(([, v]) => v).map(([label, value]) => (
-              <Stack key={label} direction="row" justifyContent="space-between" sx={{ mb: 0.5 }}>
-                <Typography variant="caption" color="text.secondary">{label}</Typography>
-                <Typography variant="caption" align="right" sx={{ maxWidth: '60%', wordBreak: 'break-word' }}>{value}</Typography>
+    <Grid container spacing={2.5}>
+      <Grid item xs={12} lg={8}>
+        <Stack gap={2.5}>
+          <DetailSection title="Project" icon={<ConstructionIcon />} tone="#1976d2">
+            <DetailField label="Project no.">{project.projectNumber}</DetailField>
+            <DetailField label="Main project">
+              {main?.name && (
+                <Box component="span" onClick={() => navigate(`/general/project-management/${main._id || main}`)}
+                  sx={{ color: 'primary.main', cursor: 'pointer', '&:hover': { textDecoration: 'underline' } }}>
+                  {main.name}
+                </Box>
+              )}
+            </DetailField>
+            <DetailField label="Status"><Chip label={project.status || 'Draft'} sx={{ fontWeight: 700, fontSize: 14 }} /></DetailField>
+            <DetailField label="Project type">{project.projectType}</DetailField>
+            <DetailField label="Contracts">
+              {project.contractBasis ? <ContractTypeTag type={project.contractBasis} /> : 'BOQ-wise or Slab-wise'}
+            </DetailField>
+            <DetailField label="Progress">
+              <Stack direction="row" alignItems="center" gap={1.25}>
+                <LinearProgress variant="determinate" value={Math.min(100, project.overallProgress || 0)} sx={{ flex: 1, height: 8, borderRadius: 4 }} />
+                <span>{project.overallProgress || 0}%</span>
               </Stack>
-            ))}
-          </CardContent>
-        </Card>
-      </Grid>
+            </DetailField>
+          </DetailSection>
 
-      {/* Milestones */}
-      <Grid item xs={12}>
-        <SectionHeader
-          title="Project Milestones"
-          action={<Button size="small" variant="outlined" startIcon={<AddIcon />} onClick={openAddMs}>Add Milestone</Button>}
-        />
+          <Box sx={{ display: 'grid', gap: 2.5, gridTemplateColumns: { xs: '1fr', md: '1fr 1fr' } }}>
+            <DetailSection title="Location" icon={<PlaceIcon />} tone="#0f766e" cols={2}>
+              <DetailField label="Society">{project.society}</DetailField>
+              <DetailField label="Sector / Block">{project.sector}</DetailField>
+              <DetailField label="Street">{project.street}</DetailField>
+              <DetailField label="Side">{project.side && `${project.side} side`}</DetailField>
+              <DetailField label="Address" span={2}>{project.address}</DetailField>
+            </DetailSection>
 
-        {genInvSuccess && <Alert severity="success" onClose={() => setGenInvSuccess('')} sx={{ mb: 2 }}>{genInvSuccess}</Alert>}
-        {genInvError && <Alert severity="error" onClose={() => setGenInvError('')} sx={{ mb: 2 }}>{genInvError}</Alert>}
-
-        {!project.milestones?.length ? (
-          <EmptyState icon={FlagIcon} text="No milestones defined"
-            action={<Button variant="outlined" size="small" startIcon={<AddIcon />} onClick={openAddMs}>Add First Milestone</Button>} />
-        ) : (
-          <Grid container spacing={2}>
-            {project.milestones.map((ms, idx) => (
-              <Grid item xs={12} sm={6} md={4} key={ms._id || idx}>
-                <Card variant="outlined">
-                  <CardContent sx={{ pb: 1 }}>
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start">
-                      <Box sx={{ flex: 1, minWidth: 0 }}>
-                        <Typography variant="subtitle2" fontWeight={600} noWrap>{ms.title}</Typography>
-                        <Chip label={ms.status} size="small" color={MS_STATUS_COLOR[ms.status] || 'default'} sx={{ mt: 0.5 }} />
+            <Stack gap={2.5}>
+              <DetailSection title="Team" icon={<PersonIcon />} tone="#7c3aed" cols={1}>
+                <DetailField label="Project Manager">
+                  {managerName && (
+                    <Stack direction="row" alignItems="center" gap={1.5}>
+                      <Box sx={{ width: 44, height: 44, borderRadius: '50%', bgcolor: '#7c3aed', color: '#fff', display: 'grid', placeItems: 'center', fontSize: 16, fontWeight: 800, flexShrink: 0 }}>{initials}</Box>
+                      <Box>
+                        {managerName}
+                        {managerMeta && <Typography sx={{ fontSize: 13.5, fontWeight: 500, color: '#64748b' }}>{managerMeta}</Typography>}
                       </Box>
-                      <Stack direction="row" spacing={0.5}>
-                        <Tooltip title="View Milestone Details">
-                          <IconButton size="small" color="info" onClick={() => setViewMs(ms)}>
-                            <ViewIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Edit Milestone">
-                          <IconButton size="small" color="primary" onClick={() => openEditMs(ms)}>
-                            <EditIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                        <Tooltip title="Delete Milestone">
-                          <IconButton size="small" color="error" onClick={() => handleDeleteMs(ms._id)}>
-                            <DeleteIcon fontSize="small" />
-                          </IconButton>
-                        </Tooltip>
-                      </Stack>
                     </Stack>
-                    {ms.description && <Typography variant="caption" color="text.secondary">{ms.description}</Typography>}
-                    {ms.plannedDate && (
-                      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-                        Planned: {dayjs(ms.plannedDate).format('DD MMM YYYY')}
-                      </Typography>
-                    )}
-                    {ms.completionPercentage > 0 && (
-                      <Box sx={{ mt: 1 }}>
-                        <LinearProgress variant="determinate" value={ms.completionPercentage} sx={{ height: 4, borderRadius: 2 }} />
-                        <Typography variant="caption">{ms.completionPercentage}% complete</Typography>
-                      </Box>
-                    )}
-                    {ms.billingTrigger && (
-                      <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mt: 1 }}>
-                        <Chip
-                          icon={<InvoiceIcon />}
-                          label={`Bill ${ms.billingPercentage}% of contract`}
-                          size="small" color="warning" variant="outlined"
-                        />
-                        <Tooltip title={project.contractValue ? `Generate invoice for ${fmt((ms.billingPercentage / 100) * project.contractValue)}` : 'Set contract value first'}>
-                          <span>
-                            <Button
-                              size="small" variant="outlined" color="warning"
-                              startIcon={genInvLoading === ms._id ? <CircularProgress size={12} /> : <InvoiceIcon />}
-                              onClick={() => handleGenerateInvoice(ms)}
-                              disabled={genInvLoading === ms._id}
-                              sx={{ mt: 0.5, fontSize: '0.65rem', py: 0.3 }}
-                            >
-                              {genInvLoading === ms._id ? 'Generating…' : 'Generate Invoice'}
-                            </Button>
-                          </span>
-                        </Tooltip>
-                      </Stack>
-                    )}
-                  </CardContent>
-                </Card>
-              </Grid>
-            ))}
-          </Grid>
-        )}
-
-        {/* Milestone Dialog */}
-        <Dialog open={msDialogOpen} onClose={() => setMsDialogOpen(false)} maxWidth="sm" fullWidth>
-          <DialogTitle>{editMs ? 'Edit Milestone' : 'Add Milestone'}</DialogTitle>
-          <DialogContent sx={{ pt: 2 }}>
-            {msError && <Alert severity="error" sx={{ mb: 2 }}>{msError}</Alert>}
-            <Grid container spacing={2}>
-              <Grid item xs={12}>
-                <TextField fullWidth required label="Milestone Title" value={msForm.title} onChange={setMs('title')} />
-              </Grid>
-              <Grid item xs={12}>
-                <TextField fullWidth label="Description" value={msForm.description} onChange={setMs('description')} multiline rows={2} />
-              </Grid>
-              <Grid item xs={6}>
-                <TextField fullWidth type="date" label="Planned Date" value={msForm.plannedDate}
-                  onChange={setMs('plannedDate')} InputLabelProps={{ shrink: true }} />
-              </Grid>
-              {editMs && (
-                <Grid item xs={6}>
-                  <FormControl fullWidth>
-                    <InputLabel>Status</InputLabel>
-                    <Select value={msForm.status || 'Pending'} label="Status" onChange={setMs('status')}>
-                      {['Pending', 'In Progress', 'Completed', 'Delayed'].map(s => <MenuItem key={s} value={s}>{s}</MenuItem>)}
-                    </Select>
-                  </FormControl>
-                </Grid>
-              )}
-              {editMs && (
-                <Grid item xs={6}>
-                  <TextField fullWidth label="Completion %" type="number" value={msForm.completionPercentage}
-                    onChange={setMs('completionPercentage')} InputProps={{ inputProps: { min: 0, max: 100 } }} />
-                </Grid>
-              )}
-              <Grid item xs={6}>
-                <TextField fullWidth label="Billing % (if milestone billing)" type="number"
-                  value={msForm.billingPercentage} onChange={setMs('billingPercentage')}
-                  helperText="% of contract value to invoice" />
-              </Grid>
-            </Grid>
-          </DialogContent>
-          <DialogActions>
-            <Button onClick={() => setMsDialogOpen(false)}>Cancel</Button>
-            <Button variant="contained" onClick={handleSaveMs} disabled={saving}>
-              {saving ? 'Saving…' : editMs ? 'Update' : 'Add'}
-            </Button>
-          </DialogActions>
-        </Dialog>
-
-        {/* View Milestone Details Dialog */}
-        <Dialog open={Boolean(viewMs)} onClose={() => setViewMs(null)} maxWidth="sm" fullWidth>
-          <DialogTitle sx={{ m: 0, p: 2, pb: 1, display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
-            <Stack direction="row" alignItems="center" spacing={1}>
-              <FlagIcon color="primary" />
-              <Typography variant="h6" fontWeight={700}>Milestone Details</Typography>
-            </Stack>
-            {viewMs?.status && (
-              <Chip label={viewMs.status} size="small" color={MS_STATUS_COLOR[viewMs.status] || 'default'} />
-            )}
-          </DialogTitle>
-          <Divider />
-          {viewMs && (
-            <DialogContent sx={{ p: 2.5 }}>
-              <Stack spacing={2.5}>
-                <Box>
-                  <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" sx={{ mb: 0.5 }}>MILESTONE TITLE</Typography>
-                  <Typography variant="subtitle1" fontWeight={700}>{viewMs.title}</Typography>
-                </Box>
-
-                {viewMs.description && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" sx={{ mb: 0.5 }}>DESCRIPTION</Typography>
-                    <Typography variant="body2" sx={{ bgcolor: 'action.hover', p: 1.5, borderRadius: 1 }}>{viewMs.description}</Typography>
-                  </Box>
-                )}
-
-                <Grid container spacing={2}>
-                  <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block">PLANNED COMPLETION DATE</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {viewMs.plannedDate ? dayjs(viewMs.plannedDate).format('DD MMMM YYYY') : 'Not specified'}
-                    </Typography>
-                  </Grid>
-                  <Grid item xs={6}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block">ACTUAL DATE</Typography>
-                    <Typography variant="body2" fontWeight={600}>
-                      {viewMs.actualDate ? dayjs(viewMs.actualDate).format('DD MMMM YYYY') : 'Pending Completion'}
-                    </Typography>
-                  </Grid>
-                </Grid>
-
-                <Box sx={{ p: 2, border: '1px solid', borderColor: 'divider', borderRadius: 2, bgcolor: 'background.paper' }}>
-                  <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 1 }}>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600}>PHYSICAL COMPLETION</Typography>
-                    <Typography variant="body2" fontWeight={700}>{viewMs.completionPercentage || 0}%</Typography>
-                  </Stack>
-                  <LinearProgress
-                    variant="determinate"
-                    value={viewMs.completionPercentage || 0}
-                    sx={{ height: 8, borderRadius: 4, bgcolor: 'grey.200' }}
-                  />
-                </Box>
-
-                <Box sx={{ p: 2, border: '1px solid', borderColor: 'warning.light', borderRadius: 2, bgcolor: 'warning.50' }}>
-                  <Typography variant="subtitle2" fontWeight={700} color="warning.dark" sx={{ display: 'flex', alignItems: 'center', gap: 1, mb: 1 }}>
-                    <InvoiceIcon fontSize="small" /> Milestone Billing & Invoicing
-                  </Typography>
-                  <Grid container spacing={1}>
-                    <Grid item xs={6}>
-                      <Typography variant="caption" color="text.secondary" display="block">Billing Trigger:</Typography>
-                      <Typography variant="body2" fontWeight={600}>
-                        {viewMs.billingTrigger || viewMs.billingPercentage > 0 ? 'Enabled' : 'Disabled'}
-                      </Typography>
-                    </Grid>
-                    <Grid item xs={6}>
-                      <Typography variant="caption" color="text.secondary" display="block">Billing Percentage:</Typography>
-                      <Typography variant="body2" fontWeight={600}>{viewMs.billingPercentage || 0}% of Contract</Typography>
-                    </Grid>
-                    {Boolean(viewMs.billingPercentage > 0) && (
-                      <Grid item xs={12} sx={{ mt: 1 }}>
-                        <Typography variant="caption" color="text.secondary" display="block">Estimated Billable Amount:</Typography>
-                        <Typography variant="subtitle1" fontWeight={700} color="success.main">
-                          {project.contractValue ? fmt((viewMs.billingPercentage / 100) * project.contractValue) : 'Contract value not configured'}
-                        </Typography>
-                      </Grid>
-                    )}
-                  </Grid>
-
-                  {(viewMs.billingTrigger || viewMs.billingPercentage > 0) && (
-                    <Button
-                      size="small" variant="contained" color="warning"
-                      startIcon={genInvLoading === viewMs._id ? <CircularProgress size={14} color="inherit" /> : <InvoiceIcon />}
-                      onClick={() => {
-                        const targetMs = viewMs;
-                        setViewMs(null);
-                        handleGenerateInvoice(targetMs);
-                      }}
-                      disabled={genInvLoading === viewMs._id}
-                      sx={{ mt: 1.5, width: '100%' }}
-                    >
-                      {genInvLoading === viewMs._id ? 'Generating Invoice…' : 'Generate Milestone Invoice'}
-                    </Button>
                   )}
-                </Box>
+                </DetailField>
+              </DetailSection>
 
-                {viewMs.notes && (
-                  <Box>
-                    <Typography variant="caption" color="text.secondary" fontWeight={600} display="block" sx={{ mb: 0.5 }}>REMARKS / NOTES</Typography>
-                    <Typography variant="body2" color="text.secondary" sx={{ fontStyle: 'italic' }}>{viewMs.notes}</Typography>
-                  </Box>
-                )}
-              </Stack>
-            </DialogContent>
+              <DetailSection title="Timeline" icon={<EventIcon />} tone="#d97706" cols={2}>
+                <DetailField label="Start">{day(project.startDate)}</DetailField>
+                <DetailField label="Expected end">{day(project.expectedEndDate)}</DetailField>
+                <DetailField label="Time" span={2}>{timeLeft}</DetailField>
+              </DetailSection>
+            </Stack>
+          </Box>
+
+          {(project.description || project.notes) && (
+            <DetailSection title="Scope and notes" icon={<NotesIcon />} tone="#475569" cols={1}>
+              {project.description && <DetailField label="Description / scope"><Box sx={{ whiteSpace: 'pre-line', fontWeight: 500, fontSize: 15.5 }}>{project.description}</Box></DetailField>}
+              {project.notes && <DetailField label="Notes"><Box sx={{ whiteSpace: 'pre-line', fontWeight: 500, fontSize: 15.5 }}>{project.notes}</Box></DetailField>}
+            </DetailSection>
           )}
-          <DialogActions sx={{ p: 2, pt: 1 }}>
-            <Button variant="outlined" startIcon={<EditIcon />} onClick={() => { const target = viewMs; setViewMs(null); openEditMs(target); }}>
-              Edit Milestone
-            </Button>
-            <Button variant="contained" onClick={() => setViewMs(null)}>
-              Close
-            </Button>
-          </DialogActions>
-        </Dialog>
+        </Stack>
+      </Grid>
+
+      <Grid item xs={12} lg={4}>
+        <Stack gap={2.5}>
+          <DetailSection title="Budget" icon={<WalletIcon />} tone="#15803d" cols={1}>
+            {!inForce ? (
+              <Alert severity="warning" sx={{ fontSize: 14 }}>{main?.name || 'The Main Project'}&apos;s budget is not approved yet — no contracts can be made here until it is.</Alert>
+            ) : !share ? (
+              <Alert severity="warning" sx={{ fontSize: 14 }}>{project.name} is not in the approved budget yet. Ask for it to be added with a budget revision.</Alert>
+            ) : (
+              <Box>
+                <Typography sx={{ fontSize: 32, fontWeight: 900, lineHeight: 1.1, color: '#0f172a' }}>{fmt(share)}</Typography>
+                <Typography sx={{ fontSize: 13.5, color: '#64748b', mt: 0.5 }}>Its share of {main?.name || 'the Main Project'}&apos;s approved budget</Typography>
+                <LinearProgress variant="determinate" value={Math.min(100, used)} color={used >= 90 ? 'error' : 'primary'} sx={{ mt: 2, height: 10, borderRadius: 5 }} />
+                <Stack direction="row" justifyContent="space-between" sx={{ mt: 1.25 }}>
+                  <Box>
+                    <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#64748b' }}>In contracts</Typography>
+                    <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{fmt(committed)}</Typography>
+                  </Box>
+                  <Box sx={{ textAlign: 'right' }}>
+                    <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#64748b' }}>Left for contracts</Typography>
+                    <Typography sx={{ fontSize: 16, fontWeight: 800, color: share - committed > 0 ? '#15803d' : 'error.main' }}>{fmt(share - committed)}</Typography>
+                  </Box>
+                </Stack>
+              </Box>
+            )}
+          </DetailSection>
+
+          <DetailSection title="Work so far" icon={<CheckRequestIcon />} tone="#0369a1" cols={2}>
+            {!work ? <Skeleton variant="rounded" height={160} sx={{ gridColumn: '1 / -1' }} /> : (
+              <>
+                {!isSlab && <Stat label="BOQ lines" value={work.boq?.lines || 0} tab="boq" />}
+                <Stat
+                  label={isSlab ? 'Slab contracts' : 'Contracts'} tab="sublet-contracts"
+                  value={(work.contracts?.active || 0) + (work.contracts?.completed || 0)}
+                  sub={work.contracts?.draft ? `${work.contracts.draft} draft` : 'active'}
+                />
+                <Stat
+                  label="Check requests" tab="check-requests"
+                  value={work.checkRequests?.verifiedOrBilled || 0}
+                  sub={work.checkRequests?.submitted ? `verified · ${work.checkRequests.submitted} in inspection` : 'verified'}
+                />
+                <Stat
+                  label="IPCs" tab="invoices"
+                  value={work.ipcs?.total || 0}
+                  sub={work.ipcs?.inApproval ? `${work.ipcs.inApproval} in approval` : work.ipcs?.paid ? `${work.ipcs.paid} paid` : 'raised'}
+                />
+                {isSlab && <Stat label="With Finance" value={fmt(work.ipcs?.unpaidAmount || 0)} sub={work.ipcs?.unpaid ? `${work.ipcs.unpaid} unpaid` : 'nothing due'} tab="invoices" />}
+              </>
+            )}
+          </DetailSection>
+        </Stack>
       </Grid>
     </Grid>
   );
@@ -1919,14 +1727,14 @@ const ProjectDetail = () => {
   useEffect(() => { loadProject(); }, [loadProject]);
 
   const isMainProject = project ? !project.parentProject : false;
-  const visibleTabs = getVisibleTabs(isMainProject);
+  const visibleTabs = getVisibleTabs(isMainProject, project?.contractBasis);
   const activeTab = visibleTabs[Math.min(tab, Math.max(0, visibleTabs.length - 1))] || visibleTabs[0];
   const goToTab = (tabId) => setSearchParams({ tab: tabId }, { replace: true });
 
   useEffect(() => {
     // Wait for the project in the URL: moving Main → Sub would otherwise map ?tab=invoices against the Main's tabs
     if (!project || String(project._id) !== String(id)) return;
-    const tabs = getVisibleTabs(!project.parentProject);
+    const tabs = getVisibleTabs(!project.parentProject, project.contractBasis);
     const raw = searchParams.get('tab');
     let idx = 0;
     if (raw != null && raw !== '') {
@@ -2023,6 +1831,7 @@ const ProjectDetail = () => {
           onDelete={user?.role === 'developer' ? () => setPermanentDeleteOpen(true) : null}
           boqView={<BOQTab projectId={id} project={project} />}
           costView={<MainCostReport project={project} />}
+          budgetView={<ProjectBudgetPanel project={project} onRefresh={loadProject} />}
         />
         {deleteDialog}
       </Box>
@@ -2107,11 +1916,11 @@ const ProjectDetail = () => {
                     sx={isMainProject ? { bgcolor: 'rgba(255,255,255,0.16)', color: '#fff', fontWeight: 700 } : undefined}
                     color={isMainProject ? undefined : 'default'}
                   />
-                  <Chip
-                    label={project.status}
-                    size="small"
-                    color={STATUS_COLOR[project.status] || 'default'}
-                    sx={isMainProject ? { bgcolor: 'rgba(255,255,255,0.9)', fontWeight: 600 } : undefined}
+                  {!isMainProject && project.contractBasis && <ContractTypeTag type={project.contractBasis} />}
+                  <ProjectStatusMenu
+                    project={project}
+                    onChanged={loadProject}
+                    chipSx={isMainProject ? { bgcolor: 'rgba(255,255,255,0.9)', fontWeight: 600 } : undefined}
                   />
                 </Stack>
                 <Typography variant="body2" sx={{ color: isMainProject ? 'rgba(255,255,255,0.72)' : 'text.secondary' }}>
@@ -2122,6 +1931,13 @@ const ProjectDetail = () => {
                   {!isMainProject && project.street && ` · ${project.street}`}
                   {!isMainProject && project.side && ` (${project.side} side)`}
                 </Typography>
+                {!isMainProject && project.projectManagerEmployee && (
+                  <Typography variant="body2" sx={{ color: 'text.secondary', mt: 0.25 }}>
+                    Project Manager: <Box component="span" sx={{ fontWeight: 700, color: 'text.primary' }}>
+                      {`${project.projectManagerEmployee.firstName || ''} ${project.projectManagerEmployee.lastName || ''}`.trim()}
+                    </Box>
+                  </Typography>
+                )}
               </Box>
             </Stack>
           </Box>
@@ -2169,36 +1985,32 @@ const ProjectDetail = () => {
           </Card>
 
           <Grid container spacing={1.5} sx={{ mb: 2 }}>
-            <Grid item xs={12} sm={4}>
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-                <Typography variant="caption" color="text.secondary">Spent</Typography>
-                <Typography variant="body2" fontWeight={700}>
-                  {fmt(project.totalActualSpent || 0)}
-                </Typography>
-              </Paper>
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-                <Typography variant="caption" color="text.secondary">Timeline</Typography>
-                <Typography variant="body2" fontWeight={700}>
-                  {project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'}
-                </Typography>
-              </Paper>
-            </Grid>
-            <Grid item xs={12} sm={4}>
-              <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff' }}>
-                <Typography variant="caption" color="text.secondary">Expected End</Typography>
-                <Typography variant="body2" fontWeight={700}>
-                  {project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'}
-                </Typography>
-              </Paper>
-            </Grid>
+            {(() => {
+              const mine = project.budgetAllocation?.subProjects?.find((x) => String(x._id) === String(project._id));
+              const daysLeft = project.expectedEndDate ? dayjs(project.expectedEndDate).endOf('day').diff(dayjs(), 'day') : null;
+              return [
+                ['Budget', mine?.allocatedBudget ? fmt(mine.allocatedBudget) : 'Not in budget yet',
+                  mine?.allocatedBudget ? `${fmt(mine.allocatedBudget - (mine.committed || 0))} left for contracts` : 'No contracts until it has a budget'],
+                ['Spent (certified)', fmt(project.totalActualSpent || 0), 'Certified work on IPCs'],
+                ['Timeline',
+                  `${project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'} → ${project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'}`,
+                  project.status === 'Completed' ? 'Completed' : daysLeft === null ? 'No end date set' : daysLeft < 0 ? `${Math.abs(daysLeft)} days overdue` : `${daysLeft} days left`]
+              ].map(([label, value, sub]) => (
+                <Grid item xs={12} sm={4} key={label}>
+                  <Paper variant="outlined" sx={{ p: 1.25, borderRadius: 2, bgcolor: '#fff', height: '100%' }}>
+                    <Typography sx={{ fontSize: 11.5, fontWeight: 600, color: '#64748b' }}>{label}</Typography>
+                    <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#0f172a', lineHeight: 1.3 }}>{value}</Typography>
+                    <Typography variant="caption" sx={{ fontWeight: 500, color: /overdue|Not in budget|No contracts/.test(sub) ? 'error.main' : 'text.secondary' }}>{sub}</Typography>
+                  </Paper>
+                </Grid>
+              ));
+            })()}
           </Grid>
         </>
       )}
 
       {!isMainProject && (
-        <ProjectWorkflowStrip projectId={id} activeTabId={activeTab?.id} onGoToTab={goToTab} />
+        <ProjectWorkflowStrip projectId={id} activeTabId={activeTab?.id} onGoToTab={goToTab} basis={project.contractBasis} />
       )}
 
       {/* Tabs */}
@@ -2255,8 +2067,9 @@ const ProjectDetail = () => {
             </Stack>
           </Box>
         )}
-        <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 } }}>
-          {activeTab?.id === 'overview' && <OverviewTab project={project} onRefresh={loadProject} />}
+        {/* Overview cards sit on a soft grey so each section reads as its own card */}
+        <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 }, ...(activeTab?.id === 'overview' && !isMainProject ? { bgcolor: '#f6f8fb', borderBottomLeftRadius: 10, borderBottomRightRadius: 10 } : {}) }}>
+          {activeTab?.id === 'overview' && <OverviewTab project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}

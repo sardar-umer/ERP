@@ -135,6 +135,7 @@ const MainLevel = ({ item, summary, tree, color, open }) => {
             <Stack direction="row" gap={0.75} flexWrap="wrap" sx={{ mb: 0.5 }}>
               <Chip size="small" label={item.status || 'Draft'} sx={{ height: 20, bgcolor: 'rgba(255,255,255,0.15)', color: '#fff', fontWeight: 700 }} />
               <Chip size="small" label={item.health} sx={{ height: 20, bgcolor: health.bg, color: health.fg, fontWeight: 800 }} />
+              {item.contractBasis && <ContractTypeTag type={item.contractBasis} />}
             </Stack>
             <Typography sx={{ fontSize: 22, fontWeight: 900, lineHeight: 1.2 }}>{item.name}</Typography>
             <Stack direction="row" gap={1.5} flexWrap="wrap" sx={{ mt: 0.5, color: 'rgba(255,255,255,0.7)', '& svg': { fontSize: 14 } }}>
@@ -148,15 +149,36 @@ const MainLevel = ({ item, summary, tree, color, open }) => {
       </Box>
       <Box sx={{ mt: 2 }}>
         <Stats items={[
-          { label: 'Budget', value: fmt(t.budget), note: t.lumpSumBudget ? `Lump sum ${fmt(t.lumpSumBudget)}` : 'Sum of BOQs' },
-          { label: 'Contracted', value: fmt(t.contracted), note: `${pct(t.contracted, t.budget)}% of budget` },
-          { label: 'Spent (certified)', value: fmt(t.spent), tone: t.budget && t.spent > t.budget ? '#dc2626' : '#b45309', note: `${pct(t.spent, t.budget)}% of budget` },
+          item.budgetStatus === 'Approved'
+            ? { label: 'Approved budget', value: fmt(item.budget), tone: '#0f766e', note: `${fmt(item.distributed)} distributed to sub projects` }
+            : { label: 'Budget', value: item.budgetStatus === 'Submitted' ? 'With the CEO' : 'Not set', tone: '#b45309', note: item.budgetStatus === 'Submitted' ? `${fmt(item.lumpSumBudget)} awaiting approval` : 'No contracts until approved' },
+          ...(item.contractBasis === 'Slab' ? [
+            // Slab-wise: the slab contracts are the yardstick
+            { label: 'Contract value (slabs)', value: fmt(t.contracted), note: t.lumpSumBudget ? `Lump sum budget ${fmt(t.lumpSumBudget)}` : plural(item.slabs?.total || 0, 'slab') },
+            { label: 'Slabs billed', value: `${item.slabs?.billed || 0} of ${item.slabs?.total || 0}`, note: `${item.slabs?.verified || 0} verified on site` },
+            { label: 'Billed (certified)', value: fmt(t.spent), tone: t.contracted && t.spent > t.contracted ? '#dc2626' : '#b45309', note: `${pct(t.spent, t.contracted)}% of contract value` }
+          ] : [
+            { label: 'Contracted', value: fmt(t.contracted), note: item.contractBasis === 'BOQ' && item.lines?.total ? `${item.lines.contracted} of ${plural(item.lines.total, 'BOQ line')} · ${pct(t.contracted, item.budget)}% of budget` : `${pct(t.contracted, item.budget)}% of budget` },
+            { label: 'Spent (certified)', value: fmt(t.spent), tone: item.budget && t.spent > item.budget ? '#dc2626' : '#b45309', note: `${pct(t.spent, item.budget)}% of budget` }
+          ]),
           { label: 'CEO approved', value: fmt(t.approved), tone: '#7e22ce' },
           { label: 'Paid', value: fmt(t.paid), tone: '#15803d' },
-          { label: 'Awaiting approval', value: item.pendingApprovals ? fmt(item.pendingAmount) : 'None', tone: item.pendingApprovals ? '#dc2626' : undefined, note: item.pendingApprovals ? plural(item.pendingApprovals, 'IPC') : undefined }
+          { label: 'Awaiting approval', value: item.pendingApprovals ? fmt(item.pendingAmount) : 'None', tone: item.pendingApprovals ? '#dc2626' : undefined, note: item.pendingApprovals ? `${plural(item.pendingApprovals, 'IPC')}${item.oldestPendingDays ? ` · oldest ${item.oldestPendingDays}d` : ''}` : undefined },
+          item.retentionHeld ? { label: 'Retention held', value: fmt(item.retentionHeld), note: 'Kept from contractors until release' } : null,
+          item.advanceOutstanding ? { label: 'Advance outstanding', value: fmt(item.advanceOutstanding), tone: '#b45309', note: 'Paid ahead, not yet recovered' } : null,
+          item.clientBilled ? { label: 'Billed to client', value: fmt(item.clientBilled), tone: '#0f766e' } : null,
+          item.clientBilled ? { label: 'Received from client', value: fmt(item.clientReceived), tone: '#0f766e', note: `${pct(item.clientReceived, item.clientBilled)}% of billed` } : null
         ]}
         />
       </Box>
+      {item.healthReasons?.length > 0 && (
+        <Box sx={{ mt: 1.5, p: 1.5, borderRadius: 2.5, bgcolor: health.bg, border: `1px solid ${health.fg}33` }}>
+          <Typography sx={{ fontSize: 12, fontWeight: 900, color: health.fg, mb: 0.5 }}>Why this project is “{item.health}”</Typography>
+          <Box component="ul" sx={{ m: 0, pl: 2.25, color: INK, fontSize: 13, '& li': { py: 0.15 } }}>
+            {item.healthReasons.map((r) => <li key={r}>{r}</li>)}
+          </Box>
+        </Box>
+      )}
       <SectionTitle count={tree.subProjects.length}>Sub projects</SectionTitle>
       {tree.subProjects.length ? tree.subProjects.map((s, n) => {
         const m = money.get(String(s._id));
@@ -176,7 +198,7 @@ const MainLevel = ({ item, summary, tree, color, open }) => {
   );
 };
 
-const SubLevel = ({ sub, money, color, open }) => (
+const SubLevel = ({ sub, money, basis, color, open }) => (
   <>
     <Stack direction="row" gap={2} alignItems="center" sx={{ mb: 2 }}>
       <ProgressRing value={sub.progress} size={72} stroke={7} color={color} label="done" />
@@ -185,13 +207,18 @@ const SubLevel = ({ sub, money, color, open }) => (
         <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">
           <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700 }}>{sub.projectNumber}{sub.sector ? ` · ${sub.sector}` : ''}</Typography>
           <Chip size="small" label={sub.status || 'Draft'} sx={{ height: 20, fontWeight: 700 }} />
+          {basis && <ContractTypeTag type={basis} />}
           {money?.health && <Chip size="small" label={money.health} color={HEALTH_COLOR[money.health] || 'default'} sx={{ height: 20, fontWeight: 700 }} />}
         </Stack>
       </Box>
     </Stack>
     <Stats items={[
-      { label: 'Budget', value: fmt(money?.budget) },
-      { label: 'Contracted', value: fmt(money?.contracted), note: `${pct(money?.contracted, money?.budget)}% of budget` },
+      ...(basis === 'Slab'
+        ? [{ label: 'Contract value (slabs)', value: fmt(money?.contracted), note: plural(sub.contracts.length, 'contract') }]
+        : [
+          { label: 'Budget', value: fmt(money?.budget) },
+          { label: 'Contracted', value: fmt(money?.contracted), note: `${pct(money?.contracted, money?.budget)}% of budget` }
+        ]),
       { label: 'Verified', value: fmt(money?.verified) },
       { label: 'Spent (certified)', value: fmt(money?.spent ?? sub.totals.billed), tone: '#b45309' },
       { label: 'CEO approved', value: fmt(money?.approved ?? sub.totals.approved), tone: '#7e22ce' },
@@ -424,6 +451,8 @@ const APPROVAL_STEPS = ['Draft', 'Pending Audit', 'Forwarded to Audit Director',
 const IpcLevel = ({ ipc: i, color }) => {
   const reached = APPROVAL_STEPS.indexOf(i.approvalStatus);
   const rejected = i.approvalStatus === 'Rejected';
+  const pending = !['Draft', 'Approved', 'Rejected'].includes(i.approvalStatus);
+  const waiting = pending && i.submittedAt ? Math.max(0, dayjs().diff(dayjs(i.submittedAt), 'day')) : null;
   return (
     <>
       <Stack direction="row" gap={1.5} alignItems="center" sx={{ mb: 2 }}>
@@ -434,6 +463,11 @@ const IpcLevel = ({ ipc: i, color }) => {
             <StatusChip label={i.approvalStatus} colorMap={IPC_APPROVAL_COLOR} />
           </Stack>
           <Typography variant="body2" sx={{ color: MUTED }}>{[i.invoiceNumber, i.ipcKind || 'Work', fmtDate(i.issueDate)].filter(Boolean).join(' · ')}</Typography>
+          {waiting !== null && (
+            <Typography variant="body2" sx={{ color: waiting > 7 ? '#dc2626' : '#b45309', fontWeight: 700 }}>
+              Submitted {fmtDate(i.submittedAt)} · waiting {waiting === 0 ? 'since today' : `${waiting} day${waiting === 1 ? '' : 's'}`} for approval
+            </Typography>
+          )}
         </Box>
       </Stack>
       <Stats items={[
@@ -634,7 +668,7 @@ export default function PortfolioProjectDialog({ item, color, onClose, onPrev, o
             <>
             {top.type === 'main' && <MainLevel item={item} summary={summary} tree={tree} color={color} open={open} />}
             {top.type === 'sub' && (top.sub
-              ? <SubLevel sub={top.sub} money={summary.subProjects.find((s) => String(s._id) === String(top.sub._id))} color={color} open={open} />
+              ? <SubLevel sub={top.sub} basis={item.contractBasis} money={summary.subProjects.find((s) => String(s._id) === String(top.sub._id))} color={color} open={open} />
               : <Empty>This sub project is no longer available.</Empty>)}
             {top.type === 'contract' && (top.contract ? <ContractLevel contract={top.contract} color={color} open={open} /> : <Empty>This contract is no longer available.</Empty>)}
             {top.type === 'cr' && <CrLevel cr={top.cr} color={color} open={open} />}

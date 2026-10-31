@@ -55,6 +55,7 @@ import {
 } from '../../services/projectManagementService';
 import SlabRowsEditor, { emptySlab, slabsTotalPercent } from '../../components/ProjectManagement/SlabRowsEditor';
 import { SLAB_SCHEDULES_PATH, normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
+import { SubBudgetStrip } from '../../components/ProjectManagement/ProjectBudgetPanel';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -108,6 +109,15 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   const [success, setSuccess] = useState('');
   const [statusFilter, setStatusFilter] = useState('');
   const [typeFilter, setTypeFilter] = useState('');
+  const basis = project?.contractBasis || null;
+  // New contracts need an approved Main Project budget with a share given to this Sub Project
+  const budgetBlocked = (() => {
+    const b = project?.budgetAllocation;
+    if (!b || !project?.parentProject) return null;
+    if (!(b.inForce ?? b.budgetStatus === 'Approved')) return 'The Main Project budget is not approved yet';
+    const mine = b.subProjects.find((s) => String(s._id) === String(project._id));
+    return mine?.allocatedBudget > 0 ? null : 'This sub project is not in the approved budget yet — add it with a budget revision';
+  })();
   const [slabSchedules, setSlabSchedules] = useState([]);
   const [wbsActivities, setWbsActivities] = useState([]);
   const [dialogError, setDialogError] = useState('');
@@ -173,7 +183,10 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
     setForm({
       ...emptyForm,
       title: `Sublet — ${project?.name || ''}`.trim(),
-      lines: buildLinesFromBoq()
+      lines: buildLinesFromBoq(),
+      // The Main Project decides BOQ-wise or Slab-wise for everything under it
+      contractType: basis || emptyForm.contractType,
+      slabs: basis === 'Slab' ? [emptySlab()] : []
     });
     setDialogOpen(true);
   };
@@ -340,6 +353,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
 
   return (
     <Box>
+      <SubBudgetStrip project={project} />
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
         <Box>
           <Typography variant="h6" fontWeight={700}>
@@ -350,6 +364,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
           </Typography>
         </Box>
         <Stack direction="row" spacing={1} alignItems="center">
+          {!basis && (
           <FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>Type</InputLabel>
             <Select label="Type" value={typeFilter} onChange={(e) => setTypeFilter(e.target.value)}>
@@ -358,6 +373,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
               <MenuItem value="Slab">Slab Wise</MenuItem>
             </Select>
           </FormControl>
+          )}
           <FormControl size="small" sx={{ minWidth: 140 }}>
             <InputLabel>Status</InputLabel>
             <Select
@@ -376,9 +392,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
           <IconButton onClick={load}>
             <RefreshIcon />
           </IconButton>
-          <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate}>
-            New Sublet Contract
-          </Button>
+          <Tooltip title={budgetBlocked || ''}>
+            <span>
+              <Button variant="contained" startIcon={<AddIcon />} onClick={openCreate} disabled={Boolean(budgetBlocked)}>
+                New Sublet Contract
+              </Button>
+            </span>
+          </Tooltip>
         </Stack>
       </Stack>
 
@@ -445,7 +465,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                         : 'This Sub Project has no BOQ lines yet — add them before creating a contract.'}
                     </Typography>
                     {boqItems.length ? (
-                      <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreate}>New Sublet Contract</Button>
+                      <Button variant="contained" size="small" startIcon={<AddIcon />} onClick={openCreate} disabled={Boolean(budgetBlocked)}>New Sublet Contract</Button>
                     ) : onGoToTab && (
                       <Button variant="outlined" size="small" onClick={() => onGoToTab('boq')}>Go to BOQ</Button>
                     )}
@@ -558,9 +578,14 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                   setForm((f) => ({ ...f, contractType: v, slabs: v === 'Slab' && !f.slabs.length ? [emptySlab()] : f.slabs }));
                 }}
               >
-                <ToggleButton value="BOQ" sx={{ px: 2.5 }}>BOQ Wise</ToggleButton>
-                <ToggleButton value="Slab" sx={{ px: 2.5 }}>Slab Wise (Percentage)</ToggleButton>
+                <ToggleButton value="BOQ" disabled={Boolean(basis) && basis !== 'BOQ'} sx={{ px: 2.5 }}>BOQ Wise</ToggleButton>
+                <ToggleButton value="Slab" disabled={Boolean(basis) && basis !== 'Slab'} sx={{ px: 2.5 }}>Slab Wise (Percentage)</ToggleButton>
               </ToggleButtonGroup>
+              {basis && (
+                <Typography variant="caption" color="primary" fontWeight={700} display="block" mt={0.75}>
+                  This project is {basis === 'Slab' ? 'Slab-wise' : 'BOQ-wise'} (set on the Main Project), so its contracts are {basis === 'Slab' ? 'Slab-wise' : 'BOQ-wise'}.
+                </Typography>
+              )}
               <Typography variant="caption" color="text.secondary" display="block" mt={0.75}>
                 {isSlabForm
                   ? 'Lump-sum contract paid in stages: each slab is a % of the contract value and covers WBS activities.'

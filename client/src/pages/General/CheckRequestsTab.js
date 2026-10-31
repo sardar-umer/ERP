@@ -59,6 +59,7 @@ import {
 import { normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
 import { printCheckRequest } from '../../utils/checkRequestPrint';
 import InspectionReportDialog from '../../components/ProjectManagement/InspectionReportDialog';
+import { CheckRequestAttachmentsField, CheckRequestAttachmentsList } from '../../components/ProjectManagement/CheckRequestAttachments';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -85,7 +86,8 @@ const emptyForm = {
   activity: '',
   task: '',
   notes: '',
-  lines: []
+  lines: [],
+  attachments: [] // supporting documents — at least one is required
 };
 
 const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
@@ -396,7 +398,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       ...emptyForm,
       title: `Check Request — ${project?.name || ''}`.trim(),
       contractor: onlyContractor,
-      claimType: onlyContractor ? defaultClaimType(onlyContractor) : 'BOQ',
+      claimType: onlyContractor ? defaultClaimType(onlyContractor) : (project?.contractBasis || 'BOQ'),
       lines: buildLines(onlyContractor)
     });
     setDialogOpen(true);
@@ -441,7 +443,8 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       activity: row.activity?._id || row.activity || '',
       task: row.task?._id || row.task || '',
       notes: row.notes || '',
-      lines
+      lines,
+      attachments: row.attachments || []
     });
     setDialogOpen(true);
   };
@@ -459,6 +462,10 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       setError('Select the subcontractor this check request is for');
       return;
     }
+    if (!form.attachments.length) {
+      setError('Attach at least one supporting document (measurement sheet, photos or the contractor’s bill)');
+      return;
+    }
     if (form.claimType === 'Slab') {
       if (!selectedSlab) {
         setError('Select the slab (stage) being claimed');
@@ -473,7 +480,8 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
           claimType: 'Slab',
           subletContract: selectedSlab.contract._id,
           slabId: selectedSlab.slab._id,
-          notes: form.notes
+          notes: form.notes,
+          attachments: form.attachments
         };
         if (editing) {
           await updateCheckRequest(projectId, editing._id, payload);
@@ -517,6 +525,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
         activity: form.activity || null,
         task: form.task || null,
         notes: form.notes,
+        attachments: form.attachments,
         items
       };
       if (editing) {
@@ -954,6 +963,14 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
               />
             </Grid>
+            <Grid item xs={12}>
+              <CheckRequestAttachmentsField
+                projectId={projectId}
+                value={form.attachments}
+                onChange={(attachments) => setForm((f) => ({ ...f, attachments }))}
+                error={Boolean(error) && !form.attachments.length}
+              />
+            </Grid>
             {form.claimType !== 'Slab' && (
             <Grid item xs={12}>
               <Typography variant="subtitle2" fontWeight={700} mb={1}>
@@ -1162,6 +1179,11 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                     12
                   )}
                 </Grid>
+
+                <Box>
+                  <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>Supporting documents</Typography>
+                  <CheckRequestAttachmentsList attachments={viewRow.attachments} emptyText="None attached — edit the check request to add them before submitting" />
+                </Box>
 
                 {isSlab ? (
                   <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 1.5 }}>

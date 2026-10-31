@@ -117,6 +117,16 @@ const checkRequestSchema = new mongoose.Schema(
     claimedTotal: { type: Number, default: 0, min: 0 },
     verifiedTotal: { type: Number, default: 0, min: 0 },
 
+    /** Supporting documents for the claim (measurement sheet, photos, contractor's bill…) — at least one is required */
+    attachments: [{
+      _id: false,
+      url: { type: String, required: true },
+      originalName: { type: String, trim: true, default: '' },
+      mimeType: { type: String, trim: true, default: '' },
+      size: { type: Number, default: 0 },
+      uploadedAt: { type: Date, default: Date.now }
+    }],
+
     submittedAt: { type: Date },
     submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
 

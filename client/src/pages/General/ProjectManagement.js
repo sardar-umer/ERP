@@ -14,15 +14,19 @@ import {
   TrendingUp as TrendingIcon, Visibility as ViewIcon,
   FolderSpecial as FolderIcon, PlayCircleFilled as ActiveIcon,
   AssignmentTurnedIn as CompleteIcon, AttachMoney as MoneyIcon,
-  DeleteForever as DeleteForeverIcon
+  DeleteForever as DeleteForeverIcon, CheckCircle as CheckedIcon, AccountBalanceWallet as BudgetIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
 import {
-  getProjects, getProjectStats, createProject, updateProject, cancelProject
+  getProjects, getProjectStats, createProject, updateProject, cancelProject, getEmployeeOptions
 } from '../../services/projectManagementService';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
+import { ContractTypeTag } from '../../components/ProjectManagement/mainProjectUi';
+import { ProjectStatusMenu, ProjectTypeMenu } from '../../components/ProjectManagement/ProjectQuickMenus';
+import ProjectBudgetPanel from '../../components/ProjectManagement/ProjectBudgetPanel';
+import EmployeePicker from '../../components/ProjectManagement/EmployeePicker';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
 
@@ -44,11 +48,6 @@ const SECTORS_BY_TYPE = {
   ]
 };
 
-const STATUS_COLOR = {
-  Draft: 'default', Planning: 'info', Active: 'success',
-  'On Hold': 'warning', Completed: 'primary', Cancelled: 'error'
-};
-
 const getParentId = (p) => {
   if (!p?.parentProject) return null;
   return String(p.parentProject._id || p.parentProject);
@@ -61,6 +60,12 @@ const getHierarchyLevel = (p) => {
 };
 
 const DEFAULT_SOCIETY = 'Taj Residencia';
+
+/** How a Main Project's work is contracted; its Sub Projects and every contract follow it */
+const CONTRACT_BASES = [
+  { value: 'BOQ', label: 'BOQ-wise', text: 'Work is contracted and paid by bill-of-quantity lines: quantity × rate, measured on site.' },
+  { value: 'Slab', label: 'Slab-wise', text: 'Work is contracted as stages (slabs) with a fixed amount each, paid as each stage is completed.' }
+];
 
 const defaultForm = {
   hierarchyLevel: 'main',
@@ -77,7 +82,9 @@ const defaultForm = {
   startDate: '',
   expectedEndDate: '',
   notes: '',
-  status: 'Draft'
+  status: 'Draft',
+  contractBasis: '',
+  projectManagerEmployee: null // { _id, name, employeeId, designation } — Sub Projects only
 };
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
@@ -118,6 +125,81 @@ const StatCard = ({ label, value, color = 'primary.main', subtitle, icon }) => (
     </CardContent>
   </Card>
 );
+
+// ─── Budget cell (Project Registry) ───────────────────────────────────────────
+const shortPkr = (v) => {
+  const n = Number(v) || 0;
+  if (n >= 1e7) return `Rs ${(n / 1e7).toFixed(2)} Cr`;
+  if (n >= 1e5) return `Rs ${(n / 1e5).toFixed(1)} Lac`;
+  return `Rs ${Math.round(n).toLocaleString('en-PK')}`;
+};
+const approvedAmountOf = (main) => (main?.approvedBudget?.amount > 0
+  ? Number(main.approvedBudget.amount)
+  : main?.budgetStatus === 'Approved' ? Number(main.lumpSumBudget) || 0 : 0);
+
+/**
+ * Where a project's budget stands, at a glance. Main: approved amount or where the request is (with whom);
+ * Sub: its share of the approved budget, or why it has none. Clicking opens the Main Project's Budget page.
+ */
+const BudgetCell = ({ project, level, mains, subsOf, onOpen }) => {
+  const line = (text, color = 'text.secondary', weight = 600) => (
+    <Typography variant="caption" display="block" sx={{ color, fontWeight: weight, lineHeight: 1.35 }}>{text}</Typography>
+  );
+  let body;
+  if (level === 'main') {
+    const approved = approvedAmountOf(project);
+    const br = project.budgetRequest;
+    const withWhom = project.budgetStatus === 'Submitted' ? br?.approvers?.[br.currentStep] : null;
+    const requested = (br?.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0);
+    const missing = approved > 0 ? subsOf(project._id).filter((s) => !(Number(s.allocatedBudget) > 0) && s.status !== 'Completed').length : 0;
+    body = (
+      <>
+        {approved > 0 ? (
+          <>
+            <Chip size="small" label="Approved" color="success" sx={{ height: 20, fontSize: 11, fontWeight: 800, mb: 0.25 }} />
+            {line(shortPkr(approved), 'text.primary', 800)}
+            {project.budgetStatus === 'Submitted' && line(`Revision with ${withWhom?.role || 'approvers'}`, 'warning.dark')}
+            {project.budgetStatus === 'Draft' && br?.history?.some((h) => h.action === 'Revision started') && line('Revision being prepared', 'info.main')}
+          </>
+        ) : project.budgetStatus === 'Submitted' ? (
+          <>
+            <Chip size="small" label="In approval" color="warning" sx={{ height: 20, fontSize: 11, fontWeight: 800, mb: 0.25 }} />
+            {line(shortPkr(requested), 'text.primary', 800)}
+            {withWhom && line(`With ${withWhom.role}`, 'warning.dark')}
+          </>
+        ) : br?.returned?.at ? (
+          <>
+            <Chip size="small" label="Returned" color="error" variant="outlined" sx={{ height: 20, fontSize: 11, fontWeight: 800, mb: 0.25 }} />
+            {line(`By ${br.returned.role}`, 'error.main')}
+          </>
+        ) : br?.lines?.length ? (
+          <>
+            <Chip size="small" label="Draft" sx={{ height: 20, fontSize: 11, fontWeight: 800, mb: 0.25 }} />
+            {line('Not sent for approval')}
+          </>
+        ) : (
+          <Chip size="small" label="Not prepared" color="error" variant="outlined" sx={{ height: 20, fontSize: 11, fontWeight: 800 }} />
+        )}
+        {missing > 0 && line(`${missing} sub project${missing === 1 ? '' : 's'} not in budget`, 'warning.dark', 700)}
+      </>
+    );
+  } else {
+    const main = mains.find((m) => String(m._id) === String(project.parentProject?._id || project.parentProject));
+    const share = Number(project.allocatedBudget) || 0;
+    body = share > 0 ? (
+      <>{line(shortPkr(share), 'text.primary', 800)}{line('Its share')}</>
+    ) : approvedAmountOf(main) > 0 ? (
+      <>{line('Not in budget', 'warning.dark', 800)}{line(main?.budgetStatus === 'Submitted' ? 'Revision in approval' : 'Add it with a revision')}</>
+    ) : (
+      line('Waiting for main budget')
+    );
+  }
+  return (
+    <Tooltip title={level === 'main' ? 'Open the budget' : 'Open the Main Project budget'}>
+      <Box onClick={onOpen} sx={{ cursor: 'pointer', borderRadius: 1, px: 0.5, mx: -0.5, py: 0.25, '&:hover': { bgcolor: 'action.hover' } }}>{body}</Box>
+    </Tooltip>
+  );
+};
 
 // ─── Create / Edit Dialog (Main Project ↔ Sub Project) ───────────────────────
 const ProjectFormDialog = ({
@@ -165,7 +247,15 @@ const ProjectFormDialog = ({
         expectedEndDate: editing.expectedEndDate ? dayjs(editing.expectedEndDate).format('YYYY-MM-DD') : '',
         notes: editing.notes || '',
         status: editing.status || 'Draft',
-        companyId: editing.companyId?._id || editing.companyId || ''
+        companyId: editing.companyId?._id || editing.companyId || '',
+        contractBasis: editing.contractBasis || '',
+        projectManagerEmployee: editing.projectManagerEmployee?._id
+          ? {
+            _id: editing.projectManagerEmployee._id,
+            name: `${editing.projectManagerEmployee.firstName || ''} ${editing.projectManagerEmployee.lastName || ''}`.trim(),
+            employeeId: editing.projectManagerEmployee.employeeId || ''
+          }
+          : null
       });
     } else {
       const level = defaultLevel === 'sub' ? 'sub' : 'main';
@@ -177,14 +267,35 @@ const ProjectFormDialog = ({
         hierarchyLevel: level,
         isMasterProject: level === 'main',
         parentProject: parentId,
+        projectType: level === 'sub' ? (mainProjects.find((m) => String(m._id) === String(parentId))?.projectType || defaultForm.projectType) : '',
         society: DEFAULT_SOCIETY
       });
+      // New Sub Projects start with the default Project Manager (Zia Ullah Khan)
+      if (level === 'sub') {
+        getEmployeeOptions()
+          .then((res) => {
+            const d = res.data?.data?.defaultManager;
+            if (d) setForm((prev) => (prev.projectManagerEmployee ? prev : { ...prev, projectManagerEmployee: d }));
+          })
+          .catch(() => {});
+      }
     }
     setError('');
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open, editing, defaultLevel, defaultParentId]);
 
   const set = (field) => (e) => setForm((prev) => ({ ...prev, [field]: e.target.value }));
+  const parentMain = mainProjects.find((m) => String(m._id) === String(form.parentProject));
+
+  // A Sub Project takes its Main Project's type, so its Sector / Block list follows the Main Project
+  const handleParentChange = (e) => {
+    const parent = mainProjects.find((m) => String(m._id) === String(e.target.value));
+    setForm((prev) => {
+      const type = parent?.projectType || prev.projectType;
+      const options = SECTORS_BY_TYPE[type] || [];
+      return { ...prev, parentProject: e.target.value, projectType: type, sector: options.includes(prev.sector) ? prev.sector : '' };
+    });
+  };
 
   const handleProjectTypeChange = (type) => {
     const options = SECTORS_BY_TYPE[type] || [];
@@ -210,6 +321,14 @@ const ProjectFormDialog = ({
       setError('Project name is required');
       return;
     }
+    if (form.hierarchyLevel === 'main' && !PROJECT_TYPES.includes(form.projectType) && !(editing && form.projectType === editing.projectType)) {
+      setError('Select the Project Type');
+      return;
+    }
+    if (form.hierarchyLevel === 'main' && !form.contractBasis) {
+      setError('Select whether this project is BOQ-wise or Slab-wise');
+      return;
+    }
     if (form.hierarchyLevel === 'main' && !form.companyId) {
       setError('Select the Finance Company — Sub Projects, contracts and IPCs under this Main Project post to it');
       return;
@@ -220,6 +339,10 @@ const ProjectFormDialog = ({
     }
     if (form.hierarchyLevel === 'sub' && !form.sector) {
       setError('Select a Sector / Block');
+      return;
+    }
+    if (form.hierarchyLevel === 'sub' && !form.projectManagerEmployee) {
+      setError('Select the Project Manager');
       return;
     }
 
@@ -239,10 +362,15 @@ const ProjectFormDialog = ({
         isMasterProject: isMain,
         parentProject: isMain ? null : form.parentProject
       };
-      if (isMain) payload.companyId = form.companyId || null;
-      // Project type and street / side belong to Sub Projects only (Main is a simple portfolio container)
+      if (isMain) {
+        // Chosen once on the Main Project; every Sub Project and contract under it follows
+        payload.companyId = form.companyId || null;
+        payload.projectType = form.projectType;
+        payload.contractBasis = form.contractBasis;
+      }
+      // Street / side / Project Manager belong to Sub Projects; their type and basis come from the Main Project
       if (!isMain) {
-        payload.projectType = form.projectType || 'INFRASTRUCTURE DEVELOPMENT';
+        payload.projectManagerEmployee = form.projectManagerEmployee?._id || null;
         payload.street = (form.street || '').trim();
         payload.side = form.side || '';
       }
@@ -294,7 +422,7 @@ const ProjectFormDialog = ({
                   <Select
                     value={form.parentProject || ''}
                     label="Under Main Project"
-                    onChange={set('parentProject')}
+                    onChange={handleParentChange}
                   >
                     {mainProjects.length === 0 && (
                       <MenuItem value="" disabled>Create a Main Project first</MenuItem>
@@ -319,6 +447,11 @@ const ProjectFormDialog = ({
                   return mainCompanyId ? (
                     <Alert severity="info" sx={{ mt: 1 }}>
                       Finance Company: <strong>{companyName || 'set'}</strong> — inherited from {main.name}. Contracts and IPCs here post to it.
+                      <Box sx={{ mt: 0.5 }}>
+                        Project Type: <strong>{main.projectType || '—'}</strong>
+                        {' · '}Contracts: <strong>{main.contractBasis ? (main.contractBasis === 'Slab' ? 'Slab-wise' : 'BOQ-wise') : 'BOQ-wise or Slab-wise (not set on the Main Project)'}</strong>
+                        {' '}— taken from {main.name}.
+                      </Box>
                     </Alert>
                   ) : (
                     <Alert severity="warning" sx={{ mt: 1 }}>
@@ -361,17 +494,66 @@ const ProjectFormDialog = ({
             </Grid>
           )}
 
+          {form.hierarchyLevel === 'main' && (
+            <>
+              <Grid item xs={12}>
+                <FormControl fullWidth required error={Boolean(error) && !PROJECT_TYPES.includes(form.projectType)}>
+                  <InputLabel>Project Type</InputLabel>
+                  <Select value={form.projectType || ''} label="Project Type" onChange={(e) => handleProjectTypeChange(e.target.value)}>
+                    <MenuItem value="" disabled><em>Select project type</em></MenuItem>
+                    {form.projectType && !PROJECT_TYPES.includes(form.projectType) && (
+                      <MenuItem value={form.projectType}>{form.projectType} (legacy)</MenuItem>
+                    )}
+                    {PROJECT_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                  </Select>
+                  <FormHelperText>Every Sub Project under it is created with this type</FormHelperText>
+                </FormControl>
+              </Grid>
+              <Grid item xs={12}>
+                <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
+                  Contract basis <Box component="span" sx={{ color: 'error.main' }}>*</Box>
+                </Typography>
+                <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr' } }}>
+                  {CONTRACT_BASES.map((b) => {
+                    const on = form.contractBasis === b.value;
+                    return (
+                      <Box
+                        key={b.value}
+                        role="radio"
+                        aria-checked={on}
+                        tabIndex={0}
+                        onClick={() => setForm((prev) => ({ ...prev, contractBasis: b.value }))}
+                        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setForm((prev) => ({ ...prev, contractBasis: b.value }))}
+                        sx={{
+                          position: 'relative', p: 2, borderRadius: 2, cursor: 'pointer',
+                          border: '2px solid', borderColor: on ? 'primary.main' : 'divider',
+                          bgcolor: on ? 'rgba(25,118,210,0.05)' : 'background.paper',
+                          transition: 'all .15s', '&:hover': { borderColor: 'primary.main' }
+                        }}
+                      >
+                        {on && <CheckedIcon color="primary" sx={{ position: 'absolute', top: 10, right: 10, fontSize: 20 }} />}
+                        <ContractTypeTag type={b.value} />
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 1 }}>{b.text}</Typography>
+                      </Box>
+                    );
+                  })}
+                </Box>
+                <FormHelperText error={Boolean(error) && !form.contractBasis}>
+                  All its Sub Projects follow this, and only {form.contractBasis === 'Slab' ? 'Slab-wise' : form.contractBasis === 'BOQ' ? 'BOQ-wise' : 'this kind of'} sublet contracts can be made under it
+                </FormHelperText>
+              </Grid>
+            </>
+          )}
+
           {form.hierarchyLevel === 'sub' && (
             <Grid item xs={12} md={4}>
-              <FormControl fullWidth required>
-                <InputLabel>Project Type</InputLabel>
-                <Select value={form.projectType} label="Project Type" onChange={(e) => handleProjectTypeChange(e.target.value)}>
-                  {form.projectType && !PROJECT_TYPES.includes(form.projectType) && (
-                    <MenuItem value={form.projectType}>{form.projectType} (legacy)</MenuItem>
-                  )}
-                  {PROJECT_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
-                </Select>
-              </FormControl>
+              <TextField
+                fullWidth
+                label="Project Type"
+                value={form.projectType || ''}
+                InputProps={{ readOnly: true }}
+                helperText={parentMain ? `From ${parentMain.name}` : 'From the Main Project'}
+              />
             </Grid>
           )}
 
@@ -442,6 +624,17 @@ const ProjectFormDialog = ({
                 </FormControl>
               </Grid>
             </>
+          )}
+
+          {form.hierarchyLevel === 'sub' && (
+            <Grid item xs={12}>
+              <EmployeePicker
+                label="Project Manager"
+                required
+                value={form.projectManagerEmployee}
+                onChange={(v) => setForm((prev) => ({ ...prev, projectManagerEmployee: v }))}
+              />
+            </Grid>
           )}
 
           <Grid item xs={12}>
@@ -522,6 +715,8 @@ const ProjectManagement = () => {
   const [editingProject, setEditingProject] = useState(null);
   const [dialogDefaults, setDialogDefaults] = useState({ level: 'main', parentId: '' });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
+  // Main Project whose budget is open in the popup ({ _id, name, projectNumber })
+  const [budgetFor, setBudgetFor] = useState(null);
   const [deleting, setDeleting] = useState(false);
   const [hierarchyProjects, setHierarchyProjects] = useState([]);
 
@@ -568,6 +763,9 @@ const ProjectManagement = () => {
       // parent dropdown can fall back to current page list
     }
   }, []);
+
+  // After a status / type change from the list: reload rows, the stat cards and the parent lists
+  const refreshAfterQuickChange = () => { loadProjects(); loadStats(); loadHierarchyOptions(); };
 
   useEffect(() => { loadProjects(); }, [loadProjects]);
   useEffect(() => { loadStats(); }, [loadStats]);
@@ -756,6 +954,7 @@ const ProjectManagement = () => {
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Project Directory</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Type</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Status</TableCell>
+                  <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Budget</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Progress</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Actual Spent</TableCell>
                   <TableCell sx={{ fontWeight: 600, color: 'text.secondary', bgcolor: 'grey.50', py: 1.5 }}>Expected Timeline</TableCell>
@@ -766,14 +965,14 @@ const ProjectManagement = () => {
                 {loading ? (
                   Array.from({ length: 5 }).map((_, i) => (
                     <TableRow key={i}>
-                      {Array.from({ length: 8 }).map((__, j) => (
+                      {Array.from({ length: 9 }).map((__, j) => (
                         <TableCell key={j}><Skeleton /></TableCell>
                       ))}
                     </TableRow>
                   ))
                 ) : projects.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} align="center" sx={{ py: 6 }}>
+                    <TableCell colSpan={9} align="center" sx={{ py: 6 }}>
                       <TrendingIcon sx={{ fontSize: 48, color: 'grey.300', mb: 1, display: 'block', mx: 'auto' }} />
                       <Typography color="text.secondary">No projects found</Typography>
                       <Button
@@ -904,12 +1103,35 @@ const ProjectManagement = () => {
                             </Box>
                           </TableCell>
                           <TableCell>
-                            <Typography variant="body2" color={level === 'main' ? 'text.disabled' : 'text.primary'}>
-                              {level === 'main' ? '—' : (project.projectType || '—')}
-                            </Typography>
+                            {level === 'main' ? (
+                              <ProjectTypeMenu project={project} onChanged={refreshAfterQuickChange} />
+                            ) : (
+                              <Stack gap={0.5} alignItems="flex-start">
+                                <Typography variant="body2">{project.projectType || '—'}</Typography>
+                                {project.contractBasis && <ContractTypeTag type={project.contractBasis} />}
+                              </Stack>
+                            )}
                           </TableCell>
                           <TableCell>
-                            <Chip label={project.status} size="small" color={STATUS_COLOR[project.status] || 'default'} />
+                            <ProjectStatusMenu
+                              project={project}
+                              onChanged={refreshAfterQuickChange}
+                              subCount={level === 'main' && hierarchyProjects.length
+                                ? hierarchyProjects.filter((h) => String(h.parentProject?._id || h.parentProject) === String(project._id) && h.status !== 'Cancelled').length
+                                : undefined}
+                            />
+                          </TableCell>
+                          <TableCell sx={{ minWidth: 150 }}>
+                            <BudgetCell
+                              project={project}
+                              level={level}
+                              mains={hierarchyProjects.length ? hierarchyProjects : projects}
+                              subsOf={(mainId) => (hierarchyProjects.length ? hierarchyProjects : projects)
+                                .filter((h) => String(h.parentProject?._id || h.parentProject) === String(mainId) && h.status !== 'Cancelled')}
+                              onOpen={() => setBudgetFor(level === 'main'
+                                ? project
+                                : (hierarchyProjects.find((h) => String(h._id) === getParentId(project)) || { _id: getParentId(project), name: project.parentProject?.name || 'Main Project' }))}
+                            />
                           </TableCell>
                           <TableCell sx={{ minWidth: 130 }}>
                             <Stack spacing={0.5}>
@@ -943,14 +1165,23 @@ const ProjectManagement = () => {
                             )}
                           </TableCell>
                           <TableCell align="right">
-                            <Stack direction="row" spacing={0.5} justifyContent="flex-end">
+                            <Stack direction="row" spacing={0.5} justifyContent="flex-end" alignItems="center">
                               {level === 'main' && (
                                 <Tooltip title="Add Sub Project under this Main Project">
                                   <Button
                                     size="small"
-                                    variant="outlined"
-                                    startIcon={<AddIcon />}
-                                    sx={{ textTransform: 'none', px: 1, py: 0.2, fontSize: '0.72rem' }}
+                                    disableElevation
+                                    startIcon={<AddIcon sx={{ fontSize: '16px !important' }} />}
+                                    sx={{
+                                      // Soft tinted pill, same height as the icon buttons beside it
+                                      height: 30, px: 1.5, borderRadius: 999, whiteSpace: 'nowrap',
+                                      textTransform: 'none', fontSize: 13, fontWeight: 700, letterSpacing: 0.1,
+                                      color: 'primary.main', bgcolor: 'rgba(25,118,210,0.08)',
+                                      border: '1px solid rgba(25,118,210,0.18)',
+                                      '& .MuiButton-startIcon': { mr: 0.5 },
+                                      transition: 'background-color .15s, color .15s, box-shadow .15s',
+                                      '&:hover': { bgcolor: 'primary.main', color: '#fff', borderColor: 'primary.main', boxShadow: '0 4px 10px rgba(25,118,210,0.25)' }
+                                    }}
                                     onClick={() => {
                                       setEditingProject(null);
                                       setDialogDefaults({ level: 'sub', parentId: project._id });
@@ -958,8 +1189,15 @@ const ProjectManagement = () => {
                                       setDialogOpen(true);
                                     }}
                                   >
-                                    Add Sub
+                                    Sub project
                                   </Button>
+                                </Tooltip>
+                              )}
+                              {level === 'main' && (
+                                <Tooltip title="Budget">
+                                  <IconButton size="small" sx={{ color: '#0f766e' }} onClick={() => setBudgetFor(project)}>
+                                    <BudgetIcon fontSize="small" />
+                                  </IconButton>
                                 </Tooltip>
                               )}
                               <Tooltip title="View Detail">
@@ -1034,6 +1272,31 @@ const ProjectManagement = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Budget of a Main Project, worked on right here: prepare, send, approve, revise, print */}
+      <Dialog
+        open={Boolean(budgetFor)} onClose={() => setBudgetFor(null)} maxWidth="lg" fullWidth scroll="paper"
+        PaperProps={{ sx: { borderRadius: 3, bgcolor: '#f4f6f8', maxHeight: 'calc(100% - 32px)' } }}
+      >
+        {budgetFor && (
+          <>
+            <Stack direction="row" alignItems="center" gap={1.5} sx={{ px: 3, py: 1.75, bgcolor: '#fff', borderBottom: '1px solid', borderColor: 'divider' }}>
+              <Box sx={{ width: 36, height: 36, borderRadius: 2, display: 'grid', placeItems: 'center', bgcolor: 'rgba(15,118,110,0.1)', color: '#0f766e' }}>
+                <BudgetIcon fontSize="small" />
+              </Box>
+              <Box sx={{ flex: 1, minWidth: 0 }}>
+                <Typography variant="h6" fontWeight={800} noWrap>{budgetFor.name} — Budget</Typography>
+                {budgetFor.projectNumber && <Typography variant="caption" color="text.secondary">{budgetFor.projectNumber}</Typography>}
+              </Box>
+              <Button size="small" onClick={() => navigate(`/general/project-management/${budgetFor._id}`)} sx={{ textTransform: 'none' }}>Open project</Button>
+              <IconButton onClick={() => setBudgetFor(null)}><CancelIcon /></IconButton>
+            </Stack>
+            <DialogContent sx={{ p: { xs: 1.5, sm: 2.5 } }}>
+              <ProjectBudgetPanel key={budgetFor._id} project={budgetFor} onRefresh={refreshAfterQuickChange} />
+            </DialogContent>
+          </>
+        )}
+      </Dialog>
 
       {/* Create / Edit Dialog */}
       <ProjectFormDialog
