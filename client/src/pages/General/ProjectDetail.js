@@ -40,6 +40,7 @@ import SubletContractsTab from './SubletContractsTab';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
 import CostReportTab from '../../components/ProjectManagement/CostReportTab';
+import MainProjectPage from '../../components/ProjectManagement/MainProjectPage';
 import { useAuth } from '../../contexts/AuthContext';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
@@ -1479,140 +1480,7 @@ const BOQTab = ({ projectId, project }) => {
   );
 };
 
-const MainKpi = ({ label, value, hint, accent = '#0f766e' }) => (
-  <Box
-    sx={{
-      p: 2,
-      height: '100%',
-      borderRadius: 2,
-      bgcolor: '#fff',
-      border: '1px solid',
-      borderColor: 'rgba(15, 118, 110, 0.14)',
-      borderTop: `3px solid ${accent}`,
-      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.04)'
-    }}
-  >
-    <Typography variant="caption" sx={{ color: 'text.secondary', fontWeight: 600, letterSpacing: 0.4, textTransform: 'uppercase' }}>
-      {label}
-    </Typography>
-    <Typography variant="h6" fontWeight={800} sx={{ mt: 0.5, color: '#0f172a', lineHeight: 1.2 }}>
-      {value}
-    </Typography>
-    {hint && (
-      <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
-        {hint}
-      </Typography>
-    )}
-  </Box>
-);
-
-// ─── Main portfolio overview (distinct from Sub execution view) ───────────────
-const MainProjectOverview = ({ project }) => {
-  const navigate = useNavigate();
-  const subs = project.budgetAllocation?.subProjects || [];
-  const spent = Number(project.totalActualSpent) || 0;
-  const activeSubs = subs.filter((s) => s.status === 'Active').length;
-
-  return (
-    <Box>
-      <Grid container spacing={2} sx={{ mb: 2.5 }}>
-        <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Sub Projects" value={String(subs.length)} hint={`${activeSubs} active`} accent="#0f766e" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Portfolio Progress" value={`${project.overallProgress || 0}%`} hint="Average of Sub Projects" accent="#0369a1" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Spent" value={fmt(spent)} hint="Certified subcontractor IPCs" accent="#b45309" />
-        </Grid>
-        <Grid item xs={12} sm={6} md={3}>
-          <MainKpi label="Status" value={project.status || '—'} hint={project.society || ' '} accent="#334155" />
-        </Grid>
-      </Grid>
-
-      <Grid container spacing={2.5}>
-        <Grid item xs={12} md={5} lg={4}>
-          <Paper
-            elevation={0}
-            sx={{
-              p: 2.5,
-              borderRadius: 2.5,
-              border: '1px solid',
-              borderColor: 'divider',
-              bgcolor: '#0f172a',
-              color: '#e2e8f0',
-              mb: 2.5
-            }}
-          >
-            <Typography variant="overline" sx={{ color: '#94a3b8', letterSpacing: 1.2 }}>Portfolio</Typography>
-            <Typography variant="h6" fontWeight={800} sx={{ color: '#fff', mb: 2 }}>{project.name}</Typography>
-            <Stack spacing={1.25}>
-              {[
-                ['Code', project.projectNumber],
-                ['Society', project.society || '—'],
-                ['Status', project.status],
-                ['Start', project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'],
-                ['Expected End', project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'],
-                ['Sub Projects', String(subs.length)]
-              ].map(([label, value]) => (
-                <Stack key={label} direction="row" justifyContent="space-between" gap={1}>
-                  <Typography variant="caption" sx={{ color: '#94a3b8' }}>{label}</Typography>
-                  <Typography variant="caption" fontWeight={700} align="right" sx={{ color: '#f8fafc' }}>{value}</Typography>
-                </Stack>
-              ))}
-            </Stack>
-          </Paper>
-        </Grid>
-
-        <Grid item xs={12} md={7} lg={8}>
-          <Paper elevation={0} sx={{ p: 2.5, borderRadius: 2.5, border: '1px solid', borderColor: 'divider', bgcolor: '#fff' }}>
-            <Stack direction="row" alignItems="center" gap={1} sx={{ mb: 1.5 }}>
-              <TreeIcon sx={{ color: '#0f766e' }} fontSize="small" />
-              <Typography variant="subtitle1" fontWeight={800}>Sub Projects</Typography>
-            </Stack>
-            {!subs.length ? (
-              <Typography variant="body2" color="text.secondary">No sub projects yet.</Typography>
-            ) : (
-              <Stack spacing={1}>
-                {subs.map((s) => (
-                  <Box
-                    key={s._id}
-                    onClick={() => navigate(`/general/project-management/${s._id}`)}
-                    sx={{
-                      p: 1.5,
-                      borderRadius: 2,
-                      border: '1px solid',
-                      borderColor: 'divider',
-                      cursor: 'pointer',
-                      transition: 'all .15s ease',
-                      '&:hover': { borderColor: '#0f766e', bgcolor: 'rgba(15, 118, 110, 0.04)' }
-                    }}
-                  >
-                    <Stack direction="row" justifyContent="space-between" alignItems="flex-start" gap={1}>
-                      <Box>
-                        <Typography variant="body2" fontWeight={700}>{s.name}</Typography>
-                        <Typography variant="caption" color="text.secondary">
-                          {[s.sector, s.projectType].filter(Boolean).join(' · ') || s.projectNumber}
-                        </Typography>
-                      </Box>
-                      <Chip label={s.status || 'Draft'} size="small" variant="outlined" />
-                    </Stack>
-                  </Box>
-                ))}
-              </Stack>
-            )}
-          </Paper>
-        </Grid>
-      </Grid>
-    </Box>
-  );
-};
-
-const OverviewTab = ({ project, onRefresh }) => (
-  !project.parentProject
-    ? <MainProjectOverview project={project} onRefresh={onRefresh} />
-    : <SubProjectOverview project={project} onRefresh={onRefresh} />
-);
+const OverviewTab = ({ project, onRefresh }) => <SubProjectOverview project={project} onRefresh={onRefresh} />;
 
 const SubProjectOverview = ({ project, onRefresh }) => {
   const [msDialogOpen, setMsDialogOpen] = useState(false);
@@ -2056,7 +1924,8 @@ const ProjectDetail = () => {
   const goToTab = (tabId) => setSearchParams({ tab: tabId }, { replace: true });
 
   useEffect(() => {
-    if (!project) return;
+    // Wait for the project in the URL: moving Main → Sub would otherwise map ?tab=invoices against the Main's tabs
+    if (!project || String(project._id) !== String(id)) return;
     const tabs = getVisibleTabs(!project.parentProject);
     const raw = searchParams.get('tab');
     let idx = 0;
@@ -2077,7 +1946,7 @@ const ProjectDetail = () => {
     if (canonical && raw !== canonical) {
       setSearchParams({ tab: canonical }, { replace: true });
     }
-  }, [project, searchParams, setSearchParams]);
+  }, [id, project, searchParams, setSearchParams]);
 
   if (loading) {
     return (
@@ -2127,17 +1996,45 @@ const ProjectDetail = () => {
     );
   }
 
-  const mainSubCount = (project.budgetAllocation?.subProjects || []).length;
+  const deleteDialog = (
+    <PermanentDeleteProjectDialog
+      project={permanentDeleteOpen ? project : null}
+      onClose={() => setPermanentDeleteOpen(false)}
+      onDeleted={() => {
+        setPermanentDeleteOpen(false);
+        ['pmLastProjectId', 'pmLastSubProjectId'].forEach((key) => {
+          if (localStorage.getItem(key) === String(id)) localStorage.removeItem(key);
+        });
+        navigate('/general/project-management/projects', { replace: true });
+      }}
+    />
+  );
+
+  // Main Project: its own page (sub project sidebar → contracts → check requests → IPCs)
+  if (isMainProject) {
+    return (
+      <Box sx={{ p: { xs: 1.5, sm: 3 }, minHeight: '100%', bgcolor: '#f4f6f8' }}>
+        <MainProjectPage
+          project={project}
+          view={activeTab?.id}
+          onViewChange={goToTab}
+          onBack={() => navigate('/general/project-management')}
+          onRefresh={loadProject}
+          onDelete={user?.role === 'developer' ? () => setPermanentDeleteOpen(true) : null}
+          boqView={<BOQTab projectId={id} project={project} />}
+          costView={<CostReportTab project={project} />}
+        />
+        {deleteDialog}
+      </Box>
+    );
+  }
 
   return (
     <Box
       sx={{
         p: { xs: 1.5, sm: 3 },
         minHeight: '100%',
-        bgcolor: isMainProject ? '#f1f5f9' : 'grey.50',
-        backgroundImage: isMainProject
-          ? 'radial-gradient(ellipse at top left, rgba(15,118,110,0.08), transparent 45%), radial-gradient(ellipse at top right, rgba(15,23,42,0.06), transparent 40%)'
-          : 'none'
+        bgcolor: 'grey.50'
       }}
     >
       {/* Breadcrumb + Header */}
@@ -2252,23 +2149,6 @@ const ProjectDetail = () => {
           </Stack>
         </Stack>
 
-        {isMainProject && (
-          <Grid container spacing={1.5} sx={{ mt: 2, position: 'relative' }}>
-            {[
-              { label: 'Sub Projects', value: String(mainSubCount) },
-              { label: 'Progress', value: `${project.overallProgress || 0}%` },
-              { label: 'Spent', value: fmt(project.totalActualSpent || 0) },
-              { label: 'Status', value: project.status || '—' }
-            ].map((item) => (
-              <Grid item xs={6} md={3} key={item.label}>
-                <Box sx={{ p: 1.5, borderRadius: 2, bgcolor: 'rgba(255,255,255,0.08)', border: '1px solid rgba(255,255,255,0.12)' }}>
-                  <Typography variant="caption" sx={{ color: 'rgba(255,255,255,0.65)', fontWeight: 600 }}>{item.label}</Typography>
-                  <Typography variant="subtitle1" fontWeight={800} sx={{ color: '#fff' }}>{item.value}</Typography>
-                </Box>
-              </Grid>
-            ))}
-          </Grid>
-        )}
       </Paper>
 
       {!isMainProject && (
@@ -2385,17 +2265,7 @@ const ProjectDetail = () => {
         </Box>
       </Paper>
 
-      <PermanentDeleteProjectDialog
-        project={permanentDeleteOpen ? project : null}
-        onClose={() => setPermanentDeleteOpen(false)}
-        onDeleted={() => {
-          setPermanentDeleteOpen(false);
-          ['pmLastProjectId', 'pmLastSubProjectId'].forEach((key) => {
-            if (localStorage.getItem(key) === String(id)) localStorage.removeItem(key);
-          });
-          navigate('/general/project-management/projects', { replace: true });
-        }}
-      />
+      {deleteDialog}
     </Box>
   );
 };

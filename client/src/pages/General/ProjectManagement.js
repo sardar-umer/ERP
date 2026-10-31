@@ -10,7 +10,7 @@ import {
 import {
   Add as AddIcon, Cancel as CancelIcon,
   Construction as ConstructionIcon, Delete as DeleteIcon,
-  Edit as EditIcon, Refresh as RefreshIcon, AccountTree as StructureIcon,
+  Edit as EditIcon, Refresh as RefreshIcon,
   TrendingUp as TrendingIcon, Visibility as ViewIcon,
   FolderSpecial as FolderIcon, PlayCircleFilled as ActiveIcon,
   AssignmentTurnedIn as CompleteIcon, AttachMoney as MoneyIcon,
@@ -22,7 +22,6 @@ import TablePaginationWrapper from '../../components/TablePaginationWrapper';
 import {
   getProjects, getProjectStats, createProject, updateProject, cancelProject
 } from '../../services/projectManagementService';
-import MasterExecutiveControlTower from '../../components/ProjectManagement/MasterExecutiveControlTower';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
@@ -524,7 +523,6 @@ const ProjectManagement = () => {
   const [dialogDefaults, setDialogDefaults] = useState({ level: 'main', parentId: '' });
   const [deleteConfirm, setDeleteConfirm] = useState(null);
   const [deleting, setDeleting] = useState(false);
-  const [selectedMasterProjectId, setSelectedMasterProjectId] = useState(null);
   const [hierarchyProjects, setHierarchyProjects] = useState([]);
 
   const pagination = usePagination({
@@ -593,17 +591,6 @@ const ProjectManagement = () => {
 
   const progressColor = (pct) => pct >= 80 ? 'success' : pct >= 40 ? 'warning' : 'error';
 
-  if (selectedMasterProjectId) {
-    return (
-      <Box sx={{ p: { xs: 1.5, sm: 3 }, bgcolor: 'grey.50', minHeight: '100%' }}>
-        <MasterExecutiveControlTower
-          masterProjectId={selectedMasterProjectId}
-          onClose={() => setSelectedMasterProjectId(null)}
-        />
-      </Box>
-    );
-  }
-
   return (
     <Box sx={{ p: { xs: 1.5, sm: 3 }, bgcolor: 'grey.50', minHeight: '100%' }}>
       {/* Header */}
@@ -633,23 +620,6 @@ const ProjectManagement = () => {
             </Box>
           </Stack>
           <Stack direction="row" gap={1.5} alignItems="center">
-            {(hierarchyProjects.some((p) => getHierarchyLevel(p) === 'main') ||
-              projects.some((p) => getHierarchyLevel(p) === 'main')) && (
-              <Button
-                variant={selectedMasterProjectId ? "contained" : "outlined"}
-                color="primary"
-                startIcon={<StructureIcon />}
-                onClick={() => {
-                  const firstMain =
-                    hierarchyProjects.find((p) => getHierarchyLevel(p) === 'main') ||
-                    projects.find((p) => getHierarchyLevel(p) === 'main');
-                  if (firstMain) setSelectedMasterProjectId(firstMain._id);
-                }}
-                sx={{ textTransform: 'none', fontWeight: 600, borderRadius: 1.5 }}
-              >
-                Executive Control Tower
-              </Button>
-            )}
             <Tooltip title="Refresh Registry">
               <IconButton onClick={() => { loadProjects(); loadStats(); loadHierarchyOptions(); }} disabled={loading}>
                 <RefreshIcon />
@@ -974,17 +944,6 @@ const ProjectManagement = () => {
                           </TableCell>
                           <TableCell align="right">
                             <Stack direction="row" spacing={0.5} justifyContent="flex-end">
-                              {level === 'main' && (
-                                <Tooltip title="Senior Management Control Tower">
-                                  <Button
-                                    size="small" variant="contained" color="secondary"
-                                    sx={{ textTransform: 'none', px: 1, py: 0.2, fontSize: '0.72rem' }}
-                                    onClick={() => setSelectedMasterProjectId(project._id)}
-                                  >
-                                    Control Tower
-                                  </Button>
-                                </Tooltip>
-                              )}
                               {level === 'main' && (
                                 <Tooltip title="Add Sub Project under this Main Project">
                                   <Button

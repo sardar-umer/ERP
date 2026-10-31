@@ -44,8 +44,11 @@ export const setLumpSumBudget = (id, lumpSumBudget) =>
 export const allocateBudgetToSubs = (id, allocations) =>
   api.put(`${BASE}/projects/${id}/budget-allocations`, { allocations });
 
-export const getProjectRollup = (id) =>
-  api.get(`${BASE}/projects/${id}/rollup`);
+export const getProjectSummary = (id) =>
+  api.get(`${BASE}/projects/${id}/summary`);
+
+export const getProjectTree = (id) =>
+  api.get(`${BASE}/projects/${id}/tree`);
 
 // ─── Milestones ───────────────────────────────────────────────────────────────
 export const addMilestone = (projectId, data) =>

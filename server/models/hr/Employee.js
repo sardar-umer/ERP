@@ -1498,9 +1498,10 @@ employeeSchema.pre('save', async function (next) {
 
   // Auto-calculate salary components if gross salary is provided
   if (this.salary?.gross && this.isModified('salary.gross')) {
-    this.salary.basic = Math.round(this.salary.gross * 0.6666); // 66.66% of gross
     this.salary.houseRent = Math.round(this.salary.gross * 0.2334); // 23.34% of gross
     this.salary.medical = Math.round(this.salary.gross * 0.1); // 10% of gross
+    // Basic (~66.66%) takes the rounding remainder so the three parts add up to gross exactly
+    this.salary.basic = Math.round(this.salary.gross) - this.salary.houseRent - this.salary.medical;
 
     // Sync EOBI amount with active flag (respect user-configured amount)
     if (!this.eobi?.isActive) {
