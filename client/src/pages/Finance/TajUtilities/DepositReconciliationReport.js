@@ -98,8 +98,8 @@ const DepositRow = ({ row }) => {
         <TableCell align="right" sx={{ color: row.unposted > 0 ? 'error.main' : 'text.secondary' }}>
           {formatCurrency(row.unposted)}
         </TableCell>
-        <TableCell align="right" sx={{ color: resident.outstandingBalance > 0 ? 'warning.main' : 'text.secondary' }}>
-          {row.isSuspense ? '—' : formatCurrency(resident.outstandingBalance)}
+        <TableCell align="right" sx={{ color: row.outstandingShare > 0 ? 'warning.main' : 'text.secondary' }}>
+          {row.isSuspense ? '—' : formatCurrency(row.outstandingShare)}
         </TableCell>
       </TableRow>
       <TableRow>
@@ -139,7 +139,7 @@ const DepositRow = ({ row }) => {
                     {[
                       ['Payment method', row.paymentMethod || '—'],
                       ['Description', row.description || '—'],
-                      ['Outstanding invoices', row.isSuspense ? '—' : `${formatCurrency(resident.outstandingBalance)} (${resident.openInvoices} open)`],
+                      ['Resident total outstanding', row.isSuspense ? '—' : `${formatCurrency(resident.outstandingBalance)} (${resident.openInvoices} open invoices)`],
                       ['Unused deposits', row.isSuspense ? '—' : formatCurrency(resident.unusedDeposits)]
                     ].map(([label, value]) => (
                       <Grid item xs={12} sm={6} key={label}>
@@ -165,12 +165,13 @@ const DepositRow = ({ row }) => {
                       <TableCell align="right"><strong>Amount posted</strong></TableCell>
                       <TableCell align="right"><strong>Invoice total</strong></TableCell>
                       <TableCell align="right"><strong>Invoice balance</strong></TableCell>
+                      <TableCell align="right"><strong>Outstanding (today)</strong></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
                     {row.postings.length === 0 && (
                       <TableRow>
-                        <TableCell colSpan={9} align="center">
+                        <TableCell colSpan={10} align="center">
                           <Typography variant="body2" color="text.secondary">Not posted to any invoice yet</Typography>
                         </TableCell>
                       </TableRow>
@@ -190,6 +191,9 @@ const DepositRow = ({ row }) => {
                         <TableCell align="right" sx={{ color: p.invoiceBalance > 0 ? 'warning.main' : 'text.secondary' }}>
                           {p.invoiceId ? formatCurrency(p.invoiceBalance) : '—'}
                         </TableCell>
+                        <TableCell align="right" sx={{ color: p.outstanding > 0 ? 'warning.main' : 'text.secondary' }}>
+                          {row.isSuspense ? '—' : formatCurrency(p.outstanding)}
+                        </TableCell>
                       </TableRow>
                     ))}
                     {row.unposted > 0 && (
@@ -198,9 +202,25 @@ const DepositRow = ({ row }) => {
                           <Typography variant="body2" color="error.main">Unposted (still in deposit)</Typography>
                         </TableCell>
                         <TableCell align="right" sx={{ color: 'error.main' }}><strong>{formatCurrency(row.unposted)}</strong></TableCell>
-                        <TableCell colSpan={2} />
+                        <TableCell colSpan={3} />
                       </TableRow>
                     )}
+                    {row.otherOpenInvoices.map((o) => (
+                      <TableRow key={`open-${o.invoiceId}`}>
+                        <TableCell>{o.invoiceNumber || '—'}</TableCell>
+                        <TableCell>{formatBillMonth(o.billMonth)}</TableCell>
+                        <TableCell>
+                          <Chip size="small" label="Open – nothing posted" variant="outlined" />
+                        </TableCell>
+                        <TableCell>{(o.chargeTypes || []).join(', ') || '—'}</TableCell>
+                        <TableCell>{o.property || '—'}</TableCell>
+                        <TableCell>—</TableCell>
+                        <TableCell align="right">—</TableCell>
+                        <TableCell align="right">{formatCurrency(o.invoiceTotal)}</TableCell>
+                        <TableCell align="right">{formatCurrency(o.invoiceBalance)}</TableCell>
+                        <TableCell align="right" sx={{ color: 'warning.main' }}>{formatCurrency(o.outstanding)}</TableCell>
+                      </TableRow>
+                    ))}
                   </TableBody>
                 </Table>
               </TableContainer>
@@ -281,32 +301,47 @@ const DepositReconciliationReport = () => {
         'Deposit Date', 'Bank', 'Payment Method', 'Reference', 'Deposit Amount',
         'Resident ID', 'Resident Name', 'Account Type', 'CNIC', 'Contact', 'Email', 'Address', 'Properties',
         'Invoice #', 'Bill Month', 'Posted As', 'Charges', 'Invoice Property', 'Posted On', 'Amount Posted',
-        'Invoice Total', 'Invoice Balance', 'Resident Outstanding (today)', 'Resident Unused Deposits (today)'
+        'Invoice Total', 'Invoice Balance', 'Outstanding (today)', 'Resident Unused Deposits (today)'
       ];
       const widths = [14, 22, 16, 18, 16, 12, 24, 14, 16, 16, 24, 28, 30, 18, 12, 18, 18, 28, 14, 16, 16, 16, 20, 20];
       detailSheet.columns = widths.map((width) => ({ width }));
       detailSheet.addRow(detailHeaders).font = { bold: true };
 
+      // Resident balances go on one row each so a resident's rows add up to their total
+      const unusedShown = new Set();
       data.deposits.forEach((d) => {
         const r = d.resident;
+        const residentKey = String(r._id);
+        const unusedCell = () => {
+          if (d.isSuspense || unusedShown.has(residentKey)) return '';
+          unusedShown.add(residentKey);
+          return r.unusedDeposits;
+        };
         const base = [
           formatDate(d.date), d.bank, d.paymentMethod || '', d.reference || '', d.amount,
           d.isSuspense ? '' : r.residentId, residentLabel(r, d.isSuspense), r.accountType, r.cnic, r.contactNumber,
           r.email, r.address, r.properties.join(', ')
         ];
-        const tail = [d.isSuspense ? '' : r.outstandingBalance, d.isSuspense ? '' : r.unusedDeposits];
         d.postings.forEach((p) => {
           detailSheet.addRow([
             ...base,
             p.invoiceNumber || '', formatBillMonth(p.billMonth), POSTED_AS[p.postedAs].label,
             (p.chargeTypes || []).join(', '), p.property || '', formatDate(p.postedAt), p.amount,
             p.invoiceId ? p.invoiceTotal : '', p.invoiceId ? p.invoiceBalance : '',
-            ...tail
+            d.isSuspense ? '' : p.outstanding, unusedCell()
           ]);
         });
         if (d.unposted > 0 || d.postings.length === 0) {
-          detailSheet.addRow([...base, '', '', 'Unposted', '', '', '', d.unposted, '', '', ...tail]);
+          detailSheet.addRow([...base, '', '', 'Unposted', '', '', '', d.unposted, '', '', d.isSuspense ? '' : 0, unusedCell()]);
         }
+        d.otherOpenInvoices.forEach((o) => {
+          detailSheet.addRow([
+            ...base,
+            o.invoiceNumber || '', formatBillMonth(o.billMonth), 'Open – nothing posted',
+            (o.chargeTypes || []).join(', '), o.property || '', '', '',
+            o.invoiceTotal, o.invoiceBalance, o.outstanding, unusedCell()
+          ]);
+        });
       });
 
       [summarySheet, detailSheet].forEach((sheet) => {
@@ -339,7 +374,8 @@ const DepositReconciliationReport = () => {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Every deposit received in the month, by bank, and the invoices it was posted to. A posting is
           &quot;Current month&quot; when the invoice is for the deposit month, &quot;Arrears&quot; when it is for an earlier month,
-          and &quot;Advance&quot; for a later month. Balances are as of today.
+          and &quot;Advance&quot; for a later month. Balances are as of today: Outstanding is split per invoice (same as the
+          Resident Ledger), so a resident&apos;s rows add up to their total.
         </Typography>
 
         <Grid container spacing={2} alignItems="center" sx={{ mb: 2 }}>

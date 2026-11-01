@@ -2154,6 +2154,69 @@ const propertyLabel = (property) => {
     .join(' · ');
 };
 
+// Same rules as the Resident Ledger (client/src/utils/residentLedgerDisplay.js) so totals match it
+const LEDGER_GRACE_PERIOD_DAYS = 6;
+const LEDGER_SECTION_TYPES = ['CAM', 'WATER', 'ELECTRICITY', 'RENT'];
+
+const ledgerInvoiceDisplayAmount = (inv) => {
+  let chargesForMonth = Number(inv.subtotal) || 0;
+  if (Array.isArray(inv.charges) && inv.charges.length > 0) {
+    const totalChargesAmount = inv.charges.reduce((sum, charge) => sum + (Number(charge.amount) || 0), 0);
+    if (totalChargesAmount > 0) chargesForMonth = totalChargesAmount;
+  }
+  const totalArrears = Number(inv.totalArrears) || 0;
+  const baseAmount = chargesForMonth + totalArrears;
+  if (!inv.dueDate) return Number(inv.grandTotal) || baseAmount;
+
+  const todayStart = new Date();
+  todayStart.setHours(0, 0, 0, 0);
+  const graceEndDate = new Date(inv.dueDate);
+  graceEndDate.setHours(0, 0, 0, 0);
+  graceEndDate.setDate(graceEndDate.getDate() + LEDGER_GRACE_PERIOD_DAYS);
+  const isUnpaid = inv.paymentStatus === 'unpaid' || inv.paymentStatus === 'partial_paid' || (Number(inv.balance) || 0) > 0;
+  if (!(todayStart > graceEndDate) || !isUnpaid) return Number(inv.grandTotal) || baseAmount;
+
+  const latePaymentSurcharge = Math.max(Math.round(chargesForMonth * 0.1), 0);
+  const storedGrandTotal = Number(inv.grandTotal) || 0;
+  return storedGrandTotal > baseAmount ? storedGrandTotal : baseAmount + latePaymentSurcharge;
+};
+
+const ledgerSectionKey = (inv) => {
+  const types = inv.chargeTypes || [];
+  return types.length === 1 && LEDGER_SECTION_TYPES.includes(types[0]) ? types[0] : 'OTHER';
+};
+
+const ledgerPeriodKey = (value) => (value ? new Date(value).toISOString() : '');
+
+/**
+ * A resident's outstanding split per invoice without double-counting carried arrears:
+ * per charge-type section only the earliest unpaid invoice keeps its arrears.
+ * Returns the invoices that still owe, with { inv, balance }.
+ */
+const ledgerOutstandingRows = (invoices) => {
+  const sections = {};
+  invoices.forEach(inv => { (sections[ledgerSectionKey(inv)] = sections[ledgerSectionKey(inv)] || []).push(inv); });
+  const rows = [];
+  Object.values(sections).forEach(list => {
+    const sorted = [...list].sort((a, b) => {
+      const cmp = ledgerPeriodKey(a.periodFrom || a.invoiceDate).localeCompare(ledgerPeriodKey(b.periodFrom || b.invoiceDate));
+      return cmp !== 0 ? cmp : ledgerPeriodKey(a.invoiceDate).localeCompare(ledgerPeriodKey(b.invoiceDate));
+    });
+    const stillOwes = (inv) => (Number(inv.balance) || 0) > 0 || ['unpaid', 'partial_paid'].includes(String(inv.paymentStatus || '').toLowerCase());
+    const firstId = (sorted.find(stillOwes) || sorted[0])?._id?.toString();
+    sorted.forEach(inv => {
+      const displayAmount = ledgerInvoiceDisplayAmount(inv);
+      const totalPaid = Number(inv.totalPaid) || 0;
+      const totalArrears = Number(inv.totalArrears) || 0;
+      const balance = inv._id.toString() === firstId
+        ? Math.max(0, displayAmount - totalPaid)
+        : Math.max(0, displayAmount - totalArrears - totalPaid);
+      if (balance > 0.005) rows.push({ inv, balance });
+    });
+  });
+  return rows;
+};
+
 /**
  * Deposit reconciliation for one month: every deposit received (by bank), the invoices it was posted to
  * (current month / arrears / advance by the invoice's billing month), what is still unposted,
@@ -2295,22 +2358,25 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
       residentByProperty[p._id.toString()] = residentByProperty[p._id.toString()] || r._id.toString();
     }));
 
-    const openByProperty = await PropertyInvoice.aggregate([
-      {
-        $match: {
-          property: { $in: Object.keys(residentByProperty).map(id => new mongoose.Types.ObjectId(id)) },
-          status: { $ne: 'Cancelled' },
-          balance: { $gt: 0.005 }
-        }
-      },
-      { $group: { _id: '$property', balance: { $sum: '$balance' }, count: { $sum: 1 } } }
-    ]);
-    openByProperty.forEach(row => {
-      const residentId = residentByProperty[row._id.toString()];
-      if (!residentId) return;
-      const entry = outstandingByResident[residentId] || (outstandingByResident[residentId] = { balance: 0, count: 0 });
-      entry.balance += row.balance || 0;
-      entry.count += row.count || 0;
+    const residentInvoices = await PropertyInvoice.find({
+      property: { $in: Object.keys(residentByProperty) },
+      status: { $ne: 'Cancelled' }
+    })
+      .select('invoiceNumber invoiceDate periodFrom periodTo dueDate chargeTypes charges subtotal totalArrears grandTotal totalPaid balance paymentStatus property')
+      .populate('property', 'propertyName plotNumber sector block')
+      .lean();
+    const invoicesByResident = {};
+    residentInvoices.forEach(inv => {
+      const residentId = residentByProperty[String(inv.property?._id || inv.property)];
+      if (residentId) (invoicesByResident[residentId] = invoicesByResident[residentId] || []).push(inv);
+    });
+    Object.entries(invoicesByResident).forEach(([residentId, list]) => {
+      const rows = ledgerOutstandingRows(list);
+      outstandingByResident[residentId] = {
+        balance: rows.reduce((s, r) => s + r.balance, 0),
+        count: rows.length,
+        byInvoice: new Map(rows.map(r => [r.inv._id.toString(), r]))
+      };
     });
 
     const residentDeposits = await TajTransaction.find({
@@ -2395,9 +2461,54 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
         openInvoices: outstanding.count,
         unusedDeposits: round2(isSuspense ? 0 : unusedByResident[residentKey])
       },
-      postings
+      postings,
+      outstandingShare: 0,
+      otherOpenInvoices: []
     };
   });
+
+  // Split each resident's outstanding across their rows so the rows add up to the total once:
+  // each invoice's balance goes on the first posting to it, and open invoices nothing was posted to
+  // go on the resident's first deposit row.
+  const shownInvoicesByResident = {};
+  const firstRowByResident = {};
+  rows.forEach(row => {
+    if (row.isSuspense) return;
+    const residentKey = String(row.resident._id);
+    const outstanding = outstandingByResident[residentKey];
+    const shown = shownInvoicesByResident[residentKey] || (shownInvoicesByResident[residentKey] = new Set());
+    if (!firstRowByResident[residentKey]) firstRowByResident[residentKey] = row;
+    row.postings.forEach(p => {
+      const invoiceKey = p.invoiceId ? String(p.invoiceId) : '';
+      const ledgerRow = invoiceKey && outstanding?.byInvoice.get(invoiceKey);
+      p.outstanding = ledgerRow && !shown.has(invoiceKey) ? round2(ledgerRow.balance) : 0;
+      if (invoiceKey) shown.add(invoiceKey);
+      row.outstandingShare += p.outstanding;
+    });
+  });
+  Object.entries(firstRowByResident).forEach(([residentKey, row]) => {
+    const outstanding = outstandingByResident[residentKey];
+    if (!outstanding) return;
+    const shown = shownInvoicesByResident[residentKey];
+    row.otherOpenInvoices = [...outstanding.byInvoice.values()]
+      .filter(r => !shown.has(r.inv._id.toString()))
+      .sort((a, b) => ledgerPeriodKey(a.inv.periodTo || a.inv.invoiceDate).localeCompare(ledgerPeriodKey(b.inv.periodTo || b.inv.invoiceDate)))
+      .map(({ inv, balance }) => {
+        const billDate = inv.periodTo || inv.invoiceDate;
+        return {
+          invoiceId: inv._id,
+          invoiceNumber: inv.invoiceNumber || '',
+          billMonth: billDate ? new Date(billDate).toISOString().slice(0, 7) : null,
+          chargeTypes: inv.chargeTypes || [],
+          property: propertyLabel(inv.property),
+          invoiceTotal: round2(inv.grandTotal),
+          invoiceBalance: round2(inv.balance),
+          outstanding: round2(balance)
+        };
+      });
+    row.outstandingShare += row.otherOpenInvoices.reduce((s, r) => s + r.outstanding, 0);
+  });
+  rows.forEach(row => { row.outstandingShare = round2(row.outstandingShare); });
 
   const roundGroup = (g) => ({
     ...g,
