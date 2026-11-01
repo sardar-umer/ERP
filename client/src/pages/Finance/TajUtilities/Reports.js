@@ -43,6 +43,7 @@ import {
   buildLedgerSectionDisplayRows,
   getLedgerTotalOutstandingBalance
 } from '../../../utils/residentLedgerDisplay';
+import DepositReconciliationReport from './DepositReconciliationReport';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PK', {
@@ -492,6 +493,8 @@ const TajUtilitiesReports = () => {
           )}
         </CardContent>
       </Card>
+
+      <DepositReconciliationReport />
 
       {/* Resident Ledger */}
       <Card sx={{ mt: 4 }}>

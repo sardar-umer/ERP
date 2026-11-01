@@ -57,6 +57,10 @@ export const fetchAllDeposits = (params = {}) =>
 export const fetchDepositCollections = (params = {}) =>
   api.get(`${base}/deposits/collections`, { params });
 
+/** One month's deposits by bank, with the invoices each was posted to and the resident's balances. */
+export const fetchDepositReconciliation = (params = {}) =>
+  api.get(`${base}/deposits/reconciliation`, { params });
+
 export const transferDeposit = (transactionId, data) =>
   api.post(`${base}/deposits/${transactionId}/transfer`, data);
 

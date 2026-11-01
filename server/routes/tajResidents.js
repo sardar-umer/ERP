@@ -2137,6 +2137,289 @@ router.get('/deposits/collections', authMiddleware, asyncHandler(async (req, res
   res.json({ success: true, data: { timezone, months } });
 }));
 
+const UNKNOWN_BANK_LABEL = 'Not specified';
+
+const depositBankLabel = (deposit) => {
+  const bank = String(deposit.bank || '').trim();
+  if (bank) return bank;
+  if (deposit.paymentMethod === 'Cash') return 'Cash';
+  return UNKNOWN_BANK_LABEL;
+};
+
+const propertyLabel = (property) => {
+  if (!property) return '';
+  return [property.plotNumber, property.propertyName, property.block, property.sector]
+    .map(v => String(v || '').trim())
+    .filter(Boolean)
+    .join(' · ');
+};
+
+/**
+ * Deposit reconciliation for one month: every deposit received (by bank), the invoices it was posted to
+ * (current month / arrears / advance by the invoice's billing month), what is still unposted,
+ * and each resident's details with outstanding invoices and unused deposits as of today.
+ * Read-only.
+ */
+router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, res) => {
+  const { month, bank, search } = req.query;
+  const timezone = resolveTimezone(req.query.timezone);
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) {
+    return res.status(400).json({ success: false, message: 'month (YYYY-MM) is required' });
+  }
+
+  const unknownResidentIds = await findUnknownResidentIds();
+  const suspenseIdSet = new Set(unknownResidentIds.map(id => id.toString()));
+
+  // Pad the date range by a day on each side, then bucket exactly by month in the requested timezone
+  const rangeStart = new Date(`${month}-01T00:00:00Z`);
+  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1);
+  const rangeEnd = new Date(`${month}-01T00:00:00Z`);
+  rangeEnd.setUTCMonth(rangeEnd.getUTCMonth() + 1);
+  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 1);
+
+  const monthDeposits = await TajTransaction.aggregate([
+    {
+      $match: {
+        transactionType: 'deposit',
+        createdAt: { $gte: rangeStart, $lt: rangeEnd },
+        $or: [
+          { referenceNumberExternal: { $not: /^REV-/ } },
+          { referenceNumberExternal: { $exists: false } },
+          { referenceNumberExternal: null }
+        ]
+      }
+    },
+    { $addFields: { monthKey: { $dateToString: { format: '%Y-%m', date: '$createdAt', timezone } } } },
+    { $match: { monthKey: month } },
+    { $sort: { createdAt: 1 } },
+    {
+      $project: {
+        amount: 1, resident: 1, bank: 1, paymentMethod: 1, referenceNumberExternal: 1,
+        description: 1, chargeType: 1, createdAt: 1
+      }
+    }
+  ]);
+
+  const residentIds = [...new Set(monthDeposits.map(d => String(d.resident)).filter(Boolean))];
+  const residents = residentIds.length > 0
+    ? await TajResident.find({ _id: { $in: residentIds } })
+      .select('residentId name accountType cnic contactNumber email address properties')
+      .populate('properties', 'propertyName plotNumber sector block fullAddress ownerName')
+      .lean()
+    : [];
+  const residentById = new Map(residents.map(r => [r._id.toString(), r]));
+
+  const bankList = [...new Set(monthDeposits.map(depositBankLabel))].sort((a, b) => a.localeCompare(b));
+
+  // Bank and search filters (applied after the bank list so the dropdown always shows every bank)
+  const searchText = String(search || '').trim().toLowerCase();
+  const deposits = monthDeposits.filter(d => {
+    if (bank && depositBankLabel(d) !== bank) return false;
+    if (!searchText) return true;
+    const resident = residentById.get(String(d.resident));
+    const haystack = [
+      resident?.name, resident?.residentId, resident?.cnic, resident?.contactNumber,
+      d.referenceNumberExternal, d.description,
+      ...(resident?.properties || []).map(propertyLabel)
+    ].map(v => String(v || '').toLowerCase());
+    return haystack.some(v => v.includes(searchText));
+  });
+
+  // Every posting of these deposits onto invoices (to date, whenever it was posted)
+  const depositIds = deposits.map(d => d._id);
+  const depositIdSet = new Set(depositIds.map(String));
+  const payments = depositIds.length > 0
+    ? await TajTransaction.find({ transactionType: 'bill_payment', 'depositUsages.depositId': { $in: depositIds } })
+      .select('depositUsages referenceId referenceNumber referenceType createdAt')
+      .lean()
+    : [];
+
+  const invoiceIds = [...new Set(payments
+    .map(p => p.referenceId)
+    .filter(id => id && mongoose.Types.ObjectId.isValid(id))
+    .map(String))];
+  const invoices = invoiceIds.length > 0
+    ? await PropertyInvoice.find({ _id: { $in: invoiceIds } })
+      .select('invoiceNumber invoiceDate periodFrom periodTo dueDate chargeTypes subtotal totalArrears grandTotal totalPaid balance paymentStatus property customerName')
+      .populate('property', 'propertyName plotNumber sector block')
+      .lean()
+    : [];
+  const invoiceById = new Map(invoices.map(inv => [inv._id.toString(), inv]));
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const postingsByDeposit = {};
+  payments.forEach(payment => {
+    const invoice = payment.referenceId ? invoiceById.get(String(payment.referenceId)) : null;
+    (payment.depositUsages || []).forEach(usage => {
+      const depositId = usage.depositId?.toString();
+      const amount = Number(usage.amount) || 0;
+      if (!depositId || !depositIdSet.has(depositId) || amount <= 0) return;
+      const billDate = invoice ? (invoice.periodTo || invoice.invoiceDate) : null;
+      const billMonth = billDate ? new Date(billDate).toISOString().slice(0, 7) : null;
+      let postedAs = 'not_linked';
+      if (billMonth) postedAs = billMonth < month ? 'arrears' : billMonth > month ? 'advance' : 'current';
+      (postingsByDeposit[depositId] = postingsByDeposit[depositId] || []).push({
+        postedAt: payment.createdAt,
+        amount: round2(amount),
+        postedAs,
+        billMonth,
+        invoiceId: invoice?._id || null,
+        invoiceNumber: invoice?.invoiceNumber || payment.referenceNumber || '',
+        chargeTypes: invoice?.chargeTypes || (payment.referenceType ? [payment.referenceType] : []),
+        property: invoice?.property ? propertyLabel(invoice.property) : (invoice?.customerName || ''),
+        periodFrom: invoice?.periodFrom || null,
+        periodTo: invoice?.periodTo || null,
+        invoiceAmount: round2(invoice?.subtotal),
+        invoiceArrears: round2(invoice?.totalArrears),
+        invoiceTotal: round2(invoice?.grandTotal),
+        invoicePaid: round2(invoice?.totalPaid),
+        invoiceBalance: round2(invoice?.balance),
+        paymentStatus: invoice?.paymentStatus || ''
+      });
+    });
+  });
+
+  // Balances as of today for each resident: open invoice balances on their properties and unused deposits
+  const knownResidentIds = residentIds.filter(id => !suspenseIdSet.has(id));
+  const outstandingByResident = {};
+  const unusedByResident = {};
+  if (knownResidentIds.length > 0) {
+    const knownObjectIds = knownResidentIds.map(id => new mongoose.Types.ObjectId(id));
+    const listedPropertyIds = residents.flatMap(r => (r.properties || []).map(p => p._id));
+    const properties = await TajProperty.find({
+      $or: [{ resident: { $in: knownObjectIds } }, { _id: { $in: listedPropertyIds } }]
+    }).select('_id resident').lean();
+    const residentByProperty = {};
+    properties.forEach(p => { if (p.resident) residentByProperty[p._id.toString()] = p.resident.toString(); });
+    residents.forEach(r => (r.properties || []).forEach(p => {
+      residentByProperty[p._id.toString()] = residentByProperty[p._id.toString()] || r._id.toString();
+    }));
+
+    const openByProperty = await PropertyInvoice.aggregate([
+      {
+        $match: {
+          property: { $in: Object.keys(residentByProperty).map(id => new mongoose.Types.ObjectId(id)) },
+          status: { $ne: 'Cancelled' },
+          balance: { $gt: 0.005 }
+        }
+      },
+      { $group: { _id: '$property', balance: { $sum: '$balance' }, count: { $sum: 1 } } }
+    ]);
+    openByProperty.forEach(row => {
+      const residentId = residentByProperty[row._id.toString()];
+      if (!residentId) return;
+      const entry = outstandingByResident[residentId] || (outstandingByResident[residentId] = { balance: 0, count: 0 });
+      entry.balance += row.balance || 0;
+      entry.count += row.count || 0;
+    });
+
+    const residentDeposits = await TajTransaction.find({
+      resident: { $in: knownObjectIds },
+      transactionType: 'deposit',
+      $or: [
+        { referenceNumberExternal: { $not: /^REV-/ } },
+        { referenceNumberExternal: { $exists: false } },
+        { referenceNumberExternal: null }
+      ]
+    }).select('_id resident amount').lean();
+    const residentDepositIds = residentDeposits.map(d => d._id);
+    const usedTotals = residentDepositIds.length > 0
+      ? await TajTransaction.aggregate([
+        { $match: { transactionType: 'bill_payment', 'depositUsages.depositId': { $in: residentDepositIds } } },
+        { $unwind: '$depositUsages' },
+        { $match: { 'depositUsages.depositId': { $in: residentDepositIds } } },
+        { $group: { _id: '$depositUsages.depositId', used: { $sum: '$depositUsages.amount' } } }
+      ])
+      : [];
+    const usedByDepositId = {};
+    usedTotals.forEach(u => { usedByDepositId[String(u._id)] = u.used || 0; });
+    // Remaining per deposit, capped at zero like the Deposits page
+    residentDeposits.forEach(d => {
+      const key = String(d.resident);
+      const remaining = Math.max(0, (Number(d.amount) || 0) - (usedByDepositId[d._id.toString()] || 0));
+      unusedByResident[key] = (unusedByResident[key] || 0) + remaining;
+    });
+  }
+
+  const emptyPosted = () => ({ current: 0, arrears: 0, advance: 0, not_linked: 0 });
+  const totals = { count: 0, amount: 0, posted: emptyPosted(), totalPosted: 0, unposted: 0 };
+  const byBank = {};
+
+  const rows = deposits.map(d => {
+    const id = d._id.toString();
+    const residentKey = String(d.resident);
+    const resident = residentById.get(residentKey);
+    const isSuspense = suspenseIdSet.has(residentKey);
+    const amount = Number(d.amount) || 0;
+    const postings = (postingsByDeposit[id] || []).sort((a, b) => String(a.billMonth || '').localeCompare(String(b.billMonth || '')));
+    const posted = emptyPosted();
+    postings.forEach(p => { posted[p.postedAs] += p.amount; });
+    const totalPosted = Object.values(posted).reduce((s, v) => s + v, 0);
+    const unposted = Math.max(0, amount - totalPosted);
+    const bankLabel = depositBankLabel(d);
+
+    const bankEntry = byBank[bankLabel] || (byBank[bankLabel] = { bank: bankLabel, count: 0, amount: 0, posted: emptyPosted(), totalPosted: 0, unposted: 0 });
+    [bankEntry, totals].forEach(target => {
+      target.count += 1;
+      target.amount += amount;
+      Object.keys(posted).forEach(k => { target.posted[k] += posted[k]; });
+      target.totalPosted += totalPosted;
+      target.unposted += unposted;
+    });
+
+    const outstanding = outstandingByResident[residentKey] || { balance: 0, count: 0 };
+    return {
+      _id: d._id,
+      date: d.createdAt,
+      bank: bankLabel,
+      paymentMethod: d.paymentMethod || '',
+      reference: d.referenceNumberExternal || '',
+      description: d.description || '',
+      chargeType: d.chargeType || '',
+      amount: round2(amount),
+      posted: Object.fromEntries(Object.entries(posted).map(([k, v]) => [k, round2(v)])),
+      totalPosted: round2(totalPosted),
+      unposted: round2(unposted),
+      isSuspense,
+      resident: {
+        _id: resident?._id || d.resident,
+        residentId: resident?.residentId || '',
+        name: resident?.name || '',
+        accountType: resident?.accountType || '',
+        cnic: resident?.cnic || '',
+        contactNumber: resident?.contactNumber || '',
+        email: resident?.email || '',
+        address: resident?.address || '',
+        properties: (resident?.properties || []).map(propertyLabel).filter(Boolean),
+        outstandingBalance: round2(outstanding.balance),
+        openInvoices: outstanding.count,
+        unusedDeposits: round2(isSuspense ? 0 : unusedByResident[residentKey])
+      },
+      postings
+    };
+  });
+
+  const roundGroup = (g) => ({
+    ...g,
+    amount: round2(g.amount),
+    totalPosted: round2(g.totalPosted),
+    unposted: round2(g.unposted),
+    posted: Object.fromEntries(Object.entries(g.posted).map(([k, v]) => [k, round2(v)]))
+  });
+
+  res.json({
+    success: true,
+    data: {
+      month,
+      timezone,
+      banks: bankList,
+      totals: roundGroup(totals),
+      byBank: Object.values(byBank).sort((a, b) => b.amount - a.amount).map(roundGroup),
+      deposits: rows
+    }
+  });
+}));
+
 // Get all deposits across all residents (for Deposits page)
 router.get('/deposits/all', authMiddleware, asyncHandler(async (req, res) => {
   const { page = 1, limit = 50, search, startDate, endDate, suspenseAccount } = req.query;
