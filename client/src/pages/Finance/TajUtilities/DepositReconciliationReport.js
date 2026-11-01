@@ -36,6 +36,7 @@ import {
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import { fetchDepositReconciliation } from '../../../services/tajResidentsService';
+import { fetchReports } from '../../../services/propertyInvoiceService';
 
 const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
 
@@ -70,6 +71,31 @@ const SummaryCard = ({ title, value, color, note }) => (
     </Paper>
   </Grid>
 );
+
+const MonthStep = ({ sign, title, value, color, strong }) => (
+  <Grid item xs={6} sm={4} md>
+    <Paper variant="outlined" sx={{ p: 1.5, height: '100%', bgcolor: strong ? 'action.hover' : undefined }}>
+      <Typography variant="caption" color="text.secondary">{sign ? `${sign} ` : ''}{title}</Typography>
+      <Typography variant="subtitle1" fontWeight={700} color={color}>{formatCurrency(value)}</Typography>
+    </Paper>
+  </Grid>
+);
+
+/** Same figures as the Month-wise Breakdown row: arrears + invoiced − paid on that month's invoices. */
+const buildMonthReconciliation = (monthRow) => {
+  if (!monthRow) return null;
+  const arrears = Number(monthRow.arrears) || 0;
+  const invoiced = Number(monthRow.invoiceAmount) || 0;
+  const received = Number(monthRow.paymentsReceived) || 0;
+  return {
+    arrears,
+    invoiced,
+    totalDue: arrears + invoiced,
+    received,
+    balance: arrears + invoiced - received,
+    invoiceCount: Number(monthRow.invoiceCount) || 0
+  };
+};
 
 const DepositRow = ({ row }) => {
   const [open, setOpen] = useState(false);
@@ -241,6 +267,7 @@ const DepositReconciliationReport = () => {
   const [exporting, setExporting] = useState(false);
   const [error, setError] = useState('');
   const [data, setData] = useState(null);
+  const [monthRecon, setMonthRecon] = useState(null);
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(25);
 
@@ -252,8 +279,17 @@ const DepositReconciliationReport = () => {
       const params = { month, timezone: BROWSER_TIMEZONE };
       if (bank) params.bank = bank;
       if (search) params.search = search;
-      const response = await fetchDepositReconciliation(params);
+      const [response, monthReport] = await Promise.all([
+        fetchDepositReconciliation(params),
+        // Neighbouring months too, so edge-of-month invoices bucket exactly as in the Month-wise Breakdown
+        fetchReports({
+          startMonth: dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM'),
+          endMonth: dayjs(`${month}-01`).add(1, 'month').format('YYYY-MM')
+        })
+      ]);
       setData(response.data?.data || null);
+      const monthRow = (monthReport.data?.data?.byMonth || []).find((r) => r.month === month);
+      setMonthRecon(buildMonthReconciliation(monthRow));
       setPage(0);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to load deposit reconciliation');
@@ -284,6 +320,22 @@ const DepositReconciliationReport = () => {
       const { Workbook } = await import('exceljs');
       const workbook = new Workbook();
       const monthLabel = formatBillMonth(data.month);
+
+      if (monthRecon) {
+        const reconSheet = workbook.addWorksheet('Month Reconciliation');
+        reconSheet.columns = [{ width: 44 }, { width: 20 }];
+        reconSheet.addRow([`Month reconciliation — ${monthLabel} (all invoices billed in the month)`]).font = { bold: true };
+        [
+          ['Arrears brought forward', monthRecon.arrears],
+          ['+ Invoiced in the month', monthRecon.invoiced],
+          ['= Total due', monthRecon.totalDue],
+          ['− Received on these invoices', monthRecon.received],
+          ['= Balance remaining', monthRecon.balance]
+        ].forEach(([label, value]) => {
+          const added = reconSheet.addRow([label, value]);
+          if (label.startsWith('=')) added.font = { bold: true };
+        });
+      }
 
       const summarySheet = workbook.addWorksheet('Bank Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
       const summaryHeaders = ['Bank', 'Deposits', 'Received', 'Posted - Current month', 'Posted - Arrears', 'Posted - Advance', 'Posted - Not linked', 'Unposted'];
@@ -363,7 +415,7 @@ const DepositReconciliationReport = () => {
     } finally {
       setExporting(false);
     }
-  }, [data, bank]);
+  }, [data, bank, monthRecon]);
 
   return (
     <Card sx={{ mt: 4 }}>
@@ -438,6 +490,25 @@ const DepositReconciliationReport = () => {
           <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}><CircularProgress /></Box>
         ) : totals && (
           <Box sx={{ opacity: loading ? 0.6 : 1 }}>
+            {monthRecon && (
+              <>
+                <Typography variant="subtitle1" fontWeight={600}>
+                  Month reconciliation — {formatBillMonth(data.month)}
+                </Typography>
+                <Typography variant="caption" color="text.secondary" component="p" sx={{ mb: 1 }}>
+                  All {monthRecon.invoiceCount} invoices billed in the month, same figures as the Month-wise Breakdown
+                  (not affected by the bank or search filter). Paying an older invoice already lowers the arrears here.
+                </Typography>
+                <Grid container spacing={1.5} sx={{ mb: 3 }}>
+                  <MonthStep title="Arrears brought forward" value={monthRecon.arrears} color="warning.main" />
+                  <MonthStep sign="+" title="Invoiced in the month" value={monthRecon.invoiced} />
+                  <MonthStep sign="=" title="Total due" value={monthRecon.totalDue} strong />
+                  <MonthStep sign="−" title="Received on these invoices" value={monthRecon.received} color="success.main" />
+                  <MonthStep sign="=" title="Balance remaining" value={monthRecon.balance} color="error.main" strong />
+                </Grid>
+                <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>Deposits received in the month</Typography>
+              </>
+            )}
             <Grid container spacing={1.5} sx={{ mb: 2 }}>
               <SummaryCard title={`Received (${totals.count})`} value={totals.amount} />
               <SummaryCard title="Posted - Current month" value={totals.posted.current} color="success.main" />
