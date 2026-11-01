@@ -2374,8 +2374,7 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
       const rows = ledgerOutstandingRows(list);
       outstandingByResident[residentId] = {
         balance: rows.reduce((s, r) => s + r.balance, 0),
-        count: rows.length,
-        byInvoice: new Map(rows.map(r => [r.inv._id.toString(), r]))
+        count: rows.length
       };
     });
 
@@ -2462,53 +2461,120 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
         unusedDeposits: round2(isSuspense ? 0 : unusedByResident[residentKey])
       },
       postings,
-      outstandingShare: 0,
-      otherOpenInvoices: []
+      monthBalance: 0,
+      otherMonthInvoices: []
     };
   });
 
-  // Split each resident's outstanding across their rows so the rows add up to the total once:
-  // each invoice's balance goes on the first posting to it, and open invoices nothing was posted to
-  // go on the resident's first deposit row.
-  const shownInvoicesByResident = {};
+  // Every invoice billed in the month (same bucket as the Month-wise Breakdown) puts its balance
+  // (invoice + arrears − paid) on exactly one row, so the Balance column adds up to that report:
+  // on the first posting to it, else under the resident's first deposit, else as a "no deposit" row.
+  const monthInvoices = await PropertyInvoice.aggregate([
+    { $match: { status: { $ne: 'Cancelled' } } },
+    { $addFields: { billDate: { $ifNull: ['$periodTo', '$invoiceDate'] } } },
+    { $match: { billDate: { $gte: rangeStart, $lt: rangeEnd } } },
+    { $addFields: { billMonth: { $dateToString: { format: '%Y-%m', date: '$billDate' } } } },
+    { $match: { billMonth: month } },
+    {
+      $project: {
+        invoiceNumber: 1, chargeTypes: 1, property: 1, customerName: 1, subtotal: 1, charges: 1,
+        totalArrears: 1, grandTotal: 1, totalPaid: 1, balance: 1, billMonth: 1
+      }
+    }
+  ]);
+  const monthInvoiceBalance = (inv) => {
+    const subtotal = inv.subtotal != null
+      ? Number(inv.subtotal) || 0
+      : (inv.charges || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+    return subtotal + (Number(inv.totalArrears) || 0) - (Number(inv.totalPaid) || 0);
+  };
+  const monthInvoiceById = new Map(monthInvoices.map(inv => [inv._id.toString(), inv]));
+
+  const monthPropertyIds = [...new Set(monthInvoices.map(inv => inv.property && String(inv.property)).filter(Boolean))];
+  const [monthProperties, monthPropertyOwners] = monthPropertyIds.length > 0
+    ? await Promise.all([
+      TajProperty.find({ _id: { $in: monthPropertyIds } }).select('propertyName plotNumber sector block resident').lean(),
+      TajResident.find({ properties: { $in: monthPropertyIds } }).select('_id properties').lean()
+    ])
+    : [[], []];
+  const propertyById = new Map(monthProperties.map(pr => [pr._id.toString(), pr]));
+  const monthResidentByProperty = {};
+  monthPropertyOwners.forEach(r => (r.properties || []).forEach(pid => { monthResidentByProperty[String(pid)] = r._id.toString(); }));
+  monthProperties.forEach(pr => { if (pr.resident) monthResidentByProperty[pr._id.toString()] = pr.resident.toString(); });
+
+  const assignedInvoices = new Set();
   const firstRowByResident = {};
   rows.forEach(row => {
-    if (row.isSuspense) return;
-    const residentKey = String(row.resident._id);
-    const outstanding = outstandingByResident[residentKey];
-    const shown = shownInvoicesByResident[residentKey] || (shownInvoicesByResident[residentKey] = new Set());
-    if (!firstRowByResident[residentKey]) firstRowByResident[residentKey] = row;
+    if (!row.isSuspense && !firstRowByResident[String(row.resident._id)]) firstRowByResident[String(row.resident._id)] = row;
     row.postings.forEach(p => {
       const invoiceKey = p.invoiceId ? String(p.invoiceId) : '';
-      const ledgerRow = invoiceKey && outstanding?.byInvoice.get(invoiceKey);
-      p.outstanding = ledgerRow && !shown.has(invoiceKey) ? round2(ledgerRow.balance) : 0;
-      if (invoiceKey) shown.add(invoiceKey);
-      row.outstandingShare += p.outstanding;
+      const inv = invoiceKey && monthInvoiceById.get(invoiceKey);
+      p.monthBalance = inv && !assignedInvoices.has(invoiceKey) ? round2(monthInvoiceBalance(inv)) : 0;
+      if (inv) assignedInvoices.add(invoiceKey);
+      row.monthBalance += p.monthBalance;
     });
   });
-  Object.entries(firstRowByResident).forEach(([residentKey, row]) => {
-    const outstanding = outstandingByResident[residentKey];
-    if (!outstanding) return;
-    const shown = shownInvoicesByResident[residentKey];
-    row.otherOpenInvoices = [...outstanding.byInvoice.values()]
-      .filter(r => !shown.has(r.inv._id.toString()))
-      .sort((a, b) => ledgerPeriodKey(a.inv.periodTo || a.inv.invoiceDate).localeCompare(ledgerPeriodKey(b.inv.periodTo || b.inv.invoiceDate)))
-      .map(({ inv, balance }) => {
-        const billDate = inv.periodTo || inv.invoiceDate;
-        return {
-          invoiceId: inv._id,
-          invoiceNumber: inv.invoiceNumber || '',
-          billMonth: billDate ? new Date(billDate).toISOString().slice(0, 7) : null,
-          chargeTypes: inv.chargeTypes || [],
-          property: propertyLabel(inv.property),
-          invoiceTotal: round2(inv.grandTotal),
-          invoiceBalance: round2(inv.balance),
-          outstanding: round2(balance)
-        };
-      });
-    row.outstandingShare += row.otherOpenInvoices.reduce((s, r) => s + r.outstanding, 0);
+
+  // Invoices with no deposit row only make the column add up when every deposit is listed
+  const unfiltered = !bank && !searchText;
+  const noDepositByResident = {};
+  monthInvoices.forEach(inv => {
+    const invoiceKey = inv._id.toString();
+    if (assignedInvoices.has(invoiceKey)) return;
+    const property = inv.property ? propertyById.get(String(inv.property)) : null;
+    const residentKey = inv.property ? monthResidentByProperty[String(inv.property)] : null;
+    const entry = {
+      invoiceId: inv._id,
+      invoiceNumber: inv.invoiceNumber || '',
+      billMonth: inv.billMonth,
+      chargeTypes: inv.chargeTypes || [],
+      property: property ? propertyLabel(property) : (inv.customerName || ''),
+      invoiceTotal: round2(inv.grandTotal),
+      invoiceBalance: round2(inv.balance),
+      monthBalance: round2(monthInvoiceBalance(inv))
+    };
+    const row = residentKey && firstRowByResident[residentKey];
+    if (row) {
+      row.otherMonthInvoices.push(entry);
+      row.monthBalance += entry.monthBalance;
+    } else if (unfiltered) {
+      const key = residentKey || `open:${inv.customerName || ''}`;
+      (noDepositByResident[key] = noDepositByResident[key] || { residentKey, customerName: inv.customerName || '', invoices: [] }).invoices.push(entry);
+    }
   });
-  rows.forEach(row => { row.outstandingShare = round2(row.outstandingShare); });
+  rows.forEach(row => { row.monthBalance = round2(row.monthBalance); });
+
+  const noDepositResidentIds = Object.values(noDepositByResident).map(g => g.residentKey).filter(Boolean);
+  const noDepositResidents = noDepositResidentIds.length > 0
+    ? await TajResident.find({ _id: { $in: noDepositResidentIds } })
+      .select('residentId name accountType cnic contactNumber email address')
+      .lean()
+    : [];
+  const noDepositResidentById = new Map(noDepositResidents.map(r => [r._id.toString(), r]));
+  const noDeposit = Object.values(noDepositByResident).map(group => {
+    const r = group.residentKey ? noDepositResidentById.get(group.residentKey) : null;
+    return {
+      resident: {
+        _id: group.residentKey,
+        residentId: r?.residentId || '',
+        name: r?.name || group.customerName || '',
+        accountType: r?.accountType || '',
+        cnic: r?.cnic || '',
+        contactNumber: r?.contactNumber || '',
+        email: r?.email || '',
+        address: r?.address || ''
+      },
+      invoices: group.invoices,
+      monthBalance: round2(group.invoices.reduce((s, i) => s + i.monthBalance, 0))
+    };
+  }).sort((a, b) => String(a.resident.residentId).localeCompare(String(b.resident.residentId)));
+
+  const monthBalance = {
+    onDepositRows: round2(rows.reduce((s, r) => s + r.monthBalance, 0)),
+    noDeposit: round2(noDeposit.reduce((s, g) => s + g.monthBalance, 0)),
+    complete: unfiltered
+  };
+  monthBalance.total = round2(monthBalance.onDepositRows + monthBalance.noDeposit);
 
   const roundGroup = (g) => ({
     ...g,
@@ -2526,7 +2592,9 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
       banks: bankList,
       totals: roundGroup(totals),
       byBank: Object.values(byBank).sort((a, b) => b.amount - a.amount).map(roundGroup),
-      deposits: rows
+      deposits: rows,
+      noDeposit,
+      monthBalance
     }
   });
 }));

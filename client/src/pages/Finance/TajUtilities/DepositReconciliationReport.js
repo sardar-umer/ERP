@@ -124,8 +124,8 @@ const DepositRow = ({ row }) => {
         <TableCell align="right" sx={{ color: row.unposted > 0 ? 'error.main' : 'text.secondary' }}>
           {formatCurrency(row.unposted)}
         </TableCell>
-        <TableCell align="right" sx={{ color: row.outstandingShare > 0 ? 'warning.main' : 'text.secondary' }}>
-          {row.isSuspense ? '—' : formatCurrency(row.outstandingShare)}
+        <TableCell align="right" sx={{ color: row.monthBalance > 0 ? 'warning.main' : 'text.secondary' }}>
+          {formatCurrency(row.monthBalance)}
         </TableCell>
       </TableRow>
       <TableRow>
@@ -191,7 +191,7 @@ const DepositRow = ({ row }) => {
                       <TableCell align="right"><strong>Amount posted</strong></TableCell>
                       <TableCell align="right"><strong>Invoice total</strong></TableCell>
                       <TableCell align="right"><strong>Invoice balance</strong></TableCell>
-                      <TableCell align="right"><strong>Outstanding (today)</strong></TableCell>
+                      <TableCell align="right"><strong>Balance (month-wise)</strong></TableCell>
                     </TableRow>
                   </TableHead>
                   <TableBody>
@@ -217,8 +217,8 @@ const DepositRow = ({ row }) => {
                         <TableCell align="right" sx={{ color: p.invoiceBalance > 0 ? 'warning.main' : 'text.secondary' }}>
                           {p.invoiceId ? formatCurrency(p.invoiceBalance) : '—'}
                         </TableCell>
-                        <TableCell align="right" sx={{ color: p.outstanding > 0 ? 'warning.main' : 'text.secondary' }}>
-                          {row.isSuspense ? '—' : formatCurrency(p.outstanding)}
+                        <TableCell align="right" sx={{ color: p.monthBalance > 0 ? 'warning.main' : 'text.secondary' }}>
+                          {formatCurrency(p.monthBalance)}
                         </TableCell>
                       </TableRow>
                     ))}
@@ -231,12 +231,12 @@ const DepositRow = ({ row }) => {
                         <TableCell colSpan={3} />
                       </TableRow>
                     )}
-                    {row.otherOpenInvoices.map((o) => (
-                      <TableRow key={`open-${o.invoiceId}`}>
+                    {row.otherMonthInvoices.map((o) => (
+                      <TableRow key={`month-${o.invoiceId}`}>
                         <TableCell>{o.invoiceNumber || '—'}</TableCell>
                         <TableCell>{formatBillMonth(o.billMonth)}</TableCell>
                         <TableCell>
-                          <Chip size="small" label="Open – nothing posted" variant="outlined" />
+                          <Chip size="small" label="Billed in month – not paid from this deposit" variant="outlined" />
                         </TableCell>
                         <TableCell>{(o.chargeTypes || []).join(', ') || '—'}</TableCell>
                         <TableCell>{o.property || '—'}</TableCell>
@@ -244,7 +244,7 @@ const DepositRow = ({ row }) => {
                         <TableCell align="right">—</TableCell>
                         <TableCell align="right">{formatCurrency(o.invoiceTotal)}</TableCell>
                         <TableCell align="right">{formatCurrency(o.invoiceBalance)}</TableCell>
-                        <TableCell align="right" sx={{ color: 'warning.main' }}>{formatCurrency(o.outstanding)}</TableCell>
+                        <TableCell align="right" sx={{ color: o.monthBalance > 0 ? 'warning.main' : 'text.secondary' }}>{formatCurrency(o.monthBalance)}</TableCell>
                       </TableRow>
                     ))}
                   </TableBody>
@@ -321,22 +321,6 @@ const DepositReconciliationReport = () => {
       const workbook = new Workbook();
       const monthLabel = formatBillMonth(data.month);
 
-      if (monthRecon) {
-        const reconSheet = workbook.addWorksheet('Month Reconciliation');
-        reconSheet.columns = [{ width: 44 }, { width: 20 }];
-        reconSheet.addRow([`Month reconciliation — ${monthLabel} (all invoices billed in the month)`]).font = { bold: true };
-        [
-          ['Arrears brought forward', monthRecon.arrears],
-          ['+ Invoiced in the month', monthRecon.invoiced],
-          ['= Total due', monthRecon.totalDue],
-          ['− Received on these invoices', monthRecon.received],
-          ['= Balance remaining', monthRecon.balance]
-        ].forEach(([label, value]) => {
-          const added = reconSheet.addRow([label, value]);
-          if (label.startsWith('=')) added.font = { bold: true };
-        });
-      }
-
       const summarySheet = workbook.addWorksheet('Bank Summary', { views: [{ state: 'frozen', ySplit: 1 }] });
       const summaryHeaders = ['Bank', 'Deposits', 'Received', 'Posted - Current month', 'Posted - Arrears', 'Posted - Advance', 'Posted - Not linked', 'Unposted'];
       summarySheet.columns = summaryHeaders.map((h, i) => ({ width: i === 0 ? 28 : 20 }));
@@ -353,13 +337,13 @@ const DepositReconciliationReport = () => {
         'Deposit Date', 'Bank', 'Payment Method', 'Reference', 'Deposit Amount',
         'Resident ID', 'Resident Name', 'Account Type', 'CNIC', 'Contact', 'Email', 'Address', 'Properties',
         'Invoice #', 'Bill Month', 'Posted As', 'Charges', 'Invoice Property', 'Posted On', 'Amount Posted',
-        'Invoice Total', 'Invoice Balance', 'Outstanding (today)', 'Resident Unused Deposits (today)'
+        'Invoice Total', 'Invoice Balance', 'Balance (month-wise)', 'Resident Unused Deposits (today)'
       ];
       const widths = [14, 22, 16, 18, 16, 12, 24, 14, 16, 16, 24, 28, 30, 18, 12, 18, 18, 28, 14, 16, 16, 16, 20, 20];
       detailSheet.columns = widths.map((width) => ({ width }));
       detailSheet.addRow(detailHeaders).font = { bold: true };
 
-      // Resident balances go on one row each so a resident's rows add up to their total
+      // Unused deposits go on one row per resident; Balance is on one row per invoice billed in the month
       const unusedShown = new Set();
       data.deposits.forEach((d) => {
         const r = d.resident;
@@ -380,21 +364,45 @@ const DepositReconciliationReport = () => {
             p.invoiceNumber || '', formatBillMonth(p.billMonth), POSTED_AS[p.postedAs].label,
             (p.chargeTypes || []).join(', '), p.property || '', formatDate(p.postedAt), p.amount,
             p.invoiceId ? p.invoiceTotal : '', p.invoiceId ? p.invoiceBalance : '',
-            d.isSuspense ? '' : p.outstanding, unusedCell()
+            p.monthBalance, unusedCell()
           ]);
         });
         if (d.unposted > 0 || d.postings.length === 0) {
-          detailSheet.addRow([...base, '', '', 'Unposted', '', '', '', d.unposted, '', '', d.isSuspense ? '' : 0, unusedCell()]);
+          detailSheet.addRow([...base, '', '', 'Unposted', '', '', '', d.unposted, '', '', 0, unusedCell()]);
         }
-        d.otherOpenInvoices.forEach((o) => {
+        d.otherMonthInvoices.forEach((o) => {
           detailSheet.addRow([
             ...base,
-            o.invoiceNumber || '', formatBillMonth(o.billMonth), 'Open – nothing posted',
+            o.invoiceNumber || '', formatBillMonth(o.billMonth), 'Billed in month – not paid from this deposit',
             (o.chargeTypes || []).join(', '), o.property || '', '', '',
-            o.invoiceTotal, o.invoiceBalance, o.outstanding, unusedCell()
+            o.invoiceTotal, o.invoiceBalance, o.monthBalance, unusedCell()
           ]);
         });
       });
+      (data.noDeposit || []).forEach((g) => {
+        const r = g.resident;
+        g.invoices.forEach((o) => {
+          detailSheet.addRow([
+            '', '', '', '', '',
+            r.residentId, r.name, r.accountType, r.cnic, r.contactNumber, r.email, r.address, '',
+            o.invoiceNumber || '', formatBillMonth(o.billMonth), 'No deposit this month',
+            (o.chargeTypes || []).join(', '), o.property || '', '', '',
+            o.invoiceTotal, o.invoiceBalance, o.monthBalance, ''
+          ]);
+        });
+      });
+      const totalRow = detailSheet.addRow([
+        'Total', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+        data.monthBalance.total, ''
+      ]);
+      totalRow.font = { bold: true };
+      if (monthRecon && data.monthBalance.complete) {
+        const checkRow = detailSheet.addRow([
+          'Month-wise Breakdown balance', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '', '',
+          monthRecon.balance, ''
+        ]);
+        checkRow.font = { italic: true };
+      }
 
       [summarySheet, detailSheet].forEach((sheet) => {
         sheet.eachRow((row) => row.eachCell((cell) => {
@@ -417,6 +425,10 @@ const DepositReconciliationReport = () => {
     }
   }, [data, bank, monthRecon]);
 
+  const balanceMatches = monthRecon && data?.monthBalance
+    ? Math.abs(monthRecon.balance - data.monthBalance.total) < 1
+    : false;
+
   return (
     <Card sx={{ mt: 4 }}>
       <CardContent>
@@ -426,8 +438,8 @@ const DepositReconciliationReport = () => {
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
           Every deposit received in the month, by bank, and the invoices it was posted to. A posting is
           &quot;Current month&quot; when the invoice is for the deposit month, &quot;Arrears&quot; when it is for an earlier month,
-          and &quot;Advance&quot; for a later month. Balances are as of today: Outstanding is split per invoice (same as the
-          Resident Ledger), so a resident&apos;s rows add up to their total.
+          and &quot;Advance&quot; for a later month. Balance (month-wise) is invoice + arrears − paid for each
+          invoice billed in the month, shown once per invoice, so the column adds up to the Month-wise Breakdown.
         </Typography>
 
         <Grid container spacing={2} alignItems="center" sx={{ mb: 2 }}>
@@ -601,7 +613,7 @@ const DepositReconciliationReport = () => {
                     <TableCell align="right"><strong>Arrears</strong></TableCell>
                     <TableCell align="right"><strong>Advance</strong></TableCell>
                     <TableCell align="right"><strong>Unposted</strong></TableCell>
-                    <TableCell align="right"><strong>Outstanding (today)</strong></TableCell>
+                    <TableCell align="right"><strong>Balance (month-wise)</strong></TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -626,6 +638,23 @@ const DepositReconciliationReport = () => {
                 onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
                 rowsPerPageOptions={[25, 50, 100]}
               />
+            )}
+
+            {data.monthBalance && (
+              data.monthBalance.complete ? (
+                <Alert severity={balanceMatches ? 'success' : 'warning'} sx={{ mt: 2 }}>
+                  Balance (month-wise): {formatCurrency(data.monthBalance.onDepositRows)} on deposit rows
+                  {' + '}{formatCurrency(data.monthBalance.noDeposit)} for {data.noDeposit.length} residents with no deposit this month
+                  {' = '}<strong>{formatCurrency(data.monthBalance.total)}</strong>
+                  {monthRecon && <> — Month-wise Breakdown: <strong>{formatCurrency(monthRecon.balance)}</strong></>}.
+                  {' '}The Excel lists every one of these invoices.
+                </Alert>
+              ) : (
+                <Alert severity="info" sx={{ mt: 2 }}>
+                  Bank or search filter is on: Balance covers only the deposits shown ({formatCurrency(data.monthBalance.total)}).
+                  Clear the filters for the total that matches the Month-wise Breakdown.
+                </Alert>
+              )
             )}
           </Box>
         )}
