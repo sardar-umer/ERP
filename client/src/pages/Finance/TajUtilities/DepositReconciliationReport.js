@@ -35,7 +35,7 @@ import {
   Search as SearchIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
-import { fetchDepositReconciliation } from '../../../services/tajResidentsService';
+import { fetchArrearsGap, fetchDepositReconciliation } from '../../../services/tajResidentsService';
 import { fetchReports } from '../../../services/propertyInvoiceService';
 
 const BROWSER_TIMEZONE = Intl.DateTimeFormat().resolvedOptions().timeZone;
@@ -255,6 +255,190 @@ const DepositRow = ({ row }) => {
         </TableCell>
       </TableRow>
     </Fragment>
+  );
+};
+
+/** Why this month's arrears brought forward differ from last month's balance remaining. */
+const ArrearsGapPanel = ({ month }) => {
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+  const [gap, setGap] = useState(null);
+  const [reasonFilter, setReasonFilter] = useState('');
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(25);
+
+  useEffect(() => {
+    setGap(null);
+    setReasonFilter('');
+    setError('');
+  }, [month]);
+
+  const load = async () => {
+    try {
+      setLoading(true);
+      setError('');
+      const response = await fetchArrearsGap({ month });
+      setGap(response.data?.data || null);
+      setPage(0);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to check the gap');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const rows = useMemo(
+    () => (gap?.rows || []).filter((r) => !reasonFilter || r.reason === reasonFilter),
+    [gap, reasonFilter]
+  );
+
+  const exportGap = async () => {
+    const { Workbook } = await import('exceljs');
+    const workbook = new Workbook();
+    const { summary } = gap;
+    const sheet = workbook.addWorksheet('Arrears Gap', { views: [{ state: 'frozen', ySplit: 5 }] });
+    sheet.columns = [14, 24, 16, 16, 30, 14, 24, 16, 24, 14, 16, 16, 50].map((width) => ({ width }));
+    sheet.addRow([`${formatBillMonth(summary.prevMonth)} balance remaining`, '', '', '', '', summary.prevClosing]);
+    sheet.addRow([`${formatBillMonth(summary.month)} arrears brought forward`, '', '', '', '', summary.curOpening]);
+    sheet.addRow(['Gap', '', '', '', '', summary.gap]).font = { bold: true };
+    sheet.addRow([]);
+    sheet.addRow([
+      'Resident ID', 'Resident', 'CNIC', 'Contact', 'Property', 'Charges',
+      `${formatBillMonth(summary.prevMonth)} invoices`, `${formatBillMonth(summary.prevMonth)} balance`,
+      `${formatBillMonth(summary.month)} invoices`, 'Status', `${formatBillMonth(summary.month)} arrears`, 'Difference', 'Reason'
+    ]).font = { bold: true };
+    gap.rows.forEach((r) => sheet.addRow([
+      r.resident.residentId, r.resident.name, r.resident.cnic, r.resident.contactNumber, r.property,
+      r.chargeTypes.join(', '), r.prevInvoices.join(', '), r.prevBalance, r.curInvoices.join(', '), r.curStatus,
+      r.curArrears, r.difference, r.reasonLabel
+    ]));
+    sheet.addRow(['Total', '', '', '', '', '', '', '', '', '', '', gap.rows.reduce((t, r) => t + r.difference, 0), '']).font = { bold: true };
+    sheet.eachRow((row) => row.eachCell((cell) => {
+      if (typeof cell.value === 'number') cell.numFmt = '#,##0;[Red]-#,##0';
+    }));
+    const buffer = await workbook.xlsx.writeBuffer();
+    const url = URL.createObjectURL(new Blob([buffer], { type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet' }));
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `Arrears_Gap_${summary.prevMonth}_to_${summary.month}.xlsx`;
+    link.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const summary = gap?.summary;
+  return (
+    <Paper variant="outlined" sx={{ p: 2, mb: 3 }}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }} justifyContent="space-between">
+        <Box>
+          <Typography variant="subtitle2">
+            Gap with {formatBillMonth(dayjs(`${month}-01`).subtract(1, 'month').format('YYYY-MM'))}
+          </Typography>
+          <Typography variant="caption" color="text.secondary">
+            Last month&apos;s balance remaining should equal this month&apos;s arrears brought forward. This lists every
+            property and charge where they differ, and why.
+          </Typography>
+        </Box>
+        <Stack direction="row" spacing={1}>
+          <Button variant="outlined" size="small" onClick={load} disabled={loading}
+            startIcon={loading ? <CircularProgress size={14} /> : <SearchIcon />}>
+            {gap ? 'Recheck' : 'Find the gap'}
+          </Button>
+          {gap && (
+            <Button variant="outlined" size="small" startIcon={<DownloadIcon />} onClick={exportGap} disabled={gap.rows.length === 0}>
+              Excel
+            </Button>
+          )}
+        </Stack>
+      </Stack>
+
+      {error && <Alert severity="error" sx={{ mt: 2 }}>{error}</Alert>}
+
+      {summary && (
+        <Box sx={{ mt: 2 }}>
+          <Typography variant="body2" sx={{ mb: 1 }}>
+            {formatBillMonth(summary.prevMonth)} balance remaining <strong>{formatCurrency(summary.prevClosing)}</strong>
+            {' → '}{formatBillMonth(summary.month)} arrears brought forward <strong>{formatCurrency(summary.curOpening)}</strong>
+            {' = gap '}<strong style={{ color: summary.gap < 0 ? '#d32f2f' : undefined }}>{formatCurrency(summary.gap)}</strong>
+          </Typography>
+          <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: 'action.hover' }}>
+                  <TableCell><strong>Reason</strong></TableCell>
+                  <TableCell align="right"><strong>Properties</strong></TableCell>
+                  <TableCell align="right"><strong>Amount</strong></TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {Object.entries(summary.byReason)
+                  .sort((a, b) => Math.abs(b[1].amount) - Math.abs(a[1].amount))
+                  .map(([key, r]) => (
+                    <TableRow key={key} hover selected={reasonFilter === key} sx={{ cursor: 'pointer' }}
+                      onClick={() => { setReasonFilter(reasonFilter === key ? '' : key); setPage(0); }}>
+                      <TableCell>{r.label}</TableCell>
+                      <TableCell align="right">{r.count}</TableCell>
+                      <TableCell align="right" sx={{ color: r.amount < 0 ? 'error.main' : 'text.primary' }}>{formatCurrency(r.amount)}</TableCell>
+                    </TableRow>
+                  ))}
+                <TableRow sx={{ bgcolor: 'action.hover' }}>
+                  <TableCell><strong>Total gap</strong></TableCell>
+                  <TableCell align="right"><strong>{gap.rows.length}</strong></TableCell>
+                  <TableCell align="right"><strong>{formatCurrency(summary.gap)}</strong></TableCell>
+                </TableRow>
+              </TableBody>
+            </Table>
+          </TableContainer>
+
+          {rows.length > 0 && (
+            <>
+              <TableContainer component={Paper} variant="outlined">
+                <Table size="small">
+                  <TableHead>
+                    <TableRow sx={{ bgcolor: 'action.hover' }}>
+                      <TableCell><strong>Resident</strong></TableCell>
+                      <TableCell><strong>Property</strong></TableCell>
+                      <TableCell><strong>Charges</strong></TableCell>
+                      <TableCell><strong>{formatBillMonth(summary.prevMonth)} invoice</strong></TableCell>
+                      <TableCell align="right"><strong>Balance</strong></TableCell>
+                      <TableCell><strong>{formatBillMonth(summary.month)} invoice</strong></TableCell>
+                      <TableCell align="right"><strong>Arrears</strong></TableCell>
+                      <TableCell align="right"><strong>Difference</strong></TableCell>
+                      <TableCell><strong>Reason</strong></TableCell>
+                    </TableRow>
+                  </TableHead>
+                  <TableBody>
+                    {rows.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage).map((r, i) => (
+                      <TableRow key={`${r.property}-${r.chargeTypes.join()}-${i}`}>
+                        <TableCell>{[r.resident.residentId, r.resident.name].filter(Boolean).join(' · ') || '—'}</TableCell>
+                        <TableCell>{r.property || '—'}</TableCell>
+                        <TableCell>{r.chargeTypes.join(', ') || '—'}</TableCell>
+                        <TableCell>{r.prevInvoices.join(', ') || '—'}</TableCell>
+                        <TableCell align="right">{formatCurrency(r.prevBalance)}</TableCell>
+                        <TableCell>{r.curInvoices.join(', ') || '—'}{r.curStatus ? ` (${r.curStatus})` : ''}</TableCell>
+                        <TableCell align="right">{formatCurrency(r.curArrears)}</TableCell>
+                        <TableCell align="right" sx={{ color: r.difference < 0 ? 'error.main' : 'success.main' }}>
+                          <strong>{formatCurrency(r.difference)}</strong>
+                        </TableCell>
+                        <TableCell><Typography variant="caption">{r.reasonLabel}</Typography></TableCell>
+                      </TableRow>
+                    ))}
+                  </TableBody>
+                </Table>
+              </TableContainer>
+              <TablePagination
+                component="div"
+                count={rows.length}
+                page={page}
+                onPageChange={(e, p) => setPage(p)}
+                rowsPerPage={rowsPerPage}
+                onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+                rowsPerPageOptions={[25, 50, 100]}
+              />
+            </>
+          )}
+        </Box>
+      )}
+    </Paper>
   );
 };
 
@@ -518,6 +702,7 @@ const DepositReconciliationReport = () => {
                   <MonthStep sign="−" title="Received on these invoices" value={monthRecon.received} color="success.main" />
                   <MonthStep sign="=" title="Balance remaining" value={monthRecon.balance} color="error.main" strong />
                 </Grid>
+                <ArrearsGapPanel month={data.month} />
                 <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 1 }}>Deposits received in the month</Typography>
               </>
             )}

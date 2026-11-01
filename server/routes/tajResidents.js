@@ -2217,6 +2217,52 @@ const ledgerOutstandingRows = (invoices) => {
   return rows;
 };
 
+// Invoices billed in a month, bucketed exactly like the Month-wise Breakdown (periodTo, else invoiceDate, by UTC month)
+const findMonthInvoices = async (month) => {
+  const rangeStart = new Date(`${month}-01T00:00:00Z`);
+  rangeStart.setUTCDate(rangeStart.getUTCDate() - 1);
+  const rangeEnd = new Date(`${month}-01T00:00:00Z`);
+  rangeEnd.setUTCMonth(rangeEnd.getUTCMonth() + 1);
+  rangeEnd.setUTCDate(rangeEnd.getUTCDate() + 1);
+  return PropertyInvoice.aggregate([
+    { $match: { status: { $ne: 'Cancelled' } } },
+    { $addFields: { billDate: { $ifNull: ['$periodTo', '$invoiceDate'] } } },
+    { $match: { billDate: { $gte: rangeStart, $lt: rangeEnd } } },
+    { $addFields: { billMonth: { $dateToString: { format: '%Y-%m', date: '$billDate' } } } },
+    { $match: { billMonth: month } },
+    {
+      $project: {
+        invoiceNumber: 1, invoiceDate: 1, dueDate: 1, chargeTypes: 1, property: 1, customerName: 1, subtotal: 1,
+        charges: 1, totalArrears: 1, grandTotal: 1, totalPaid: 1, balance: 1, paymentStatus: 1, billMonth: 1
+      }
+    }
+  ]);
+};
+
+// Month-wise Breakdown balance of one invoice: invoice amount + arrears − paid
+const monthInvoiceBalance = (inv) => {
+  const subtotal = inv.subtotal != null
+    ? Number(inv.subtotal) || 0
+    : (inv.charges || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
+  return subtotal + (Number(inv.totalArrears) || 0) - (Number(inv.totalPaid) || 0);
+};
+
+// Property and owning resident for each invoice's property (TajProperty.resident wins over TajResident.properties)
+const mapInvoicePropertiesToResidents = async (invoices) => {
+  const propertyIds = [...new Set(invoices.map(inv => inv.property && String(inv.property)).filter(Boolean))];
+  const [properties, owners] = propertyIds.length > 0
+    ? await Promise.all([
+      TajProperty.find({ _id: { $in: propertyIds } }).select('propertyName plotNumber sector block resident').lean(),
+      TajResident.find({ properties: { $in: propertyIds } }).select('_id properties').lean()
+    ])
+    : [[], []];
+  const propertyById = new Map(properties.map(pr => [pr._id.toString(), pr]));
+  const residentByProperty = {};
+  owners.forEach(r => (r.properties || []).forEach(pid => { residentByProperty[String(pid)] = r._id.toString(); }));
+  properties.forEach(pr => { if (pr.resident) residentByProperty[pr._id.toString()] = pr.resident.toString(); });
+  return { propertyById, residentByProperty };
+};
+
 /**
  * Deposit reconciliation for one month: every deposit received (by bank), the invoices it was posted to
  * (current month / arrears / advance by the invoice's billing month), what is still unposted,
@@ -2469,38 +2515,10 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
   // Every invoice billed in the month (same bucket as the Month-wise Breakdown) puts its balance
   // (invoice + arrears − paid) on exactly one row, so the Balance column adds up to that report:
   // on the first posting to it, else under the resident's first deposit, else as a "no deposit" row.
-  const monthInvoices = await PropertyInvoice.aggregate([
-    { $match: { status: { $ne: 'Cancelled' } } },
-    { $addFields: { billDate: { $ifNull: ['$periodTo', '$invoiceDate'] } } },
-    { $match: { billDate: { $gte: rangeStart, $lt: rangeEnd } } },
-    { $addFields: { billMonth: { $dateToString: { format: '%Y-%m', date: '$billDate' } } } },
-    { $match: { billMonth: month } },
-    {
-      $project: {
-        invoiceNumber: 1, chargeTypes: 1, property: 1, customerName: 1, subtotal: 1, charges: 1,
-        totalArrears: 1, grandTotal: 1, totalPaid: 1, balance: 1, billMonth: 1
-      }
-    }
-  ]);
-  const monthInvoiceBalance = (inv) => {
-    const subtotal = inv.subtotal != null
-      ? Number(inv.subtotal) || 0
-      : (inv.charges || []).reduce((s, c) => s + (Number(c.amount) || 0), 0);
-    return subtotal + (Number(inv.totalArrears) || 0) - (Number(inv.totalPaid) || 0);
-  };
+  const monthInvoices = await findMonthInvoices(month);
   const monthInvoiceById = new Map(monthInvoices.map(inv => [inv._id.toString(), inv]));
 
-  const monthPropertyIds = [...new Set(monthInvoices.map(inv => inv.property && String(inv.property)).filter(Boolean))];
-  const [monthProperties, monthPropertyOwners] = monthPropertyIds.length > 0
-    ? await Promise.all([
-      TajProperty.find({ _id: { $in: monthPropertyIds } }).select('propertyName plotNumber sector block resident').lean(),
-      TajResident.find({ properties: { $in: monthPropertyIds } }).select('_id properties').lean()
-    ])
-    : [[], []];
-  const propertyById = new Map(monthProperties.map(pr => [pr._id.toString(), pr]));
-  const monthResidentByProperty = {};
-  monthPropertyOwners.forEach(r => (r.properties || []).forEach(pid => { monthResidentByProperty[String(pid)] = r._id.toString(); }));
-  monthProperties.forEach(pr => { if (pr.resident) monthResidentByProperty[pr._id.toString()] = pr.resident.toString(); });
+  const { propertyById, residentByProperty: monthResidentByProperty } = await mapInvoicePropertiesToResidents(monthInvoices);
 
   const assignedInvoices = new Set();
   const firstRowByResident = {};
@@ -2597,6 +2615,117 @@ router.get('/deposits/reconciliation', authMiddleware, asyncHandler(async (req, 
       monthBalance
     }
   });
+}));
+
+const ARREARS_GAP_REASONS = {
+  no_invoice_this_month: 'No invoice this month to carry last month\'s balance',
+  no_invoice_last_month: 'Arrears from an older month (no invoice last month)',
+  not_carried: 'Last month unpaid but this month\'s invoice has no arrears (old invoice left open)',
+  late_surcharge: '10% late surcharge added to last month\'s balance',
+  paid_not_refreshed: 'This month\'s invoice already (part) paid, so its arrears were not updated',
+  overpaid_last_month: 'Last month overpaid (negative balance not carried)',
+  arrears_differ: 'Arrears differ from last month\'s balance (edited or calculated differently)'
+};
+
+/**
+ * Why a month's arrears brought forward differ from the previous month's balance remaining.
+ * Compares each property + charge type: last month's invoice balance vs this month's invoice arrears.
+ * The differences add up exactly to the gap between the two Month-wise Breakdown figures. Read-only.
+ */
+router.get('/deposits/arrears-gap', authMiddleware, asyncHandler(async (req, res) => {
+  const { month } = req.query;
+  if (!/^\d{4}-\d{2}$/.test(String(month || ''))) {
+    return res.status(400).json({ success: false, message: 'month (YYYY-MM) is required' });
+  }
+  const prev = new Date(`${month}-01T00:00:00Z`);
+  prev.setUTCMonth(prev.getUTCMonth() - 1);
+  const prevMonth = prev.toISOString().slice(0, 7);
+
+  const [prevInvoices, curInvoices] = await Promise.all([findMonthInvoices(prevMonth), findMonthInvoices(month)]);
+  const { propertyById, residentByProperty } = await mapInvoicePropertiesToResidents([...prevInvoices, ...curInvoices]);
+
+  const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+  const groupKey = (inv) => (inv.property
+    ? `${inv.property}|${[...(inv.chargeTypes || [])].sort().join(',')}`
+    : `open|${inv._id}`);
+  const groups = new Map();
+  const ensureGroup = (inv) => {
+    const key = groupKey(inv);
+    if (!groups.has(key)) {
+      groups.set(key, { property: inv.property ? String(inv.property) : null, customerName: inv.customerName || '', chargeTypes: inv.chargeTypes || [], prev: [], cur: [] });
+    }
+    return groups.get(key);
+  };
+  prevInvoices.forEach(inv => ensureGroup(inv).prev.push(inv));
+  curInvoices.forEach(inv => ensureGroup(inv).cur.push(inv));
+
+  const summary = {
+    prevMonth,
+    month,
+    prevClosing: prevInvoices.reduce((s, inv) => s + monthInvoiceBalance(inv), 0),
+    curOpening: curInvoices.reduce((s, inv) => s + (Number(inv.totalArrears) || 0), 0),
+    byReason: {}
+  };
+
+  const rows = [];
+  groups.forEach(group => {
+    const prevBalance = group.prev.reduce((s, inv) => s + monthInvoiceBalance(inv), 0);
+    const curArrears = group.cur.reduce((s, inv) => s + (Number(inv.totalArrears) || 0), 0);
+    const difference = curArrears - prevBalance;
+    if (Math.abs(difference) < 1) return;
+
+    let reason;
+    if (group.prev.length === 0) reason = 'no_invoice_last_month';
+    else if (group.cur.length === 0) reason = 'no_invoice_this_month';
+    else {
+      const surcharge = group.prev.reduce((s, inv) => {
+        const charges = (inv.charges || []).reduce((t, c) => t + (Number(c.amount) || 0), 0) || Number(inv.subtotal) || 0;
+        return s + (monthInvoiceBalance(inv) > 0 ? Math.max(Math.round(charges * 0.1), 0) : 0);
+      }, 0);
+      if (surcharge > 0 && Math.abs(difference - surcharge) <= 1) reason = 'late_surcharge';
+      else if (prevBalance > 0 && Math.abs(curArrears) < 1) reason = 'not_carried';
+      else if (group.cur.some(inv => ['paid', 'partial_paid'].includes(inv.paymentStatus))) reason = 'paid_not_refreshed';
+      else if (prevBalance < 0) reason = 'overpaid_last_month';
+      else reason = 'arrears_differ';
+    }
+
+    const entry = summary.byReason[reason] || (summary.byReason[reason] = { label: ARREARS_GAP_REASONS[reason], count: 0, amount: 0 });
+    entry.count += 1;
+    entry.amount += difference;
+
+    rows.push({
+      residentKey: group.property ? residentByProperty[group.property] || null : null,
+      property: group.property ? propertyLabel(propertyById.get(group.property)) : group.customerName,
+      chargeTypes: group.chargeTypes,
+      prevInvoices: group.prev.map(inv => inv.invoiceNumber).filter(Boolean),
+      prevBalance: round2(prevBalance),
+      curInvoices: group.cur.map(inv => inv.invoiceNumber).filter(Boolean),
+      curStatus: group.cur.map(inv => inv.paymentStatus).filter(Boolean).join(', '),
+      curArrears: round2(curArrears),
+      difference: round2(difference),
+      reason,
+      reasonLabel: ARREARS_GAP_REASONS[reason]
+    });
+  });
+
+  const residentIds = [...new Set(rows.map(r => r.residentKey).filter(Boolean))];
+  const residents = residentIds.length > 0
+    ? await TajResident.find({ _id: { $in: residentIds } }).select('residentId name cnic contactNumber').lean()
+    : [];
+  const residentById = new Map(residents.map(r => [r._id.toString(), r]));
+  rows.forEach(row => {
+    const r = row.residentKey ? residentById.get(row.residentKey) : null;
+    row.resident = { residentId: r?.residentId || '', name: r?.name || '', cnic: r?.cnic || '', contactNumber: r?.contactNumber || '' };
+    delete row.residentKey;
+  });
+  rows.sort((a, b) => Math.abs(b.difference) - Math.abs(a.difference));
+
+  summary.prevClosing = round2(summary.prevClosing);
+  summary.curOpening = round2(summary.curOpening);
+  summary.gap = round2(summary.curOpening - summary.prevClosing);
+  Object.values(summary.byReason).forEach(r => { r.amount = round2(r.amount); });
+
+  res.json({ success: true, data: { summary, rows } });
 }));
 
 // Get all deposits across all residents (for Deposits page)

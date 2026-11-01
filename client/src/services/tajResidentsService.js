@@ -61,6 +61,10 @@ export const fetchDepositCollections = (params = {}) =>
 export const fetchDepositReconciliation = (params = {}) =>
   api.get(`${base}/deposits/reconciliation`, { params });
 
+/** Why a month's arrears brought forward differ from last month's balance remaining (per property + charge type). */
+export const fetchArrearsGap = (params = {}) =>
+  api.get(`${base}/deposits/arrears-gap`, { params });
+
 export const transferDeposit = (transactionId, data) =>
   api.post(`${base}/deposits/${transactionId}/transfer`, data);
 
