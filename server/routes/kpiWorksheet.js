@@ -6,7 +6,8 @@ const Employee = require('../models/hr/Employee');
 const {
   getOrCreateWorksheet,
   ensureWorksheetsForMonth,
-  rowsFromBlueCollarDesignation
+  rowsFromBlueCollarDesignation,
+  propagateStructureForward
 } = require('../utils/kpiWorksheetService');
 const { findEmployeeForAuthUser } = require('../utils/employeeUserLink');
 const { checkSubRoleAccess } = require('../config/permissions');
@@ -926,6 +927,7 @@ router.put(
     doc.lastSavedBy = req.user._id;
     doc.lastSavedAt = new Date();
     await doc.save();
+    await propagateStructureForward(doc, prevRows);
 
     await populateWorksheetEmployee(doc);
     const editFlags = await worksheetEditFlags(req, doc.employee._id || doc.employee);

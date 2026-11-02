@@ -30,6 +30,55 @@ function cloneRowsFromWorksheet(prev) {
   }));
 }
 
+function nextYearMonth(year, month) {
+  if (month >= 12) return { year: year + 1, month: 1 };
+  return { year, month: month + 1 };
+}
+
+/** KPI names + weights only, as a comparable key. */
+function structureKey(rows) {
+  return (rows || [])
+    .map((r) => `${String(r.kpiArea || '').trim()}|${Number(r.weight) || 0}`)
+    .join('\n');
+}
+
+function sheetHasMarks(sheet) {
+  return (sheet?.rows || []).some(
+    (r) =>
+      (Number(r.employeeAchieved) || 0) > 0 ||
+      (Number(r.employeeTotalAssigned) || 0) > 0 ||
+      (Number(r.managerAchieved) || 0) > 0 ||
+      (Number(r.managerTotalAssigned) || 0) > 0 ||
+      (Number(r.achieved) || 0) > 0 ||
+      (Number(r.totalAssigned) || 0) > 0
+  );
+}
+
+/**
+ * After KPI names/weights change on a sheet, carry them into the following months' sheets
+ * that already exist (e.g. created by the monthly cron before the edit). A following sheet is
+ * only replaced while it is still an untouched copy: no marks entered and the same KPIs the
+ * edited sheet had before the edit. Stops at the first sheet that doesn't qualify.
+ */
+async function propagateStructureForward(source, oldRows) {
+  const oldKey = structureKey(oldRows);
+  const newKey = structureKey(source.rows);
+  if (oldKey === newKey) return 0;
+
+  let { year, month } = nextYearMonth(source.year, source.month);
+  let updated = 0;
+  for (;;) {
+    const next = await KPIWorksheet.findOne({ employee: source.employee, year, month });
+    if (!next || sheetHasMarks(next) || structureKey(next.rows) !== oldKey) break;
+
+    next.rows = cloneRowsFromWorksheet(source);
+    await next.save();
+    updated += 1;
+    ({ year, month } = nextYearMonth(year, month));
+  }
+  return updated;
+}
+
 /**
  * Default rows for blue-collar employees from designation KPI catalog.
  */
@@ -142,6 +191,7 @@ module.exports = {
   ensureWorksheetsForMonth,
   prevYearMonth,
   cloneRowsFromWorksheet,
+  propagateStructureForward,
   rowsFromBlueCollarDesignation,
   backfillEmptyBlueCollarWorksheets
 };
