@@ -69,6 +69,12 @@ const projectInvoiceSchema = new mongoose.Schema({
   whtPercentage: { type: Number, default: 0 },
   whtAmount: { type: Number, default: 0 },
   netPayableAmount: { type: Number, default: 0 },
+  /**
+   * Barter / Mixed contracts: share of this IPC settled in property instead of cash. The property
+   * part is (gross − retention) × propertyPercent; netPayableAmount is then the cash still payable.
+   */
+  propertyPercent: { type: Number, default: 0, min: 0, max: 100 },
+  propertySettlementAmount: { type: Number, default: 0, min: 0 },
 
   // Milestone link (optional — manual invoices have no milestone)
   milestoneId: { type: mongoose.Schema.Types.ObjectId, default: null },

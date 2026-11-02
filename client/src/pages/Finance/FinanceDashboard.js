@@ -26,71 +26,11 @@ import {
   ArrowDropDown as DropIcon,
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip,
-  ResponsiveContainer, Cell,
-} from 'recharts';
 import api from '../../services/api';
-
-// ─── helpers ──────────────────────────────────────────────────────────────────
-const fmt = (n) =>
-  Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 0 });
-
-// ─── Custom recharts tooltip ──────────────────────────────────────────────────
-const ChartTooltip = ({ active, payload, label }) => {
-  if (!active || !payload?.length) return null;
-  return (
-    <Paper elevation={3} sx={{ px: 1.5, py: 1, borderRadius: 1.5 }}>
-      <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
-      <Typography variant="body2" fontWeight={700}>PKR {fmt(payload[0].value)}</Typography>
-    </Paper>
-  );
-};
-
-// ─── Aging bar chart ──────────────────────────────────────────────────────────
-const AgingBars = ({ data, barColor, overdueColor }) => {
-  const theme = useTheme();
-  if (!data || data.every(d => d.value === 0)) {
-    return (
-      <Box display="flex" alignItems="center" justifyContent="center" height={150}>
-        <Typography variant="body2" color="text.secondary">No outstanding items</Typography>
-      </Box>
-    );
-  }
-  return (
-    <ResponsiveContainer width="100%" height={150}>
-      <BarChart data={data} margin={{ top: 4, right: 0, left: -18, bottom: 0 }} barSize={30}>
-        <XAxis
-          dataKey="label"
-          tick={{ fontSize: 10, fill: theme.palette.text.secondary }}
-          axisLine={false}
-          tickLine={false}
-        />
-        <YAxis
-          tick={{ fontSize: 10, fill: theme.palette.text.secondary }}
-          axisLine={false}
-          tickLine={false}
-          tickFormatter={v => v >= 1000000 ? `${(v / 1000000).toFixed(1)}M` : v >= 1000 ? `${(v / 1000).toFixed(0)}K` : v}
-        />
-        <RTooltip content={<ChartTooltip />} cursor={{ fill: alpha(barColor, 0.06) }} />
-        <Bar dataKey="value" radius={[4, 4, 0, 0]}>
-          {data.map((entry, i) => (
-            <Cell
-              key={i}
-              fill={
-                entry.value === 0
-                  ? alpha(barColor, 0.15)
-                  : entry.overdue
-                  ? overdueColor
-                  : barColor
-              }
-            />
-          ))}
-        </Bar>
-      </BarChart>
-    </ResponsiveContainer>
-  );
-};
+import FinanceOverview from '../../components/Finance/FinanceOverview';
+import FinanceWorkQueue, { overdueOf } from '../../components/Finance/FinanceWorkQueue';
+import { useFinanceCompany } from '../../context/FinanceCompanyContext';
+import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelector';
 
 // ─── Panel card — Odoo layout with our MUI theme ─────────────────────────────
 const Panel = ({ title, subtitle, headerAction, accentColor, children }) => {
@@ -133,20 +73,16 @@ const Panel = ({ title, subtitle, headerAction, accentColor, children }) => {
   );
 };
 
-// ─── Stat block ───────────────────────────────────────────────────────────────
-const Stat = ({ label, value, color }) => (
-  <Box>
-    <Typography variant="caption" color="text.secondary" display="block">{label}</Typography>
-    <Typography variant="h6" fontWeight={800} color={color} lineHeight={1.1}>
-      PKR {fmt(value)}
-    </Typography>
-  </Box>
-);
-
 // ─── Main component ───────────────────────────────────────────────────────────
 export default function FinanceDashboard() {
   const navigate = useNavigate();
   const theme    = useTheme();
+  const { selectedCompany, selectedCompanyId } = useFinanceCompany() || {};
+  const isAllCompanies = selectedCompanyId === 'all';
+  const companyName = isAllCompanies ? 'All Companies' : selectedCompany?.name;
+  const [reloadKey, setReloadKey] = useState(0);
+  // Every panel reloads when the company changes (the request header carries the selection)
+  const scopeKey = `${reloadKey}-${selectedCompanyId || ''}`;
 
   // Section card dropdown menu state
   const [menuAnchor, setMenuAnchor] = useState(null);
@@ -195,7 +131,7 @@ export default function FinanceDashboard() {
     setLoading(false);
   }, [today]);
 
-  useEffect(() => { loadAll(); }, [loadAll]);
+  useEffect(() => { if (selectedCompanyId) loadAll(); }, [loadAll, selectedCompanyId]);
 
   // ── Build chart data (same structure for both AR and AP) ──────────────────
   const makeChart = (b) => b ? [
@@ -211,22 +147,15 @@ export default function FinanceDashboard() {
 
   const arTotal    = arChart.reduce((s, d) => s + d.value, 0);
   const apTotal    = apChart.reduce((s, d) => s + d.value, 0);
-  const arOverdue  = (arData?.buckets?.days31_60 || 0) + (arData?.buckets?.days61_90 || 0) + (arData?.buckets?.over90 || 0);
-  const apOverdue  = (apData?.buckets?.days31_60 || 0) + (apData?.buckets?.days61_90 || 0) + (apData?.buckets?.over90 || 0);
 
   const isBalanced = tlData?.totals?.isBalanced;
-  const isReconc   = Math.abs(bankData?.difference || 0) < 0.01;
-  const unrecCount = bankData?.unreconciledCount || 0;
 
   const gstTaxes   = taxes.filter(t => t.taxType === 'gst');
   const whtTaxes   = taxes.filter(t => t.taxType === 'wht');
 
-  // Theme colours — use primary for AR, warning/amber for AP
-  const arColor  = theme.palette.success.main;
-  const apColor  = theme.palette.warning.dark;
-  const redColor = theme.palette.error.main;
 
-  if (loading) {
+  // Full-page spinner only on first load; a company switch keeps the page and refreshes in place
+  if (loading && !arData && !apData && !tlData) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight={400}>
         <CircularProgress />
@@ -238,7 +167,7 @@ export default function FinanceDashboard() {
     <Box sx={{ p: { xs: 2, md: 3 }, bgcolor: 'grey.50', minHeight: '100vh' }}>
 
       {/* ── Header ─────────────────────────────────────────────────────────── */}
-      <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
+      <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1} mb={3}>
         <Box>
           <Typography variant="h5" fontWeight={800} letterSpacing={-0.5}>
             Finance Dashboard
@@ -269,14 +198,36 @@ export default function FinanceDashboard() {
             )}
           </Stack>
         </Box>
-        <Tooltip title="Refresh all data">
-          <IconButton onClick={loadAll} size="small">
-            <RefreshIcon />
-          </IconButton>
-        </Tooltip>
+        <Stack direction="row" alignItems="center" gap={1}>
+          <FinanceCompanySelector allowAll showHelper={false} minWidth={260} sx={{ bgcolor: '#fff', borderRadius: 1 }} />
+          <Tooltip title="Refresh all data">
+            <IconButton onClick={() => { loadAll(); setReloadKey((k) => k + 1); }} size="small">
+              <RefreshIcon />
+            </IconButton>
+          </Tooltip>
+        </Stack>
       </Stack>
 
+      {/* ── Overview: KPIs, 12-month trend, cash by bank ─────────────────── */}
+      <FinanceOverview
+        ar={arData ? { total: arTotal, overdue: overdueOf(arData) } : null}
+        ap={apData ? { total: apTotal, overdue: overdueOf(apData) } : null}
+        companyName={companyName}
+        reloadKey={scopeKey}
+      />
+
+      {/* ── Collections & payments, Needs action ──────────────────────────── */}
+      <FinanceWorkQueue
+        ar={arData}
+        ap={apData}
+        bankData={bankData}
+        tlData={tlData}
+        reloadKey={scopeKey}
+      />
+
       {/* ── Section Navigation (Odoo-style top nav as cards with dropdown) ── */}
+      <Typography sx={{ fontWeight: 800, color: '#0f172a', fontSize: 17 }}>Finance areas</Typography>
+      <Typography sx={{ fontSize: 12.5, color: '#64748b', mb: 1.5 }}>Open a section, or use the arrow for its pages</Typography>
       {(() => {
         const sections = [
           {
@@ -401,7 +352,7 @@ export default function FinanceDashboard() {
                       alignItems: 'flex-start',
                       gap: 0.5,
                       height: '100%',
-                      minHeight: 96,
+                      minHeight: 72,
                       position: 'relative',
                     }}
                   >
@@ -489,205 +440,6 @@ export default function FinanceDashboard() {
           </>
         );
       })()}
-
-      {/* ── Row 1: Sales | Purchases | Bank ─────────────────────────────────── */}
-      <Grid container spacing={2.5} mb={2.5}>
-
-        {/* ① SALES / AR — with aging bar chart */}
-        <Grid item xs={12} md={4}>
-          <Panel
-            title="Sales"
-            subtitle="Outstanding receivables by aging"
-            accentColor={arColor}
-            headerAction={
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<AddIcon />}
-                color="success"
-                onClick={() => navigate('/finance/accounts-receivable')}
-                sx={{ borderRadius: 1.5, textTransform: 'none', fontSize: 12 }}
-              >
-                New
-              </Button>
-            }
-          >
-            <Stack direction="row" gap={3} mb={2}>
-              <Stat label="Total Outstanding" value={arTotal} color="success.main" />
-              {arOverdue > 0 && <Stat label="Overdue" value={arOverdue} color="error.main" />}
-              <Box>
-                <Typography variant="caption" color="text.secondary">Invoices</Typography>
-                <Typography variant="h6" fontWeight={800} lineHeight={1.1}>
-                  {arData?.rows?.length || 0}
-                </Typography>
-              </Box>
-            </Stack>
-
-            <AgingBars data={arChart} barColor={arColor} overdueColor={redColor} />
-
-            <Divider sx={{ mt: 1, mb: 1 }} />
-            <Button
-              size="small"
-              endIcon={<GoIcon sx={{ fontSize: 12 }} />}
-              color="success"
-              onClick={() => navigate('/finance/accounts-receivable')}
-              sx={{ textTransform: 'none', fontSize: 12 }}
-            >
-              View all receivables
-            </Button>
-          </Panel>
-        </Grid>
-
-        {/* ② PURCHASES / AP — identical layout to Sales */}
-        <Grid item xs={12} md={4}>
-          <Panel
-            title="Purchases"
-            subtitle="Outstanding payables by aging"
-            accentColor={apColor}
-            headerAction={
-              <Button
-                variant="contained"
-                size="small"
-                startIcon={<AddIcon />}
-                color="warning"
-                onClick={() => navigate('/finance/accounts-payable')}
-                sx={{ borderRadius: 1.5, textTransform: 'none', fontSize: 12 }}
-              >
-                New
-              </Button>
-            }
-          >
-            <Stack direction="row" gap={3} mb={2}>
-              <Stat label="Total Outstanding" value={apTotal} color="warning.dark" />
-              {apOverdue > 0 && <Stat label="Overdue" value={apOverdue} color="error.main" />}
-              <Box>
-                <Typography variant="caption" color="text.secondary">Bills</Typography>
-                <Typography variant="h6" fontWeight={800} lineHeight={1.1}>
-                  {apData?.rows?.length || 0}
-                </Typography>
-              </Box>
-            </Stack>
-
-            <AgingBars data={apChart} barColor={apColor} overdueColor={redColor} />
-
-            <Divider sx={{ mt: 1, mb: 1 }} />
-            <Stack direction="row" justifyContent="space-between">
-              <Button
-                size="small"
-                color="warning"
-                onClick={() => navigate('/finance/vendor-statement')}
-                sx={{ textTransform: 'none', fontSize: 12 }}
-              >
-                Vendor statements
-              </Button>
-              <Button
-                size="small"
-                endIcon={<GoIcon sx={{ fontSize: 12 }} />}
-                color="warning"
-                onClick={() => navigate('/finance/aged-payables')}
-                sx={{ textTransform: 'none', fontSize: 12 }}
-              >
-                Aged payables
-              </Button>
-            </Stack>
-          </Panel>
-        </Grid>
-
-        {/* ③ BANK */}
-        <Grid item xs={12} md={4}>
-          <Panel
-            title="Bank"
-            subtitle="Account balances and reconciliation"
-            accentColor={theme.palette.primary.main}
-            headerAction={
-              <Button
-                variant="outlined"
-                size="small"
-                color="primary"
-                onClick={() => navigate('/finance/bank-reconciliation')}
-                sx={{ borderRadius: 1.5, textTransform: 'none', fontSize: 12 }}
-              >
-                Reconcile
-              </Button>
-            }
-          >
-            {bankData ? (
-              <>
-                <Grid container spacing={1.5} mb={2}>
-                  {[
-                    {
-                      label: 'GL Balance',
-                      value: `PKR ${fmt(bankData.glBalance)}`,
-                      bgcolor: alpha(theme.palette.primary.main, 0.08),
-                      color: theme.palette.primary.main,
-                      border: alpha(theme.palette.primary.main, 0.2),
-                    },
-                    {
-                      label: 'Unreconciled',
-                      value: `${unrecCount} txns`,
-                      bgcolor: unrecCount > 0 ? alpha(theme.palette.warning.main, 0.1) : alpha(theme.palette.success.main, 0.08),
-                      color: unrecCount > 0 ? theme.palette.warning.dark : theme.palette.success.main,
-                      border: unrecCount > 0 ? alpha(theme.palette.warning.main, 0.3) : alpha(theme.palette.success.main, 0.3),
-                    },
-                    {
-                      label: 'Difference',
-                      value: `PKR ${fmt(Math.abs(bankData.difference || 0))}`,
-                      bgcolor: isReconc ? alpha(theme.palette.success.main, 0.08) : alpha(theme.palette.error.main, 0.08),
-                      color: isReconc ? theme.palette.success.main : theme.palette.error.main,
-                      border: isReconc ? alpha(theme.palette.success.main, 0.3) : alpha(theme.palette.error.main, 0.3),
-                    },
-                    {
-                      label: 'Status',
-                      value: isReconc ? 'Fully Reconciled' : 'Needs Review',
-                      bgcolor: isReconc ? alpha(theme.palette.success.main, 0.08) : alpha(theme.palette.error.main, 0.08),
-                      color: isReconc ? theme.palette.success.main : theme.palette.error.main,
-                      border: isReconc ? alpha(theme.palette.success.main, 0.3) : alpha(theme.palette.error.main, 0.3),
-                    },
-                  ].map(item => (
-                    <Grid item xs={6} key={item.label}>
-                      <Paper
-                        variant="outlined"
-                        sx={{
-                          p: 1.2, borderRadius: 1.5,
-                          bgcolor: item.bgcolor,
-                          borderColor: item.border,
-                        }}
-                      >
-                        <Typography variant="caption" color="text.secondary" display="block">{item.label}</Typography>
-                        <Typography variant="body2" fontWeight={700} color={item.color} noWrap>{item.value}</Typography>
-                      </Paper>
-                    </Grid>
-                  ))}
-                </Grid>
-
-                <Divider sx={{ mb: 1 }} />
-                <Stack direction="row" gap={1}>
-                  <Button variant="contained" size="small" fullWidth color="primary"
-                    onClick={() => navigate('/finance/bank-reconciliation')}
-                    sx={{ textTransform: 'none', borderRadius: 1.5, fontSize: 12 }}>
-                    Reconcile Now
-                  </Button>
-                  <Button variant="outlined" size="small" fullWidth color="primary"
-                    onClick={() => navigate('/finance/banking')}
-                    sx={{ textTransform: 'none', borderRadius: 1.5, fontSize: 12 }}>
-                    View Banking
-                  </Button>
-                </Stack>
-              </>
-            ) : (
-              <Stack alignItems="center" justifyContent="center" gap={2} py={3}>
-                <BankIconMui sx={{ fontSize: 48, color: 'text.disabled' }} />
-                <Typography variant="body2" color="text.secondary" textAlign="center">
-                  No bank data yet.
-                </Typography>
-                <Button variant="outlined" size="small" onClick={() => navigate('/finance/banking')} sx={{ textTransform: 'none' }}>
-                  Set up Banking
-                </Button>
-              </Stack>
-            )}
-          </Panel>
-        </Grid>
-      </Grid>
 
       {/* ── Row 2: Tax Returns | Fiscal Period | Journal Entries ─────────────── */}
       <Grid container spacing={2.5} mb={2.5}>
@@ -842,9 +594,8 @@ export default function FinanceDashboard() {
       </Grid>
 
       {/* ── Row 3: Shortcut cards ─────────────────────────────────────────────── */}
-      <Typography variant="subtitle2" color="text.secondary" fontWeight={600} mb={1.5} ml={0.5}>
-        Quick Access
-      </Typography>
+      <Typography sx={{ fontWeight: 800, color: '#0f172a', fontSize: 17 }}>More tools</Typography>
+      <Typography sx={{ fontSize: 12.5, color: '#64748b', mb: 1.5 }}>Stock, assets, reports and settings</Typography>
       <Grid container spacing={2}>
         {[
           { title: 'Inventory Valuation', desc: 'WAC-based stock valuation by category.',      icon: <InvIcon     color="success"   sx={{ fontSize: 28 }} />, path: '/finance/inventory-valuation',  color: 'success'   },

@@ -26,7 +26,8 @@ export const moneyLines = (ipc) => [
   ['Gross value certified', ipc.grossAmount, false],
   [`Retention @ ${ipc.retentionPercentage || 0}%`, ipc.retentionAmount, true],
   ['Advance recovery', ipc.advanceRecoveryAmount, true],
-  [`Withholding tax @ ${ipc.whtPercentage || 0}% (at payment)`, ipc.whtAmount, true]
+  [`Withholding tax @ ${ipc.whtPercentage || 0}% (at payment)`, ipc.whtAmount, true],
+  [`Settled in property (barter ${ipc.propertyPercent || 0}%)`, ipc.propertySettlementAmount, true]
 ].filter(([, v, neg]) => !neg || Number(v) > 0);
 
 export const signatories = (ipc) => [
@@ -182,7 +183,7 @@ export const ipcCertificateHtml = (d, { print = false } = {}) => {
         <h2><span>3</span>Amount ${isClient ? 'receivable' : 'certified'} (PKR)</h2>
         <div class="rows">
           ${moneyLines(ipc).map(([l, v, neg]) => `<div class="row ${neg ? 'neg' : ''}"><span>${esc(neg ? `Less: ${l}` : l)}</span><span>${money(v)}</span></div>`).join('')}
-          <div class="total"><span>${isClient ? 'Amount receivable' : 'Net amount payable'}</span><span>${money(net)}</span></div>
+          <div class="total"><span>${isClient ? 'Amount receivable' : Number(ipc.propertySettlementAmount) > 0 ? 'Net cash payable' : 'Net amount payable'}</span><span>${money(net)}</span></div>
         </div>
       </div>
     </div>

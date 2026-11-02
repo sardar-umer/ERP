@@ -36,6 +36,7 @@ import {
   Delete as DeleteIcon,
   DoneAll as CompleteIcon,
   Edit as EditIcon,
+  HomeWork as PropertyIcon,
   Refresh as RefreshIcon,
   Visibility as ViewIcon
 } from '@mui/icons-material';
@@ -47,6 +48,7 @@ import {
   completeSubletContract,
   createSubletContract,
   getBOQ,
+  getProjectUnits,
   getSlabSchedules,
   getSubletContracts,
   getSuppliers,
@@ -56,6 +58,9 @@ import {
 import SlabRowsEditor, { emptySlab, slabsTotalPercent } from '../../components/ProjectManagement/SlabRowsEditor';
 import { SLAB_SCHEDULES_PATH, normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
 import { SubBudgetStrip } from '../../components/ProjectManagement/ProjectBudgetPanel';
+import { unitWord } from './UnitsTab';
+import BarterPropertiesDialog from '../../components/ProjectManagement/BarterPropertiesDialog';
+import BarterBalancesPanel from '../../components/ProjectManagement/BarterBalancesPanel';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -86,8 +91,16 @@ const emptyForm = {
   contractValue: '',
   clientValue: '', // slab-wise: what the client pays for this scope (client invoices bill clientValue × slab %)
   slabScheduleId: '',
-  slabs: []
+  slabs: [],
+  units: [], // ids of the Sub Project's villas / units this contract covers
+  ratePerUnit: '', // slab-wise with units: contractor's price per villa
+  clientRatePerUnit: '', // slab-wise with units: client's price per villa
+  propertyPercent: '' // Mixed payment mode: share of the value paid in property
 };
+
+/** Contracts share work only if their units overlap — no units means the whole Sub Project */
+const unitIdsOf = (row) => (row?.units || []).map((u) => String(u.unit?._id || u.unit));
+const overlaps = (a, b) => !a.length || !b.length || a.some((id) => b.includes(id));
 
 /** Contract slabs → SlabRowsEditor rows (activities as ids). */
 const toEditorSlabs = (slabs = []) =>
@@ -128,6 +141,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [viewRow, setViewRow] = useState(null);
+  const [barterRow, setBarterRow] = useState(null);
+  const [projectUnits, setProjectUnits] = useState(project?.units || []);
+  const hasUnits = projectUnits.length > 0;
+  const word = unitWord(project?.projectType);
+  // Cash / Barter / Mixed — set on the Main Project; decides the property (barter) share of each contract
+  const paymentMode = project?.paymentMode || 'Cash';
+  const words = unitWord(project?.projectType, true);
 
   const load = useCallback(async () => {
     try {
@@ -136,13 +156,15 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       const params = {};
       if (statusFilter) params.status = statusFilter;
       if (typeFilter) params.contractType = typeFilter;
-      const [scRes, boqRes, suppRes, schedRes, actRes] = await Promise.all([
+      const [scRes, boqRes, suppRes, schedRes, actRes, unitsRes] = await Promise.all([
         getSubletContracts(projectId, params),
         getBOQ(projectId, { limit: 500 }),
         getSuppliers().catch(() => ({ data: { data: [] } })),
         wbsType ? getSlabSchedules({ projectType: wbsType }).catch(() => ({ data: { data: [] } })) : { data: { data: [] } },
-        wbsType ? getWbsActivities({ projectType: wbsType }).catch(() => ({ data: { data: {} } })) : { data: { data: {} } }
+        wbsType ? getWbsActivities({ projectType: wbsType }).catch(() => ({ data: { data: {} } })) : { data: { data: {} } },
+        getProjectUnits(projectId).catch(() => ({ data: { data: project?.units || [] } }))
       ]);
+      setProjectUnits(unitsRes.data?.data || []);
       setRows(scRes.data?.data?.contracts || []);
       setSlabSchedules(schedRes.data?.data || []);
       setWbsActivities(actRes.data?.data?.activities || []);
@@ -155,7 +177,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
     } finally {
       setLoading(false);
     }
-  }, [projectId, statusFilter, typeFilter, wbsType]);
+  }, [projectId, statusFilter, typeFilter, wbsType, project?.units]);
 
   useEffect(() => {
     load();
@@ -211,22 +233,30 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       contractValue: contractTypeOf(row) === 'Slab' ? row.totalAmount || '' : '',
       clientValue: contractTypeOf(row) === 'Slab' ? row.clientValue || '' : '',
       slabScheduleId: row.slabSchedule?._id || row.slabSchedule || '',
-      slabs: toEditorSlabs(row.slabs)
+      slabs: toEditorSlabs(row.slabs),
+      units: unitIdsOf(row),
+      ratePerUnit: row.ratePerUnit || '',
+      clientRatePerUnit: row.clientRatePerUnit || '',
+      propertyPercent: row.propertyPercent || ''
     });
     setDialogOpen(true);
   };
 
   const isSlabForm = form.contractType === 'Slab';
+  const perUnit = isSlabForm && hasUnits;
+  const slabValue = perUnit ? (Number(form.ratePerUnit) || 0) * form.units.length : Number(form.contractValue) || 0;
+  const slabClientValue = perUnit ? (Number(form.clientRatePerUnit) || 0) * form.units.length : Number(form.clientValue) || 0;
   const totalAmount = isSlabForm
-    ? Number(form.contractValue) || 0
+    ? slabValue
     : form.lines
       .filter((l) => l.selected && Number(l.quantity) > 0)
       .reduce((s, l) => s + Number(l.quantity) * Number(l.unitPrice), 0);
 
-  // Activities already covered by another open slab-wise contract on this Sub Project
+  // Activities already covered by another open slab-wise contract for the same villas / units
   const takenActivityIds = new Set(
     rows
       .filter((r) => contractTypeOf(r) === 'Slab' && r.status !== 'Cancelled' && r._id !== editing?._id)
+      .filter((r) => overlaps(unitIdsOf(r), form.units))
       .flatMap((r) => (r.slabs || []).flatMap((sl) => (sl.activities || []).map((a) => String(a.activity?._id || a.activity))))
   );
 
@@ -259,15 +289,31 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       contractType: form.contractType,
       activate: activateAfter && !editing
     };
+    if (paymentMode === 'Mixed') {
+      const pct = Number(form.propertyPercent);
+      if (!(pct > 0 && pct < 100)) return fail('Enter the property share — between 1% and 99%');
+      payload.propertyPercent = pct;
+    }
+    if (hasUnits) {
+      if (!form.units.length) return fail(`Select the ${words.toLowerCase()} this contract covers`);
+      payload.units = form.units;
+    }
 
     if (isSlabForm) {
       if (!wbsType) return fail('Set this Sub Project\'s Project Type before creating a slab-wise contract');
-      if (!(Number(form.contractValue) > 0)) return fail('Enter the contract value');
+      if (perUnit ? !(Number(form.ratePerUnit) > 0) : !(Number(form.contractValue) > 0)) {
+        return fail(perUnit ? `Enter the rate per ${word.toLowerCase()}` : 'Enter the contract value');
+      }
       if (!form.slabs.length) return fail('Add at least one slab');
       if (form.slabs.some((sl) => !String(sl.name).trim())) return fail('Every slab needs a name');
       if (Math.abs(slabsTotalPercent(form.slabs) - 100) >= 0.001) return fail('Slab percentages must total 100%');
-      payload.contractValue = Number(form.contractValue);
-      payload.clientValue = Number(form.clientValue) || 0;
+      if (perUnit) {
+        payload.ratePerUnit = Number(form.ratePerUnit);
+        payload.clientRatePerUnit = Number(form.clientRatePerUnit) || 0;
+      } else {
+        payload.contractValue = Number(form.contractValue);
+        payload.clientValue = Number(form.clientValue) || 0;
+      }
       payload.slabSchedule = form.slabScheduleId || null;
       payload.slabs = form.slabs.map((sl) => ({
         name: String(sl.name).trim(),
@@ -300,8 +346,8 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
           setSuccess('Sublet contract updated');
         }
       } else {
-        await createSubletContract(projectId, payload);
-        setSuccess(activateAfter ? 'Sublet contract created and activated' : 'Sublet contract created');
+        const res = await createSubletContract(projectId, payload);
+        setSuccess(res.data?.message || (activateAfter ? 'Sublet contract created and activated' : 'Sublet contract created'));
       }
       setDialogOpen(false);
       await load();
@@ -354,6 +400,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   return (
     <Box>
       <SubBudgetStrip project={project} />
+      {paymentMode !== 'Cash' && <BarterBalancesPanel projectId={projectId} reloadKey={rows} />}
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2} flexWrap="wrap" gap={1}>
         <Box>
           <Typography variant="h6" fontWeight={700}>
@@ -488,6 +535,14 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                     <Typography variant="body2" fontWeight={600}>
                       {row.title}
                     </Typography>
+                    {row.units?.length > 0 && (
+                      <Tooltip title={row.units.map((u) => u.name).join(', ')}>
+                        <Typography variant="caption" color="text.secondary">
+                          {row.units.length === projectUnits.length ? `All ${words.toLowerCase()}` : `${row.units.length} ${row.units.length === 1 ? word.toLowerCase() : words.toLowerCase()}`}
+                          {row.ratePerUnit > 0 ? ` · ${fmt(row.ratePerUnit)} each` : ''}
+                        </Typography>
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2">
@@ -504,7 +559,15 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                       ? `${row.slabs?.length || 0} slab${row.slabs?.length === 1 ? '' : 's'}`
                       : `${row.items?.length || 0} line${row.items?.length === 1 ? '' : 's'}`}
                   </TableCell>
-                  <TableCell align="right">{fmt(row.totalAmount)}</TableCell>
+                  <TableCell align="right">
+                    {fmt(row.totalAmount)}
+                    {row.propertyPercent > 0 && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        {row.propertyPercent >= 100 ? 'All in property' : `Cash ${fmt(row.cashAmount)} · Property ${fmt(row.propertyAmount)}`}
+                        {` · ${(row.barterProperties || []).filter((p) => p.status !== 'Released').length || 'no'} propert${(row.barterProperties || []).filter((p) => p.status !== 'Released').length === 1 ? 'y' : 'ies'}`}
+                      </Typography>
+                    )}
+                  </TableCell>
                   <TableCell>
                     <Chip size="small" label={row.status} color={STATUS_COLOR[row.status] || 'default'} />
                   </TableCell>
@@ -518,6 +581,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                         <ViewIcon fontSize="small" />
                       </IconButton>
                     </Tooltip>
+                    {row.propertyPercent > 0 && ['Draft', 'Active'].includes(row.status) && (
+                      <Tooltip title="Properties given in exchange">
+                        <IconButton size="small" color="warning" onClick={() => setBarterRow(row)}>
+                          <PropertyIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     {row.status === 'Draft' && (
                       <>
                         <Tooltip title="Edit">
@@ -710,6 +780,74 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                 onChange={(e) => setForm((f) => ({ ...f, notes: e.target.value }))}
               />
             </Grid>
+            {hasUnits && (
+              <Grid item xs={12}>
+                <Stack direction="row" alignItems="center" justifyContent="space-between" mb={0.75}>
+                  <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                    {words} covered ({form.units.length} of {projectUnits.length})
+                  </Typography>
+                  <Stack direction="row" gap={1}>
+                    <Button size="small" onClick={() => setForm((f) => ({ ...f, units: projectUnits.map((u) => String(u._id)) }))}>All {words.toLowerCase()}</Button>
+                    <Button size="small" color="inherit" onClick={() => setForm((f) => ({ ...f, units: [] }))}>Clear</Button>
+                  </Stack>
+                </Stack>
+                <Autocomplete
+                  multiple
+                  disableCloseOnSelect
+                  options={projectUnits}
+                  getOptionLabel={(u) => (u.plotNumber ? `${u.name} (${u.plotNumber})` : u.name)}
+                  value={projectUnits.filter((u) => form.units.includes(String(u._id)))}
+                  onChange={(_, picked) => setForm((f) => ({ ...f, units: picked.map((u) => String(u._id)) }))}
+                  isOptionEqualToValue={(o, v) => String(o._id) === String(v._id)}
+                  renderInput={(params) => (
+                    <TextField {...params} required label={`${words} this contract covers`} placeholder={form.units.length ? '' : `Pick ${words.toLowerCase()}`} />
+                  )}
+                />
+                <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+                  One contractor can take the same work for many {words.toLowerCase()}; another contractor can take the same work for other {words.toLowerCase()}.
+                </Typography>
+              </Grid>
+            )}
+            {paymentMode !== 'Cash' && (() => {
+              const pct = paymentMode === 'Barter' ? 100 : Math.max(0, Math.min(100, Number(form.propertyPercent) || 0));
+              const propertyAmount = Math.round((totalAmount * pct) / 100);
+              return (
+                <Grid item xs={12}>
+                  <Paper variant="outlined" sx={{ p: 2, borderRadius: 2, bgcolor: '#fffbeb', borderColor: '#fde68a' }}>
+                    <Typography variant="subtitle2" fontWeight={700}>
+                      Payment: {paymentMode === 'Barter' ? 'Barter — paid in property' : 'Mixed — part cash, part property'}
+                    </Typography>
+                    <Grid container spacing={2} alignItems="center" sx={{ mt: 0.25 }}>
+                      {paymentMode === 'Mixed' && (
+                        <Grid item xs={12} sm={4}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            required
+                            type="number"
+                            label="Property share (%)"
+                            value={form.propertyPercent}
+                            onChange={(e) => setForm((f) => ({ ...f, propertyPercent: e.target.value }))}
+                            inputProps={{ min: 1, max: 99, step: 'any' }}
+                          />
+                        </Grid>
+                      )}
+                      <Grid item xs={6} sm={4}>
+                        <Typography variant="caption" color="text.secondary">Cash ({100 - pct}%)</Typography>
+                        <Typography fontWeight={800}>{fmt(totalAmount - propertyAmount)}</Typography>
+                      </Grid>
+                      <Grid item xs={6} sm={4}>
+                        <Typography variant="caption" color="text.secondary">Property ({pct}%)</Typography>
+                        <Typography fontWeight={800}>{fmt(propertyAmount)}</Typography>
+                      </Grid>
+                    </Grid>
+                    <Typography variant="caption" color="text.secondary" display="block" mt={1}>
+                      The properties given in exchange are picked in the next step, once the contract is saved.
+                    </Typography>
+                  </Paper>
+                </Grid>
+              );
+            })()}
             {isSlabForm && (
               <Grid item xs={12}>
                 {!wbsType ? (
@@ -743,6 +881,37 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                           </Typography>
                         )}
                       </Grid>
+                      {perUnit ? (
+                        <>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              size="small"
+                              required
+                              type="number"
+                              label={`Rate per ${word.toLowerCase()} (PKR)`}
+                              value={form.ratePerUnit}
+                              onChange={(e) => setForm((f) => ({ ...f, ratePerUnit: e.target.value }))}
+                              inputProps={{ min: 0, step: 'any' }}
+                              helperText={`Contract value ${fmt(slabValue)} = ${fmt(form.ratePerUnit)} × ${form.units.length} ${form.units.length === 1 ? word.toLowerCase() : words.toLowerCase()}`}
+                            />
+                          </Grid>
+                          <Grid item xs={12} md={6}>
+                            <TextField
+                              fullWidth
+                              size="small"
+                              type="number"
+                              label={`Client rate per ${word.toLowerCase()} (PKR) — optional`}
+                              value={form.clientRatePerUnit}
+                              onChange={(e) => setForm((f) => ({ ...f, clientRatePerUnit: e.target.value }))}
+                              inputProps={{ min: 0, step: 'any' }}
+                              helperText={slabClientValue > 0 && slabValue > 0
+                                ? `Client value ${fmt(slabClientValue)} · margin ${Math.round(((slabClientValue - slabValue) / slabClientValue) * 100)}%`
+                                : `What the client pays per ${word.toLowerCase()} — each verified slab is billed to the client at this × slab %`}
+                            />
+                          </Grid>
+                        </>
+                      ) : (<>
                       <Grid item xs={12} md={6}>
                         <TextField
                           fullWidth
@@ -769,6 +938,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                             : 'What the client pays for this scope — each verified slab is billed to the client at this × slab %'}
                         />
                       </Grid>
+                      </>)}
                     </Grid>
                     <Typography variant="subtitle2" fontWeight={700} mb={1}>
                       Slabs (payment stages)
@@ -776,13 +946,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                     <SlabRowsEditor
                       slabs={form.slabs}
                       activities={wbsActivities}
-                      contractValue={form.contractValue}
+                      contractValue={slabValue}
                       disabledActivityIds={takenActivityIds}
                       onChange={(slabs) => setForm((f) => ({ ...f, slabs }))}
                     />
                     {takenActivityIds.size > 0 && (
                       <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
-                        Greyed-out activities are already covered by another slab-wise contract on this Sub Project.
+                        Greyed-out activities are already covered by another slab-wise contract{hasUnits ? ` for one of the selected ${words.toLowerCase()}` : ' on this Sub Project'}.
                       </Typography>
                     )}
                     <Typography variant="subtitle2" mt={1.5} fontWeight={700}>
@@ -914,6 +1084,18 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
         </DialogActions>
       </Dialog>
 
+      <BarterPropertiesDialog
+        open={Boolean(barterRow)}
+        projectId={projectId}
+        contract={barterRow}
+        onClose={() => setBarterRow(null)}
+        onSaved={async (message) => {
+          setSuccess(message || 'Properties saved');
+          setBarterRow(null);
+          await load();
+        }}
+      />
+
       <Dialog open={Boolean(viewRow)} onClose={() => setViewRow(null)} maxWidth="md" fullWidth>
         <DialogTitle>
           {viewRow?.contractNumber} — {viewRow?.title}
@@ -940,6 +1122,29 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                 {' · '}
                 <strong>Sector / Block:</strong> {viewRow.sector || project?.sector || '—'}
               </Typography>
+              {viewRow.propertyPercent > 0 && (
+                <Typography variant="body2">
+                  <strong>Payment:</strong> {viewRow.propertyPercent >= 100 ? 'Barter' : 'Mixed'}
+                  {' · '}Cash {fmt(viewRow.cashAmount)} ({100 - viewRow.propertyPercent}%)
+                  {' · '}Property {fmt(viewRow.propertyAmount)} ({viewRow.propertyPercent}%)
+                </Typography>
+              )}
+              {(viewRow.barterProperties || []).length > 0 && (
+                <Box>
+                  <Typography variant="body2" fontWeight={700}>Properties given in exchange</Typography>
+                  {viewRow.barterProperties.map((p) => (
+                    <Typography key={p._id} variant="body2" color={p.status === 'Released' ? 'text.disabled' : 'text.primary'}>
+                      {p.label}{p.area ? ` (${p.area})` : ''} — {fmt(p.agreedValue)} · {p.status}
+                    </Typography>
+                  ))}
+                </Box>
+              )}
+              {viewRow.units?.length > 0 && (
+                <Typography variant="body2">
+                  <strong>{words} ({viewRow.units.length}):</strong> {viewRow.units.map((u) => u.name).join(', ')}
+                  {viewRow.ratePerUnit > 0 && <> · <strong>Rate:</strong> {fmt(viewRow.ratePerUnit)} per {word.toLowerCase()}</>}
+                </Typography>
+              )}
               <Typography variant="body2" color="text.secondary">
                 {viewRow.notes || 'No notes'}
               </Typography>

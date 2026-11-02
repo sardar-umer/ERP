@@ -20,7 +20,8 @@ import {
   Handshake as SubletIcon,
   DeleteForever as DeleteForeverIcon,
   Place as PlaceIcon, Person as PersonIcon, Event as EventIcon, Notes as NotesIcon,
-  AccountBalanceWallet as WalletIcon
+  AccountBalanceWallet as WalletIcon,
+  HomeWork as UnitsIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -37,6 +38,7 @@ import {
 import api from '../../services/api';
 import CheckRequestsTab from './CheckRequestsTab';
 import SubletContractsTab from './SubletContractsTab';
+import UnitsTab, { unitWord } from './UnitsTab';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import ProjectWorkflowStrip from '../../components/ProjectManagement/ProjectWorkflowStrip';
 import MainProjectPage from '../../components/ProjectManagement/MainProjectPage';
@@ -77,6 +79,7 @@ const BUDGET_CATEGORIES = BUDGET_CATEGORY_GROUPS.flatMap((g) => g.categories);
 /** Main projects only show portfolio tabs; Subs get the full execution suite. */
 const ALL_TABS = [
   { id: 'overview', label: 'Overview', icon: <ViewIcon fontSize="small" />, onMain: true, onSub: true },
+  { id: 'units', label: 'Units', icon: <UnitsIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'boq', label: 'Bill of Quantities', icon: <POIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
@@ -86,9 +89,10 @@ const ALL_TABS = [
 ];
 
 /** Slab-wise projects have no Bill of Quantities: their contracts are paid by stage, not by measured quantities */
-const getVisibleTabs = (isMain, basis) => ALL_TABS
+const getVisibleTabs = (isMain, basis, projectType) => ALL_TABS
   .filter((t) => (isMain ? t.onMain : t.onSub))
-  .filter((t) => !(basis === 'Slab' && t.id === 'boq'));
+  .filter((t) => !(basis === 'Slab' && t.id === 'boq'))
+  .map((t) => (t.id === 'units' ? { ...t, label: unitWord(projectType, true) } : t));
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 const fmt = (v) =>
@@ -1727,14 +1731,14 @@ const ProjectDetail = () => {
   useEffect(() => { loadProject(); }, [loadProject]);
 
   const isMainProject = project ? !project.parentProject : false;
-  const visibleTabs = getVisibleTabs(isMainProject, project?.contractBasis);
+  const visibleTabs = getVisibleTabs(isMainProject, project?.contractBasis, project?.projectType);
   const activeTab = visibleTabs[Math.min(tab, Math.max(0, visibleTabs.length - 1))] || visibleTabs[0];
   const goToTab = (tabId) => setSearchParams({ tab: tabId }, { replace: true });
 
   useEffect(() => {
     // Wait for the project in the URL: moving Main → Sub would otherwise map ?tab=invoices against the Main's tabs
     if (!project || String(project._id) !== String(id)) return;
-    const tabs = getVisibleTabs(!project.parentProject, project.contractBasis);
+    const tabs = getVisibleTabs(!project.parentProject, project.contractBasis, project.projectType);
     const raw = searchParams.get('tab');
     let idx = 0;
     if (raw != null && raw !== '') {
@@ -2070,6 +2074,7 @@ const ProjectDetail = () => {
         {/* Overview cards sit on a soft grey so each section reads as its own card */}
         <Box sx={{ p: { xs: 1.5, sm: isMainProject ? 2.5 : 2 }, ...(activeTab?.id === 'overview' && !isMainProject ? { bgcolor: '#f6f8fb', borderBottomLeftRadius: 10, borderBottomRightRadius: 10 } : {}) }}>
           {activeTab?.id === 'overview' && <OverviewTab project={project} onGoToTab={goToTab} />}
+          {activeTab?.id === 'units' && <UnitsTab projectId={id} project={project} />}
           {activeTab?.id === 'boq' && <BOQTab projectId={id} project={project} />}
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}

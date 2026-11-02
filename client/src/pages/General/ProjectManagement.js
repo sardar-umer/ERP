@@ -29,24 +29,43 @@ import ProjectBudgetPanel from '../../components/ProjectManagement/ProjectBudget
 import EmployeePicker from '../../components/ProjectManagement/EmployeePicker';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
+import { normalizeWbsProjectType } from '../../utils/wbsProjectTypes';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
 const PROJECT_STATUSES = ['Draft', 'Planning', 'Active', 'On Hold', 'Completed', 'Cancelled'];
-/** Sectors / blocks from Taj Residencia PM workflow PDF — by project type. */
+/** Taj Residencia sectors (from the PM workflow PDF) — every project type is built in these */
+const TAJ_SECTORS = [
+  'Gardenia', 'Iris', 'Rose', 'Geranium', 'Cosmos', 'Zinnia', 'Blue Bell',
+  'Lotus (Exec)', 'Cosmos-II', 'Daffodils', 'Lotus', 'Lavender', 'Tulip',
+  'Lily', 'Jasmine', 'Sun Flower', 'Marigold', 'Daisy'
+];
 const SECTORS_BY_TYPE = {
-  'INFRASTRUCTURE DEVELOPMENT': [
-    'Gardenia', 'Iris', 'Rose', 'Geranium', 'Cosmos', 'Zinnia', 'Blue Bell',
-    'Lotus (Exec)', 'Cosmos-II', 'Daffodils', 'Lotus', 'Lavender', 'Tulip',
-    'Lily', 'Jasmine', 'Sun Flower', 'Marigold', 'Daisy'
-  ],
-  COMMERCIAL: [
-    'Boulevard Tower', 'Commercial Hub'
-  ],
-  VILLAS: [
-    '4 Marla', '5 Marla', '7 Marla', '10 Marla', '1 Kanal'
-  ]
+  'INFRASTRUCTURE DEVELOPMENT': TAJ_SECTORS,
+  COMMERCIAL: [...TAJ_SECTORS, 'Boulevard Tower', 'Commercial Hub'],
+  VILLAS: TAJ_SECTORS
 };
+
+/**
+ * Sub Project size by type: villas by plot size (Marla / Kanal), commercial by covered area,
+ * infrastructure by length or area. presets = one-click common sizes.
+ */
+const SIZE_BY_TYPE = {
+  VILLAS: {
+    label: 'Plot size',
+    units: ['Marla', 'Kanal'],
+    presets: [[4, 'Marla'], [5, 'Marla'], [7, 'Marla'], [10, 'Marla'], [1, 'Kanal'], [2, 'Kanal']]
+  },
+  COMMERCIAL: { label: 'Covered area', units: ['Sq. ft', 'Sq. yd', 'Marla', 'Kanal'], presets: [] },
+  'INFRASTRUCTURE DEVELOPMENT': { label: 'Length / area', units: ['Running ft', 'Meters', 'Km', 'Acres', 'Kanal'], presets: [] }
+};
+const sizeSpecFor = (type) => SIZE_BY_TYPE[normalizeWbsProjectType(type)] || null;
+/** Villas used to keep their plot size in Sector ("5 Marla") — read it back as a size */
+const sizeFromLegacySector = (sector) => {
+  const m = String(sector || '').trim().match(/^(\d+(?:\.\d+)?)\s*(Marla|Kanal)$/i);
+  return m ? { value: m[1], unit: m[2].charAt(0).toUpperCase() + m[2].slice(1).toLowerCase() } : null;
+};
+export const sizeText = (p) => (Number(p?.sizeValue) > 0 ? `${p.sizeValue} ${p.sizeUnit || ''}`.trim() : '');
 
 const getParentId = (p) => {
   if (!p?.parentProject) return null;
@@ -67,6 +86,13 @@ const CONTRACT_BASES = [
   { value: 'Slab', label: 'Slab-wise', text: 'Work is contracted as stages (slabs) with a fixed amount each, paid as each stage is completed.' }
 ];
 
+/** How subcontractors are paid — separate from how their work is measured (contract basis) */
+const PAYMENT_MODES = [
+  { value: 'Cash', label: 'Cash / Bank', text: 'Contractors are paid in money — by bank transfer, cheque or cash, as Finance chooses when paying.' },
+  { value: 'Barter', label: 'Barter', text: 'Contractors are paid in property — plots, villas or units — instead of cash.' },
+  { value: 'Mixed', label: 'Mixed', text: 'Part money (bank / cash), part property — each contract sets its property share.' }
+];
+
 const defaultForm = {
   hierarchyLevel: 'main',
   name: '',
@@ -74,6 +100,8 @@ const defaultForm = {
   description: '',
   society: DEFAULT_SOCIETY,
   sector: '',
+  sizeValue: '',
+  sizeUnit: '',
   street: '',
   side: '',
   address: '',
@@ -84,6 +112,7 @@ const defaultForm = {
   notes: '',
   status: 'Draft',
   contractBasis: '',
+  paymentMode: 'Cash',
   projectManagerEmployee: null // { _id, name, employeeId, designation } — Sub Projects only
 };
 
@@ -239,7 +268,13 @@ const ProjectFormDialog = ({
         parentProject: editing.parentProject?._id || editing.parentProject || '',
         description: editing.description || '',
         society: editing.society || DEFAULT_SOCIETY,
-        sector: editing.sector || '',
+        ...(() => {
+          // Old villa sub projects stored the plot size as their sector — move it into Size
+          const legacy = !editing.sizeValue && sizeFromLegacySector(editing.sector);
+          return legacy
+            ? { sector: '', sizeValue: legacy.value, sizeUnit: legacy.unit }
+            : { sector: editing.sector || '', sizeValue: editing.sizeValue || '', sizeUnit: editing.sizeUnit || '' };
+        })(),
         street: editing.street || '',
         side: editing.side || '',
         address: editing.address || '',
@@ -249,6 +284,7 @@ const ProjectFormDialog = ({
         status: editing.status || 'Draft',
         companyId: editing.companyId?._id || editing.companyId || '',
         contractBasis: editing.contractBasis || '',
+        paymentMode: editing.paymentMode || 'Cash',
         projectManagerEmployee: editing.projectManagerEmployee?._id
           ? {
             _id: editing.projectManagerEmployee._id,
@@ -293,7 +329,9 @@ const ProjectFormDialog = ({
     setForm((prev) => {
       const type = parent?.projectType || prev.projectType;
       const options = SECTORS_BY_TYPE[type] || [];
-      return { ...prev, parentProject: e.target.value, projectType: type, sector: options.includes(prev.sector) ? prev.sector : '' };
+      const spec = sizeSpecFor(type);
+      const sizeUnit = spec?.units.includes(prev.sizeUnit) ? prev.sizeUnit : spec?.units[0] || '';
+      return { ...prev, parentProject: e.target.value, projectType: type, sector: options.includes(prev.sector) ? prev.sector : '', sizeUnit };
     });
   };
 
@@ -367,12 +405,15 @@ const ProjectFormDialog = ({
         payload.companyId = form.companyId || null;
         payload.projectType = form.projectType;
         payload.contractBasis = form.contractBasis;
+        payload.paymentMode = form.paymentMode || 'Cash';
       }
       // Street / side / Project Manager belong to Sub Projects; their type and basis come from the Main Project
       if (!isMain) {
         payload.projectManagerEmployee = form.projectManagerEmployee?._id || null;
         payload.street = (form.street || '').trim();
         payload.side = form.side || '';
+        payload.sizeValue = Number(form.sizeValue) > 0 ? Number(form.sizeValue) : null;
+        payload.sizeUnit = Number(form.sizeValue) > 0 ? form.sizeUnit || sizeSpecFor(form.projectType)?.units[0] || '' : '';
       }
       if (editing) {
         if (form.status) payload.status = form.status;
@@ -450,6 +491,7 @@ const ProjectFormDialog = ({
                       <Box sx={{ mt: 0.5 }}>
                         Project Type: <strong>{main.projectType || '—'}</strong>
                         {' · '}Contracts: <strong>{main.contractBasis ? (main.contractBasis === 'Slab' ? 'Slab-wise' : 'BOQ-wise') : 'BOQ-wise or Slab-wise (not set on the Main Project)'}</strong>
+                        {' · '}Paid in: <strong>{main.paymentMode === 'Barter' ? 'Property (barter)' : main.paymentMode === 'Mixed' ? 'Cash / Bank + property' : 'Cash / Bank'}</strong>
                         {' '}— taken from {main.name}.
                       </Box>
                     </Alert>
@@ -542,6 +584,39 @@ const ProjectFormDialog = ({
                   All its Sub Projects follow this, and only {form.contractBasis === 'Slab' ? 'Slab-wise' : form.contractBasis === 'BOQ' ? 'BOQ-wise' : 'this kind of'} sublet contracts can be made under it
                 </FormHelperText>
               </Grid>
+              <Grid item xs={12}>
+                <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>
+                  Payment mode <Box component="span" sx={{ color: 'error.main' }}>*</Box>
+                </Typography>
+                <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: '1fr 1fr 1fr' } }}>
+                  {PAYMENT_MODES.map((m) => {
+                    const on = (form.paymentMode || 'Cash') === m.value;
+                    return (
+                      <Box
+                        key={m.value}
+                        role="radio"
+                        aria-checked={on}
+                        tabIndex={0}
+                        onClick={() => setForm((prev) => ({ ...prev, paymentMode: m.value }))}
+                        onKeyDown={(e) => (e.key === 'Enter' || e.key === ' ') && setForm((prev) => ({ ...prev, paymentMode: m.value }))}
+                        sx={{
+                          position: 'relative', p: 2, borderRadius: 2, cursor: 'pointer',
+                          border: '2px solid', borderColor: on ? 'primary.main' : 'divider',
+                          bgcolor: on ? 'rgba(25,118,210,0.05)' : 'background.paper',
+                          transition: 'all .15s', '&:hover': { borderColor: 'primary.main' }
+                        }}
+                      >
+                        {on && <CheckedIcon color="primary" sx={{ position: 'absolute', top: 10, right: 10, fontSize: 20 }} />}
+                        <Typography variant="subtitle2" fontWeight={800}>{m.label}</Typography>
+                        <Typography variant="body2" color="text.secondary" sx={{ mt: 0.5 }}>{m.text}</Typography>
+                      </Box>
+                    );
+                  })}
+                </Box>
+                <FormHelperText>
+                  How subcontractors are paid. Work is still measured {form.contractBasis === 'Slab' ? 'slab-wise' : form.contractBasis === 'BOQ' ? 'BOQ-wise' : 'BOQ-wise or slab-wise'}; this only decides money (cash / bank) or property. It can't change once contracts exist.
+                </FormHelperText>
+              </Grid>
             </>
           )}
 
@@ -625,6 +700,48 @@ const ProjectFormDialog = ({
               </Grid>
             </>
           )}
+
+          {form.hierarchyLevel === 'sub' && sizeSpecFor(form.projectType) && (() => {
+            const spec = sizeSpecFor(form.projectType);
+            const unit = spec.units.includes(form.sizeUnit) ? form.sizeUnit : spec.units[0];
+            return (
+              <Grid item xs={12}>
+                <Typography variant="body2" fontWeight={600} sx={{ mb: 1 }}>{spec.label}</Typography>
+                {spec.presets.length > 0 && (
+                  <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 1.5 }}>
+                    {spec.presets.map(([v, u]) => {
+                      const on = Number(form.sizeValue) === v && unit === u;
+                      return (
+                        <Chip
+                          key={`${v}${u}`}
+                          label={`${v} ${u}`}
+                          color={on ? 'primary' : 'default'}
+                          variant={on ? 'filled' : 'outlined'}
+                          onClick={() => setForm((prev) => ({ ...prev, sizeValue: String(v), sizeUnit: u }))}
+                        />
+                      );
+                    })}
+                  </Stack>
+                )}
+                <Stack direction="row" gap={1.5}>
+                  <TextField
+                    label={spec.presets.length ? 'Or enter size' : spec.label}
+                    type="number"
+                    value={form.sizeValue}
+                    onChange={(e) => setForm((prev) => ({ ...prev, sizeValue: e.target.value, sizeUnit: unit }))}
+                    inputProps={{ min: 0, step: 'any' }}
+                    sx={{ flex: 1 }}
+                  />
+                  <FormControl sx={{ minWidth: 150 }}>
+                    <InputLabel>Unit</InputLabel>
+                    <Select label="Unit" value={unit} onChange={set('sizeUnit')}>
+                      {spec.units.map((u) => <MenuItem key={u} value={u}>{u}</MenuItem>)}
+                    </Select>
+                  </FormControl>
+                </Stack>
+              </Grid>
+            );
+          })()}
 
           {form.hierarchyLevel === 'sub' && (
             <Grid item xs={12}>
@@ -1095,6 +1212,7 @@ const ProjectManagement = () => {
                                 <Typography variant="caption" color="text.secondary" display="block" sx={{ pl: depth > 0 ? 2.5 : 0 }}>
                                   {[
                                     [project.society, project.sector].filter(Boolean).join(' — '),
+                                    sizeText(project),
                                     project.street,
                                     project.side && `${project.side} side`
                                   ].filter(Boolean).join(' · ')}

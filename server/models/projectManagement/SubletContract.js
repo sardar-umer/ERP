@@ -90,6 +90,53 @@ const subletContractSchema = new mongoose.Schema(
       index: true
     },
 
+    /**
+     * Villas / units of the Sub Project this contract covers (empty = the whole Sub Project,
+     * e.g. one with no units listed). One contractor can hold the same work for many villas.
+     */
+    units: [
+      {
+        _id: false,
+        unit: { type: mongoose.Schema.Types.ObjectId, required: true },
+        name: { type: String, trim: true, default: '' }
+      }
+    ],
+    /**
+     * Share of the contract value paid in property (barter) rather than cash: 0 on Cash projects,
+     * 100 on Barter, in between on Mixed. Amounts = totalAmount × share.
+     */
+    propertyPercent: { type: Number, default: 0, min: 0, max: 100 },
+    /**
+     * Barter / Mixed: the properties given to the contractor in exchange, each at its agreed value.
+     * Linked to a Taj Residencia property record when there is one, otherwise described by hand.
+     * Reserved = promised to this contractor (no other contract can take it); Handed over = transferred;
+     * Released = taken off the deal.
+     */
+    barterProperties: [
+      {
+        property: { type: mongoose.Schema.Types.ObjectId, ref: 'TajProperty', default: null },
+        label: { type: String, trim: true, default: '' },
+        propertyType: { type: String, trim: true, default: '' },
+        plotNumber: { type: String, trim: true, default: '' },
+        sector: { type: String, trim: true, default: '' },
+        area: { type: String, trim: true, default: '' },
+        agreedValue: { type: Number, default: 0, min: 0 },
+        status: { type: String, enum: ['Reserved', 'Handed over', 'Released'], default: 'Reserved' },
+        handedOverAt: { type: Date },
+        handedOverBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+        /** Finance journal that settled the Barter Payable for this property */
+        handoverJournal: { type: mongoose.Schema.Types.ObjectId, default: null },
+        handoverReference: { type: String, trim: true, default: '' },
+        notes: { type: String, trim: true, default: '' }
+      }
+    ],
+    propertyAmount: { type: Number, default: 0, min: 0 },
+    cashAmount: { type: Number, default: 0, min: 0 },
+    /** Slab-wise with units: contractor's price per villa — contract value = rate × villas */
+    ratePerUnit: { type: Number, default: 0, min: 0 },
+    /** Slab-wise with units: client's price per villa — client value = rate × villas */
+    clientRatePerUnit: { type: Number, default: 0, min: 0 },
+
     items: {
       type: [subletItemSchema],
       default: []
@@ -129,6 +176,15 @@ const subletContractSchema = new mongoose.Schema(
 
 subletContractSchema.index({ project: 1, status: 1 });
 subletContractSchema.index({ project: 1, contractor: 1 });
+
+// Keep the cash / property amounts in step with the contract value
+subletContractSchema.pre('save', function splitCashProperty(next) {
+  const total = Number(this.totalAmount) || 0;
+  const pct = Math.max(0, Math.min(100, Number(this.propertyPercent) || 0));
+  this.propertyAmount = Math.round((total * pct) / 100);
+  this.cashAmount = Math.max(0, total - this.propertyAmount);
+  next();
+});
 
 subletContractSchema.pre('save', async function generateNumber(next) {
   if (!this.isNew || this.contractNumber) return next();

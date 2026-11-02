@@ -15,6 +15,7 @@ const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
 const CheckRequest = require('../models/projectManagement/CheckRequest');
 const SubletContract = require('../models/projectManagement/SubletContract');
 const InspectionReport = require('../models/projectManagement/InspectionReport');
+const TajProperty = require('../models/tajResidencia/TajProperty');
 const User = require('../models/User');
 const NotificationService = require('../services/notificationService');
 const WbsActivity = require('../models/projectManagement/WbsActivity');
@@ -25,7 +26,7 @@ require('../models/hr/Designation');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 const { syncProjectMetrics } = require('../services/projectMetricsService');
-const { postIpcToFinance, resolveProjectCompanyId, findMainProject } = require('../utils/projectIpcFinance');
+const { postIpcToFinance, postBarterHandover, resolveProjectCompanyId, findMainProject } = require('../utils/projectIpcFinance');
 const { postClientInvoiceToFinance, reverseClientInvoiceInFinance } = require('../utils/projectClientInvoiceFinance');
 const { hasAuditAccess, canPerformInitialPreAuditActions } = require('../utils/auditAccess');
 const { canActAsAuditDirector } = require('../utils/auditDirectorRole');
@@ -364,6 +365,22 @@ router.get('/projects/statistics', asyncHandler(async (req, res) => {
 /** Project types a Main Project can be created with (legacy values stay valid on old records) */
 const MAIN_PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
 const CONTRACT_BASES = ['BOQ', 'Slab'];
+const PAYMENT_MODES = ['Cash', 'Barter', 'Mixed'];
+
+/**
+ * Property (barter) share of a contract from its project's payment mode: Cash 0%, Barter 100%,
+ * Mixed the share entered (1–99). Returns { propertyPercent } or { error }.
+ */
+const resolvePropertyPercent = (project, raw, fallback = 0) => {
+  const mode = project?.paymentMode || 'Cash';
+  if (mode === 'Cash') return { propertyPercent: 0 };
+  if (mode === 'Barter') return { propertyPercent: 100 };
+  const pct = Number(raw ?? fallback);
+  if (!(pct > 0 && pct < 100)) {
+    return { error: `${project.name || 'This project'} is paid part money (cash / bank), part property — enter the property share (1–99%)` };
+  }
+  return { propertyPercent: Math.round(pct * 100) / 100 };
+};
 const contractBasisLabel = (b) => (b === 'Slab' ? 'Slab-wise' : 'BOQ-wise');
 
 /** IPC approval stages still waiting on someone */
@@ -931,18 +948,21 @@ router.get('/projects/:id/cost-report', asyncHandler(async (req, res) => {
 router.get('/projects/:id/summary', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
   const project = await ConstructionProject.findById(req.params.id)
-    .select('name projectNumber status parentProject lumpSumBudget overallProgress').lean();
+    .select('name projectNumber status parentProject lumpSumBudget budgetStatus approvedBudget.amount allocatedBudget overallProgress').lean();
   if (!project) return notFound(res, 'Project');
   const isMain = !project.parentProject;
 
   const units = isMain
     ? await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
-      .select('name projectNumber sector status overallProgress').sort({ name: 1 }).lean()
+      .select('name projectNumber sector status overallProgress allocatedBudget').sort({ name: 1 }).lean()
     : [project];
   const reports = await Promise.all(units.map((u) => buildSubCostReport(u._id)));
 
   const subProjects = units.map((u, i) => {
-    const { budget, contracted, verified, billed, approved, paid } = reports[i].summary;
+    const { budget: boqEstimate, contracted, verified, billed, approved, paid } = reports[i].summary;
+    // Budget = the share of the approved Main Project budget given to this Sub Project; the BOQ
+    // estimate only stands in when none has been given (slab-wise projects have no BOQ at all)
+    const budget = Number(u.allocatedBudget) > 0 ? round2(u.allocatedBudget) : boqEstimate;
     const progress = Number(u.overallProgress) || 0;
     let health = 'On Track';
     if (budget > 0 && billed > budget) health = 'Over Budget';
@@ -954,7 +974,9 @@ router.get('/projects/:id/summary', asyncHandler(async (req, res) => {
   });
 
   const sum = (f) => round2(subProjects.reduce((t, s) => t + (Number(s[f]) || 0), 0));
-  const budget = sum('budget');
+  // Main Project: its CEO-approved budget (stays in force while a revision is in approval)
+  const mainApproved = isMain ? approvedBudgetAmount(project) : 0;
+  const budget = mainApproved > 0 ? round2(mainApproved) : sum('budget');
   const spent = sum('spent');
   const progress = Number(project.overallProgress) || 0;
   // CPI only means something once work has been billed
@@ -1352,7 +1374,7 @@ router.put('/projects/:id/budget-allocations', asyncHandler(async (req, res) => 
 
 // POST /api/project-management/projects — create
 router.post('/projects', asyncHandler(async (req, res) => {
-  const { name, projectType, description, society, sector, street, side, plotNumber, address,
+  const { name, projectType, description, society, sector, street, side, plotNumber, address, sizeValue, sizeUnit,
     clientName, clientContact, projectManager, projectManagerEmployee, startDate, expectedEndDate,
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
@@ -1365,22 +1387,30 @@ router.post('/projects', asyncHandler(async (req, res) => {
   // Project type and contract basis are chosen on the Main Project; Sub Projects take them from it
   let type = projectType;
   let contractBasis = null;
+  let paymentMode = 'Cash';
   if (!parentProject) {
     if (!MAIN_PROJECT_TYPES.includes(projectType)) return badRequest(res, 'Select the Project Type');
     if (!CONTRACT_BASES.includes(req.body.contractBasis)) return badRequest(res, 'Select whether this project is BOQ-wise or Slab-wise');
     contractBasis = req.body.contractBasis;
+    if (req.body.paymentMode !== undefined && !PAYMENT_MODES.includes(req.body.paymentMode)) {
+      return badRequest(res, 'Select how contractors are paid: Cash / Bank, Barter or Mixed');
+    }
+    paymentMode = req.body.paymentMode || 'Cash';
   } else {
     if (!isValidId(parentProject)) return badRequest(res, 'Invalid Main Project');
-    const parent = await ConstructionProject.findById(parentProject).select('projectType contractBasis').lean();
+    const parent = await ConstructionProject.findById(parentProject).select('projectType contractBasis paymentMode').lean();
     if (!parent) return notFound(res, 'Main Project');
     type = parent.projectType || projectType;
     contractBasis = parent.contractBasis || null;
+    paymentMode = parent.paymentMode || 'Cash';
   }
 
   const project = new ConstructionProject({
     name: name.trim(),
-    projectType: type, contractBasis, description, society, sector, plotNumber, address,
+    projectType: type, contractBasis, paymentMode, description, society, sector, plotNumber, address,
     street: street || '',
+    sizeValue: parentProject && Number(sizeValue) > 0 ? Number(sizeValue) : null,
+    sizeUnit: parentProject && Number(sizeValue) > 0 ? String(sizeUnit || '').trim() : '',
     side: ['Left', 'Right'].includes(side) ? side : '',
     clientName, clientContact, notes, tags,
     companyId: !parentProject && companyId && isValidId(companyId) ? companyId : null,
@@ -1427,12 +1457,19 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     'plotNumber', 'street', 'side', 'address', 'clientName', 'clientContact', 'projectManager',
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
-    'parentProject', 'contractValue', 'companyId', 'contractBasis', 'projectManagerEmployee'
+    'parentProject', 'contractValue', 'companyId', 'contractBasis', 'paymentMode', 'projectManagerEmployee',
+    'sizeValue', 'sizeUnit'
   ];
 
   const updates = {};
   allowed.forEach(k => { if (req.body[k] !== undefined) updates[k] = req.body[k]; });
   if (updates.companyId !== undefined) updates.companyId = updates.companyId && isValidId(updates.companyId) ? updates.companyId : null;
+  if (updates.sizeValue !== undefined || updates.sizeUnit !== undefined) {
+    // Size is a Sub Project field: a blank / zero value clears both
+    const v = Number(updates.sizeValue);
+    updates.sizeValue = v > 0 ? v : null;
+    updates.sizeUnit = v > 0 ? String(updates.sizeUnit || '').trim() : '';
+  }
   updates.updatedBy = req.user?._id;
 
   // Convert empty string refs to null to avoid CastError
@@ -1443,7 +1480,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   });
 
   const oldProject = await ConstructionProject.findById(req.params.id)
-    .select('name parentProject overallProgress allocatedBudget companyId projectType contractBasis status actualEndDate')
+    .select('name parentProject overallProgress allocatedBudget companyId projectType contractBasis paymentMode status actualEndDate')
     .lean();
   if (!oldProject) return notFound(res, 'Project');
 
@@ -1452,12 +1489,14 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
   let cascade = null;
   if (nextParent) {
     delete updates.contractBasis;
+    delete updates.paymentMode;
     if (updates.parentProject !== undefined && String(updates.parentProject || '') !== String(oldProject.parentProject || '')) {
       // Moved under another Main Project: take that project's type and basis
-      const parent = await ConstructionProject.findById(nextParent).select('projectType contractBasis').lean();
+      const parent = await ConstructionProject.findById(nextParent).select('projectType contractBasis paymentMode').lean();
       if (!parent) return notFound(res, 'Main Project');
       updates.projectType = parent.projectType;
       updates.contractBasis = parent.contractBasis || null;
+      updates.paymentMode = parent.paymentMode || 'Cash';
     } else {
       delete updates.projectType;
     }
@@ -1468,9 +1507,13 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     if (updates.contractBasis !== undefined && !CONTRACT_BASES.includes(updates.contractBasis)) {
       return badRequest(res, 'Select whether this project is BOQ-wise or Slab-wise');
     }
+    if (updates.paymentMode !== undefined && !PAYMENT_MODES.includes(updates.paymentMode)) {
+      return badRequest(res, 'Select how contractors are paid: Cash / Bank, Barter or Mixed');
+    }
     const basisChanged = updates.contractBasis !== undefined && updates.contractBasis !== oldProject.contractBasis;
     const typeChanged = updates.projectType !== undefined && updates.projectType !== oldProject.projectType;
-    if (basisChanged || typeChanged) {
+    const modeChanged = updates.paymentMode !== undefined && updates.paymentMode !== (oldProject.paymentMode || 'Cash');
+    if (basisChanged || typeChanged || modeChanged) {
       const subIds = (await ConstructionProject.find({ parentProject: oldProject._id }).select('_id').lean()).map((s) => s._id);
       if (basisChanged) {
         // Cannot switch once contracts of the other kind exist under it
@@ -1480,8 +1523,16 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
           return badRequest(res, `${oldProject.name} already has ${clash} ${contractBasisLabel(updates.contractBasis === 'Slab' ? 'BOQ' : 'Slab')} contract(s) — cancel them before making it ${contractBasisLabel(updates.contractBasis)}`);
         }
       }
+      if (modeChanged) {
+        // Contracts already agreed under the old mode would no longer match it
+        const live = await SubletContract.countDocuments({ project: { $in: subIds }, status: { $ne: 'Cancelled' } });
+        if (live) {
+          return badRequest(res, `${oldProject.name} already has ${live} sublet contract(s) — cancel them before changing how contractors are paid`);
+        }
+      }
       cascade = { subIds, set: {} };
       if (basisChanged) cascade.set.contractBasis = updates.contractBasis;
+      if (modeChanged) cascade.set.paymentMode = updates.paymentMode;
       if (typeChanged) cascade.set.projectType = updates.projectType;
     }
   }
@@ -1502,7 +1553,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     }
     const posted = await ProjectInvoice.countDocuments({
       project: { $in: familyIds },
-      $or: [{ financeApBillId: { $ne: null } }, { financeArId: { $ne: null } }]
+      $or: [{ financeApBillId: { $ne: null } }, { financeArId: { $ne: null } }, { financePostedAt: { $ne: null } }]
     });
     if (posted) {
       return badRequest(res, `${posted} IPC(s) / invoice(s) of ${oldProject.name} already posted to the current Finance company — the company can no longer be changed`);
@@ -2043,7 +2094,191 @@ router.get('/budget-approvals', asyncHandler(async (req, res) => {
 }));
 
 // PUT /api/project-management/projects/:id/milestones/:milestoneId — update milestone
-router.put('/projects/:id/milestones/:milestoneId', asyncHandler(async (req, res) => {
+// ─── Units (villas) of a Sub Project ───────────────────────────────────────────
+
+const cleanUnit = (raw = {}) => ({
+  name: String(raw.name || '').trim(),
+  plotNumber: String(raw.plotNumber || '').trim(),
+  street: String(raw.street || '').trim(),
+  side: ['Left', 'Right'].includes(raw.side) ? raw.side : '',
+  notes: String(raw.notes || '').trim()
+});
+
+const unitNameKey = (name) => String(name || '').trim().toLowerCase();
+
+/** Loads a Sub Project for unit edits, or sends the error response and returns null */
+const loadSubForUnits = async (req, res) => {
+  if (!isValidId(req.params.id)) { badRequest(res, 'Invalid project ID'); return null; }
+  const project = await ConstructionProject.findById(req.params.id);
+  if (!project) { notFound(res, 'Project'); return null; }
+  if (!project.parentProject) { badRequest(res, `${unitNames(project)[1]} are added on Sub Projects only`); return null; }
+  return project;
+};
+
+// GET /api/project-management/projects/:id/units
+router.get('/projects/:id/units', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('units').lean();
+  if (!project) return notFound(res, 'Project');
+  res.json({ success: true, data: project.units || [] });
+}));
+
+// POST /api/project-management/projects/:id/units — body { units: [{ name, plotNumber, street, side, notes }] }
+router.post('/projects/:id/units', asyncHandler(async (req, res) => {
+  const project = await loadSubForUnits(req, res);
+  if (!project) return;
+
+  const incoming = (Array.isArray(req.body.units) ? req.body.units : [req.body]).map(cleanUnit);
+  if (!incoming.length) return badRequest(res, `Add at least one ${unitLabel(project)}`);
+  if (incoming.some((u) => !u.name)) return badRequest(res, `Every ${unitLabel(project)} needs a name`);
+
+  const taken = new Set((project.units || []).map((u) => unitNameKey(u.name)));
+  for (const u of incoming) {
+    const key = unitNameKey(u.name);
+    if (taken.has(key)) return badRequest(res, `"${u.name}" is already in this Sub Project`);
+    taken.add(key);
+  }
+
+  project.units.push(...incoming);
+  project.updatedBy = req.user?._id;
+  await project.save();
+  res.status(201).json({ success: true, message: `${incoming.length} added`, data: project.units });
+}));
+
+/**
+ * Villa-by-stage progress of a Sub Project. Columns are the stages (slabs) of its slab-wise
+ * contracts; each cell is the state of that stage's claim for that villa. A villa's progress is
+ * the value of its verified work over the value of the contracts covering it (each contract's
+ * value is split equally across its villas; a contract without villas covers all of them).
+ */
+const DONE_CR = ['Verified', 'Billed'];
+router.get('/projects/:id/units/progress', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('name units projectType').lean();
+  if (!project) return notFound(res, 'Project');
+  const units = project.units || [];
+  const [unitName, unitNamePlural] = unitNames(project);
+  if (!units.length) return res.json({ success: true, data: { unitName, unitNamePlural, units: [], columns: [], summary: { units: 0, complete: 0, started: 0, progress: 0 } } });
+
+  const [contracts, crs] = await Promise.all([
+    SubletContract.find({ project: project._id, status: { $ne: 'Cancelled' } })
+      .select('contractNumber contractType contractor units slabs totalAmount status').populate('contractor', 'name').sort({ createdAt: 1 }).lean(),
+    CheckRequest.find({ project: project._id, status: { $ne: 'Cancelled' } })
+      .select('checkRequestNumber claimType subletContract slab units status verifiedTotal claimedTotal contractor').lean()
+  ]);
+
+  const allIds = units.map((u) => String(u._id));
+  const coveredBy = (list) => (list?.length ? list.map((u) => String(u.unit)) : allIds);
+  const row = new Map(units.map((u) => [String(u._id), {
+    _id: u._id, name: u.name, plotNumber: u.plotNumber || '', value: 0, done: 0, boqVerified: 0, cells: {}
+  }]));
+
+  const columns = [];
+  const contractById = new Map();
+  contracts.forEach((c) => {
+    const covered = coveredBy(c.units).filter((id) => row.has(id));
+    contractById.set(String(c._id), { contract: c, covered });
+    if (!covered.length) return;
+    const share = (Number(c.totalAmount) || 0) / covered.length;
+    covered.forEach((id) => { row.get(id).value += share; });
+    if (c.contractType !== 'Slab') return;
+    (c.slabs || []).forEach((sl) => {
+      const key = `${c._id}:${sl._id}`;
+      columns.push({
+        key, contract: c._id, contractNumber: c.contractNumber, contractor: c.contractor?.name || '',
+        slab: sl.name, percentage: sl.percentage
+      });
+      covered.forEach((id) => { row.get(id).cells[key] = { status: 'Not claimed' }; });
+    });
+  });
+
+  crs.forEach((cr) => {
+    if (cr.claimType === 'Slab') {
+      const hit = contractById.get(String(cr.subletContract));
+      if (!hit) return;
+      const key = `${cr.subletContract}:${cr.slab?.slabId}`;
+      const slab = (hit.contract.slabs || []).find((sl) => String(sl._id) === String(cr.slab?.slabId));
+      const perUnit = (Number(slab?.amount) || 0) / (hit.covered.length || 1);
+      coveredBy(cr.units).filter((id) => hit.covered.includes(id)).forEach((id) => {
+        const r = row.get(id);
+        r.cells[key] = { status: cr.status, checkRequestNumber: cr.checkRequestNumber };
+        if (DONE_CR.includes(cr.status)) r.done += perUnit;
+      });
+    } else if (DONE_CR.includes(cr.status) && cr.units?.length) {
+      const share = (Number(cr.verifiedTotal) || 0) / cr.units.length;
+      cr.units.forEach((u) => {
+        const r = row.get(String(u.unit));
+        if (r) { r.done += share; r.boqVerified += share; }
+      });
+    }
+  });
+
+  const out = [...row.values()].map((r) => ({
+    ...r,
+    value: round2(r.value),
+    done: round2(r.done),
+    boqVerified: round2(r.boqVerified),
+    progress: r.value > 0 ? Math.min(100, Math.round((r.done / r.value) * 100)) : 0
+  }));
+  const totalValue = out.reduce((s, r) => s + r.value, 0);
+  res.json({
+    success: true,
+    data: {
+      unitName,
+      unitNamePlural,
+      units: out,
+      columns,
+      summary: {
+        units: out.length,
+        complete: out.filter((r) => r.value > 0 && r.progress >= 100).length,
+        started: out.filter((r) => r.done > 0).length,
+        progress: totalValue > 0 ? Math.min(100, Math.round((out.reduce((s, r) => s + r.done, 0) / totalValue) * 100)) : 0
+      }
+    }
+  });
+}));
+
+// PUT /api/project-management/projects/:id/units/:unitId
+router.put('/projects/:id/units/:unitId', asyncHandler(async (req, res) => {
+  const project = await loadSubForUnits(req, res);
+  if (!project) return;
+  const unit = project.units.id(req.params.unitId);
+  if (!unit) return notFound(res, unitNames(project)[0]);
+
+  const next = cleanUnit({ ...unit.toObject(), ...req.body });
+  if (!next.name) return badRequest(res, 'Name is required');
+  const clash = project.units.find((u) => String(u._id) !== String(unit._id) && unitNameKey(u.name) === unitNameKey(next.name));
+  if (clash) return badRequest(res, `"${next.name}" is already in this Sub Project`);
+
+  unit.set(next);
+  project.updatedBy = req.user?._id;
+  await project.save();
+  await SubletContract.updateMany(
+    { project: project._id, 'units.unit': unit._id },
+    { $set: { 'units.$[u].name': unit.name } },
+    { arrayFilters: [{ 'u.unit': unit._id }] }
+  );
+  res.json({ success: true, message: 'Updated', data: project.units });
+}));
+
+// DELETE /api/project-management/projects/:id/units/:unitId
+router.delete('/projects/:id/units/:unitId', asyncHandler(async (req, res) => {
+  const project = await loadSubForUnits(req, res);
+  if (!project) return;
+  const unit = project.units.id(req.params.unitId);
+  if (!unit) return notFound(res, unitNames(project)[0]);
+
+  const usedBy = await SubletContract.findOne({ project: project._id, 'units.unit': unit._id, status: { $ne: 'Cancelled' } })
+    .select('contractNumber').lean();
+  if (usedBy) return badRequest(res, `${unit.name} is covered by sublet contract ${usedBy.contractNumber} — remove it from that contract first`);
+
+  unit.deleteOne();
+  project.updatedBy = req.user?._id;
+  await project.save();
+  res.json({ success: true, message: 'Removed', data: project.units });
+}));
+
+router.put('/projects/:id/milestones/:milestoneId',asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
   const project = await ConstructionProject.findById(req.params.id);
@@ -3287,6 +3522,40 @@ const resolveAdvanceRecovery = async (projectId, contractorId, gross, given, exc
   return { amount };
 };
 
+/**
+ * Property (barter) share of a contractor's IPCs: the linked contract's share, or — for BOQ claims,
+ * which aren't tied to one contract — the share of the contractor's contracts on this Sub Project.
+ */
+const ipcPropertyPercent = async (projectId, contractorId, subletContractId = null) => {
+  if (subletContractId) {
+    const c = await SubletContract.findById(subletContractId).select('propertyPercent').lean();
+    return { percent: Number(c?.propertyPercent) || 0 };
+  }
+  const contracts = await SubletContract.find({ project: projectId, contractor: contractorId, status: { $ne: 'Cancelled' } })
+    .select('propertyPercent').lean();
+  const shares = [...new Set(contracts.map((c) => Number(c.propertyPercent) || 0))];
+  if (shares.length > 1) {
+    return { error: `This subcontractor's contracts here have different property shares (${shares.join('%, ')}%) — the IPC can't tell which applies` };
+  }
+  return { percent: shares[0] || 0 };
+};
+
+/**
+ * Barter / Mixed: part of an IPC is settled in property — (gross − retention) × share — and only the
+ * rest is cash. Advances are always cash; their recovery and WHT come out of the cash part.
+ */
+const barterSplit = ({ kind = 'Work', gross, retentionAmount = 0, advanceRecoveryAmount = 0, whtAmount = 0 }, percent) => {
+  const pct = kind === 'Advance' ? 0 : Math.max(0, Math.min(100, Number(percent) || 0));
+  const base = round2(gross - retentionAmount - advanceRecoveryAmount - whtAmount);
+  if (!pct) return { propertyPercent: 0, propertySettlementAmount: 0, netPayableAmount: Math.max(0, base) };
+  const property = round2(((gross - (kind === 'Work' ? retentionAmount : 0)) * pct) / 100);
+  const cash = round2(base - property);
+  if (cash < -0.01) {
+    return { error: `Advance recovery and WHT (${round2(advanceRecoveryAmount + whtAmount)}) are more than the cash part of this IPC (${round2(gross - retentionAmount - property)}) — ${pct}% is settled in property` };
+  }
+  return { propertyPercent: pct, propertySettlementAmount: property, netPayableAmount: Math.max(0, cash) };
+};
+
 /** Retention / WHT / advance → net payable, or { error } when they don't fit the gross. */
 const computeIpcDeductions = (gross, { retentionPercentage = 0, whtPercentage = 0, advanceRecoveryAmount = 0 }) => {
   const retentionP = Number(retentionPercentage) || 0;
@@ -3318,25 +3587,30 @@ const computeIpcDeductions = (gross, { retentionPercentage = 0, whtPercentage = 
 const clientBillableLines = async (projectId) => {
   const slabCrs = await CheckRequest.find({
     project: projectId, claimType: 'Slab', status: { $in: ['Verified', 'Billed'] }, $or: [{ clientInvoice: null }, { clientInvoice: { $exists: false } }]
-  }).populate('contractor', 'name').populate('subletContract', 'contractNumber clientValue totalAmount')
-    .select('checkRequestNumber contractor slab verifiedTotal subletContract').lean();
+  }).populate('contractor', 'name').populate('subletContract', 'contractNumber clientValue totalAmount units')
+    .select('checkRequestNumber contractor slab verifiedTotal subletContract units').lean();
+  // A claim for some of a contract's villas bills the client that share of the stage
+  const unitShare = (cr) => {
+    const all = cr.subletContract?.units?.length || 0;
+    return all && cr.units?.length ? cr.units.length / all : 1;
+  };
   const slabLines = slabCrs.map((cr) => ({
     kind: 'slab',
     checkRequest: String(cr._id),
     checkRequestNumber: cr.checkRequestNumber,
     contractor: cr.contractor?.name,
     crItem: `slab:${cr._id}`,
-    title: `Slab: ${cr.slab?.name} (${cr.slab?.percentage}%)${cr.subletContract?.contractNumber ? ` — ${cr.subletContract.contractNumber}` : ''}`,
+    title: `Slab: ${cr.slab?.name} (${cr.slab?.percentage}%)${cr.units?.length ? ` · ${cr.units.map((u) => u.name).join(', ')}` : ''}${cr.subletContract?.contractNumber ? ` — ${cr.subletContract.contractNumber}` : ''}`,
     unit: 'stage',
     remaining: 1,
     costAmount: round2(cr.verifiedTotal),
     suggestedClientAmount: cr.subletContract?.clientValue
-      ? round2((Number(cr.subletContract.clientValue) * (Number(cr.slab?.percentage) || 0)) / 100)
+      ? round2(((Number(cr.subletContract.clientValue) * (Number(cr.slab?.percentage) || 0)) / 100) * unitShare(cr))
       : 0
   }));
 
   const crs = await CheckRequest.find({ project: projectId, claimType: { $ne: 'Slab' }, status: { $in: ['Verified', 'Billed'] } })
-    .populate('contractor', 'name').select('checkRequestNumber title contractor items verifiedAt').sort({ verifiedAt: 1 }).lean();
+    .populate('contractor', 'name').select('checkRequestNumber title contractor items verifiedAt units').sort({ verifiedAt: 1 }).lean();
   const boqIds = [...new Set(crs.flatMap((c) => c.items.map((i) => String(i.boqItem))))];
   const boqs = await BOQItem.find({ _id: { $in: boqIds } }).select('estimatedUnitPrice title description unit').lean();
   const boqById = new Map(boqs.map((b) => [String(b._id), b]));
@@ -3352,7 +3626,7 @@ const clientBillableLines = async (projectId) => {
       contractor: cr.contractor?.name,
       crItem: String(i._id),
       boqItem: String(i.boqItem),
-      title: i.title || boq?.title || boq?.description,
+      title: `${i.title || boq?.title || boq?.description}${cr.units?.length ? ` · ${cr.units.map((u) => u.name).join(', ')}` : ''}`,
       unit: i.unit || boq?.unit,
       remaining,
       clientRate,
@@ -3578,7 +3852,17 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     return badRequest(res, `Deductions (${retentionAmount + whtAmount + advRec}) exceed the gross bill (${finalGross})`);
   }
 
-  const netPayableAmount = Math.max(0, Math.round((finalGross - retentionAmount - advRec - whtAmount) * 100) / 100);
+  let netPayableAmount = Math.max(0, Math.round((finalGross - retentionAmount - advRec - whtAmount) * 100) / 100);
+  // Barter / Mixed contracts: part of the work is settled in property, the rest is cash
+  let barter = { propertyPercent: 0, propertySettlementAmount: 0 };
+  if (linkedCheckRequest && computedGross) {
+    const share = await ipcPropertyPercent(req.params.id, linkedCheckRequest.contractor, linkedCheckRequest.subletContract);
+    if (share.error) return badRequest(res, share.error);
+    const split = barterSplit({ gross: finalGross, retentionAmount, advanceRecoveryAmount: advRec, whtAmount }, share.percent);
+    if (split.error) return badRequest(res, split.error);
+    barter = split;
+    netPayableAmount = split.netPayableAmount;
+  }
   const finalInvoiceAmt = computedGross ? netPayableAmount : Number(invoiceAmount);
 
   // Client invoices bill the client — they never carry a subcontractor
@@ -3598,6 +3882,8 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     whtPercentage: whtP,
     whtAmount,
     netPayableAmount,
+    propertyPercent: barter.propertyPercent,
+    propertySettlementAmount: barter.propertySettlementAmount,
     milestoneId: milestoneId || null,
     milestoneName: milestoneName || '',
     boqItemId: boqItemId || null,
@@ -3610,7 +3896,7 @@ router.post('/projects/:id/invoices', asyncHandler(async (req, res) => {
     invoiceAmount: finalInvoiceAmt,
     description: description || (invoiceType === 'Subcontractor_IPC'
       ? `IPC #${ipcNumber} from ${linkedCheckRequest.checkRequestNumber}${slabClaim
-        ? ` — Slab: ${linkedCheckRequest.slab?.name} (${linkedCheckRequest.slab?.percentage}%)`
+        ? ` — Slab: ${linkedCheckRequest.slab?.name} (${linkedCheckRequest.slab?.percentage}%)${linkedCheckRequest.units?.length ? ` · ${linkedCheckRequest.units.map((u) => u.name).join(', ')}` : ''}`
         : ''}`
       : ''),
     issueDate: issueDate ? new Date(issueDate) : new Date(),
@@ -3994,7 +4280,8 @@ const checkRetentionRelease = async (projectId, contractorId, amount, excludeInv
 };
 
 /** Shared create for the non-work IPC kinds (no check request, no deductions) */
-const createNonWorkIpc = async (req, { kind, contractor, amount, subletContract = null, recoveryPercent = 0 }) => {
+const createNonWorkIpc = async (req, { kind, contractor, amount, subletContract = null, recoveryPercent = 0, propertyPercent = 0 }) => {
+  const split = barterSplit({ kind, gross: amount }, propertyPercent);
   const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
   const lastIpc = await ProjectInvoice.findOne({ project: req.params.id, contractor, invoiceType: 'Subcontractor_IPC' })
     .sort({ ipcNumber: -1 }).select('ipcNumber').lean();
@@ -4010,8 +4297,10 @@ const createNonWorkIpc = async (req, { kind, contractor, amount, subletContract 
     advanceRecoveryPercent: kind === 'Advance' ? recoveryPercent : 0,
     items: [],
     grossAmount: amount,
-    netPayableAmount: amount,
-    invoiceAmount: amount,
+    netPayableAmount: split.netPayableAmount,
+    propertyPercent: split.propertyPercent,
+    propertySettlementAmount: split.propertySettlementAmount,
+    invoiceAmount: split.netPayableAmount,
     description: req.body.description || `${kind} — IPC #${ipcNumber}`,
     issueDate: req.body.issueDate ? new Date(req.body.issueDate) : new Date(),
     dueDate: req.body.dueDate ? new Date(req.body.dueDate) : undefined,
@@ -4065,7 +4354,10 @@ router.post('/projects/:id/retention-releases', asyncHandler(async (req, res) =>
   const amount = round2(req.body.amount);
   const check = await checkRetentionRelease(req.params.id, req.body.contractor, amount);
   if (check.error) return badRequest(res, check.error);
-  const inv = await createNonWorkIpc(req, { kind: 'Retention Release', contractor: req.body.contractor, amount });
+  // Retention released on a barter contract is settled in the same cash / property share
+  const share = await ipcPropertyPercent(req.params.id, req.body.contractor);
+  if (share.error) return badRequest(res, share.error);
+  const inv = await createNonWorkIpc(req, { kind: 'Retention Release', contractor: req.body.contractor, amount, propertyPercent: share.percent });
   await syncProjectInvoiceTotals(req.params.id);
   return ipcDone(res.status(201), inv, 'Retention release IPC created — submit it for approval');
 }));
@@ -4186,11 +4478,13 @@ router.post('/projects/:id/invoices/:invoiceId/revise', asyncHandler(async (req,
     whtPercentage: req.body.whtPercentage ?? inv.whtPercentage,
     advanceRecoveryAmount: recovery.amount
   });
-  if (ded.error) {
+  const split = ded.error ? ded : barterSplit({ gross, ...ded }, inv.propertyPercent);
+  if (split.error) {
     await CheckRequest.updateOne({ _id: cr._id }, { $set: { items: snapshot.items, status: snapshot.status, linkedInvoice: snapshot.linkedInvoice } });
     await applyBoqCounters(inv.items, 1);
-    return badRequest(res, ded.error);
+    return badRequest(res, split.error);
   }
+  Object.assign(ded, split);
 
   const before = `gross ${inv.grossAmount}, net ${inv.netPayableAmount}`;
   inv.items = lines.map(({ _crItemId, ...rest }) => rest);
@@ -4407,9 +4701,11 @@ const resolveCheckRequestContractor = async (projectId, rawContractor, { keepId 
 
 /**
  * Slab-wise claim: one payment stage (slab) of the contractor's Active slab contract.
- * A slab can be claimed by only one live check request (cancelled ones free it up).
+ * On a contract covering villas / units the stage is claimed for some of them and priced at that
+ * share; each villa's stage can be claimed by one live check request (cancelled ones free it up).
+ * Without units the whole stage is claimed once.
  */
-const resolveSlabClaim = async (projectId, contractorId, rawContractId, rawSlabId, excludeCrId = null) => {
+const resolveSlabClaim = async (projectId, contractorId, rawContractId, rawSlabId, excludeCrId = null, rawUnits = [], project = null) => {
   if (!rawContractId || !isValidId(rawContractId)) return { error: 'Select the slab-wise contract' };
   if (!rawSlabId || !isValidId(rawSlabId)) return { error: 'Select the slab (stage) being claimed' };
 
@@ -4422,17 +4718,46 @@ const resolveSlabClaim = async (projectId, contractorId, rawContractId, rawSlabI
   const slab = (contract.slabs || []).find((sl) => String(sl._id) === String(rawSlabId));
   if (!slab) return { error: 'That slab is not part of the selected contract' };
 
-  const duplicate = await CheckRequest.findOne({
+  const others = await CheckRequest.find({
     subletContract: contract._id,
     'slab.slabId': slab._id,
     status: { $ne: 'Cancelled' },
     ...(excludeCrId ? { _id: { $ne: excludeCrId } } : {})
-  }).select('checkRequestNumber').lean();
-  if (duplicate) return { error: `Slab "${slab.name}" is already claimed in ${duplicate.checkRequestNumber}` };
+  }).select('checkRequestNumber units slab.amount').lean();
 
-  const amount = Number(slab.amount) || Math.round(((Number(contract.totalAmount) || 0) * (Number(slab.percentage) || 0)) / 100);
+  const stageAmount = Number(slab.amount) || Math.round(((Number(contract.totalAmount) || 0) * (Number(slab.percentage) || 0)) / 100);
+  const contractUnits = contract.units || [];
+  let units = [];
+  let amount = stageAmount;
+
+  if (!contractUnits.length) {
+    if (others.length) return { error: `Slab "${slab.name}" is already claimed in ${others[0].checkRequestNumber}` };
+  } else {
+    const ids = [...new Set((Array.isArray(rawUnits) ? rawUnits : []).map((u) => String(u?.unit || u?._id || u)))];
+    if (!ids.length) return { error: `Select the ${unitLabel(project, true)} this stage is claimed for` };
+    const byId = new Map(contractUnits.map((u) => [String(u.unit), u]));
+    if (ids.some((id) => !byId.has(id))) return { error: `Some selected ${unitLabel(project, true)} are not on this contract` };
+    units = contractUnits.filter((u) => ids.includes(String(u.unit))).map((u) => ({ unit: u.unit, name: u.name }));
+
+    // A claim without units (made before units existed) covers the whole contract
+    const claimedBy = new Map();
+    others.forEach((o) => (o.units?.length ? o.units : contractUnits).forEach((u) => claimedBy.set(String(u.unit), o.checkRequestNumber)));
+    const clash = units.filter((u) => claimedBy.has(String(u.unit)));
+    if (clash.length) {
+      return { error: `Slab "${slab.name}" is already claimed for ${clash.map((u) => `${u.name} (${claimedBy.get(String(u.unit))})`).join(', ')}` };
+    }
+
+    // Share of the stage; the claim that completes the stage takes what is left so the claims add up to it exactly
+    if (claimedBy.size + units.length >= contractUnits.length) {
+      amount = Math.max(0, stageAmount - others.reduce((s, o) => s + (Number(o.slab?.amount) || 0), 0));
+    } else {
+      amount = Math.round((stageAmount * units.length) / contractUnits.length);
+    }
+  }
+
   return {
     contract,
+    units,
     slab: {
       slabId: slab._id,
       name: slab.name,
@@ -4441,6 +4766,32 @@ const resolveSlabClaim = async (projectId, contractorId, rawContractId, rawSlabI
       activities: (slab.activities || []).map((a) => ({ activity: a.activity, name: a.name }))
     }
   };
+};
+
+/**
+ * Villas / units a BOQ claim's work was done on. They must be on one of the contractor's Active
+ * BOQ-wise contracts here; required when all those contracts cover named villas. A contract
+ * without villas (whole Sub Project) leaves the choice optional among the Sub Project's villas.
+ */
+const resolveBoqClaimUnits = async (project, contractorId, rawUnits) => {
+  const listed = project.units || [];
+  if (!listed.length) return { units: [] };
+  const contracts = await SubletContract.find({
+    project: project._id, contractor: contractorId, status: 'Active', contractType: { $ne: 'Slab' }
+  }).select('units').lean();
+  const wholeSub = !contracts.length || contracts.some((c) => !c.units?.length);
+  const allowed = new Set(wholeSub
+    ? listed.map((u) => String(u._id))
+    : contracts.flatMap((c) => c.units.map((u) => String(u.unit))));
+
+  const ids = [...new Set((Array.isArray(rawUnits) ? rawUnits : []).map((u) => String(u?.unit || u?._id || u)))];
+  if (!ids.length) {
+    return wholeSub ? { units: [] } : { error: `Select the ${unitLabel(project, true)} this work was done on` };
+  }
+  if (ids.some((id) => !allowed.has(id))) {
+    return { error: `Some selected ${unitLabel(project, true)} are not on this subcontractor's BOQ-wise contract` };
+  }
+  return { units: listed.filter((u) => ids.includes(String(u._id))).map((u) => ({ unit: u._id, name: u.name })) };
 };
 
 /** Verified value still to be billed as an IPC (slab claims bill once, in full). */
@@ -4610,12 +4961,13 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
 
   let cr;
   if (claimType === 'Slab') {
-    const claim = await resolveSlabClaim(req.params.id, contractorId, req.body.subletContract, req.body.slabId);
+    const claim = await resolveSlabClaim(req.params.id, contractorId, req.body.subletContract, req.body.slabId, null, req.body.units, project);
     if (claim.error) return badRequest(res, claim.error);
     cr = await CheckRequest.create({
       ...base,
       subletContract: claim.contract._id,
       slab: claim.slab,
+      units: claim.units,
       activity: null,
       items: [],
       claimedTotal: claim.slab.amount
@@ -4624,11 +4976,14 @@ router.post('/projects/:id/check-requests', asyncHandler(async (req, res) => {
     const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity);
     if (activityError) return badRequest(res, activityError);
 
+    const { units, error: unitsError } = await resolveBoqClaimUnits(project, contractorId, req.body.units);
+    if (unitsError) return badRequest(res, unitsError);
+
     const { items: builtItems, claimedTotal } = await buildCheckRequestItems(req.params.id, project.parentProject, items);
     if (!builtItems.length) {
       return badRequest(res, 'Add at least one BOQ line with claimed quantity');
     }
-    cr = await CheckRequest.create({ ...base, activity: activityId, items: builtItems, claimedTotal });
+    cr = await CheckRequest.create({ ...base, activity: activityId, units, items: builtItems, claimedTotal });
   }
 
   const populated = await populateCheckRequest(CheckRequest.findById(cr._id)).lean();
@@ -4645,7 +5000,7 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
     return badRequest(res, 'Only Draft or Rejected Check Requests can be edited');
   }
 
-  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType units').lean();
   const { title, contractor, task, items, notes } = req.body;
   const claimType = req.body.claimType
     ? (req.body.claimType === 'Slab' ? 'Slab' : 'BOQ')
@@ -4684,12 +5039,15 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
       cr.contractor,
       req.body.subletContract !== undefined ? req.body.subletContract : cr.subletContract,
       req.body.slabId !== undefined ? req.body.slabId : cr.slab?.slabId,
-      cr._id
+      cr._id,
+      req.body.units !== undefined ? req.body.units : cr.units,
+      project
     );
     if (claim.error) return badRequest(res, claim.error);
     cr.claimType = 'Slab';
     cr.subletContract = claim.contract._id;
     cr.slab = claim.slab;
+    cr.units = claim.units;
     cr.activity = null;
     cr.items = [];
     cr.claimedTotal = claim.slab.amount;
@@ -4698,9 +5056,15 @@ router.put('/projects/:id/check-requests/:crId', asyncHandler(async (req, res) =
     if (cr.claimType === 'Slab' && !Array.isArray(items)) {
       return badRequest(res, 'Add the BOQ lines being claimed');
     }
+    const wasSlab = cr.claimType === 'Slab';
     cr.claimType = 'BOQ';
     cr.subletContract = null;
     cr.slab = undefined;
+    if (req.body.units !== undefined || wasSlab) {
+      const { units, error: unitsError } = await resolveBoqClaimUnits(project, cr.contractor, req.body.units);
+      if (unitsError) return badRequest(res, unitsError);
+      cr.units = units;
+    }
     if (req.body.activity !== undefined) {
       const { activityId, error: activityError } = await resolveCheckRequestActivity(project, req.body.activity, { keepId: cr.activity });
       if (activityError) return badRequest(res, activityError);
@@ -5209,10 +5573,66 @@ const buildSubletItems = async (projectId, masterProjectId, rawItems = [], exclu
 };
 
 /**
- * Slab-wise contract stages: % of contract value, each covering master WBS activities of the
- * sub project's type. An activity can sit in only one open slab-wise contract per sub project.
+ * Villas / units a contract covers. A Sub Project with units listed needs at least one picked;
+ * one without units covers the whole Sub Project (empty list).
  */
-const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabSchedule }, excludeContractId = null) => {
+const resolveContractUnits = (project, rawUnits) => {
+  const listed = project.units || [];
+  if (!listed.length) return { units: [] };
+  const ids = [...new Set((Array.isArray(rawUnits) ? rawUnits : []).map((u) => String(u?.unit || u?._id || u)))];
+  if (!ids.length) return { error: `Select the ${unitLabel(project, true)} this contract covers` };
+  const byId = new Map(listed.map((u) => [String(u._id), u]));
+  const missing = ids.filter((id) => !byId.has(id));
+  if (missing.length) return { error: `Some selected ${unitLabel(project, true)} are not in this Sub Project` };
+  // Keep the Sub Project's own order (Villa 1, 2, 3 …)
+  return { units: listed.filter((u) => ids.includes(String(u._id))).map((u) => ({ unit: u._id, name: u.name })) };
+};
+
+/** What a Sub Project's units are called for its type (same names as the screens) */
+const UNIT_NAMES = {
+  VILLAS: ['Villa', 'Villas'],
+  COMMERCIAL: ['Floor / Unit', 'Floors / Units'],
+  'INFRASTRUCTURE DEVELOPMENT': ['Section', 'Sections']
+};
+const unitNames = (project) => UNIT_NAMES[normalizeProjectType(project?.projectType)] || ['Unit', 'Units'];
+const unitLabel = (project, plural = false) => unitNames(project)[plural ? 1 : 0].toLowerCase();
+
+/** Two contracts share work only if their units overlap — an empty list means the whole Sub Project */
+const unitsOverlap = (a = [], b = []) => {
+  if (!a.length || !b.length) return true;
+  const ids = new Set(a.map((u) => String(u.unit)));
+  return b.some((u) => ids.has(String(u.unit)));
+};
+
+/**
+ * Slab-wise contract value: with units it is rate per unit × units (client value likewise),
+ * otherwise the lump sums entered.
+ */
+const slabContractValues = (body, units, fallback = {}) => {
+  if (!units.length) {
+    return {
+      contractValue: Number(body.contractValue ?? fallback.contractValue) || 0,
+      clientValue: Math.max(0, Number(body.clientValue ?? fallback.clientValue) || 0),
+      ratePerUnit: 0,
+      clientRatePerUnit: 0
+    };
+  }
+  const ratePerUnit = Math.max(0, Number(body.ratePerUnit ?? fallback.ratePerUnit) || 0);
+  const clientRatePerUnit = Math.max(0, Number(body.clientRatePerUnit ?? fallback.clientRatePerUnit) || 0);
+  return {
+    contractValue: ratePerUnit * units.length,
+    clientValue: clientRatePerUnit * units.length,
+    ratePerUnit,
+    clientRatePerUnit
+  };
+};
+
+/**
+ * Slab-wise contract stages: % of contract value, each covering master WBS activities of the
+ * sub project's type. An activity can sit in only one open slab-wise contract per villa / unit
+ * (per Sub Project when it has no units).
+ */
+const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabSchedule, units = [] }, excludeContractId = null) => {
   const fail = (message) => {
     const err = new Error(message);
     err.statusCode = 400;
@@ -5223,7 +5643,7 @@ const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabS
   if (!projectType) fail('Set the Sub Project\'s Project Type (Infra / Commercial / Villas) before creating a slab-wise contract');
 
   const value = Number(contractValue) || 0;
-  if (value <= 0) fail('Enter the contract value for a slab-wise contract');
+  if (value <= 0) fail(units.length ? `Enter the rate per ${unitLabel(project)}` : 'Enter the contract value for a slab-wise contract');
 
   let scheduleId = null;
   if (slabSchedule) {
@@ -5251,11 +5671,15 @@ const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabS
       'slabs.activities.activity': { $in: activityIds }
     };
     if (excludeContractId) clashFilter._id = { $ne: excludeContractId };
-    const clash = await SubletContract.findOne(clashFilter).select('contractNumber slabs.activities').lean();
+    const candidates = await SubletContract.find(clashFilter).select('contractNumber slabs.activities units').lean();
+    const clash = candidates.find((c) => unitsOverlap(c.units, units));
     if (clash) {
       const taken = new Set(clash.slabs.flatMap((s) => s.activities.map((a) => String(a.activity))));
       const names = activityIds.filter((id) => taken.has(id)).map((id) => masterById.get(id)?.name).filter(Boolean);
-      fail(`Already covered by sublet contract ${clash.contractNumber}: ${names.join(', ')}`);
+      const shared = units.length && clash.units?.length
+        ? ` for ${clash.units.filter((u) => units.some((x) => String(x.unit) === String(u.unit))).map((u) => u.name).join(', ')}`
+        : '';
+      fail(`Already covered by sublet contract ${clash.contractNumber}${shared}: ${names.join(', ')}`);
     }
   }
 
@@ -5381,15 +5805,25 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
   if (project.contractBasis && contractType !== project.contractBasis) {
     return badRequest(res, `${project.name} is ${contractBasisLabel(project.contractBasis)} — only ${contractBasisLabel(project.contractBasis)} contracts can be made here`);
   }
-  const clientValue = contractType === 'Slab' ? Math.max(0, Number(req.body.clientValue) || 0) : 0;
   if (!title || !String(title).trim()) return badRequest(res, 'Title is required');
   if (!contractor || !isValidId(contractor)) return badRequest(res, 'Subcontractor is required');
+
+  const { units, error: unitsError } = resolveContractUnits(project, req.body.units);
+  if (unitsError) return badRequest(res, unitsError);
+  const { propertyPercent, error: payError } = resolvePropertyPercent(project, req.body.propertyPercent);
+  if (payError) return badRequest(res, payError);
+  let clientValue = 0;
 
   let typeFields;
   try {
     if (contractType === 'Slab') {
-      const built = await buildSubletSlabs(project, req.body);
-      typeFields = { items: [], slabs: built.slabs, slabSchedule: built.slabSchedule, totalAmount: built.totalAmount };
+      const values = slabContractValues(req.body, units);
+      clientValue = values.clientValue;
+      const built = await buildSubletSlabs(project, { ...req.body, contractValue: values.contractValue, units });
+      typeFields = {
+        items: [], slabs: built.slabs, slabSchedule: built.slabSchedule, totalAmount: built.totalAmount,
+        ratePerUnit: values.ratePerUnit, clientRatePerUnit: values.clientRatePerUnit
+      };
     } else {
       const built = await buildSubletItems(req.params.id, masterProjectId, items);
       if (!built.items.length) {
@@ -5415,6 +5849,8 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     title: String(title).trim(),
     contractor,
     contractType,
+    units,
+    propertyPercent,
     ...typeFields,
     clientValue,
     notes: notes || '',
@@ -5425,7 +5861,9 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     updatedBy: req.user?._id
   });
 
-  if (activate) {
+  // Barter / Mixed contracts wait in Draft until the properties given in exchange are added
+  const needsProperties = barterShortfall(contract) > 0;
+  if (activate && !needsProperties) {
     contract.status = 'Active';
     contract.activatedAt = new Date();
     contract.activatedBy = req.user?._id;
@@ -5436,7 +5874,9 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
   const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
   res.status(201).json({
     success: true,
-    message: activate ? 'Sublet contract created and activated' : 'Sublet contract created',
+    message: needsProperties
+      ? 'Sublet contract created as Draft — add the properties given in exchange, then activate it'
+      : activate ? 'Sublet contract created and activated' : 'Sublet contract created',
     data: populated
   });
 }));
@@ -5451,7 +5891,7 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
     return badRequest(res, 'Only Draft sublet contracts can be edited');
   }
 
-  const project = await ConstructionProject.findById(req.params.id).select('name parentProject projectType contractBasis').lean();
+  const project = await ConstructionProject.findById(req.params.id).select('name parentProject projectType contractBasis paymentMode units').lean();
   const { title, contractor, items, notes, startDate, endDate } = req.body;
   const contractType = req.body.contractType === 'Slab' || req.body.contractType === 'BOQ'
     ? req.body.contractType
@@ -5469,17 +5909,32 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
     contract.contractor = contractor;
   }
   if (notes !== undefined) contract.notes = notes || '';
-  if (req.body.clientValue !== undefined) contract.clientValue = Math.max(0, Number(req.body.clientValue) || 0);
   if (startDate !== undefined) contract.startDate = startDate ? new Date(startDate) : undefined;
   if (endDate !== undefined) contract.endDate = endDate ? new Date(endDate) : undefined;
 
+  const { propertyPercent, error: payError } = resolvePropertyPercent(project, req.body.propertyPercent, contract.propertyPercent);
+  if (payError) return badRequest(res, payError);
+  contract.propertyPercent = propertyPercent;
+
+  const unitsChanged = req.body.units !== undefined;
+  const { units, error: unitsError } = resolveContractUnits(project, unitsChanged ? req.body.units : contract.units);
+  if (unitsError) return badRequest(res, unitsError);
+  contract.units = units;
+
+  const values = slabContractValues(req.body, units, {
+    contractValue: contract.totalAmount,
+    clientValue: contract.clientValue,
+    ratePerUnit: contract.ratePerUnit,
+    clientRatePerUnit: contract.clientRatePerUnit
+  });
   const typeChanged = contractType !== (contract.contractType || 'BOQ');
   try {
-    if (contractType === 'Slab' && (typeChanged || req.body.slabs !== undefined || req.body.contractValue !== undefined)) {
+    if (contractType === 'Slab' && (typeChanged || unitsChanged || req.body.slabs !== undefined || req.body.contractValue !== undefined || req.body.ratePerUnit !== undefined)) {
       const built = await buildSubletSlabs(
         project,
         {
-          contractValue: req.body.contractValue ?? contract.totalAmount,
+          units,
+          contractValue: values.contractValue,
           slabs: req.body.slabs ?? contract.slabs.map((s) => ({
             name: s.name,
             percentage: s.percentage,
@@ -5494,6 +5949,11 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
       contract.slabSchedule = built.slabSchedule;
       contract.totalAmount = built.totalAmount;
       contract.items = [];
+    }
+    if (contractType === 'Slab') {
+      contract.clientValue = values.clientValue;
+      contract.ratePerUnit = values.ratePerUnit;
+      contract.clientRatePerUnit = values.clientRatePerUnit;
     } else if (contractType === 'BOQ' && (typeChanged || Array.isArray(items))) {
       const built = await buildSubletItems(
         req.params.id,
@@ -5508,6 +5968,11 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
       contract.totalAmount = built.totalAmount;
       contract.slabs = [];
       contract.slabSchedule = null;
+    }
+    if (contractType === 'BOQ') {
+      contract.clientValue = 0;
+      contract.ratePerUnit = 0;
+      contract.clientRatePerUnit = 0;
     }
   } catch (err) {
     if (err.statusCode === 400) return badRequest(res, err.message);
@@ -5526,6 +5991,237 @@ router.put('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res)
   res.json({ success: true, message: 'Sublet contract updated', data: populated });
 }));
 
+// ─── Barter properties on a contract ───────────────────────────────────────────
+
+/** Property share not yet covered by properties still on the deal (0 when covered or not barter) */
+const barterShortfall = (contract) => {
+  if (!(Number(contract.propertyAmount) > 0)) return 0;
+  const covered = (contract.barterProperties || [])
+    .filter((p) => p.status !== 'Released')
+    .reduce((s, p) => s + (Number(p.agreedValue) || 0), 0);
+  return Math.max(0, Math.round(Number(contract.propertyAmount) - covered));
+};
+
+const plotKey = (p) => {
+  const plot = String(p.plotNumber || '').trim().toLowerCase();
+  return plot ? `${String(p.sector || '').trim().toLowerCase()}|${plot}` : '';
+};
+
+/** Every property promised on a live contract: property id / sector+plot → contract number */
+const reservedProperties = async (excludeContractId = null) => {
+  const filter = { status: { $ne: 'Cancelled' }, 'barterProperties.0': { $exists: true } };
+  if (excludeContractId) filter._id = { $ne: excludeContractId };
+  const contracts = await SubletContract.find(filter).select('contractNumber barterProperties').lean();
+  const byId = new Map();
+  const byPlot = new Map();
+  contracts.forEach((c) => (c.barterProperties || []).filter((p) => p.status !== 'Released').forEach((p) => {
+    if (p.property) byId.set(String(p.property), c.contractNumber);
+    const key = plotKey(p);
+    if (key) byPlot.set(key, c.contractNumber);
+  }));
+  return { byId, byPlot };
+};
+
+const propertyLabel = (tp) => [tp.propertyType, tp.propertyName, tp.plotNumber && `Plot ${tp.plotNumber}`, tp.unit && `Unit ${tp.unit}`, tp.block && `Block ${tp.block}`, tp.sector]
+  .filter(Boolean).join(' · ');
+
+// GET /api/project-management/barter-properties/search?q= — Taj Residencia properties to give in exchange
+router.get('/barter-properties/search', asyncHandler(async (req, res) => {
+  const q = String(req.query.q || '').trim();
+  const filter = {};
+  if (q) {
+    const rx = new RegExp(escapeRegex(q), 'i');
+    filter.$or = ['propertyName', 'plotNumber', 'sector', 'block', 'unit', 'propertyType', 'street'].map((k) => ({ [k]: rx }));
+  }
+  const [props, reserved] = await Promise.all([
+    TajProperty.find(filter)
+      .select('propertyType propertyName plotNumber sector block unit street areaValue areaUnit ownerName status')
+      .sort({ sector: 1, plotNumber: 1 }).limit(25).lean(),
+    reservedProperties(req.query.contract && isValidId(req.query.contract) ? req.query.contract : null)
+  ]);
+  res.json({
+    success: true,
+    data: props.map((tp) => ({
+      _id: tp._id,
+      label: propertyLabel(tp),
+      propertyType: tp.propertyType || '',
+      plotNumber: tp.plotNumber || '',
+      sector: tp.sector || '',
+      area: tp.areaValue ? `${tp.areaValue} ${tp.areaUnit || ''}`.trim() : '',
+      ownerName: tp.ownerName || '',
+      reservedBy: reserved.byId.get(String(tp._id)) || reserved.byPlot.get(plotKey(tp)) || ''
+    }))
+  });
+}));
+
+/**
+ * PUT /api/project-management/projects/:id/sublet-contracts/:scId/barter-properties
+ * body { properties: [{ _id?, property?, label, propertyType, plotNumber, sector, area, agreedValue, notes, status? }] }
+ * Sets the properties given in exchange. Handed-over ones stay as they are; a property can be
+ * promised on one live contract only.
+ */
+router.put('/projects/:id/sublet-contracts/:scId/barter-properties', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (['Completed', 'Cancelled'].includes(contract.status)) return badRequest(res, `A ${contract.status.toLowerCase()} contract can't be changed`);
+  if (!(Number(contract.propertyPercent) > 0)) return badRequest(res, 'This contract is paid in money (cash / bank) — it has no property share');
+
+  const incoming = Array.isArray(req.body.properties) ? req.body.properties : [];
+  const handed = (contract.barterProperties || []).filter((p) => p.status === 'Handed over');
+  const handedIds = new Set(handed.map((p) => String(p._id)));
+  const reserved = await reservedProperties(contract._id);
+
+  const rows = [];
+  const seen = new Set();
+  for (const raw of incoming) {
+    if (raw._id && handedIds.has(String(raw._id))) continue; // handed over: kept unchanged below
+    const agreedValue = Math.max(0, Number(raw.agreedValue) || 0);
+    let row = {
+      label: String(raw.label || '').trim(),
+      propertyType: String(raw.propertyType || '').trim(),
+      plotNumber: String(raw.plotNumber || '').trim(),
+      sector: String(raw.sector || '').trim(),
+      area: String(raw.area || '').trim(),
+      agreedValue,
+      status: raw.status === 'Released' ? 'Released' : 'Reserved',
+      notes: String(raw.notes || '').trim(),
+      property: null
+    };
+    if (raw.property) {
+      if (!isValidId(raw.property)) return badRequest(res, 'Invalid property');
+      const tp = await TajProperty.findById(raw.property).select('propertyType propertyName plotNumber sector block unit areaValue areaUnit').lean();
+      if (!tp) return badRequest(res, 'Property not found in Taj Residencia records');
+      row = {
+        ...row,
+        property: tp._id,
+        label: row.label || propertyLabel(tp),
+        propertyType: tp.propertyType || row.propertyType,
+        plotNumber: tp.plotNumber || row.plotNumber,
+        sector: tp.sector || row.sector,
+        area: row.area || (tp.areaValue ? `${tp.areaValue} ${tp.areaUnit || ''}`.trim() : '')
+      };
+    }
+    if (!row.label && !row.plotNumber) return badRequest(res, 'Describe each property — pick it from Taj Residencia or enter its plot / unit');
+    if (!row.label) row.label = [[row.propertyType || 'Plot', row.plotNumber].filter(Boolean).join(' '), row.sector].filter(Boolean).join(' · ');
+    if (row.status !== 'Released' && agreedValue <= 0) return badRequest(res, `Enter the agreed value of ${row.label}`);
+
+    if (row.status !== 'Released') {
+      const key = row.property ? `id:${row.property}` : `plot:${plotKey(row)}`;
+      if (seen.has(key) && key !== 'plot:') return badRequest(res, `${row.label} is listed twice`);
+      seen.add(key);
+      const takenBy = (row.property && reserved.byId.get(String(row.property))) || (plotKey(row) && reserved.byPlot.get(plotKey(row)));
+      if (takenBy) return badRequest(res, `${row.label} is already promised on sublet contract ${takenBy}`);
+    }
+    if (raw._id && isValidId(raw._id)) row._id = raw._id;
+    rows.push(row);
+  }
+
+  contract.barterProperties = [...handed, ...rows];
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  const gap = barterShortfall(populated);
+  res.json({
+    success: true,
+    message: gap > 0 ? `Saved — ${fmtPkr(gap)} of the property share is not covered yet` : 'Properties saved',
+    data: populated
+  });
+}));
+
+/**
+ * Barter position per contractor on a Sub Project: property share agreed, property earned on
+ * CEO-approved IPCs (and in approval), properties reserved / handed over, and cash certified / paid.
+ * owedInProperty = earned − handed over — what can still be handed over.
+ */
+const barterBalances = async (projectId, contractorId = null) => {
+  const pid = new mongoose.Types.ObjectId(String(projectId));
+  const cFilter = { project: pid, status: { $ne: 'Cancelled' }, propertyPercent: { $gt: 0 } };
+  if (contractorId) cFilter.contractor = new mongoose.Types.ObjectId(String(contractorId));
+  const contracts = await SubletContract.find(cFilter)
+    .select('contractNumber contractor title totalAmount propertyPercent propertyAmount cashAmount barterProperties status')
+    .populate('contractor', 'name').lean();
+  const contractorIds = [...new Set(contracts.map((c) => String(c.contractor?._id || c.contractor)))];
+  const ipcs = contractorIds.length ? await ProjectInvoice.find({
+    project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' },
+    contractor: { $in: contractorIds.map((id) => new mongoose.Types.ObjectId(id)) }
+  }).select('contractor approvalStatus propertySettlementAmount netPayableAmount paidAmount').lean() : [];
+
+  return contractorIds.map((id) => {
+    const mine = contracts.filter((c) => String(c.contractor?._id || c.contractor) === id);
+    const myIpcs = ipcs.filter((i) => String(i.contractor) === id);
+    const approved = myIpcs.filter((i) => i.approvalStatus === 'Approved');
+    const sum = (list, f) => round2(list.reduce((t, r) => t + (Number(r[f]) || 0), 0));
+    const props = mine.flatMap((c) => (c.barterProperties || []).map((p) => ({ ...p, contractNumber: c.contractNumber })));
+    const byStatus = (st) => round2(props.filter((p) => p.status === st).reduce((t, p) => t + (Number(p.agreedValue) || 0), 0));
+    const earned = sum(approved, 'propertySettlementAmount');
+    const handedOver = byStatus('Handed over');
+    const propertyShare = round2(mine.reduce((t, c) => t + (Number(c.propertyAmount) || 0), 0));
+    return {
+      contractor: mine[0].contractor,
+      contracts: mine.map((c) => ({ _id: c._id, contractNumber: c.contractNumber, title: c.title, status: c.status, totalAmount: c.totalAmount, propertyPercent: c.propertyPercent })),
+      propertyShare,
+      cashShare: round2(mine.reduce((t, c) => t + (Number(c.cashAmount) || 0), 0)),
+      propertyEarned: earned,
+      propertyInApproval: sum(myIpcs.filter((i) => i.approvalStatus !== 'Approved'), 'propertySettlementAmount'),
+      propertyToEarn: Math.max(0, round2(propertyShare - earned)),
+      reserved: byStatus('Reserved'),
+      handedOver,
+      owedInProperty: round2(earned - handedOver),
+      cashCertified: sum(approved, 'netPayableAmount'),
+      cashPaid: sum(myIpcs, 'paidAmount'),
+      properties: props.filter((p) => p.status !== 'Released').map((p) => ({
+        _id: p._id, label: p.label, area: p.area, agreedValue: p.agreedValue, status: p.status,
+        handedOverAt: p.handedOverAt, handoverReference: p.handoverReference, contractNumber: p.contractNumber
+      }))
+    };
+  });
+};
+
+// GET /api/project-management/projects/:id/barter-balances
+router.get('/projects/:id/barter-balances', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  res.json({ success: true, data: await barterBalances(req.params.id) });
+}));
+
+/**
+ * POST /api/project-management/projects/:id/sublet-contracts/:scId/barter-properties/:propId/handover
+ * body { date?, notes? } — hand a reserved property over to the contractor. Only up to the property
+ * value they have earned on CEO-approved IPCs; posts DR Barter Payable / CR Property Sales - Barter.
+ */
+router.post('/projects/:id/sublet-contracts/:scId/barter-properties/:propId/handover', asyncHandler(async (req, res) => {
+  if (![req.params.id, req.params.scId, req.params.propId].every(isValidId)) return badRequest(res, 'Invalid ID');
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status !== 'Active' && contract.status !== 'Completed') return badRequest(res, 'Properties are handed over on an Active contract');
+  const property = contract.barterProperties.id(req.params.propId);
+  if (!property) return notFound(res, 'Property');
+  if (property.status !== 'Reserved') return badRequest(res, `${property.label} is ${property.status.toLowerCase()} — only reserved properties can be handed over`);
+
+  const [bal] = await barterBalances(req.params.id, contract.contractor);
+  const value = Number(property.agreedValue) || 0;
+  if (!bal || value > bal.owedInProperty + 0.5) {
+    return badRequest(res, `${property.label} is worth ${fmtPkr(value)}, but the contractor has only ${fmtPkr(Math.max(0, bal?.owedInProperty || 0))} of property value earned and not yet handed over (earned ${fmtPkr(bal?.propertyEarned || 0)} on approved IPCs, handed over ${fmtPkr(bal?.handedOver || 0)})`);
+  }
+
+  const date = req.body.date ? new Date(req.body.date) : new Date();
+  const posting = await postBarterHandover({ contract, property, actorId: req.user?._id, date });
+  if (posting.error) return badRequest(res, posting.error);
+
+  property.status = 'Handed over';
+  property.handedOverAt = date;
+  property.handedOverBy = req.user?._id;
+  property.handoverJournal = posting.journalId;
+  property.handoverReference = posting.reference;
+  if (req.body.notes) property.notes = String(req.body.notes).trim();
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  res.json({ success: true, message: `${property.label} handed over — posted to Finance as ${posting.reference}`, data: populated });
+}));
+
 // POST activate — sync BOQ contractor assignment
 router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
@@ -5538,6 +6234,10 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
   const isSlab = contract.contractType === 'Slab';
   if (isSlab && !contract.slabs?.length) return badRequest(res, 'Contract has no slabs');
   if (!isSlab && !contract.items?.length) return badRequest(res, 'Contract has no items');
+  const barterGap = barterShortfall(contract);
+  if (barterGap > 0) {
+    return badRequest(res, `Add the properties given in exchange first — they cover ${fmtPkr(contract.propertyAmount - barterGap)} of the ${fmtPkr(contract.propertyAmount)} property share`);
+  }
 
   // Re-validate against other contracts (BOQ quantities / slab activities)
   const project = await ConstructionProject.findById(req.params.id).select('parentProject projectType').lean();
@@ -5547,6 +6247,7 @@ router.post('/projects/:id/sublet-contracts/:scId/activate', asyncHandler(async 
         project,
         {
           contractValue: contract.totalAmount,
+          units: contract.units || [],
           slabs: contract.slabs.map((s) => ({
             name: s.name,
             percentage: s.percentage,

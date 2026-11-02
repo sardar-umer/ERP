@@ -420,7 +420,8 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
   const spentPct = pct(p.spent, base);
   const figures = isSlab
     ? [['Contract value', p.contracted], ['Billed', p.spent], ['Paid', p.paid]]
-    : [['Budget', p.budgetStatus === 'Approved' ? p.budget : (p.budgetStatus === 'Submitted' ? 'With CEO' : 'Not set')], ['Spent', p.spent], ['Paid', p.paid]];
+    // The approved budget stays in force while a revision is prepared or in approval
+    : [['Budget', p.budget > 0 ? p.budget : (p.budgetStatus === 'Submitted' ? 'With CEO' : 'Not set')], ['Spent', p.spent], ['Paid', p.paid]];
   const scope = isSlab
     ? (p.slabs?.total ? `${p.slabs.billed} of ${plural(p.slabs.total, 'slab')} billed · ${p.slabs.verified} verified` : 'No slabs contracted yet')
     : p.contractBasis === 'BOQ'

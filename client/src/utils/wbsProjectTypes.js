@@ -19,6 +19,20 @@ export const normalizeWbsProjectType = (value) => {
   return LEGACY_PROJECT_TYPE_MAP[value] || null;
 };
 
+/**
+ * What the units built inside a Sub Project are called for its type: villas, floors / units of a
+ * commercial building, or sections (road stretches, streets) of infrastructure work.
+ */
+const UNIT_NAMES = {
+  VILLAS: ['Villa', 'Villas'],
+  COMMERCIAL: ['Floor / Unit', 'Floors / Units'],
+  'INFRASTRUCTURE DEVELOPMENT': ['Section', 'Sections']
+};
+export const unitWord = (projectType, plural = false) => {
+  const names = UNIT_NAMES[normalizeWbsProjectType(projectType)] || ['Unit', 'Units'];
+  return plural ? names[1] : names[0];
+};
+
 export const wbsProjectTypeLabel = (value) =>
   WBS_PROJECT_TYPES.find((t) => t.value === value)?.label || value || '—';
 

@@ -49,6 +49,7 @@ import {
   createCheckRequest,
   getBOQ,
   getCheckRequests,
+  getProjectUnits,
   getSubletContracts,
   getWbsActivities,
   rejectCheckRequest,
@@ -56,7 +57,7 @@ import {
   updateCheckRequest,
   getInspectionReports
 } from '../../services/projectManagementService';
-import { normalizeWbsProjectType, wbsProjectTypeLabel } from '../../utils/wbsProjectTypes';
+import { normalizeWbsProjectType, wbsProjectTypeLabel, unitWord } from '../../utils/wbsProjectTypes';
 import { printCheckRequest } from '../../utils/checkRequestPrint';
 import InspectionReportDialog from '../../components/ProjectManagement/InspectionReportDialog';
 import { CheckRequestAttachmentsField, CheckRequestAttachmentsList } from '../../components/ProjectManagement/CheckRequestAttachments';
@@ -83,6 +84,7 @@ const emptyForm = {
   claimType: 'BOQ', // 'Slab' = claim one stage of a slab-wise contract; 'BOQ' = claim BOQ quantities
   subletContract: '',
   slabId: '',
+  units: [], // villas the claim is for (slab claims) or the work was done on (BOQ claims)
   activity: '',
   task: '',
   notes: '',
@@ -96,6 +98,9 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
   const [boqItems, setBoqItems] = useState([]);
   const [activities, setActivities] = useState([]);
   const wbsType = normalizeWbsProjectType(project?.projectType);
+  // What this Sub Project's units are called: villas, floors / units or sections
+  const unitOne = unitWord(project?.projectType).toLowerCase();
+  const unitMany = unitWord(project?.projectType, true).toLowerCase();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
@@ -118,19 +123,23 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
   const [contracts, setContracts] = useState(null);
   const activeContracts = contracts ? contracts.length : null;
 
+  const [projectUnits, setProjectUnits] = useState(project?.units || []);
+
   const load = useCallback(async () => {
     try {
       setLoading(true);
       setError('');
-      const [crRes, boqRes, actRes, scRes, irRes] = await Promise.all([
+      const [crRes, boqRes, actRes, scRes, irRes, unitsRes] = await Promise.all([
         getCheckRequests(projectId, statusFilter ? { status: statusFilter } : {}),
         getBOQ(projectId, { limit: 500 }),
         wbsType
           ? getWbsActivities({ projectType: wbsType }).catch(() => ({ data: { data: {} } }))
           : { data: { data: {} } },
         getSubletContracts(projectId, { status: 'Active' }).catch(() => null),
-        getInspectionReports(projectId).catch(() => ({ data: { data: [] } }))
+        getInspectionReports(projectId).catch(() => ({ data: { data: [] } })),
+        getProjectUnits(projectId).catch(() => null)
       ]);
+      if (unitsRes) setProjectUnits(unitsRes.data?.data || []);
       setReports(irRes.data?.data || []);
       setContracts(scRes ? (scRes.data?.data?.contracts || []) : null);
       setRows(crRes.data?.data?.checkRequests || []);
@@ -178,8 +187,17 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       }
     });
     const types = [...new Set(mine.map((c) => (c.contractType === 'Slab' ? 'Slab' : 'BOQ')))];
-    return { types, slabOptions, boqRates: boqRates.size ? boqRates : null };
-  }, [contracts]);
+    // Villas a BOQ claim can name: those on the contractor's BOQ-wise contracts, or every villa of
+    // the Sub Project when one of those contracts covers the whole of it (then naming them is optional)
+    const boqContracts = mine.filter((c) => c.contractType !== 'Slab');
+    const subUnits = projectUnits.map((u) => ({ unit: String(u._id), name: u.name }));
+    const wholeSub = !boqContracts.length || boqContracts.some((c) => !c.units?.length);
+    const unitIds = new Set(boqContracts.flatMap((c) => (c.units || []).map((u) => String(u.unit))));
+    const boqUnits = subUnits.length
+      ? (wholeSub ? subUnits : subUnits.filter((u) => unitIds.has(u.unit)))
+      : [];
+    return { types, slabOptions, boqRates: boqRates.size ? boqRates : null, boqUnits, boqUnitsRequired: boqUnits.length > 0 && !wholeSub };
+  }, [contracts, projectUnits]);
 
   const scope = useMemo(() => scopeFor(form.contractor), [scopeFor, form.contractor]);
 
@@ -197,11 +215,20 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
   const typesFor = (contractorId) =>
     [...new Set((contractsByContractor.get(String(contractorId)) || []).map(contractTypeLabel))].join(' + ');
 
+  /**
+   * Live claims per slab: which villas each claimed it for ('*' = the whole stage, e.g. a contract
+   * without villas) and the amounts already claimed.
+   */
   const claimedSlabs = useMemo(() => {
     const map = new Map();
     rows.forEach((r) => {
       if (r.claimType === 'Slab' && r.slab?.slabId && r.status !== 'Cancelled' && String(r._id) !== String(editing?._id)) {
-        map.set(String(r.slab.slabId), r.checkRequestNumber);
+        const key = String(r.slab.slabId);
+        if (!map.has(key)) map.set(key, { byUnit: new Map(), amount: 0 });
+        const hit = map.get(key);
+        hit.amount += Number(r.slab.amount) || 0;
+        if (r.units?.length) r.units.forEach((u) => hit.byUnit.set(String(u.unit), r.checkRequestNumber));
+        else hit.byUnit.set('*', r.checkRequestNumber);
       }
     });
     return map;
@@ -209,6 +236,32 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
   const selectedSlab = scope.slabOptions.find((o) => String(o.slab._id) === String(form.slabId)) || null;
   const slabAmount = (o) =>
     Number(o.slab.amount) || Math.round(((Number(o.contract.totalAmount) || 0) * (Number(o.slab.percentage) || 0)) / 100);
+  const contractUnitsOf = (o) => o?.contract?.units || [];
+  /** Who already claimed this villa's stage (crNumber), or '' */
+  const unitClaimedIn = (o, unitId) => {
+    const hit = claimedSlabs.get(String(o.slab._id));
+    return hit ? hit.byUnit.get('*') || hit.byUnit.get(String(unitId)) || '' : '';
+  };
+  /** Text for a slab in the picker: whole stage taken, or how many villas are left */
+  const slabTakenText = (o) => {
+    const hit = claimedSlabs.get(String(o.slab._id));
+    if (!hit) return '';
+    if (hit.byUnit.has('*')) return `Claimed in ${hit.byUnit.get('*')}`;
+    const all = contractUnitsOf(o);
+    const free = all.filter((u) => !hit.byUnit.has(String(u.unit))).length;
+    return free ? '' : `Claimed for all ${all.length}`;
+  };
+  /** What this claim is worth: the stage, or the selected villas' share (the last share takes the remainder, as on the server) */
+  const claimAmount = (o, unitIds = form.units) => {
+    const all = contractUnitsOf(o);
+    const stage = slabAmount(o);
+    if (!all.length) return stage;
+    const hit = claimedSlabs.get(String(o.slab._id));
+    const claimedCount = hit ? hit.byUnit.size : 0;
+    if (!unitIds.length) return 0;
+    if (claimedCount + unitIds.length >= all.length) return Math.max(0, stage - (hit?.amount || 0));
+    return Math.round((stage * unitIds.length) / all.length);
+  };
 
   // Contract(s) the form is claiming against — shown at the top of the dialog and on the print
   const formContracts = (() => {
@@ -243,10 +296,10 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       claimType: form.claimType,
       activityLabel: activity ? `${activity.group ? `${activity.group} › ` : ''}${activity.name}` : '',
       slab: form.claimType === 'Slab' && selectedSlab
-        ? { ...selectedSlab.slab, amount: slabAmount(selectedSlab) }
+        ? { ...selectedSlab.slab, amount: claimAmount(selectedSlab) }
         : null,
       lines,
-      claimedTotal: form.claimType === 'Slab' && selectedSlab ? slabAmount(selectedSlab) : claimedTotal,
+      claimedTotal: form.claimType === 'Slab' && selectedSlab ? claimAmount(selectedSlab) : claimedTotal,
       notes: form.notes
     });
   };
@@ -387,6 +440,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       claimType: defaultClaimType(contractorId),
       subletContract: '',
       slabId: '',
+      units: [],
       lines: buildLines(contractorId, f.lines)
     }));
   };
@@ -440,6 +494,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       claimType: row.claimType === 'Slab' ? 'Slab' : 'BOQ',
       subletContract: String(row.subletContract?._id || row.subletContract || ''),
       slabId: String(row.slab?.slabId || ''),
+      units: (row.units || []).map((u) => String(u.unit)),
       activity: row.activity?._id || row.activity || '',
       task: row.task?._id || row.task || '',
       notes: row.notes || '',
@@ -471,6 +526,10 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
         setError('Select the slab (stage) being claimed');
         return;
       }
+      if (contractUnitsOf(selectedSlab).length && !form.units.length) {
+        setError(`Select the ${unitMany} this stage is claimed for`);
+        return;
+      }
       try {
         setSaving(true);
         setError('');
@@ -480,6 +539,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
           claimType: 'Slab',
           subletContract: selectedSlab.contract._id,
           slabId: selectedSlab.slab._id,
+          units: form.units,
           notes: form.notes,
           attachments: form.attachments
         };
@@ -514,6 +574,10 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
       setError('Select at least one BOQ line with claimed quantity');
       return;
     }
+    if (scope.boqUnitsRequired && !form.units.length) {
+      setError(`Select the ${unitMany} this work was done on`);
+      return;
+    }
 
     try {
       setSaving(true);
@@ -526,6 +590,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
         task: form.task || null,
         notes: form.notes,
         attachments: form.attachments,
+        units: form.units,
         items
       };
       if (editing) {
@@ -712,6 +777,12 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                     {row.claimType === 'Slab' && (
                       <Typography variant="caption" color="text.secondary" display="block">
                         Slab wise: {row.slab?.name} ({row.slab?.percentage}%)
+                        {row.units?.length ? ` · ${row.units.map((u) => u.name).join(', ')}` : ''}
+                      </Typography>
+                    )}
+                    {row.claimType !== 'Slab' && row.units?.length > 0 && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        {row.units.map((u) => u.name).join(', ')}
                       </Typography>
                     )}
                     {(row.activity?.name || row.task?.title) && (
@@ -872,25 +943,27 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                     value={selectedSlab ? String(form.slabId) : ''}
                     onChange={(e) => {
                       const hit = scope.slabOptions.find((o) => String(o.slab._id) === String(e.target.value));
-                      setForm((f) => ({ ...f, slabId: e.target.value, subletContract: hit ? String(hit.contract._id) : '' }));
+                      const free = hit ? contractUnitsOf(hit).filter((u) => !unitClaimedIn(hit, u.unit)).map((u) => String(u.unit)) : [];
+                      setForm((f) => ({ ...f, slabId: e.target.value, subletContract: hit ? String(hit.contract._id) : '', units: free }));
                     }}
                   >
                     {!scope.slabOptions.length && <MenuItem value="" disabled>No slabs on this subcontractor's contract</MenuItem>}
                     {scope.slabOptions.map((o) => {
-                      const takenBy = claimedSlabs.get(String(o.slab._id));
+                      const takenBy = slabTakenText(o);
+                      const unitCount = contractUnitsOf(o).length;
                       return (
                         <MenuItem key={o.slab._id} value={String(o.slab._id)} disabled={Boolean(takenBy)}>
                           <Stack direction="row" justifyContent="space-between" gap={1} sx={{ width: '100%' }}>
-                            <span>{o.slab.name} — {o.slab.percentage}%</span>
+                            <span>{o.slab.name} — {o.slab.percentage}%{unitCount ? ` · ${unitCount} ${unitCount === 1 ? unitOne : unitMany}` : ''}</span>
                             <Typography variant="caption" color="text.secondary">
-                              {takenBy ? `Claimed in ${takenBy}` : fmt(slabAmount(o))}
+                              {takenBy || fmt(slabAmount(o))}
                             </Typography>
                           </Stack>
                         </MenuItem>
                       );
                     })}
                   </Select>
-                  <FormHelperText>{form.contractor ? 'Each stage is claimed once, for its full amount' : 'Select a subcontractor first'}</FormHelperText>
+                  <FormHelperText>{form.contractor ? `Each stage is claimed once (once per ${unitOne} when the contract covers ${unitMany})` : 'Select a subcontractor first'}</FormHelperText>
                 </FormControl>
               ) : (
                 <Autocomplete
@@ -922,7 +995,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                   size="small"
                   color="primary"
                   value={form.claimType}
-                  onChange={(_, v) => v && setForm((f) => ({ ...f, claimType: v, slabId: '', subletContract: '' }))}
+                  onChange={(_, v) => v && setForm((f) => ({ ...f, claimType: v, slabId: '', subletContract: '', units: [] }))}
                 >
                   <ToggleButton value="Slab" sx={{ textTransform: 'none' }}>Claim a slab (slab-wise contract)</ToggleButton>
                   <ToggleButton value="BOQ" sx={{ textTransform: 'none' }}>Claim BOQ quantities (BOQ-wise contract)</ToggleButton>
@@ -937,9 +1010,51 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                       {selectedSlab.slab.name} · {selectedSlab.slab.percentage}% of {selectedSlab.contract.contractNumber}
                     </Typography>
                     <Typography variant="subtitle1" fontWeight={700} color="primary.main">
-                      {fmt(slabAmount(selectedSlab))}
+                      {fmt(claimAmount(selectedSlab))}
                     </Typography>
                   </Stack>
+                  {contractUnitsOf(selectedSlab).length > 0 && (() => {
+                    const all = contractUnitsOf(selectedSlab);
+                    const free = all.filter((u) => !unitClaimedIn(selectedSlab, u.unit));
+                    return (
+                      <Box sx={{ mt: 1.5 }}>
+                        <Stack direction="row" justifyContent="space-between" alignItems="center" mb={0.5}>
+                          <Typography variant="caption" color="text.secondary" fontWeight={700}>
+                            {unitWord(project?.projectType, true)} this stage is claimed for ({form.units.length} of {all.length})
+                          </Typography>
+                          <Stack direction="row" gap={1}>
+                            <Button size="small" onClick={() => setForm((f) => ({ ...f, units: free.map((u) => String(u.unit)) }))}>All unclaimed</Button>
+                            <Button size="small" color="inherit" onClick={() => setForm((f) => ({ ...f, units: [] }))}>Clear</Button>
+                          </Stack>
+                        </Stack>
+                        <Autocomplete
+                          multiple
+                          disableCloseOnSelect
+                          size="small"
+                          options={all}
+                          getOptionLabel={(u) => u.name}
+                          getOptionDisabled={(u) => Boolean(unitClaimedIn(selectedSlab, u.unit))}
+                          renderOption={(props, u) => (
+                            <li {...props} key={String(u.unit)}>
+                              <Stack direction="row" justifyContent="space-between" sx={{ width: '100%' }}>
+                                <span>{u.name}</span>
+                                {unitClaimedIn(selectedSlab, u.unit) && (
+                                  <Typography variant="caption" color="text.secondary">Claimed in {unitClaimedIn(selectedSlab, u.unit)}</Typography>
+                                )}
+                              </Stack>
+                            </li>
+                          )}
+                          value={all.filter((u) => form.units.includes(String(u.unit)))}
+                          onChange={(_, picked) => setForm((f) => ({ ...f, units: picked.map((u) => String(u.unit)) }))}
+                          isOptionEqualToValue={(o, v) => String(o.unit) === String(v.unit)}
+                          renderInput={(params) => <TextField {...params} required placeholder={form.units.length ? '' : `Pick ${unitMany}`} />}
+                        />
+                        <Typography variant="caption" color="text.secondary" display="block" mt={0.5}>
+                          Stage {fmt(slabAmount(selectedSlab))} for {all.length} {all.length === 1 ? unitOne : unitMany} · {fmt(slabAmount(selectedSlab) / all.length)} per {unitOne}
+                        </Typography>
+                      </Box>
+                    );
+                  })()}
                   <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.75, mb: 0.5 }}>
                     Work covered by this stage
                   </Typography>
@@ -951,6 +1066,29 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                       : <Typography variant="body2" color="text.secondary">No WBS activities linked to this slab</Typography>}
                   </Stack>
                 </Paper>
+              </Grid>
+            )}
+            {form.claimType !== 'Slab' && form.contractor && scope.boqUnits.length > 0 && (
+              <Grid item xs={12}>
+                <Autocomplete
+                  multiple
+                  disableCloseOnSelect
+                  options={scope.boqUnits}
+                  getOptionLabel={(u) => u.name}
+                  value={scope.boqUnits.filter((u) => form.units.includes(u.unit))}
+                  onChange={(_, picked) => setForm((f) => ({ ...f, units: picked.map((u) => u.unit) }))}
+                  isOptionEqualToValue={(o, v) => o.unit === v.unit}
+                  renderInput={(params) => (
+                    <TextField
+                      {...params}
+                      required={scope.boqUnitsRequired}
+                      label={`${unitWord(project?.projectType, true)} this work was done on`}
+                      helperText={scope.boqUnitsRequired
+                        ? `Only ${unitMany} on this subcontractor's BOQ-wise contract`
+                        : `Optional — tag the ${unitMany} so progress shows per ${unitOne}`}
+                    />
+                  )}
+                />
               </Grid>
             )}
             <Grid item xs={12}>
@@ -1170,6 +1308,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                   {field(isSlab ? 'Slab (stage)' : 'WBS Activity', isSlab
                     ? `${viewRow.slab?.name || '—'} · ${viewRow.slab?.percentage ?? 0}%`
                     : activityText(viewRow.activity) || viewRow.task?.title)}
+                  {viewRow.units?.length > 0 && field(`${unitWord(project?.projectType, true)} (${viewRow.units.length})`, viewRow.units.map((u) => u.name).join(', '), 12)}
                   {field('Created', when(viewRow.createdAt, personText(viewRow.createdBy)))}
                   {field('Submitted', when(viewRow.submittedAt, personText(viewRow.submittedBy)))}
                   {field('Verified', when(viewRow.verifiedAt, viewRow.verifiedBy))}

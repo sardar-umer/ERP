@@ -37,6 +37,18 @@ const documentSchema = new mongoose.Schema({
   uploadedAt: { type: Date, default: Date.now }
 }, { _id: true });
 
+/**
+ * One unit built inside a Sub Project — a villa (or a floor / shop). Sublet contracts cover
+ * one or more units, and claims are made per unit.
+ */
+const unitSchema = new mongoose.Schema({
+  name: { type: String, required: true, trim: true },
+  plotNumber: { type: String, trim: true, default: '' },
+  street: { type: String, trim: true, default: '' },
+  side: { type: String, enum: ['', 'Left', 'Right'], default: '' },
+  notes: { type: String, trim: true, default: '' }
+}, { _id: true });
+
 /** One person in a Main Project budget's approval chain, signed with their profile signature when they act */
 const budgetApproverSchema = new mongoose.Schema({
   role: { type: String, trim: true, default: '' }, // shown on the document, e.g. "Chief Operating Officer"
@@ -124,6 +136,12 @@ const constructionProjectSchema = new mongoose.Schema({
    * every sublet contract under it must be of this kind. null = legacy project, either kind allowed.
    */
   contractBasis: { type: String, enum: ['BOQ', 'Slab', null], default: null },
+  /**
+   * How subcontractors are paid: Cash, Barter (in property — plots / villas — instead of cash) or
+   * Mixed (part cash, part property). Chosen on the Main Project and copied to its Sub Projects.
+   * Independent of contractBasis, which is how the work is measured.
+   */
+  paymentMode: { type: String, enum: ['Cash', 'Barter', 'Mixed'], default: 'Cash' },
 
   // Project Hierarchy
   isMasterProject: {
@@ -148,7 +166,15 @@ const constructionProjectSchema = new mongoose.Schema({
   // Sub Project location within the sector
   street: { type: String, trim: true, default: '' },
   side: { type: String, enum: ['', 'Left', 'Right'], default: '' },
+  /**
+   * Sub Project size, in the unit its type uses: plot size in Marla / Kanal for villas, covered
+   * area for commercial, length or area for infrastructure.
+   */
+  sizeValue: { type: Number, default: null, min: 0 },
+  sizeUnit: { type: String, trim: true, default: '' },
   address: { type: String, trim: true },
+  /** Sub Project only: the villas / units being built in it */
+  units: { type: [unitSchema], default: [] },
 
   // Client
   clientName: { type: String, trim: true },

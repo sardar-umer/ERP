@@ -27,6 +27,8 @@ const { createAndEmitNotification } = require('../services/realtimeNotificationS
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
 const RETENTION_ACCOUNT_NAME = 'Retention Payable - Subcontractors';
+const BARTER_ACCOUNT_NAME = 'Barter Payable - Property to Subcontractors';
+const BARTER_SALES_ACCOUNT_NAME = 'Property Sales - Barter';
 
 /** Company-scoped account lookup by name pattern (falls back to a known number whose name still matches). */
 const findAccount = async (companyId, { type, name, number }) => {
@@ -51,6 +53,49 @@ const resolveRetentionAccount = async (companyId) => {
       type: 'Liability',
       category: 'Current Liability',
       description: 'Retention money held from subcontractor IPCs until the defects liability period ends',
+      isActive: true
+    });
+  }
+  return null;
+};
+
+/**
+ * Work earned by barter contractors but settled in property, not cash: owed until the property is
+ * handed over. Created on the company's chart the first time a barter IPC posts.
+ */
+const resolveBarterAccount = async (companyId) => {
+  const existing = await findAccount(companyId, { type: 'Liability', name: /barter/i });
+  if (existing) return existing;
+  for (let n = 2180; n < 2200; n += 1) {
+    const taken = await Account.exists({ companyId, accountNumber: String(n) });
+    if (taken) continue;
+    return Account.create({
+      companyId,
+      accountNumber: String(n),
+      name: BARTER_ACCOUNT_NAME,
+      type: 'Liability',
+      category: 'Current Liability',
+      description: 'Subcontractor work to be settled by handing over property (barter) instead of cash',
+      isActive: true
+    });
+  }
+  return null;
+};
+
+/** Property handed over in barter is a sale at its agreed value; create the revenue account the first time */
+const resolveBarterSalesAccount = async (companyId) => {
+  const existing = await findAccount(companyId, { type: 'Revenue', name: /barter/i });
+  if (existing) return existing;
+  for (let n = 4180; n < 4200; n += 1) {
+    const taken = await Account.exists({ companyId, accountNumber: String(n) });
+    if (taken) continue;
+    return Account.create({
+      companyId,
+      accountNumber: String(n),
+      name: BARTER_SALES_ACCOUNT_NAME,
+      type: 'Revenue',
+      category: 'Operating Revenue',
+      description: 'Plots / villas / units handed over to subcontractors in exchange for work (barter), at the agreed value',
       isActive: true
     });
   }
@@ -138,8 +183,8 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   if (!invoice) return { posted: false, error: 'IPC not found' };
   if (invoice.invoiceType !== 'Subcontractor_IPC') return { posted: false, skipped: true, error: 'Not a subcontractor IPC' };
   if (invoice.approvalStatus !== 'Approved') return { posted: false, skipped: true, error: 'IPC is not CEO-approved yet' };
-  if (invoice.financeApBillId) {
-    return { posted: true, skipped: true, apId: String(invoice.financeApBillId), billNumber: invoice.financeBillNumber };
+  if (invoice.financeApBillId || invoice.financePostedAt) {
+    return { posted: true, skipped: true, apId: invoice.financeApBillId ? String(invoice.financeApBillId) : '', billNumber: invoice.financeBillNumber };
   }
 
   const fail = async (error) => {
@@ -163,18 +208,21 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   // Advances and retention releases pay their full amount; only Work IPCs carry deductions
   const retention = isWork ? round2(invoice.retentionAmount) : 0;
   const advance = isWork ? round2(invoice.advanceRecoveryAmount) : 0;
-  const apAmount = round2(gross - retention - advance);
-  if (gross <= 0 || apAmount < 0) return fail('IPC amounts are not valid for posting');
+  // Barter / Mixed: the property part is owed as property, not through Accounts Payable
+  const property = kind === 'Advance' ? 0 : round2(invoice.propertySettlementAmount);
+  const apAmount = round2(gross - retention - advance - property);
+  if (gross <= 0 || apAmount < -0.01) return fail('IPC amounts are not valid for posting');
 
   const A = acct(companyId);
   const findAdvanceAccount = () => findAccount(companyId, { type: 'Asset', name: /advance.*(supplier|contractor)/i });
-  const [debitAcc, ap, retentionAcc, advanceAcc] = await Promise.all([
+  const [debitAcc, ap, retentionAcc, advanceAcc, barterAcc] = await Promise.all([
     kind === 'Advance' ? findAdvanceAccount()
       : kind === 'Retention Release' ? resolveRetentionAccount(companyId)
         : resolveWipAccount(companyId),
     A.resolve(FinanceHelper.ACCOUNTS.PAYABLE),
     retention > 0 ? resolveRetentionAccount(companyId) : null,
-    advance > 0 ? findAdvanceAccount() : null
+    advance > 0 ? findAdvanceAccount() : null,
+    property > 0 ? resolveBarterAccount(companyId) : null
   ]);
   if (!debitAcc) {
     return fail(kind === 'Advance'
@@ -187,6 +235,7 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   if (!ap) return fail('No Accounts Payable (2001) account on this company\'s chart of accounts');
   if (retention > 0 && !retentionAcc) return fail('Could not find or create a Retention Payable account');
   if (advance > 0 && !advanceAcc) return fail('No "Advance to Suppliers / Contractors" asset account for the advance recovery');
+  if (property > 0 && !barterAcc) return fail('Could not find or create a Barter Payable account');
 
   let billNumber = `IPC-${invoice.invoiceNumber}`;
   if (await AccountsPayable.exists({ billNumber })) billNumber = `${billNumber}-${Date.now().toString().slice(-5)}`;
@@ -203,6 +252,7 @@ const postIpcToFinance = async (invoiceId, actorId) => {
       : kind === 'Advance'
         ? `Mobilisation advance ${gross}, recovered at ${invoice.advanceRecoveryPercent || 0}% of later IPCs.`
         : `Release of retention money held: ${gross}.`,
+    property > 0 ? `Settled in property (barter, ${invoice.propertyPercent || 0}%): ${property}; cash payable ${apAmount}.` : '',
     invoice.whtPercentage ? `Deduct WHT @ ${invoice.whtPercentage}% when paying (proposed by Project Management).` : '',
     `CEO approved ${billDate.toISOString().slice(0, 10)}.`
   ].filter(Boolean).join(' ');
@@ -210,7 +260,8 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   let apEntry = null;
   try {
     const companyDoc = await require('mongoose').model('PlacementCompany').findById(companyId).select('name').lean();
-    apEntry = await FinanceHelper.createAPFromBill({
+    // Fully settled in property: no cash bill, only the journal
+    if (apAmount > 0.01) apEntry = await FinanceHelper.createAPFromBill({
       companyId,
       company: companyDoc?.name || '',
       vendorName: contractor.name,
@@ -244,8 +295,9 @@ const postIpcToFinance = async (invoiceId, actorId) => {
         debit: gross,
         department: 'project_management'
       },
-      { account: ap._id, description: `Payable to ${contractor.name}`, credit: apAmount, department: 'project_management' }
     ];
+    if (apAmount > 0.01) lines.push({ account: ap._id, description: `Payable to ${contractor.name}`, credit: apAmount, department: 'project_management' });
+    if (property > 0) lines.push({ account: barterAcc._id, description: `Owed in property (barter) — ${contractor.name}`, credit: property, department: 'project_management' });
     if (retention > 0) lines.push({ account: retentionAcc._id, description: `Retention held — ${contractor.name}`, credit: retention, department: 'project_management' });
     if (advance > 0) lines.push({ account: advanceAcc._id, description: `Advance recovered — ${contractor.name}`, credit: advance, department: 'project_management' });
 
@@ -255,8 +307,8 @@ const postIpcToFinance = async (invoiceId, actorId) => {
       description: `Subcontractor IPC ${invoice.invoiceNumber} — ${contractor.name}`,
       department: 'project_management',
       module: 'project_management',
-      referenceId: apEntry._id,
-      referenceType: 'bill',
+      referenceId: apEntry ? apEntry._id : invoice._id,
+      referenceType: apEntry ? 'bill' : 'adjustment',
       journalCode: 'PURCH',
       voucherSeries: 'BILL',
       createdBy: actorId,
@@ -269,18 +321,25 @@ const postIpcToFinance = async (invoiceId, actorId) => {
     return fail(`Finance posting failed: ${err.message}`);
   }
 
-  invoice.financeApBillId = apEntry._id;
-  invoice.financeBillNumber = billNumber;
+  invoice.financeApBillId = apEntry ? apEntry._id : null;
+  invoice.financeBillNumber = apEntry ? billNumber : '';
   invoice.financePostedAt = new Date();
   invoice.financePostingError = '';
+  if (!apEntry) {
+    // Nothing to pay in cash — the IPC is settled once posted; the property is handed over separately
+    invoice.status = 'Paid';
+    invoice.paidDate = new Date();
+  }
   invoice.workflowHistory.push({
     fromStatus: 'Approved',
     toStatus: 'Approved',
     changedBy: actorId,
-    comments: `Posted to Finance: AP ${billNumber} — DR ${wip.name} ${gross} / CR AP ${apAmount}${retention ? ` / CR Retention ${retention}` : ''}${advance ? ` / CR Advance ${advance}` : ''}`,
+    comments: `Posted to Finance: ${apEntry ? `AP ${billNumber}` : 'journal only (settled in property)'} — DR ${wip.name} ${gross}${apEntry ? ` / CR AP ${apAmount}` : ''}${retention ? ` / CR Retention ${retention}` : ''}${advance ? ` / CR Advance ${advance}` : ''}${property ? ` / CR Barter ${property}` : ''}`,
     module: 'Finance'
   });
   await invoice.save();
+
+  if (!apEntry) return { posted: true, apId: '', billNumber: '' };
 
   try {
     await createAndEmitNotification({
@@ -300,6 +359,49 @@ const postIpcToFinance = async (invoiceId, actorId) => {
   }
 
   return { posted: true, apId: String(apEntry._id), billNumber };
+};
+
+
+/**
+ * A property handed over to a barter contractor settles what they are owed in property:
+ *   DR Barter Payable — Property to Subcontractors   agreed value
+ *   CR Property Sales — Barter                       agreed value
+ * (The property's cost leaves stock through the property / land books, not here.)
+ * Returns { posted, journalId, reference } or { error }.
+ */
+const postBarterHandover = async ({ contract, property, actorId, date = new Date() }) => {
+  const project = await ConstructionProject.findById(contract.project).select('name companyId parentProject').lean();
+  const companyId = await resolveProjectCompanyId(project);
+  if (!companyId) return { error: 'Set the Finance company on the Main Project so the handover can post' };
+  const value = round2(property.agreedValue);
+  if (!(value > 0)) return { error: 'The property has no agreed value' };
+
+  const [payable, sales] = await Promise.all([resolveBarterAccount(companyId), resolveBarterSalesAccount(companyId)]);
+  if (!payable) return { error: 'Could not find or create a Barter Payable account' };
+  if (!sales) return { error: 'Could not find or create a Property Sales - Barter account' };
+
+  const contractor = await Supplier.findById(contract.contractor).select('name').lean();
+  const reference = `BRT-${contract.contractNumber}-${String(property._id).slice(-5)}`;
+  try {
+    const entry = await FinanceHelper.createAndPostJournalEntry(withCompany({
+      date,
+      reference,
+      description: `Property handed over in barter — ${property.label} to ${contractor?.name || 'subcontractor'} (${contract.contractNumber})`,
+      department: 'project_management',
+      module: 'project_management',
+      referenceId: contract._id,
+      referenceType: 'adjustment',
+      createdBy: actorId,
+      lines: [
+        { account: payable._id, description: `Barter settled — ${contractor?.name || ''}`, debit: value, department: 'project_management' },
+        { account: sales._id, description: `${property.label} handed over at agreed value`, credit: value, department: 'project_management' }
+      ]
+    }, companyId));
+    return { posted: true, journalId: entry?._id || null, reference };
+  } catch (err) {
+    console.error('[projectIpcFinance] barter handover posting failed:', err);
+    return { error: `Finance posting failed: ${err.message}` };
+  }
 };
 
 /**
@@ -336,5 +438,8 @@ module.exports = {
   resolveProjectCompanyId,
   findMainProject,
   ipcCompanyNames,
-  RETENTION_ACCOUNT_NAME
+  postBarterHandover,
+  RETENTION_ACCOUNT_NAME,
+  BARTER_ACCOUNT_NAME,
+  BARTER_SALES_ACCOUNT_NAME
 };

@@ -149,9 +149,37 @@ export const updateSlabSchedule = (scheduleId, data) =>
 export const deleteSlabSchedule = (scheduleId) =>
   api.delete(`${BASE}/slab-schedules/${scheduleId}`);
 
+// ─── Villas / units of a Sub Project ──────────────────────────────────────────
+export const getProjectUnits = (projectId) =>
+  api.get(`${BASE}/projects/${projectId}/units`);
+
+export const getProjectUnitProgress = (projectId) =>
+  api.get(`${BASE}/projects/${projectId}/units/progress`);
+
+export const addProjectUnits = (projectId, units) =>
+  api.post(`${BASE}/projects/${projectId}/units`, { units });
+
+export const updateProjectUnit = (projectId, unitId, data) =>
+  api.put(`${BASE}/projects/${projectId}/units/${unitId}`, data);
+
+export const deleteProjectUnit = (projectId, unitId) =>
+  api.delete(`${BASE}/projects/${projectId}/units/${unitId}`);
+
 // ─── Sublet Contracts (BOQ lines → subcontractors) ────────────────────────────
 export const getSubletContracts = (projectId, params = {}) =>
   api.get(`${BASE}/projects/${projectId}/sublet-contracts`, { params });
+
+export const searchBarterProperties = (q, contract) =>
+  api.get(`${BASE}/barter-properties/search`, { params: { q, contract } });
+
+export const saveBarterProperties = (projectId, scId, properties) =>
+  api.put(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/barter-properties`, { properties });
+
+export const getBarterBalances = (projectId) =>
+  api.get(`${BASE}/projects/${projectId}/barter-balances`);
+
+export const handoverBarterProperty = (projectId, scId, propId, data = {}) =>
+  api.post(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/barter-properties/${propId}/handover`, data);
 
 export const getSubletContractById = (projectId, scId) =>
   api.get(`${BASE}/projects/${projectId}/sublet-contracts/${scId}`);

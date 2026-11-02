@@ -9454,7 +9454,7 @@ router.get('/reports/cost-center-pl',
     const mongoose = require('mongoose');
     const { costCenterId, fromDate, toDate } = req.query;
     const { jeMatch } = await financeScope(req);
-    const match = jeMatch({ status: 'posted' });
+    const match = jeMatch({ status: 'posted', ...notClosingEntry });
     if (fromDate || toDate) {
       match.date = {};
       if (fromDate) match.date.$gte = new Date(fromDate);
@@ -9524,7 +9524,7 @@ router.get('/reports/budget-vs-actual',
     if (toDate) dateMatch.$lte = new Date(toDate);
 
     const actuals = await JournalEntry.aggregate([
-      { $match: jeMatch({ status: 'posted', ...(Object.keys(dateMatch).length ? { date: dateMatch } : {}) }) },
+      { $match: jeMatch({ status: 'posted', ...notClosingEntry, ...(Object.keys(dateMatch).length ? { date: dateMatch } : {}) }) },
       { $unwind: '$lines' },
       { $match: { 'lines.costCenter': { $exists: true, $ne: null } } },
       {
@@ -9533,11 +9533,12 @@ router.get('/reports/budget-vs-actual',
         }
       },
       { $unwind: '$accDoc' },
-      { $match: { 'accDoc.type': { $in: ['expense', 'cost_of_goods_sold'] } } },
+      // Account types are stored capitalised ('Expense'); the lowercase names never matched
+      { $match: { 'accDoc.type': { $in: ['Expense', 'expense', 'cost_of_goods_sold'] } } },
       {
         $group: {
           _id: '$lines.costCenter',
-          actualExpenses: { $sum: '$lines.debit' }
+          actualExpenses: { $sum: { $subtract: ['$lines.debit', '$lines.credit'] } }
         }
       }
     ]);
@@ -9834,108 +9835,101 @@ router.post('/sales-orders/:orderId/create-invoice',
 // ═════════════════════════════════════════════════════════════════════════════
 
 // POST /api/finance/year-end-closing — transfer net income to Retained Earnings
+/** Year-end closing journals carry this reference; P&L figures leave them out so a closed year still shows its profit */
+const CLOSING_REF = /^CLOSE-/;
+const notClosingEntry = { reference: { $not: CLOSING_REF } };
+// Account types are stored capitalised; the lowercase names are kept for any legacy rows
+const REVENUE_TYPES = ['Revenue', 'revenue', 'income', 'other_income'];
+const EXPENSE_TYPES = ['Expense', 'expense', 'cost_of_goods_sold', 'operating_expense', 'other_expense', 'depreciation'];
+
+/**
+ * POST /api/finance/year-end-closing  body { year, retainedEarningsAccountId? }
+ * Closes the year: every Revenue and Expense account's balance for the year is reversed in one
+ * journal dated 31 Dec, and the net (profit or loss) goes to Retained Earnings. A year can be
+ * closed once per company.
+ */
 router.post('/year-end-closing',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
     const { year, retainedEarningsAccountId } = req.body;
-    if (!year) return res.status(400).json({ success: false, message: 'Year is required' });
+    if (!year || !/^\d{4}$/.test(String(year))) return res.status(400).json({ success: false, message: 'Year is required' });
 
-    const { companyId, jeMatch, withCo } = await financeScope(req);
+    const { companyId, jeMatch, withCo, q } = await financeScope(req);
     const A = acct(companyId);
-    const from = new Date(`${year}-01-01`);
+    const reference = `CLOSE-${year}`;
+    const from = new Date(`${year}-01-01T00:00:00.000Z`);
     const to = new Date(`${year}-12-31T23:59:59.999Z`);
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+    const already = await JournalEntry.findOne(jeMatch({ reference, status: { $in: ['posted', 'draft'] } })).select('entryNumber').lean();
+    if (already) {
+      return res.status(400).json({ success: false, message: `${year} is already closed (journal ${already.entryNumber || reference})` });
+    }
 
     const rows = await JournalEntry.aggregate([
-      { $match: jeMatch({ status: 'posted', date: { $gte: from, $lte: to } }) },
+      { $match: jeMatch({ status: 'posted', date: { $gte: from, $lte: to }, ...notClosingEntry }) },
       { $unwind: '$lines' },
       { $group: { _id: '$lines.account', totalDebit: { $sum: '$lines.debit' }, totalCredit: { $sum: '$lines.credit' } } },
       { $lookup: { from: 'accounts', localField: '_id', foreignField: '_id', as: 'acc' } },
       { $unwind: '$acc' },
-      { $match: { 'acc.type': { $in: ['revenue', 'income', 'other_income', 'expense', 'cost_of_goods_sold', 'operating_expense', 'other_expense', 'depreciation'] } } },
-      {
-        $project: {
-          accountType: '$acc.type', totalDebit: 1, totalCredit: 1,
-          balance: {
-            $cond: {
-              if: { $in: ['$acc.type', ['expense', 'cost_of_goods_sold', 'operating_expense', 'other_expense', 'depreciation']] },
-              then: { $subtract: ['$totalDebit', '$totalCredit'] },
-              else: { $subtract: ['$totalCredit', '$totalDebit'] }
-            }
-          }
-        }
-      }
+      { $match: { 'acc.type': { $in: [...REVENUE_TYPES, ...EXPENSE_TYPES] } } },
+      { $project: { name: '$acc.name', accountType: '$acc.type', totalDebit: 1, totalCredit: 1 } }
     ]);
 
-    const revenueTypes = ['revenue', 'income', 'other_income'];
-    const totalRevenue = rows.filter(r => revenueTypes.includes(r.accountType)).reduce((s, r) => s + (r.balance || 0), 0);
-    const totalExpenses = rows.filter(r => !revenueTypes.includes(r.accountType)).reduce((s, r) => s + (r.balance || 0), 0);
-    const netIncome = Math.round((totalRevenue - totalExpenses) * 100) / 100;
+    // Each account's closing line is the opposite of its balance for the year
+    const lines = [];
+    let totalRevenue = 0;
+    let totalExpenses = 0;
+    rows.forEach((r) => {
+      const net = r2(r.totalDebit - r.totalCredit); // debit balance > 0
+      if (Math.abs(net) < 0.005) return;
+      if (REVENUE_TYPES.includes(r.accountType)) totalRevenue += -net;
+      else totalExpenses += net;
+      lines.push({
+        account: r._id,
+        description: `Close ${r.name} for ${year}`,
+        ...(net > 0 ? { credit: Math.abs(net) } : { debit: Math.abs(net) }),
+        department: 'finance'
+      });
+    });
+    totalRevenue = r2(totalRevenue);
+    totalExpenses = r2(totalExpenses);
+    const netIncome = r2(totalRevenue - totalExpenses);
 
-    if (Math.abs(netIncome) < 0.01) {
-      return res.json({ success: true, message: 'Net income is zero — no closing entry needed', data: { netIncome } });
+    if (!lines.length) {
+      return res.json({ success: true, message: `No revenue or expenses posted in ${year} — nothing to close`, data: { year, netIncome: 0, totalRevenue: 0, totalExpenses: 0 } });
     }
 
-    // Resolve retained earnings account
-    let reAccount = retainedEarningsAccountId
-      ? await A.map(retainedEarningsAccountId)
-      : await A.resolve('3002');
-    if (!reAccount) reAccount = await Account.findOne({ companyId, type: { $in: ['retained_earnings', 'equity', 'Equity'] } });
-    if (!reAccount) return res.status(400).json({ success: false, message: 'Retained Earnings account not found. Please provide retainedEarningsAccountId.' });
-
-    // Close income/expense accounts via a closing entry
-    // Net profit: DR Revenue accounts / CR Retained Earnings (net income > 0)
-    //             DR Retained Earnings / CR Expense accounts  (conceptually balanced)
-    // Simplified: single line closing entry for the net
-    const closingLines = netIncome > 0
-      ? [
-          { account: reAccount._id, description: `Net profit for ${year} transferred to Retained Earnings`, credit: netIncome, department: 'finance' },
-          // Placeholder debit to Income Summary (use a clearing approach)
-          // In practice this balances via the revenue/expense accounts already closed
-        ]
-      : [];
-
-    if (netIncome > 0) {
-      const revAccount = await Account.findOne({ companyId, type: { $in: ['revenue', 'income', 'Revenue'] } });
-      if (revAccount) {
-        await FinanceHelper.createAndPostJournalEntry(withCo({
-          date: new Date(`${year}-12-31`),
-          reference: `CLOSE-${year}`,
-          description: `Year-End Closing — Net Income for ${year}`,
-          department: 'finance',
-          module: 'finance',
-          referenceType: 'adjustment',
-          journalCode: 'GEN',
-          createdBy: req.user._id,
-          lines: [
-            { account: revAccount._id, description: `Closing revenue to retained earnings`, debit: netIncome, department: 'finance' },
-            { account: reAccount._id, description: `Net income ${year} — retained earnings`, credit: netIncome, department: 'finance' }
-          ]
-        }));
-      }
-    } else {
-      const expAccount = await Account.findOne({ companyId, type: { $in: ['expense', 'operating_expense', 'Expense'] } });
-      if (expAccount) {
-        await FinanceHelper.createAndPostJournalEntry(withCo({
-          date: new Date(`${year}-12-31`),
-          reference: `CLOSE-${year}`,
-          description: `Year-End Closing — Net Loss for ${year}`,
-          department: 'finance',
-          module: 'finance',
-          referenceType: 'adjustment',
-          journalCode: 'GEN',
-          createdBy: req.user._id,
-          lines: [
-            { account: reAccount._id, description: `Net loss ${year} — retained earnings`, debit: Math.abs(netIncome), department: 'finance' },
-            { account: expAccount._id, description: `Closing expense to retained earnings`, credit: Math.abs(netIncome), department: 'finance' }
-          ]
-        }));
-      }
+    let reAccount = retainedEarningsAccountId ? await A.map(retainedEarningsAccountId) : await A.resolve('3002');
+    if (!reAccount) reAccount = await Account.findOne(q({ type: 'Equity', name: /retained/i, isActive: { $ne: false } }));
+    if (!reAccount) {
+      return res.status(400).json({ success: false, message: 'Retained Earnings account not found — pick it, or add an Equity account named "Retained Earnings"' });
     }
+    if (Math.abs(netIncome) >= 0.005) {
+      lines.push({
+        account: reAccount._id,
+        description: `Net ${netIncome >= 0 ? 'profit' : 'loss'} for ${year} to retained earnings`,
+        ...(netIncome >= 0 ? { credit: netIncome } : { debit: Math.abs(netIncome) }),
+        department: 'finance'
+      });
+    }
+
+    const entry = await FinanceHelper.createAndPostJournalEntry(withCo({
+      date: new Date(`${year}-12-31T12:00:00.000Z`),
+      reference,
+      description: `Year-end closing ${year} — revenue and expenses closed to ${reAccount.name}`,
+      department: 'finance',
+      module: 'finance',
+      referenceType: 'adjustment',
+      journalCode: 'GEN',
+      createdBy: req.user._id,
+      lines
+    }));
 
     res.json({
       success: true,
-      message: `Year-End closing entry posted for ${year}. Net ${netIncome >= 0 ? 'Income' : 'Loss'}: PKR ${Math.abs(netIncome).toLocaleString()}`,
-      data: { year, netIncome, totalRevenue: Math.round(totalRevenue * 100) / 100, totalExpenses: Math.round(totalExpenses * 100) / 100 }
+      message: `${year} closed: ${lines.length - (Math.abs(netIncome) >= 0.005 ? 1 : 0)} accounts closed, net ${netIncome >= 0 ? 'profit' : 'loss'} PKR ${Math.abs(netIncome).toLocaleString()} to ${reAccount.name}`,
+      data: { year, netIncome, totalRevenue, totalExpenses, accountsClosed: lines.length - (Math.abs(netIncome) >= 0.005 ? 1 : 0), entryNumber: entry?.entryNumber, retainedEarningsAccount: reAccount.name }
     });
   })
 );
@@ -9943,50 +9937,90 @@ router.post('/year-end-closing',
 // ═════════════════════════════════════════════════════════════════════════════
 // CASH FLOW STATEMENT
 // ═════════════════════════════════════════════════════════════════════════════
+/** Bank and cash GL accounts — the same rule the dashboard uses */
+const CASH_ACCOUNT_FILTER = {
+  type: 'Asset',
+  $or: [
+    { detailType: { $in: ['Bank', 'Cash and Cash Equivalents', 'Cash on hand'] } },
+    { category: { $regex: /^cash/i } }
+  ]
+};
+
+/** Which cash-flow section a counterpart account belongs to */
+const cashFlowSection = (acc) => {
+  const text = `${acc.category || ''} ${acc.detailType || ''} ${acc.name || ''}`;
+  if (acc.type === 'Equity' || /equity|retained/i.test(acc.type || '')) return 'financing';
+  if (acc.type === 'Liability' && /long[\s-]*term|non[\s-]*current|loan|borrow|lease|debenture|mortgage/i.test(text)) return 'financing';
+  if (acc.type === 'Asset' && /fixed|property|plant|equipment|vehicle|furniture|land|building|capital work|intangible|long[\s-]*term|non[\s-]*current|investment/i.test(text)) return 'investing';
+  return 'operating';
+};
+
+/**
+ * GET /api/finance/reports/cash-flow?fromDate=&toDate=
+ * Direct method from the bank / cash accounts: every posted journal that moves cash is split by its
+ * other lines — what each counterpart account brought in (+) or paid out (−) — and grouped into
+ * operating, investing and financing. Transfers between two cash accounts net to nothing.
+ * Net cash change equals the change in bank / cash balances over the period.
+ */
 router.get('/reports/cash-flow',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
     const { fromDate, toDate } = req.query;
-    const from = fromDate ? new Date(fromDate) : new Date(new Date().getFullYear(), 0, 1);
-    const to = toDate ? new Date(toDate) : new Date();
-    const { jeMatch } = await financeScope(req);
+    const from = fromDate ? new Date(`${fromDate}T00:00:00.000Z`) : new Date(Date.UTC(new Date().getUTCFullYear(), 0, 1));
+    const to = toDate ? new Date(`${toDate}T23:59:59.999Z`) : new Date();
+    const { jeMatch, q } = await financeScope(req);
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 
-    const operatingTypes = ['revenue', 'income', 'other_income', 'expense', 'cost_of_goods_sold', 'operating_expense', 'other_expense', 'depreciation', 'accounts_receivable', 'accounts_payable', 'current_asset', 'current_liability'];
-    const investingTypes = ['fixed_asset', 'other_asset'];
-    const financingTypes = ['equity', 'long_term_liability', 'retained_earnings', 'owners_equity'];
+    const cashAccounts = await Account.find(q(CASH_ACCOUNT_FILTER)).select('_id').lean();
+    const cashIds = cashAccounts.map((a) => a._id);
+    const cashSet = new Set(cashIds.map(String));
 
-    const allRows = await JournalEntry.aggregate([
-      { $match: jeMatch({ status: 'posted', date: { $gte: from, $lte: to } }) },
-      { $unwind: '$lines' },
-      { $group: { _id: '$lines.account', totalDebit: { $sum: '$lines.debit' }, totalCredit: { $sum: '$lines.credit' } } },
-      { $lookup: { from: 'accounts', localField: '_id', foreignField: '_id', as: 'acc' } },
-      { $unwind: '$acc' },
-      {
-        $project: {
-          accountNumber: '$acc.accountNumber', accountName: '$acc.name', accountType: '$acc.type', totalDebit: 1, totalCredit: 1,
-          netFlow: { $subtract: ['$totalCredit', '$totalDebit'] }
-        }
-      },
-      { $sort: { accountNumber: 1 } }
-    ]);
+    const entries = cashIds.length ? await JournalEntry.find(jeMatch({
+      status: 'posted',
+      date: { $gte: from, $lte: to },
+      'lines.account': { $in: cashIds }
+    })).select('lines.account lines.debit lines.credit').lean() : [];
 
-    const operating = allRows.filter(r => operatingTypes.some(t => r.accountType?.includes(t)));
-    const investing = allRows.filter(r => investingTypes.some(t => r.accountType?.includes(t)));
-    const financing = allRows.filter(r => financingTypes.some(t => r.accountType?.includes(t)));
+    // Counterpart account → cash it brought in (credit − debit on that line)
+    const flowByAccount = new Map();
+    let netCashChange = 0;
+    entries.forEach((je) => {
+      (je.lines || []).forEach((l) => {
+        const amt = (Number(l.credit) || 0) - (Number(l.debit) || 0);
+        if (cashSet.has(String(l.account))) { netCashChange -= amt; return; }
+        flowByAccount.set(String(l.account), (flowByAccount.get(String(l.account)) || 0) + amt);
+      });
+    });
 
-    const totalOperating = Math.round(operating.reduce((s, r) => s + (r.netFlow || 0), 0) * 100) / 100;
-    const totalInvesting = Math.round(investing.reduce((s, r) => s + (r.netFlow || 0), 0) * 100) / 100;
-    const totalFinancing = Math.round(financing.reduce((s, r) => s + (r.netFlow || 0), 0) * 100) / 100;
-    const netCashChange = Math.round((totalOperating + totalInvesting + totalFinancing) * 100) / 100;
+    const accounts = flowByAccount.size
+      ? await Account.find({ _id: { $in: [...flowByAccount.keys()] } }).select('accountNumber name type category detailType').lean()
+      : [];
+    const sections = { operating: [], investing: [], financing: [] };
+    accounts.forEach((acc) => {
+      const netFlow = r2(flowByAccount.get(String(acc._id)));
+      if (Math.abs(netFlow) < 0.005) return;
+      sections[cashFlowSection(acc)].push({
+        _id: acc._id, accountNumber: acc.accountNumber, accountName: acc.name, accountType: acc.type, netFlow
+      });
+    });
+    Object.values(sections).forEach((list) => list.sort((a, b) => String(a.accountNumber || '').localeCompare(String(b.accountNumber || ''))));
+    const total = (list) => r2(list.reduce((t, r) => t + r.netFlow, 0));
+    const totalOperating = total(sections.operating);
+    const totalInvesting = total(sections.investing);
+    const totalFinancing = total(sections.financing);
 
     res.json({
       success: true,
       data: {
         fromDate: from, toDate: to,
-        operating: { rows: operating, total: totalOperating },
-        investing: { rows: investing, total: totalInvesting },
-        financing: { rows: financing, total: totalFinancing },
-        summary: { totalOperating, totalInvesting, totalFinancing, netCashChange }
+        operating: { rows: sections.operating, total: totalOperating },
+        investing: { rows: sections.investing, total: totalInvesting },
+        financing: { rows: sections.financing, total: totalFinancing },
+        summary: {
+          totalOperating, totalInvesting, totalFinancing,
+          netCashChange: r2(totalOperating + totalInvesting + totalFinancing),
+          cashMovement: r2(netCashChange)
+        }
       }
     });
   })
@@ -10217,6 +10251,226 @@ router.get('/reports/balance-sheet',
 // ═════════════════════════════════════════════════════════════════════════════
 // PROFIT & LOSS REPORT
 // ═════════════════════════════════════════════════════════════════════════════
+/**
+ * GET /api/finance/dashboard/overview?fromDate=&toDate=
+ * Finance dashboard in one call, for the selected finance company, from posted journals:
+ *  - P&L for the period and the same-length period before it
+ *  - revenue / expenses / profit for each of the last 12 months (ending at toDate)
+ *  - cash & bank: balance of every bank / cash GL account at toDate, and the total at each month end
+ */
+router.get('/dashboard/overview',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const { jeMatch, q } = await financeScope(req);
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const dayStart = (d) => new Date(`${d}T00:00:00.000Z`);
+    const dayEnd = (d) => new Date(`${d}T23:59:59.999Z`);
+    const now = new Date();
+    const to = req.query.toDate ? dayEnd(req.query.toDate) : now;
+    const from = req.query.fromDate
+      ? dayStart(req.query.fromDate)
+      : new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+    const span = to.getTime() - from.getTime();
+    const prevTo = new Date(from.getTime() - 1);
+    const prevFrom = new Date(prevTo.getTime() - span);
+
+    // Revenue / expense totals for a date range
+    const plFor = async (a, b) => {
+      const rows = await JournalEntry.aggregate([
+        { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: a, $lte: b } }) },
+        { $unwind: '$lines' },
+        { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'acc' } },
+        { $unwind: '$acc' },
+        { $match: { 'acc.type': { $in: ['Revenue', 'Expense'] } } },
+        { $group: { _id: '$acc.type', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } }
+      ]);
+      const get = (t) => rows.find((x) => x._id === t) || { debit: 0, credit: 0 };
+      const revenue = r2(get('Revenue').credit - get('Revenue').debit);
+      const expenses = r2(get('Expense').debit - get('Expense').credit);
+      return { revenue, expenses, netProfit: r2(revenue - expenses), margin: revenue > 0 ? Math.round(((revenue - expenses) / revenue) * 1000) / 10 : null };
+    };
+
+    // Last 12 months ending with toDate's month
+    const firstMonth = new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth() - 11, 1));
+    const monthKey = (y, m) => `${y}-${String(m).padStart(2, '0')}`;
+    const months = Array.from({ length: 12 }, (_, i) => {
+      const d = new Date(Date.UTC(firstMonth.getUTCFullYear(), firstMonth.getUTCMonth() + i, 1));
+      return { key: monthKey(d.getUTCFullYear(), d.getUTCMonth() + 1), label: d.toLocaleString('en-US', { month: 'short', year: '2-digit', timeZone: 'UTC' }) };
+    });
+
+    // Bank / cash accounts of this company
+    const cashAccounts = await Account.find(q({
+      type: 'Asset',
+      isActive: { $ne: false },
+      $or: [
+        { detailType: { $in: ['Bank', 'Cash and Cash Equivalents', 'Cash on hand'] } },
+        { category: { $regex: /^cash/i } }
+      ]
+    })).select('name accountNumber detailType category').sort({ accountNumber: 1 }).lean();
+    const cashIds = cashAccounts.map((a) => a._id);
+
+    const [current, previous, monthlyPl, cashTotals, cashMonthly] = await Promise.all([
+      plFor(from, to),
+      plFor(prevFrom, prevTo),
+      JournalEntry.aggregate([
+        { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: firstMonth, $lte: to } }) },
+        { $unwind: '$lines' },
+        { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'acc' } },
+        { $unwind: '$acc' },
+        { $match: { 'acc.type': { $in: ['Revenue', 'Expense'] } } },
+        {
+          $group: {
+            _id: { y: { $year: '$date' }, m: { $month: '$date' }, t: '$acc.type' },
+            debit: { $sum: '$lines.debit' },
+            credit: { $sum: '$lines.credit' }
+          }
+        }
+      ]),
+      cashIds.length ? JournalEntry.aggregate([
+        { $match: jeMatch({ status: 'posted', date: { $lte: to } }) },
+        { $unwind: '$lines' },
+        { $match: { 'lines.account': { $in: cashIds } } },
+        { $group: { _id: '$lines.account', debit: { $sum: '$lines.debit' }, credit: { $sum: '$lines.credit' } } }
+      ]) : [],
+      cashIds.length ? JournalEntry.aggregate([
+        { $match: jeMatch({ status: 'posted', date: { $lte: to } }) },
+        { $unwind: '$lines' },
+        { $match: { 'lines.account': { $in: cashIds } } },
+        {
+          $group: {
+            _id: { y: { $year: '$date' }, m: { $month: '$date' } },
+            net: { $sum: { $subtract: ['$lines.debit', '$lines.credit'] } },
+            cashIn: { $sum: '$lines.debit' },
+            cashOut: { $sum: '$lines.credit' }
+          }
+        }
+      ]) : []
+    ]);
+
+    // Where the money went this period: expense accounts, largest first
+    const expenseRows = await JournalEntry.aggregate([
+      { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: from, $lte: to } }) },
+      { $unwind: '$lines' },
+      { $lookup: { from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'acc' } },
+      { $unwind: '$acc' },
+      { $match: { 'acc.type': 'Expense' } },
+      {
+        $group: {
+          _id: '$acc._id',
+          name: { $first: '$acc.name' },
+          category: { $first: '$acc.category' },
+          amount: { $sum: { $subtract: ['$lines.debit', '$lines.credit'] } }
+        }
+      },
+      { $match: { amount: { $gt: 0.005 } } },
+      { $sort: { amount: -1 } }
+    ]);
+    const topExpenses = expenseRows.slice(0, 7).map((x) => ({ _id: x._id, name: x.name, category: x.category || '', amount: r2(x.amount) }));
+    const otherExpenses = r2(expenseRows.slice(7).reduce((t, x) => t + x.amount, 0));
+    if (otherExpenses > 0) topExpenses.push({ _id: 'other', name: `Other (${expenseRows.length - 7} accounts)`, category: '', amount: otherExpenses });
+
+    const monthly = months.map(({ key, label }) => {
+      const pick = (t) => monthlyPl.find((x) => monthKey(x._id.y, x._id.m) === key && x._id.t === t) || { debit: 0, credit: 0 };
+      const revenue = r2(pick('Revenue').credit - pick('Revenue').debit);
+      const expenses = r2(pick('Expense').debit - pick('Expense').credit);
+      return { month: key, label, revenue, expenses, netProfit: r2(revenue - expenses) };
+    });
+
+    // Cash at each month end = everything posted before the window + movements month by month
+    const firstKey = months[0].key;
+    let running = cashMonthly.filter((x) => monthKey(x._id.y, x._id.m) < firstKey).reduce((t, x) => t + x.net, 0);
+    const cashTrend = months.map(({ key, label }) => {
+      running += cashMonthly.filter((x) => monthKey(x._id.y, x._id.m) === key).reduce((t, x) => t + x.net, 0);
+      const rows = cashMonthly.filter((x) => monthKey(x._id.y, x._id.m) === key);
+      return {
+        month: key,
+        label,
+        balance: r2(running),
+        cashIn: r2(rows.reduce((t, x) => t + x.cashIn, 0)),
+        cashOut: r2(rows.reduce((t, x) => t + x.cashOut, 0))
+      };
+    });
+
+    const balanceOf = new Map(cashTotals.map((x) => [String(x._id), r2(x.debit - x.credit)]));
+    const accounts = cashAccounts.map((a) => ({
+      _id: a._id,
+      name: a.name,
+      accountNumber: a.accountNumber,
+      kind: /bank/i.test(`${a.detailType} ${a.name}`) ? 'Bank' : 'Cash',
+      balance: balanceOf.get(String(a._id)) || 0
+    })).sort((a, b) => b.balance - a.balance);
+    const cashTotal = r2(accounts.reduce((t, a) => t + a.balance, 0));
+    const prevMonthCash = cashTrend.length > 1 ? cashTrend[cashTrend.length - 2].balance : 0;
+
+    res.json({
+      success: true,
+      data: {
+        period: { fromDate: from, toDate: to, prevFromDate: prevFrom, prevToDate: prevTo },
+        pl: { current, previous },
+        monthly,
+        cash: { total: cashTotal, previousMonthEnd: r2(prevMonthCash), accounts, trend: cashTrend },
+        expenses: topExpenses
+      }
+    });
+  })
+);
+
+/**
+ * GET /api/finance/dashboard/actions — what is waiting on Finance, for the selected company:
+ * bills submitted for approval, journals / vouchers still in draft, and approved documents from
+ * other modules that never reached the ledger (posting exceptions).
+ */
+router.get('/dashboard/actions',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const { q, jeMatch } = await financeScope(req);
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+    const GoodsIssue = require('../models/procurement/GoodsIssue');
+    const ProjectInvoice = require('../models/projectManagement/ProjectInvoice');
+    const since = new Date(Date.now() - 365 * 24 * 60 * 60 * 1000);
+
+    const [billsSubmitted, draftJournals, sinExceptions, pmExceptions] = await Promise.all([
+      AccountsPayable.find(q({ approvalStatus: 'Submitted', status: { $nin: ['cancelled', 'paid'] }, voidedAt: null }))
+        .select('totalAmount createdAt').lean(),
+      JournalEntry.find(jeMatch({ status: 'draft' })).select('totalDebits date createdAt').lean(),
+      GoodsIssue.countDocuments({ financePostingStatus: { $in: ['failed', 'partial', 'not_posted'] }, issueDate: { $gte: since } }),
+      ProjectInvoice.find({
+        approvalStatus: 'Approved',
+        status: { $ne: 'Cancelled' },
+        $or: [
+          { invoiceType: 'Subcontractor_IPC', financeApBillId: null, financePostedAt: null },
+          { invoiceType: 'Client_Invoice', financeArId: null }
+        ]
+      }).select('netPayableAmount invoiceAmount grossAmount').lean()
+    ]);
+    const oldestDays = (list, f = 'createdAt') => (list.length
+      ? Math.floor((Date.now() - Math.min(...list.map((x) => new Date(x[f] || x.createdAt || Date.now()).getTime()))) / 86400000)
+      : null);
+
+    res.json({
+      success: true,
+      data: {
+        billsAwaitingApproval: {
+          count: billsSubmitted.length,
+          amount: r2(billsSubmitted.reduce((t, b) => t + (Number(b.totalAmount) || 0), 0)),
+          oldestDays: oldestDays(billsSubmitted)
+        },
+        draftJournals: {
+          count: draftJournals.length,
+          amount: r2(draftJournals.reduce((t, j) => t + (Number(j.totalDebits) || 0), 0)),
+          oldestDays: oldestDays(draftJournals, 'date')
+        },
+        postingExceptions: {
+          count: sinExceptions + pmExceptions.length,
+          storeIssues: sinExceptions,
+          projectDocuments: pmExceptions.length,
+          amount: r2(pmExceptions.reduce((t, d) => t + (Number(d.netPayableAmount) || Number(d.invoiceAmount) || Number(d.grossAmount) || 0), 0))
+        }
+      }
+    });
+  })
+);
+
 router.get('/reports/profit-loss',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
@@ -10230,7 +10484,7 @@ router.get('/reports/profit-loss',
     const { jeMatch } = await financeScope(req);
 
     const rows = await JournalEntry.aggregate([
-      { $match: jeMatch({ status: 'posted', date: { $gte: from, $lte: to } }) },
+      { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: from, $lte: to } }) },
       { $unwind: '$lines' },
       { $group: { _id: '$lines.account', totalDebit: { $sum: '$lines.debit' }, totalCredit: { $sum: '$lines.credit' } } },
       { $lookup: { from: 'accounts', localField: '_id', foreignField: '_id', as: 'acc' } },
@@ -10963,7 +11217,7 @@ router.get('/reports/budget-vs-actual-detailed',
     assertDocCompany(budget, companyId, 'Budget');
 
     const actualRows = await GeneralLedger.aggregate([
-      { $match: jeMatch({ status: 'posted', date: { $gte: budget.startDate, $lte: budget.endDate }, ...(budget.department ? { department: budget.department } : {}) }) },
+      { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: budget.startDate, $lte: budget.endDate }, ...(budget.department ? { department: budget.department } : {}) }) },
       { $lookup: { from: 'accounts', localField: 'account', foreignField: '_id', as: 'acc' } },
       { $unwind: '$acc' },
       { $match: { 'acc.type': { $in: ['Expense', 'Revenue'] } } },
@@ -11588,7 +11842,7 @@ router.get('/reports/comparative-pl',
     const { jeMatch } = await financeScope(req);
 
     const getPeriodData = async (fromDate, toDate) => {
-      const match = jeMatch({ status: 'posted' });
+      const match = jeMatch({ status: 'posted', ...notClosingEntry });
       if (fromDate) match.date = { ...(match.date || {}), $gte: new Date(fromDate) };
       if (toDate) match.date = { ...(match.date || {}), $lte: new Date(toDate) };
 
@@ -11652,7 +11906,7 @@ router.get('/reports/department-pl',
   asyncHandler(async (req, res) => {
     const { department, fromDate, toDate } = req.query;
 
-    const match = { status: 'posted' };
+    const match = { status: 'posted', ...notClosingEntry };
     if (fromDate || toDate) {
       match.date = {};
       if (fromDate) match.date.$gte = new Date(fromDate);
@@ -12622,7 +12876,8 @@ router.get('/posting-exceptions',
         approvalStatus: 'Approved',
         status: { $ne: 'Cancelled' },
         $or: [
-          { invoiceType: 'Subcontractor_IPC', financeApBillId: null },
+          // An IPC settled fully in property (barter) posts a journal only — no AP bill
+          { invoiceType: 'Subcontractor_IPC', financeApBillId: null, financePostedAt: null },
           { invoiceType: 'Client_Invoice', financeArId: null }
         ]
       }).populate('contractor', 'name').populate('project', 'name')

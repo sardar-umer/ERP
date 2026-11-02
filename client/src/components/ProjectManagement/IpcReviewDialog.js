@@ -166,8 +166,11 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
         </Box>
         {ipc && (
           <Box sx={{ textAlign: 'right', pr: 1, display: { xs: 'none', sm: 'block' } }}>
-            <Typography sx={label}>{ipc.invoiceType === 'Client_Invoice' ? 'Receivable' : 'Net payable'}</Typography>
+            <Typography sx={label}>{ipc.invoiceType === 'Client_Invoice' ? 'Receivable' : Number(ipc.propertySettlementAmount) > 0 ? 'Net cash payable' : 'Net payable'}</Typography>
             <Typography noWrap sx={{ fontSize: 18, fontWeight: 600, color: INK, fontVariantNumeric: 'tabular-nums' }}>{pkr(ipc.netPayableAmount || ipc.invoiceAmount)}</Typography>
+            {Number(ipc.propertySettlementAmount) > 0 && (
+              <Typography sx={{ fontSize: 12, color: MUTED }} noWrap>+ {pkr(ipc.propertySettlementAmount)} in property</Typography>
+            )}
           </Box>
         )}
         {dossier && (

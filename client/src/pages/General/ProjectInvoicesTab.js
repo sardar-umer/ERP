@@ -622,6 +622,11 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                   <TableCell align="right">{fmt(inv.grossAmount || inv.invoiceAmount)}</TableCell>
                   <TableCell align="right">
                     <strong>{fmt(inv.netPayableAmount || inv.invoiceAmount)}</strong>
+                    {Number(inv.propertySettlementAmount) > 0 && (
+                      <Typography variant="caption" color="warning.main" display="block">
+                        + {fmt(inv.propertySettlementAmount)} in property
+                      </Typography>
+                    )}
                     {Number(inv.paidAmount) > 0 && inv.status !== 'Cancelled' && (
                       <Typography variant="caption" color="text.secondary" display="block">
                         Paid {fmt(inv.paidAmount)} · Due {fmt(balanceOf(inv))}
@@ -1058,8 +1063,14 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                     <Grid item xs={6} align="right"><Typography variant="body2" color="error.main">−{fmt(viewIpcDialog.whtAmount)}</Typography></Grid>
                   </>
                 )}
+                {viewIpcDialog.propertySettlementAmount > 0 && (
+                  <>
+                    <Grid item xs={6}><Typography variant="body2" color="warning.main">Less Settled in Property (barter {viewIpcDialog.propertyPercent}%):</Typography></Grid>
+                    <Grid item xs={6} align="right"><Typography variant="body2" color="warning.main">−{fmt(viewIpcDialog.propertySettlementAmount)}</Typography></Grid>
+                  </>
+                )}
                 <Grid item xs={12}><Divider sx={{ my: 1 }} /></Grid>
-                <Grid item xs={6}><Typography variant="subtitle1" fontWeight={800} color="success.main">Net Amount Payable:</Typography></Grid>
+                <Grid item xs={6}><Typography variant="subtitle1" fontWeight={800} color="success.main">{viewIpcDialog.propertySettlementAmount > 0 ? 'Net Cash Payable:' : 'Net Amount Payable:'}</Typography></Grid>
                 <Grid item xs={6} align="right"><Typography variant="subtitle1" fontWeight={800} color="success.main">{fmt(viewIpcDialog.netPayableAmount || viewIpcDialog.invoiceAmount)}</Typography></Grid>
                 <Grid item xs={6}><Typography variant="body2">Paid to date:</Typography></Grid>
                 <Grid item xs={6} align="right"><Typography variant="body2">{fmt(viewIpcDialog.paidAmount)}</Typography></Grid>

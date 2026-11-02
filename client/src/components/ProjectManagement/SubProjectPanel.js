@@ -9,6 +9,7 @@ import {
   ACCENT, BORDER, CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, Empty, HEALTH_COLOR, INK,
   GLASS_EDGE, IPC_APPROVAL_COLOR, Label, PASTEL_BG_TALL, PASTEL_SHADOW, PROJECT_STATUS_COLOR, SOFT, fmt, plural, progressColor
 } from './mainProjectUi';
+import UnitProgressGrid from './UnitProgressGrid';
 
 // Cards sit on the pastel panel as frosted white glass so tables stay easy to read
 const CARD_BG = 'rgba(255,255,255,0.88)';
@@ -195,6 +196,24 @@ const ContractCard = ({ contract, go, unlinked = false }) => {
   );
 };
 
+/** Unit progress (villas / floors / sections) on the Main Project page; hidden for Sub Projects without units */
+const UnitPanel = ({ subId }) => {
+  const [count, setCount] = React.useState(0);
+  const [title, setTitle] = React.useState('Units');
+  const onLoaded = React.useCallback((n, names) => { setCount(n); if (names) setTitle(names); }, []);
+  return (
+    <Paper
+      elevation={0}
+      sx={{ display: count ? 'block' : 'none', mb: 2, p: 2.5, borderRadius: 3, border: `1px solid ${GLASS_EDGE}`, bgcolor: CARD_BG, backdropFilter: 'blur(6px)', boxShadow: '0 4px 14px rgba(15,23,42,0.06)' }}
+    >
+      <Typography variant="overline" sx={{ display: 'block', color: 'text.secondary', fontWeight: 800, letterSpacing: 1, mb: 1 }}>
+        {title} progress ({count})
+      </Typography>
+      <UnitProgressGrid projectId={subId} compact onLoaded={onLoaded} />
+    </Paper>
+  );
+};
+
 /** Right-hand panel for one Sub Project: its numbers, then every contract → check request → IPC → payment */
 export default function SubProjectPanel({ sub, money, index = 0, count = 1 }) {
   const navigate = useNavigate();
@@ -260,6 +279,9 @@ export default function SubProjectPanel({ sub, money, index = 0, count = 1 }) {
           <Box><Label>Paid</Label><Typography variant="h6" fontWeight={800}>{fmt(t.paid)}</Typography></Box>
         </Box>
       </Paper>
+
+      {/* Villas / units — renders nothing when the Sub Project has none */}
+      <UnitPanel subId={sub._id} />
 
       {/* Contracts */}
       <Typography variant="overline" sx={{ display: 'block', color: 'text.secondary', fontWeight: 800, letterSpacing: 1, mb: 1 }}>

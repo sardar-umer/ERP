@@ -102,6 +102,18 @@ const checkRequestSchema = new mongoose.Schema(
       ]
     },
 
+    /**
+     * Slab claims on a contract covering villas / units: the villas this stage is claimed for.
+     * slab.amount is then that share of the stage. Empty = the whole contract.
+     */
+    units: [
+      {
+        _id: false,
+        unit: { type: mongoose.Schema.Types.ObjectId },
+        name: { type: String, trim: true, default: '' }
+      }
+    ],
+
     items: {
       type: [checkRequestItemSchema],
       default: []
