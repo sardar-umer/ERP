@@ -351,7 +351,8 @@ const VoucherView = () => {
         await api.put(`/cash-approvals/${cashApproval._id}/finance-approve`, { comments: 'Approved from Voucher page' });
         const refreshed = await api.get(`/cash-approvals/${cashApproval._id}`);
         setCashApproval(refreshed?.data?.data || cashApproval);
-        setApprovalMsg('Authority approval recorded from voucher and synced to Cash Approval.');
+        await reloadEntry();
+        setApprovalMsg('Authority approval recorded. Voucher posts to the ledger when all finance authorities have approved.');
         return;
       }
       if (vendorAdvanceDoc?._id) {
@@ -409,7 +410,8 @@ const VoucherView = () => {
         await api.put(`/cash-approvals/${cashApproval._id}/finance-reject`, { comments });
         const refreshed = await api.get(`/cash-approvals/${cashApproval._id}`);
         setCashApproval(refreshed?.data?.data || cashApproval);
-        setApprovalMsg('Authority rejection recorded from voucher and synced to Cash Approval.');
+        await reloadEntry();
+        setApprovalMsg('Cash Approval rejected. Draft voucher cancelled.');
         return;
       }
       if (vendorAdvanceDoc?._id) {
@@ -440,6 +442,7 @@ const VoucherView = () => {
     || (payrollPeriodPaymentApp?.workflowStatus === 'pending_authority' && entry?.status === 'draft')
     || (manualSalaryPaymentApp?.workflowStatus === 'pending_authority' && entry?.status === 'draft')
     || (vendorAdvanceDoc?.voucherWorkflowStatus === 'pending_authority' && entry?.status === 'draft')
+    || (cashApproval?.status === 'Pending Finance' && entry?.status === 'draft')
   );
 
   const authoritySlots = useMemo(() => {

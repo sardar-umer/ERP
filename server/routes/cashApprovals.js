@@ -656,7 +656,8 @@ const ensureVoucherForCashApproval = async (ca, userId, options = {}) => {
 
   const isCashVoucher = paymentMethod === 'cash';
   const caNarration = getCashApprovalNarration(ca);
-  const voucher = await FinanceHelper.createAndPostJournalEntry(
+  // Draft until every finance authority signs; finance-approve posts it to the ledger
+  const voucher = await FinanceHelper.createDraftJournalEntry(
     withVoucherNarration(withCompany({
       date: new Date(),
       reference: ca.caNumber,
@@ -2470,7 +2471,7 @@ router.put('/:id/create-voucher', authMiddleware, asyncHandler(async (req, res) 
       if (voucherDoc?.entryNumber) ca.advanceVoucherNo = voucherDoc.entryNumber;
     }
   } else {
-    await ensurePostedBpvForGeneralCashApproval(ca, req.user.id, {
+    await ensureDraftBpvForGeneralCashApproval(ca, req.user.id, {
       advanceAmount: ca.advanceAmount,
       paymentMethod: req.body?.paymentMethod || req.body?.advancePaymentMethod,
       bankAccountId: req.body?.bankAccountId || ca.advanceBankAccount,
@@ -2495,8 +2496,8 @@ router.put('/:id/create-voucher', authMiddleware, asyncHandler(async (req, res) 
   return res.json({
     success: true,
     message: isGeneralCashApproval(ca)
-      ? `BPV ${ca.advanceVoucherNo || ''} created and posted to the ledger. Complete finance approvals, then mark the voucher signed/cleared in Vouchers.`
-      : 'Voucher created successfully. Continue remaining approvals from Vouchers.',
+      ? `BPV ${ca.advanceVoucherNo || ''} created as draft. It posts to the ledger once all finance authorities approve in Vouchers.`
+      : 'Voucher created as draft. It posts to the ledger once all finance authorities approve in Vouchers.',
     data: await fullPopulate(CashApproval.findById(ca._id))
   });
 }));
@@ -2559,7 +2560,7 @@ router.put('/:id/finance-approve', authMiddleware, asyncHandler(async (req, res)
   if (remaining === 0) {
     pushHistory(ca, 'Pending Finance', 'Finance Authority Approved', req.user.id, req.body?.comments || 'All finance authorities approved', 'Finance');
     ca.status = 'Finance Authority Approved';
-    if (isGeneralCashApproval(ca) && ca.voucherEntryId) {
+    if (ca.voucherEntryId) {
       const draftJe = await JournalEntry.findById(ca.voucherEntryId);
       if (draftJe?.status === 'draft') {
         await postJournalEntryWithGl(draftJe, req.user.id);
@@ -2613,6 +2614,16 @@ router.put('/:id/finance-reject', authMiddleware, asyncHandler(async (req, res) 
   ca.status = 'Rejected';
   ca.returnedFromStatus = 'Pending Finance';
   ca.updatedBy = req.user.id;
+  if (ca.voucherEntryId) {
+    const draftJe = await JournalEntry.findById(ca.voucherEntryId);
+    if (draftJe?.status === 'draft') {
+      draftJe.status = 'cancelled';
+      await draftJe.save();
+      // Unlink so a resubmitted approval gets a fresh voucher
+      ca.voucherEntryId = null;
+      ca.advanceVoucherNo = '';
+    }
+  }
   await ca.save();
   res.json({ success: true, message: 'Finance authority rejection recorded. Cash Approval has been rejected.', data: await fullPopulate(CashApproval.findById(ca._id)) });
 }));
@@ -2723,8 +2734,8 @@ const postJournalEntryWithGl = async (entry, userId) => {
   return entry;
 };
 
-/** Create or update BPV/CPV and post immediately so Trial Balance / GL include it (same as AP bills). */
-const ensurePostedBpvForGeneralCashApproval = async (ca, userId, opts = {}) => {
+/** Create or update the BPV/CPV as a draft; finance-approve posts it once every finance authority has signed. */
+const ensureDraftBpvForGeneralCashApproval = async (ca, userId, opts = {}) => {
   if (!isGeneralCashApproval(ca) || !ca.advanceToEmployee) return null;
 
   const amount = Math.round((Number(opts.advanceAmount) || getCaOpenAdvanceAmount(ca)) * 100) / 100;
@@ -2776,13 +2787,13 @@ const ensurePostedBpvForGeneralCashApproval = async (ca, userId, opts = {}) => {
     if (existing?.status === 'draft') {
       const narrated = withVoucherNarration({ ...meta, lines: jeLines }, caNarration);
       Object.assign(existing, narrated);
-      const posted = await postJournalEntryWithGl(existing, userId);
-      ca.advanceVoucherNo = posted.entryNumber || ca.advanceVoucherNo;
-      return posted;
+      await existing.save();
+      ca.advanceVoucherNo = existing.entryNumber || ca.advanceVoucherNo;
+      return existing;
     }
   }
 
-  const voucher = await FinanceHelper.createAndPostJournalEntry(
+  const voucher = await FinanceHelper.createDraftJournalEntry(
     withVoucherNarration(withCompany({ ...meta, createdBy: userId, lines: jeLines }, companyId), caNarration)
   );
   ca.voucherEntryId = voucher._id;

@@ -1175,13 +1175,69 @@ router.delete('/journal-entries/:id',
   })
 );
 
-/** Post draft BPV/CPV linked to a cash approval so Trial Balance includes it (legacy drafts + safety net). */
+const CA_FINANCE_SLOTS = [
+  { key: 'accountsOfficerUser', label: 'Accounts Officer' },
+  { key: 'accountsManagerUser', label: 'Sr Manager Accounts' },
+  { key: 'financeControllerUser', label: 'GM Finance' }
+];
+
+/** Finance authorities on a cash approval that have not signed yet (all three when none are assigned) */
+const pendingCashApprovalSignatures = (ca) => {
+  const assigned = CA_FINANCE_SLOTS.filter((s) => ca?.financeApprovalAuthorities?.[s.key]);
+  if (!assigned.length) return CA_FINANCE_SLOTS.map((s) => s.label);
+  const approved = new Set((ca.financeAuthorityApprovals || [])
+    .filter((a) => String(a?.decision || 'approved').trim() !== 'rejected')
+    .map((a) => String(a?.authorityKey || '').trim()));
+  return assigned.filter((s) => !approved.has(s.key)).map((s) => s.label);
+};
+
+const AUTHORITY_LABELS = {
+  accountsOfficerUser: 'Accounts Officer',
+  accountsManagerUser: 'Sr Manager Accounts',
+  financeControllerUser: 'GM Finance'
+};
+
+/**
+ * Assigned finance authorities that have not signed a draft voucher yet — from its payment source
+ * (bill payment, vendor advance, payroll / manual salary payment) or the manual JV itself.
+ */
+const pendingDraftVoucherSignatures = async (entry) => {
+  const optional = (name, file) => mongoose.models[name] || require(file);
+  const sources = [
+    [optional('ApPaymentApplication', '../models/finance/ApPaymentApplication'), ['journalEntryId', 'payingJournalEntryId']],
+    [VendorAdvance, ['journalEntryId', 'payingJournalEntryId']],
+    [optional('PayrollPeriodPaymentApplication', '../models/finance/PayrollPeriodPaymentApplication'), ['journalEntryId']],
+    [optional('ManualSalaryPaymentApplication', '../models/finance/ManualSalaryPaymentApplication'), ['journalEntryId']]
+  ];
+  let doc = null;
+  for (const [Model, fields] of sources) {
+    doc = await Model.findOne({ $or: fields.map((f) => ({ [f]: entry._id })) })
+      .select('financeApprovalAuthorities financeAuthorityApprovals').lean();
+    if (doc) break;
+  }
+  if (!doc) doc = typeof entry.toObject === 'function' ? entry.toObject() : entry;
+  const assigned = Object.entries(doc.financeApprovalAuthorities || {})
+    .filter(([, user]) => user)
+    .map(([key]) => key);
+  const approved = new Set((doc.financeAuthorityApprovals || [])
+    .filter((a) => String(a?.decision || 'approved').trim() !== 'rejected')
+    .map((a) => String(a?.authorityKey || '').trim()));
+  return assigned.filter((key) => !approved.has(key)).map((key) => AUTHORITY_LABELS[key] || key);
+};
+
+/** Post draft BPV/CPV linked to a cash approval so Trial Balance includes it — only once every finance authority has signed. */
 const postLinkedCashApprovalJournalIfDraft = async (entry, userId) => {
   if (!entry || entry.status !== 'draft') return entry;
   const linkedCashApproval = await CashApproval.findOne({
     $or: [{ voucherEntryId: entry._id }, { _id: entry.referenceId }]
   }).lean();
   if (!linkedCashApproval) return entry;
+  const pending = pendingCashApprovalSignatures(linkedCashApproval);
+  if (pending.length) {
+    const err = new Error(`Voucher is still draft — it posts only after all finance authorities sign. Pending: ${pending.join(', ')}`);
+    err.statusCode = 400;
+    throw err;
+  }
   await entry.post(userId);
   try {
     await FinanceHelper.postToGeneralLedger(entry._id);
@@ -1251,6 +1307,11 @@ router.put('/journal-entries/:id/signed-document',
     const entry = await JournalEntry.findById(req.params.id);
     if (!entry) return res.status(404).json({ success: false, message: 'Journal entry not found' });
 
+    // A draft cash approval voucher can't be marked signed (and posted) before its finance authorities sign
+    if (signedDocumentStatus === 'signed') {
+      await postLinkedCashApprovalJournalIfDraft(entry, req.user._id);
+    }
+
     entry.signedDocumentStatus = signedDocumentStatus;
     if (signedBySignatory !== undefined) {
       entry.signedBySignatory = signedBySignatory || null;
@@ -1263,9 +1324,8 @@ router.put('/journal-entries/:id/signed-document',
     }
     await entry.save();
 
-    // Cash-approval BPV/CPV: ensure posted to GL (Trial Balance) when signed; then sync Advance Issued.
+    // Cash-approval BPV/CPV: sync Advance Issued once posted and every finance authority has signed.
     if (signedDocumentStatus === 'signed') {
-      await postLinkedCashApprovalJournalIfDraft(entry, req.user._id);
       const linkedCashApproval = await CashApproval.findOne({
         $or: [
           { voucherEntryId: entry._id },
@@ -1276,7 +1336,8 @@ router.put('/journal-entries/:id/signed-document',
       if (
         linkedCashApproval &&
         freshEntry?.status === 'posted' &&
-        linkedCashApproval.status !== 'Advance Issued'
+        linkedCashApproval.status !== 'Advance Issued' &&
+        !pendingCashApprovalSignatures(linkedCashApproval).length
       ) {
         linkedCashApproval.status = 'Advance Issued';
         if (!linkedCashApproval.advanceIssuedAt) linkedCashApproval.advanceIssuedAt = new Date();
@@ -1728,6 +1789,20 @@ router.put('/journal-entries/:id/post',
       return res.status(400).json({
         success: false,
         message: 'Only draft entries can be posted'
+      });
+    }
+
+    // Cash approval vouchers post only after every finance authority signs
+    const caPosted = await postLinkedCashApprovalJournalIfDraft(entry, req.user._id);
+    if (caPosted !== entry) {
+      return res.json({ success: true, message: 'Journal entry posted successfully', data: caPosted });
+    }
+    // Every other voucher with finance authorities waits for all of them to sign
+    const pendingSigners = await pendingDraftVoucherSignatures(entry);
+    if (pendingSigners.length) {
+      return res.status(400).json({
+        success: false,
+        message: `Voucher is still draft — it posts only after all finance authorities sign. Pending: ${pendingSigners.join(', ')}`
       });
     }
 
