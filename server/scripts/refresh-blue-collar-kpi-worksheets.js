@@ -8,6 +8,7 @@
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js                 # dry run, current month
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --apply
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --year 2026 --month 12 --apply
+ *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --skip 06664,1234 --apply   # leave these employee IDs as they are
  */
 const path = require('path');
 const fsSync = require('fs');
@@ -55,6 +56,10 @@ async function main() {
   const year = argValue('--year') || now.getFullYear();
   const month = argValue('--month') || now.getMonth() + 1;
   const apply = process.argv.includes('--apply');
+  const skipIndex = process.argv.indexOf('--skip');
+  const skipIds = new Set(skipIndex > -1
+    ? String(process.argv[skipIndex + 1] || '').split(',').map((s) => s.trim()).filter(Boolean)
+    : []);
   await connectDB();
   console.log(`${apply ? 'APPLYING' : 'DRY RUN'} for ${year}-${String(month).padStart(2, '0')}\n`);
 
@@ -79,6 +84,10 @@ async function main() {
     if (!entry || !UPDATED_DESIGNATIONS.includes(entry.designation) || !isExactCatalogMatch(title, entry)) continue;
 
     const s = summary[entry.designation] || (summary[entry.designation] = { refreshed: 0, started: 0, noSheet: 0 });
+    if (skipIds.has(String(emp.employeeId || '').trim())) {
+      console.log(`  skipped (--skip): ${emp.employeeId} ${emp.firstName || ''} ${emp.lastName || ''} — ${title}`);
+      continue;
+    }
     const sheet = await KPIWorksheet.findOne({ employee: emp._id, year, month });
     if (!sheet) {
       s.noSheet += 1; // created from the catalog when the month's sheet is first opened / by the monthly cron
