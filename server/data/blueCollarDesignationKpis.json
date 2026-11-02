@@ -4,53 +4,40 @@
     "designation": "Office Boy",
     "items": [
       {
-        "kpi": "Office support task completion",
-        "weight": 25,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "kpi": "Visitor & Guest Assistance",
+        "weight": 20,
+        "details": "Attend to visitors professionally and provide tea, water and refreshments on time.",
+        "target": "95% timely service."
       },
       {
-        "kpi": "Tea/water & routine service timeliness",
+        "kpi": "Drinking Water & Refreshments",
         "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "details": "Ensure availability of drinking water, tea and refreshments for management, employees and visitors.",
+        "target": "100% availability during working hours."
       },
       {
-        "kpi": "File/document delivery accuracy",
+        "kpi": "Office Support & Assigned Tasks",
         "weight": 15,
-        "target": "≥98%",
-        "exampleActual": "99%",
-        "calculation": "99/98×100"
+        "details": "Complete photocopying, document movement, file delivery and other administrative support tasks accurately.",
+        "target": "95% task completion."
       },
       {
-        "kpi": "Office/meeting area arrangement",
-        "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "kpi": "Office Dusting, Room & Meeting Arrangements",
+        "weight": 20,
+        "details": "Ensure daily dusting of office furniture, tables, chairs and equipment, maintain proper room arrangements and prepare meeting rooms with water, stationery and refreshments.",
+        "target": "95% inspection score and 100% meeting readiness."
       },
       {
-        "kpi": "Attendance & punctuality",
-        "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
-      },
-      {
-        "kpi": "Response to assigned requests",
+        "kpi": "Additional Duties & Event Support",
         "weight": 10,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "details": "Assist during official functions, training sessions and special events, including seating arrangements, refreshments, venue setup and other assigned duties.",
+        "target": "100% completion of assigned duties."
       },
       {
-        "kpi": "Discipline & grooming",
-        "weight": 5,
-        "target": "≥95%",
-        "exampleActual": "98%",
-        "calculation": "98/95×100"
+        "kpi": "Complaint Management, Attendance & Discipline",
+        "weight": 20,
+        "details": "Maintain punctuality, follow duty schedules and supervisor instructions, minimize valid service-related complaints and resolve reported issues within the assigned timeframe.",
+        "target": "Maximum 2 valid complaints per month and 95% timely resolution and compliance."
       }
     ],
     "totalWeight": 100
@@ -60,46 +47,40 @@
     "designation": "Driver / HTV Driver",
     "items": [
       {
-        "kpi": "Safe driving / avoidable accidents",
-        "weight": 30,
-        "target": "0 accidents",
-        "exampleActual": "0",
-        "calculation": "Compliance rule"
-      },
-      {
-        "kpi": "On-time trip completion",
+        "kpi": "Safe Driving & Traffic Compliance",
         "weight": 25,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "details": "Drive responsibly, follow traffic laws, maintain speed limits, use seat belts and avoid mobile phone usage while driving.",
+        "target": "100% compliance with traffic and safety rules; zero preventable accidents."
       },
       {
-        "kpi": "Vehicle preventive checks",
+        "kpi": "Punctuality & Timely Transportation",
+        "weight": 20,
+        "details": "Ensure timely pick-up and drop-off of management, employees and other authorized passengers according to assigned schedules.",
+        "target": "95% on-time service."
+      },
+      {
+        "kpi": "Vehicle Maintenance & Cleanliness",
         "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "98%",
-        "calculation": "98/95×100"
+        "details": "Keep the assigned vehicle clean and presentable, conduct routine inspections and promptly report mechanical issues, damages and maintenance requirements.",
+        "target": "100% completion of scheduled vehicle inspections; 95% cleanliness inspection score."
       },
       {
-        "kpi": "Vehicle cleanliness/condition",
+        "kpi": "Fuel Management & Vehicle Records",
         "weight": 10,
-        "target": "≥90%",
-        "exampleActual": "94%",
-        "calculation": "94/90×100"
+        "details": "Maintain accurate fuel consumption records, mileage logs, vehicle usage records and trip details, and avoid unnecessary fuel consumption.",
+        "target": "100% maintenance of required vehicle records."
       },
       {
-        "kpi": "Fuel efficiency",
-        "weight": 10,
-        "target": "8 L/100km",
-        "exampleActual": "7.5 L/100km",
-        "calculation": "8/7.5×100 — Lower Better"
+        "kpi": "Complaint Management & Professional Conduct",
+        "weight": 15,
+        "details": "Maintain courteous behaviour with passengers, follow supervisor instructions, handle transportation-related complaints professionally and minimize valid complaints.",
+        "target": "Maximum 2 valid complaints per month and 95% timely resolution."
       },
       {
-        "kpi": "Attendance/punctuality",
-        "weight": 10,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "kpi": "Additional Duties & Official Assignment Support",
+        "weight": 15,
+        "details": "Provide transportation support for official meetings, functions, events, airport pick-ups, document delivery and other assigned duties as required.",
+        "target": "100% completion of assigned duties within the required timeframe."
       }
     ],
     "totalWeight": 100
@@ -158,46 +139,40 @@
     "designation": "Security Guard",
     "items": [
       {
-        "kpi": "Post coverage",
-        "weight": 25,
-        "target": "100%",
-        "exampleActual": "100%",
-        "calculation": "Compliance rule"
-      },
-      {
-        "kpi": "Incident prevention & reporting",
-        "weight": 25,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
-      },
-      {
-        "kpi": "SOP/checklist compliance",
+        "kpi": "Access Control & Visitor Management",
         "weight": 20,
-        "target": "100%",
-        "exampleActual": "98%",
-        "calculation": "Compliance rule"
+        "details": "Verify visitors, employees and contractors, maintain entry/exit records and ensure that unauthorized persons do not enter the premises.",
+        "target": "100% compliance with access control procedures."
       },
       {
-        "kpi": "Visitor/access control",
-        "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "kpi": "Security Monitoring & Surveillance",
+        "weight": 20,
+        "details": "Monitor office premises, entry/exit points and sensitive areas, remain alert and report suspicious activities immediately.",
+        "target": "100% completion of assigned security rounds and monitoring duties."
       },
       {
-        "kpi": "Emergency response",
+        "kpi": "Incident Reporting & Emergency Response",
+        "weight": 20,
+        "details": "Immediately report security incidents, theft, suspicious activities, accidents and emergencies to the concerned supervisor and follow emergency procedures.",
+        "target": "100% timely reporting of incidents."
+      },
+      {
+        "kpi": "Security Equipment & Property Protection",
         "weight": 10,
-        "target": "≤5 min",
-        "exampleActual": "4 min",
-        "calculation": "5/4×100 — Time Lower Better"
+        "details": "Ensure proper use and monitoring of security equipment, keys, gates, barriers and other security arrangements. Report any damage or malfunction promptly.",
+        "target": "100% compliance with equipment and property protection procedures."
       },
       {
-        "kpi": "Grooming & discipline",
-        "weight": 5,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "kpi": "Complaint Management & Professional Conduct",
+        "weight": 15,
+        "details": "Handle security-related complaints professionally, maintain discipline, follow supervisor instructions and avoid negligence or misconduct.",
+        "target": "Maximum 2 valid complaints per month and 95% compliance."
+      },
+      {
+        "kpi": "Additional Duties & Event Security Support",
+        "weight": 15,
+        "details": "Provide security assistance during official functions, meetings, training sessions and special events, including crowd management, guest guidance, parking control and entry/exit arrangements.",
+        "target": "100% completion of assigned event security duties."
       }
     ],
     "totalWeight": 100
@@ -256,46 +231,40 @@
     "designation": "Executive Protection Officer",
     "items": [
       {
-        "kpi": "Principal protection / duty coverage",
-        "weight": 30,
-        "target": "100%",
-        "exampleActual": "100%",
-        "calculation": "Compliance rule"
-      },
-      {
-        "kpi": "Threat prevention / incident-free duty",
+        "kpi": "Executive Protection & Personal Security",
         "weight": 25,
-        "target": "0 avoidable incidents",
-        "exampleActual": "0",
-        "calculation": "Compliance rule"
+        "details": "Ensure the safety and security of assigned executives during office hours, official meetings, business visits and authorized movements through professional protection practices.",
+        "target": "100% compliance with approved executive protection procedures."
       },
       {
-        "kpi": "Movement/route readiness",
+        "kpi": "Security Risk Assessment & Threat Monitoring",
+        "weight": 20,
+        "details": "Identify potential security risks, monitor surroundings, assess unusual activities and report security threats promptly to the concerned authority.",
+        "target": "100% timely reporting and documentation of identified security concerns."
+      },
+      {
+        "kpi": "Executive Movement & Security Coordination",
         "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "details": "Plan and coordinate executive movements, transportation arrangements, arrival and departure schedules, and security support for official visits.",
+        "target": "100% completion of assigned security coordination activities."
       },
       {
-        "kpi": "Emergency response",
-        "weight": 10,
-        "target": "≤2 min",
-        "exampleActual": "1.5 min",
-        "calculation": "2/1.5×100 — Time Lower Better"
+        "kpi": "Emergency Preparedness & Incident Management",
+        "weight": 15,
+        "details": "Maintain readiness for emergencies, coordinate appropriate responses to security incidents and follow approved emergency procedures.",
+        "target": "100% compliance with emergency response and incident reporting requirements."
       },
       {
-        "kpi": "SOP/equipment readiness",
+        "kpi": "Security Supervision & Protocol Compliance",
         "weight": 10,
-        "target": "100%",
-        "exampleActual": "99%",
-        "calculation": "Compliance rule"
+        "details": "Ensure implementation of security procedures, coordinate with security personnel and relevant departments, monitor duty performance and maintain compliance with approved security protocols.",
+        "target": "95% compliance with security procedures and assigned supervisory responsibilities."
       },
       {
-        "kpi": "Reporting/confidentiality/discipline",
-        "weight": 10,
-        "target": "100%",
-        "exampleActual": "98%",
-        "calculation": "Compliance rule"
+        "kpi": "Confidentiality, Reporting & Professional Conduct",
+        "weight": 15,
+        "details": "Maintain confidentiality of executive information, schedules and movements; prepare security reports, maintain records and demonstrate professional conduct.",
+        "target": "100% compliance with confidentiality requirements and timely submission of assigned reports."
       }
     ],
     "totalWeight": 100
@@ -305,46 +274,40 @@
     "designation": "Executive Protection Guard",
     "items": [
       {
-        "kpi": "Protective duty/post coverage",
-        "weight": 30,
-        "target": "100%",
-        "exampleActual": "100%",
-        "calculation": "Compliance rule"
-      },
-      {
-        "kpi": "Threat prevention / incident-free duty",
+        "kpi": "Executive Safety & Protection",
         "weight": 25,
-        "target": "0 avoidable incidents",
-        "exampleActual": "0",
-        "calculation": "Compliance rule"
+        "details": "Ensure the personal safety of assigned executives during office hours, official movements, meetings and authorized external visits. Maintain alertness and follow approved protection procedures.",
+        "target": "100% compliance with assigned protection duties."
       },
       {
-        "kpi": "Movement/route readiness",
+        "kpi": "Threat Assessment & Risk Monitoring",
+        "weight": 20,
+        "details": "Remain alert to suspicious activities, identify potential security risks, monitor surroundings and immediately report any threats or unusual situations to the concerned authority.",
+        "target": "100% timely reporting of identified security concerns."
+      },
+      {
+        "kpi": "Movement & Travel Security Coordination",
         "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "details": "Coordinate executive movements, transportation arrangements, arrival and departure schedules and security support during official visits.",
+        "target": "100% completion of assigned movement security arrangements."
       },
       {
-        "kpi": "Emergency response",
-        "weight": 10,
-        "target": "≤2 min",
-        "exampleActual": "1.5 min",
-        "calculation": "2/1.5×100 — Time Lower Better"
+        "kpi": "Emergency Response & Incident Management",
+        "weight": 15,
+        "details": "Respond promptly to emergencies, security incidents and unexpected situations, following approved emergency procedures and notifying relevant authorities.",
+        "target": "100% compliance with emergency reporting and response procedures."
       },
       {
-        "kpi": "SOP/equipment readiness",
-        "weight": 10,
-        "target": "100%",
-        "exampleActual": "99%",
-        "calculation": "Compliance rule"
+        "kpi": "Confidentiality, Discipline & Professional Conduct",
+        "weight": 15,
+        "details": "Maintain confidentiality of executive movements, schedules and personal information; demonstrate professional behaviour, punctuality and compliance with supervisor instructions.",
+        "target": "100% compliance with confidentiality and conduct requirements."
       },
       {
-        "kpi": "Reporting/confidentiality/discipline",
+        "kpi": "Complaint Management & Additional Security Support",
         "weight": 10,
-        "target": "100%",
-        "exampleActual": "98%",
-        "calculation": "Compliance rule"
+        "details": "Handle security-related concerns professionally and provide protection support during executive meetings, official functions, VIP visits and special assignments.",
+        "target": "Maximum 1 valid complaint per month; 100% completion of assigned security duties."
       }
     ],
     "totalWeight": 100
@@ -354,46 +317,40 @@
     "designation": "Watchman",
     "items": [
       {
-        "kpi": "Post coverage & presence",
-        "weight": 25,
-        "target": "100%",
-        "exampleActual": "100%",
-        "calculation": "Compliance rule"
-      },
-      {
-        "kpi": "Patrolling/check rounds",
+        "kpi": "Premises Monitoring & Protection",
         "weight": 20,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "details": "Monitor the assigned premises, remain alert and protect office buildings, parking areas and other assigned property from unauthorized access or suspicious activities.",
+        "target": "100% compliance with assigned monitoring duties."
       },
       {
-        "kpi": "Incident prevention & reporting",
+        "kpi": "Gate & Entry/Exit Monitoring",
         "weight": 20,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "details": "Monitor gates, doors and entry/exit points, observe movement of people and vehicles and report unauthorized access.",
+        "target": "100% compliance with gate monitoring procedures."
       },
       {
-        "kpi": "Access/control compliance",
+        "kpi": "Security Rounds & Incident Reporting",
+        "weight": 20,
+        "details": "Conduct regular security rounds as per the assigned schedule and immediately report suspicious activities, damage, theft or unusual incidents.",
+        "target": "100% completion of scheduled security rounds and timely incident reporting."
+      },
+      {
+        "kpi": "Attendance, Punctuality & Duty Discipline",
         "weight": 15,
-        "target": "100%",
-        "exampleActual": "98%",
-        "calculation": "Compliance rule"
+        "details": "Follow assigned duty timings, remain present at the designated location, maintain proper handover of duties and avoid leaving the post without permission.",
+        "target": "95% attendance and duty compliance."
       },
       {
-        "kpi": "Emergency response",
+        "kpi": "Complaint Management & Professional Conduct",
         "weight": 10,
-        "target": "≤5 min",
-        "exampleActual": "4 min",
-        "calculation": "5/4×100 — Time Lower Better"
+        "details": "Maintain professional behaviour, follow supervisor instructions, cooperate with employees and visitors and minimize valid security-related complaints.",
+        "target": "Maximum 2 valid complaints per month and 95% compliance."
       },
       {
-        "kpi": "Attendance & punctuality",
-        "weight": 10,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "kpi": "Additional Duties & Event Support",
+        "weight": 15,
+        "details": "Assist during office functions, official events and special activities, including parking arrangements, crowd guidance, premises monitoring and other assigned security duties.",
+        "target": "100% completion of assigned duties."
       }
     ],
     "totalWeight": 100
@@ -452,46 +409,40 @@
     "designation": "Janitor",
     "items": [
       {
-        "kpi": "Cleaning task completion",
-        "weight": 30,
-        "target": "≥95%",
-        "exampleActual": "98%",
-        "calculation": "98/95×100"
+        "kpi": "Office & Floor Cleaning",
+        "weight": 20,
+        "details": "Ensure proper sweeping, mopping, dusting and cleaning of offices, cabins, corridors, staircases and common areas.",
+        "target": "95% cleanliness inspection score."
       },
       {
-        "kpi": "Cleaning quality",
-        "weight": 25,
-        "target": "≥90%",
-        "exampleActual": "94%",
-        "calculation": "94/90×100"
+        "kpi": "Washroom Cleaning & Hygiene",
+        "weight": 20,
+        "details": "Clean and disinfect washrooms regularly and maintain availability of soap, tissue and other hygiene supplies.",
+        "target": "100% completion of scheduled cleaning."
       },
       {
-        "kpi": "Hygiene/sanitation compliance",
+        "kpi": "Waste Management",
         "weight": 15,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "details": "Empty dustbins regularly, prevent overflowing and ensure proper waste collection and disposal.",
+        "target": "95% compliance."
       },
       {
-        "kpi": "Cleaning schedule adherence",
-        "weight": 10,
-        "target": "≥95%",
-        "exampleActual": "97%",
-        "calculation": "97/95×100"
+        "kpi": "Furniture, Pantry & Surface Cleaning",
+        "weight": 15,
+        "details": "Maintain cleanliness of furniture, desks, doors, windows, pantry floors, sinks and countertops.",
+        "target": "95% cleanliness inspection score."
       },
       {
-        "kpi": "Material/equipment control",
-        "weight": 10,
-        "target": "≤5% wastage",
-        "exampleActual": "4%",
-        "calculation": "5/4×100 — Lower Better"
+        "kpi": "Complaint Management",
+        "weight": 15,
+        "details": "Minimize valid cleanliness and hygiene-related complaints, respond promptly and resolve reported issues within the timeframe assigned by the supervisor.",
+        "target": "Maximum 2 valid complaints per month and 95% timely resolution."
       },
       {
-        "kpi": "Attendance & punctuality",
-        "weight": 10,
-        "target": "≥95%",
-        "exampleActual": "96%",
-        "calculation": "96/95×100"
+        "kpi": "Additional Duties & Event Management",
+        "weight": 15,
+        "details": "Provide housekeeping support during official functions, meetings, training sessions and special events, including venue preparation, seating area cleaning, waste management and post-event cleaning.",
+        "target": "100% completion of assigned event duties."
       }
     ],
     "totalWeight": 100
@@ -2438,6 +2389,49 @@
         "target": "≥95%",
         "exampleActual": "96%",
         "calculation": "96/95×100"
+      }
+    ],
+    "totalWeight": 100
+  },
+  {
+    "num": 50,
+    "designation": "Executive Protection Driver",
+    "items": [
+      {
+        "kpi": "Safe Driving & Executive Protection",
+        "weight": 25,
+        "details": "Ensure safe and responsible transportation of assigned executives; follow traffic laws, speed limits, defensive driving practices and approved security instructions.",
+        "target": "100% compliance with driving and safety procedures; zero preventable accidents."
+      },
+      {
+        "kpi": "Punctuality & Timely Transportation",
+        "weight": 20,
+        "details": "Ensure executives reach offices, meetings, appointments and official destinations on time; plan routes and manage schedules effectively.",
+        "target": "95% on-time transportation service."
+      },
+      {
+        "kpi": "Vehicle Maintenance & Readiness",
+        "weight": 15,
+        "details": "Keep the assigned vehicle clean, presentable and roadworthy; conduct routine inspections and promptly report mechanical faults or maintenance requirements.",
+        "target": "100% scheduled vehicle inspections; 95% cleanliness inspection score."
+      },
+      {
+        "kpi": "Route Planning & Movement Coordination",
+        "weight": 15,
+        "details": "Plan suitable routes, monitor traffic conditions, coordinate pickup/drop-off arrangements and maintain readiness for changes in executive schedules.",
+        "target": "100% completion of assigned transportation and movement arrangements."
+      },
+      {
+        "kpi": "Confidentiality & Professional Conduct",
+        "weight": 15,
+        "details": "Maintain confidentiality of executive schedules, movements and personal information; demonstrate courteous behaviour, discipline, punctuality and compliance with instructions.",
+        "target": "100% compliance with confidentiality and professional conduct requirements."
+      },
+      {
+        "kpi": "Complaint Management & Additional Duties",
+        "weight": 10,
+        "details": "Handle transport-related concerns professionally, minimize valid complaints and support official visits, meetings, airport transfers and other assigned duties.",
+        "target": "Maximum 1 valid complaint per month; 100% completion of assigned additional duties."
       }
     ],
     "totalWeight": 100

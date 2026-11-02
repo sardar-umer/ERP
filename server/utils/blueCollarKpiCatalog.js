@@ -28,6 +28,8 @@ const TITLE_ALIASES = {
   masson: 'mason',
   driver: 'driver / htv driver',
   'htv driver': 'driver / htv driver',
+  // Loose "driver" matches would otherwise prefer the longer Executive Protection Driver pack
+  'dumper driver': 'driver / htv driver',
   rikshaw: 'rikshaw driver',
   rickshaw: 'rikshaw driver',
   'rickshaw driver': 'rikshaw driver'
@@ -36,7 +38,7 @@ const TITLE_ALIASES = {
 const findCatalogEntryForTitle = (title) => {
   let needle = normalizeTitle(title);
   if (!needle) return null;
-  if (TITLE_ALIASES[needle]) needle = TITLE_ALIASES[needle];
+  if (TITLE_ALIASES[needle]) needle = normalizeTitle(TITLE_ALIASES[needle]);
   const entries = getCatalogEntries();
 
   const exact = entries.find((e) => normalizeTitle(e.designation) === needle);
@@ -59,6 +61,13 @@ const findCatalogEntryForTitle = (title) => {
   return ranked[0]?.e || null;
 };
 
+/** True when the title is the entry's own designation (or an alias of it), not a loose word match */
+const isExactCatalogMatch = (title, entry) => {
+  let needle = normalizeTitle(title);
+  if (TITLE_ALIASES[needle]) needle = normalizeTitle(TITLE_ALIASES[needle]);
+  return Boolean(entry) && needle === normalizeTitle(entry.designation);
+};
+
 const isBlueCollarEmployee = (employee) => {
   if (!employee) return false;
   if (String(employee.employeeCategory || '').toLowerCase() === 'blue_collar') return true;
@@ -70,7 +79,7 @@ const isBlueCollarEmployee = (employee) => {
 
 const catalogItemsToTemplateItems = (entry) => (entry?.items || []).map((item) => ({
   title: item.kpi,
-  description: item.target ? `Target: ${item.target}` : '',
+  description: [item.details, item.target ? `Target: ${item.target}` : ''].filter(Boolean).join(' '),
   weight: Number(item.weight) || 0,
   target: item.target || '',
   calculationRule: inferCalculationRule(item.calculation, item.target),
@@ -95,6 +104,7 @@ module.exports = {
   normalizeTitle,
   getCatalogEntries,
   findCatalogEntryForTitle,
+  isExactCatalogMatch,
   catalogItemsToTemplateItems,
   worksheetRowsFromCatalogEntry,
   inferCalculationRule,
