@@ -50,6 +50,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
+import { canSeePresidentDashboard } from '../../utils/presidentAccess';
 import { getModuleMenuItems, MODULES } from '../../utils/permissions';
 import NotificationService from '../../services/notificationService';
 import { useNotifications } from '../../contexts/NotificationContext';
@@ -1168,7 +1169,14 @@ const Sidebar = () => {
       }}>
         <List sx={{ pt: 1 }}>
         {(() => {
-          const menuItems = filterMenuBySearch(getFilteredMenuItems(user?.role), menuSearch);
+          let menuItems = getFilteredMenuItems(user?.role);
+          // President and developer: President Dashboard first, then the usual Dashboard
+          if (canSeePresidentDashboard(user)) {
+            const at = menuItems.findIndex((item) => item.path === '/dashboard');
+            const presidentItem = { text: 'President Dashboard', icon: at >= 0 ? menuItems[at].icon : null, path: '/general/president-dashboard' };
+            menuItems = at >= 0 ? [...menuItems.slice(0, at), presidentItem, ...menuItems.slice(at)] : [presidentItem, ...menuItems];
+          }
+          menuItems = filterMenuBySearch(menuItems, menuSearch);
           if (!menuItems || menuItems.length === 0) {
             if (isSearchingMenu) {
               return (

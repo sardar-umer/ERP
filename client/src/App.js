@@ -250,6 +250,9 @@ import ProjectApprovals from './pages/General/ProjectApprovals';
 import SubcontractorStatement from './pages/General/SubcontractorStatement';
 import GeneralCostCenters from './pages/General/CostCenters/GeneralCostCenters';
 import PresidentSecretariatDashboard from './pages/General/PresidentSecretariat/Dashboard';
+import PresidentDashboard from './pages/General/PresidentDashboard';
+import { PresidentOnly } from './pages/Dashboard/HomeDashboard';
+import { isPresidentUser } from './utils/presidentAccess';
 import PresidentMeetings from './pages/General/PresidentSecretariat/Meetings';
 import PresidentMeetingDetail from './pages/General/PresidentSecretariat/MeetingDetail';
 import PresidentMeetingPrintView from './pages/General/PresidentSecretariat/MeetingPrintView';
@@ -404,7 +407,7 @@ const RoleBasedRedirect = () => {
     }
   };
 
-  const redirectPath = getRedirectPath(user.role);
+  const redirectPath = isPresidentUser(user) ? '/general/president-dashboard' : getRedirectPath(user.role);
   return <Navigate to={redirectPath} replace />;
 };
 
@@ -451,7 +454,7 @@ const PublicRoute = ({ children }) => {
       }
     };
 
-    const redirectPath = getRedirectPath(user.role);
+    const redirectPath = isPresidentUser(user) ? '/general/president-dashboard' : getRedirectPath(user.role);
     return <Navigate to={redirectPath} replace />;
   }
 
@@ -837,6 +840,10 @@ function App() {
                     <Route
                       path="/general/ceo-secretariat/payments"
                       element={<ProtectedRoute><Payments /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/president-dashboard"
+                      element={<ProtectedRoute><PresidentOnly><PresidentDashboard /></PresidentOnly></ProtectedRoute>}
                     />
                     <Route
                       path="/general/president-secretariat"

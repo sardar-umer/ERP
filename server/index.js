@@ -736,6 +736,7 @@ app.use('/api/stores', authMiddleware, activityLogger, storesRoutes);
 app.use('/api/project-management', authMiddleware, activityLogger, projectManagementRoutes);
 app.use('/api/president-meetings', authMiddleware, activityLogger, presidentMeetingsRoutes);
 app.use('/api/president-events', authMiddleware, activityLogger, presidentEventsRoutes);
+app.use('/api/president-dashboard', authMiddleware, activityLogger, require('./routes/presidentDashboard'));
 app.use('/api/kpi/worksheets', authMiddleware, activityLogger, require('./routes/kpiWorksheet'));
 app.use('/api/kpi', authMiddleware, activityLogger, require('./routes/kpi'));
 app.use('/api/items', authMiddleware, activityLogger, require('./routes/items'));

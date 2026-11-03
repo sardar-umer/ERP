@@ -90,7 +90,8 @@ import {
   getNewHiringEmployees
 } from '../../utils/newHiringEmployees';
 
-const ExecutiveCeoPaymentsSection = () => {
+/** `showIpcTab`: give contractor IPCs their own tab (President Dashboard) */
+const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   const theme = useTheme();
   const isMobile = useMediaQuery(theme.breakpoints.down('sm'));
   const navigate = useNavigate();
@@ -250,6 +251,7 @@ const ExecutiveCeoPaymentsSection = () => {
   const settlementItems = payments.filter((p) => p.isPaymentSettlement);
   const onboardingItems = payments.filter((p) => p.isOnboarding || p.isManualSalary);
   const otherItems = payments.filter((p) => p.isIndent || p.isUtilityBill || p.isVendorBill);
+  const ipcItems = payments.filter((p) => p.isProjectIpc);
 
   const totalAmount = payments.reduce((sum, p) => sum + (Number(p.displayAmount) || 0), 0);
   const poAmount = poItems.reduce((sum, p) => sum + (Number(p.displayAmount) || 0), 0);
@@ -263,6 +265,7 @@ const ExecutiveCeoPaymentsSection = () => {
     if (filterTab === 3 && !p.isPaymentSettlement) return false;
     if (filterTab === 4 && !(p.isOnboarding || p.isManualSalary)) return false;
     if (filterTab === 5 && !(p.isIndent || p.isUtilityBill || p.isVendorBill)) return false;
+    if (filterTab === 6 && !p.isProjectIpc) return false;
     return true;
   });
 
@@ -1929,6 +1932,7 @@ const ExecutiveCeoPaymentsSection = () => {
             <Tab label={isMobile ? `Settle (${settlementItems.length})` : `Settlements (${settlementItems.length})`} />
             <Tab label={isMobile ? `Onboard (${onboardingItems.length})` : `Onboardings (${onboardingItems.length})`} />
             <Tab label={`Other (${otherItems.length})`} />
+            {showIpcTab && <Tab value={6} label={isMobile ? `IPC (${ipcItems.length})` : `Contractor IPCs (${ipcItems.length})`} />}
           </Tabs>
         </Box>
 

@@ -2,6 +2,7 @@ import React, { createContext, useContext, useReducer, useEffect, useMemo, useCa
 import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import toast from 'react-hot-toast';
+import { isPresidentUser } from '../utils/presidentAccess';
 
 // Constants
 const MAX_RETRIES = 3;
@@ -270,7 +271,8 @@ export const AuthProvider = ({ children }) => {
       dispatch({ type: 'LOGIN_SUCCESS', payload: { user, token } });
 
       toast.success(successMsg);
-      navigate(redirectTo || getRedirectPath(user.role));
+      // The President opens on his own dashboard
+      navigate(redirectTo || (isPresidentUser(user) ? '/general/president-dashboard' : getRedirectPath(user.role)));
       return { success: true };
     } catch (error) {
       const message = getErrorMessage(error, errorMsg);
