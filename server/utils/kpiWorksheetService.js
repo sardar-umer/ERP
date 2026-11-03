@@ -103,29 +103,46 @@ async function rowsFromBlueCollarDesignation(employeeId) {
   return worksheetRowsFromCatalogEntry(entry);
 }
 
-async function getOrCreateWorksheet(employeeId, year, month) {
-  let doc = await KPIWorksheet.findOne({ employee: employeeId, year, month });
-  if (doc) return doc;
-
+/** Rows for a sheet that has none yet: previous month's KPIs, else the designation catalog. */
+async function defaultRowsForMonth(employeeId, year, month) {
   const { year: py, month: pm } = prevYearMonth(year, month);
   const prev = await KPIWorksheet.findOne({ employee: employeeId, year: py, month: pm }).lean();
+  const rows = prev ? cloneRowsFromWorksheet(prev) : [];
+  return rows.length ? rows : rowsFromBlueCollarDesignation(employeeId);
+}
 
-  let rows = prev ? cloneRowsFromWorksheet(prev) : [];
-  if (!rows.length) {
-    rows = await rowsFromBlueCollarDesignation(employeeId);
+/**
+ * A sheet created before the previous month had KPIs (e.g. by the monthly cron) stays empty;
+ * fill it once the previous month has them. Returns true when rows were added.
+ */
+async function fillEmptyWorksheet(doc) {
+  if (doc.rows?.length) return false;
+  const rows = await defaultRowsForMonth(doc.employee, doc.year, doc.month);
+  if (!rows.length) return false;
+  doc.rows = rows;
+  await doc.save();
+  return true;
+}
+
+async function getOrCreateWorksheet(employeeId, year, month) {
+  let doc = await KPIWorksheet.findOne({ employee: employeeId, year, month });
+  if (doc) {
+    await fillEmptyWorksheet(doc);
+    return doc;
   }
 
   doc = await KPIWorksheet.create({
     employee: employeeId,
     year,
     month,
-    rows
+    rows: await defaultRowsForMonth(employeeId, year, month)
   });
   return doc;
 }
 
 /**
- * Called by cron on 1st of month: ensure every active employee has a worksheet for (year, month).
+ * Called by cron on 1st of month: ensure every active employee has a worksheet for (year, month),
+ * and fill sheets that are still empty from the previous month.
  */
 async function ensureWorksheetsForMonth(year, month) {
   const employees = await Employee.find({
@@ -136,14 +153,17 @@ async function ensureWorksheetsForMonth(year, month) {
     .lean();
 
   let created = 0;
+  let filled = 0;
   for (const e of employees) {
-    const exists = await KPIWorksheet.findOne({ employee: e._id, year, month }).select('_id').lean();
-    if (!exists) {
+    const doc = await KPIWorksheet.findOne({ employee: e._id, year, month });
+    if (!doc) {
       await getOrCreateWorksheet(e._id, year, month);
       created += 1;
+    } else if (await fillEmptyWorksheet(doc)) {
+      filled += 1;
     }
   }
-  return { employees: employees.length, created };
+  return { employees: employees.length, created, filled };
 }
 
 /**

@@ -2,10 +2,13 @@
  * Replace the KPI rows on a month's worksheets with the current designation catalog
  * (server/data/blueCollarDesignationKpis.json) for the designations listed below.
  * Only sheets nobody has started (every Achieved / Total Assigned still 0) are changed;
- * later months clone these rows, so the new KPIs carry forward.
+ * the following months' sheets that are still untouched copies get the same KPIs, and sheets
+ * created later clone these rows.
+ *
+ * Defaults to the previous month — the KPI period HR reviews (on 3 Nov that is October).
  *
  * Usage:
- *   node server/scripts/refresh-blue-collar-kpi-worksheets.js                 # dry run, current month
+ *   node server/scripts/refresh-blue-collar-kpi-worksheets.js                 # dry run, previous month
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --apply
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --year 2026 --month 12 --apply
  *   node server/scripts/refresh-blue-collar-kpi-worksheets.js --skip 06664,1234 --apply   # leave these employee IDs as they are
@@ -28,6 +31,7 @@ const {
   isExactCatalogMatch,
   worksheetRowsFromCatalogEntry
 } = require('../utils/blueCollarKpiCatalog');
+const { prevYearMonth, propagateStructureForward } = require('../utils/kpiWorksheetService');
 
 // Designations whose KPIs were updated from HR's KPI documents (Driver, Security Guard & Watchman,
 // Office Boy & Janitor, Executive Protection Officer / Driver / Guard)
@@ -53,8 +57,9 @@ const argValue = (name) => {
 
 async function main() {
   const now = new Date();
-  const year = argValue('--year') || now.getFullYear();
-  const month = argValue('--month') || now.getMonth() + 1;
+  const period = prevYearMonth(now.getFullYear(), now.getMonth() + 1);
+  const year = argValue('--year') || period.year;
+  const month = argValue('--month') || period.month;
   const apply = process.argv.includes('--apply');
   const skipIndex = process.argv.indexOf('--skip');
   const skipIds = new Set(skipIndex > -1
@@ -101,9 +106,11 @@ async function main() {
     }
     s.refreshed += 1;
     if (apply) {
+      const oldRows = (sheet.rows || []).map((r) => (r.toObject ? r.toObject() : r));
       sheet.rows = worksheetRowsFromCatalogEntry(entry);
       sheet.recomputeDerived?.();
       await sheet.save();
+      await propagateStructureForward(sheet, oldRows);
     }
   }
 

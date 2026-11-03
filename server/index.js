@@ -948,13 +948,21 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('❌ Failed to start KPI Worksheet Monthly Cron:', error);
   }
 
-  // Backfill current month KPI worksheets once on startup (non-blocking)
+  // Backfill previous (the KPI period HR reviews) and current month KPI worksheets once on startup
+  // (non-blocking); previous first so the current month can copy its KPIs
   try {
-    const { ensureWorksheetsForMonth } = require('./utils/kpiWorksheetService');
+    const { ensureWorksheetsForMonth, prevYearMonth } = require('./utils/kpiWorksheetService');
     const n = new Date();
-    ensureWorksheetsForMonth(n.getFullYear(), n.getMonth() + 1).then((r) => {
-      if (r.created) console.log(`[KPIWorksheet] Startup backfill created ${r.created} worksheet(s)`);
-    }).catch(() => {});
+    const current = { year: n.getFullYear(), month: n.getMonth() + 1 };
+    const previous = prevYearMonth(current.year, current.month);
+    (async () => {
+      for (const { year, month } of [previous, current]) {
+        const r = await ensureWorksheetsForMonth(year, month);
+        if (r.created || r.filled) {
+          console.log(`[KPIWorksheet] Startup backfill ${year}-${month}: created ${r.created}, filled ${r.filled} worksheet(s)`);
+        }
+      }
+    })().catch(() => {});
   } catch (_) {
     /* ignore */
   }
