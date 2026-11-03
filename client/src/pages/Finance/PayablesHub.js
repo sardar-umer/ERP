@@ -3,7 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import {
   Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog, DialogActions, DialogContent,
   DialogTitle, FormControl, FormControlLabel, Grid, IconButton, InputLabel, MenuItem, Paper, Select, Skeleton, Stack,
-  Switch, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, TextField, Tooltip,
+  Switch, Tab, Table, TableBody, TableCell, TableContainer, TableHead, TablePagination, TableRow, Tabs, TextField, Tooltip,
   Typography
 } from '@mui/material';
 import {
@@ -88,6 +88,8 @@ export default function PayablesHub() {
   const [poView, setPoView] = useState({ open: false, data: null, loading: false });
   // Row whose company is being changed
   const [companyRow, setCompanyRow] = useState(null);
+  const [page, setPage] = useState(0);
+  const [rowsPerPage, setRowsPerPage] = useState(500);
 
   const load = useCallback(async () => {
     try {
@@ -140,6 +142,10 @@ export default function PayablesHub() {
         .filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
       .sort((a, b) => (b.overdue - a.overdue) || new Date(a.dueDate || a.date || 0) - new Date(b.dueDate || b.date || 0));
   }, [vendorRows, stage, source, overdueOnly, search]);
+
+  // Back to the first page whenever the filters change
+  useEffect(() => { setPage(0); }, [stage, source, overdueOnly, search, vendor, companyId]);
+  const pageRows = useMemo(() => rows.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage), [rows, page, rowsPerPage]);
 
   const vendorSummary = useMemo(() => {
     if (!vendor) return null;
@@ -370,7 +376,7 @@ export default function PayablesHub() {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {rows.map((r) => {
+                {pageRows.map((r) => {
                   const st = STAGES.find((x) => x.key === r.stage);
                   return (
                     <TableRow key={r.key} hover sx={{ bgcolor: r.overdue ? 'rgba(211,47,47,0.04)' : undefined }}>
@@ -437,6 +443,15 @@ export default function PayablesHub() {
                 )}
               </TableBody>
             </Table>
+            <TablePagination
+              component="div"
+              count={rows.length}
+              page={Math.min(page, Math.max(0, Math.ceil(rows.length / rowsPerPage) - 1))}
+              onPageChange={(_, p) => setPage(p)}
+              rowsPerPage={rowsPerPage}
+              onRowsPerPageChange={(e) => { setRowsPerPage(parseInt(e.target.value, 10)); setPage(0); }}
+              rowsPerPageOptions={[50, 100, 250, 500, 1000]}
+            />
           </TableContainer>
         )}
       </Paper>
