@@ -1853,4 +1853,8 @@ employeeSchema.methods.getActiveLicenses = function () {
   return this.assignedLicenses.filter(assignment => assignment.status === 'Active');
 };
 
+// Employee change log (old → new, who, when) for the History section of the employee page
+require('./EmployeeChangeLog');
+employeeSchema.plugin(require('../../utils/employeeChangeTracking').employeeChangeTracking);
+
 module.exports = mongoose.model('Employee', employeeSchema); 

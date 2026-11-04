@@ -52,6 +52,7 @@ import { fetchEmployeeKpiWorksheet } from '../../services/kpiWorksheetService';
 import { openEmployeeDetailPrint } from '../../utils/employeeDetailPrint';
 import { buildJoiningReportPrintHtml, openPrintHtml } from '../../utils/employeeFormPrint';
 import AutoCalculatedSalaryBreakdown from '../../components/AutoCalculatedSalaryBreakdown';
+import EmployeeHistory from '../../components/HR/EmployeeHistory';
 import { vehicleAllowanceAmount, fuelAllowanceAmount } from '../../utils/allowanceHelpers';
 
 const EmployeeView = () => {
@@ -1550,6 +1551,9 @@ const EmployeeView = () => {
           </Card>
         </Grid>
       </Grid>
+
+      {/* Employee History: timeline + change log */}
+      <EmployeeHistory employeeId={id} />
 
       {/* Detailed Arrears Management Section */}
       <Card sx={{ mt: 3 }}>

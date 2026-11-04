@@ -916,8 +916,112 @@ router.get('/employees/report',
 // @route   GET /api/hr/employees/:id
 // @desc    Get employee by ID
 // @access  Private (HR and Admin)
-router.get('/employees/:id', 
-  authorize('super_admin', 'admin', 'hr_manager'), 
+// @route   GET /api/hr/employees/:id/history
+// @desc    Employee history: timeline from existing records (joining, increments, payroll, leaves, loans,
+//          advances, salary cuts, KPI, settlement) + change log of edits (old → new, who, when)
+// @access  Private (HR and Admin)
+router.get('/employees/:id/history',
+  authorize('super_admin', 'admin', 'hr_manager'),
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid employee ID' });
+    }
+    const employee = await Employee.findById(req.params.id)
+      .select('employeeId firstName lastName hireDate appointmentDate confirmationDate terminationDate terminationReason employmentStatus placementDesignation')
+      .populate('placementDesignation', 'title')
+      .lean();
+    if (!employee) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+
+    const id = employee._id;
+    const M = (name) => mongoose.model(name);
+    const MONTHS = ['', 'Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    const monthLabel = (m, y) => `${MONTHS[m] || m} ${y}`;
+    const pkr = (n) => `Rs ${Math.round(Number(n) || 0).toLocaleString('en-PK')}`;
+    const monthDate = (m, y) => new Date(Date.UTC(y, m - 1, 1));
+    const optional = (name, run) => {
+      try { return run(M(name)); } catch { return Promise.resolve([]); }
+    };
+
+    const [increments, payrolls, leaves, loans, advances, cuts, worksheets, settlements, changeLog] = await Promise.all([
+      EmployeeIncrement.find({ employee: id, isActive: { $ne: false } }).lean(),
+      optional('Payroll', (m) => m.find({ employee: id, status: { $ne: 'Cancelled' } })
+        .select('month year grossSalary totalEarnings arrears incomeTax totalDeductions netSalary status proration').lean()),
+      optional('LeaveRequest', (m) => m.find({ employee: id, isActive: { $ne: false } }).populate('leaveType', 'name').lean()),
+      optional('Loan', (m) => m.find({ employee: id }).lean()),
+      optional('SalaryAdvance', (m) => m.find({ employee: id, status: { $ne: 'Cancelled' } }).lean()),
+      optional('PayrollMonthSalaryCut', (m) => m.find({ employee: id }).lean()),
+      optional('KPIWorksheet', (m) => m.find({ employee: id, 'rows.0': { $exists: true } }).select('month year totalKPIScore').lean()),
+      optional('FinalSettlement', (m) => m.find({ employee: id }).lean()),
+      M('EmployeeChangeLog').find({ employee: id }).sort({ changedAt: -1 }).limit(500)
+        .populate('changedBy', 'firstName lastName email').lean()
+    ]);
+
+    const timeline = [];
+    const add = (date, type, title, details = '') => {
+      if (date && !Number.isNaN(new Date(date).getTime())) timeline.push({ date, type, title, details });
+    };
+
+    const joined = employee.appointmentDate || employee.hireDate;
+    add(joined, 'joining', 'Joined', employee.placementDesignation?.title ? `as ${employee.placementDesignation.title}` : '');
+    add(employee.confirmationDate, 'joining', 'Confirmed', '');
+    if (employee.terminationDate) {
+      add(employee.terminationDate, 'leaving', 'Leaving date', [employee.employmentStatus, employee.terminationReason].filter(Boolean).join(' — '));
+    }
+
+    increments.forEach((i) => add(i.effectiveDate || i.requestDate, 'increment',
+      `Increment (${String(i.incrementType || '').replace('_', ' ')}) — ${i.status}`,
+      `${pkr(i.previousSalary)} → ${pkr(i.newSalary)}${i.incrementPercentage ? ` (+${i.incrementPercentage}%)` : ''}${i.reason ? ` · ${i.reason}` : ''}`));
+
+    payrolls.forEach((p) => {
+      const partial = p.proration?.isProrated ? ` · ${p.proration.payableDays}/${p.proration.daysInMonth} days` : '';
+      add(monthDate(p.month, p.year), 'payroll', `Payroll ${monthLabel(p.month, p.year)} — ${p.status}`,
+        `Gross ${pkr(p.grossSalary)}${partial} · Earnings ${pkr(p.totalEarnings)}${p.arrears ? ` (arrears ${pkr(p.arrears)})` : ''} · Tax ${pkr(p.incomeTax)} · Net ${pkr(p.netSalary)}`);
+    });
+
+    leaves.forEach((l) => add(l.startDate, 'leave',
+      `${l.leaveType?.name || 'Leave'} — ${l.status}`,
+      `${l.totalDays || ''} day(s), ${new Date(l.startDate).toISOString().slice(0, 10)} to ${new Date(l.endDate).toISOString().slice(0, 10)}${l.reason ? ` · ${l.reason}` : ''}`));
+
+    loans.forEach((l) => add(l.disbursementDate || l.applicationDate, 'loan',
+      `${l.loanType || ''} Loan — ${l.status}`,
+      `${pkr(l.loanAmount)} · installment ${pkr(l.monthlyInstallment)}${l.outstandingBalance != null ? ` · outstanding ${pkr(l.outstandingBalance)}` : ''}`));
+
+    advances.forEach((a) => add(a.advanceDate, 'advance', `Salary advance — ${a.status}`,
+      `${pkr(a.amount)} for payroll ${monthLabel(a.payrollMonth, a.payrollYear)}${a.reason ? ` · ${a.reason}` : ''}`));
+
+    cuts.forEach((c) => add(monthDate(c.month, c.year), 'salary_cut', `Salary cut ${monthLabel(c.month, c.year)}`, `${c.percentage}% of salary`));
+
+    worksheets.forEach((w) => add(monthDate(w.month, w.year), 'kpi', `KPI ${monthLabel(w.month, w.year)}`,
+      `Score ${Number(w.totalKPIScore || 0).toFixed(2)} / 5`));
+
+    settlements.forEach((s) => add(s.lastWorkingDate || s.applicationDate, 'settlement',
+      `Final settlement (${s.settlementType}) — ${s.status}`,
+      `Net settlement ${pkr(s.netSettlementAmount)}${s.reason ? ` · ${s.reason}` : ''}`));
+
+    timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
+
+    res.json({
+      success: true,
+      data: {
+        employee: { _id: id, employeeId: employee.employeeId, name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') },
+        timeline,
+        changes: changeLog.map((c) => ({
+          _id: c._id,
+          changedAt: c.changedAt,
+          changedBy: c.changedBy
+            ? [c.changedBy.firstName, c.changedBy.lastName].filter(Boolean).join(' ') || c.changedBy.email
+            : 'System',
+          changes: c.changes
+        }))
+      }
+    });
+  })
+);
+
+router.get('/employees/:id',
+  authorize('super_admin', 'admin', 'hr_manager'),
   asyncHandler(async (req, res) => {
     // Check if the ID is a valid ObjectId
     if (!req.params.id) {

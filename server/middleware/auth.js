@@ -1,5 +1,6 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
+const { runWithUser } = require('../utils/requestContext');
 const { ROLE_MODULE_ACCESS } = require('../config/permissions');
 
 // Helper functions
@@ -128,7 +129,8 @@ const authMiddleware = async (req, res, next) => {
     if (!user.isActive) return sendError(res, 401, 'Account is deactivated. Please contact administrator.');
 
     req.user = user;
-    next();
+    // Keep the acting user for the rest of the request (e.g. Employee change log)
+    runWithUser(user, () => next());
   } catch (error) {
     console.error('Auth middleware error:', error);
     return sendError(res, 500, 'Server error in authentication.');
