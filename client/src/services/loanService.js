@@ -169,6 +169,57 @@ export const loanService = {
   },
 
   // Delete loan (Pending for normal users; developer may delete at any status)
+  // Attachments
+  uploadDocuments: async (id, files = []) => {
+    try {
+      const form = new FormData();
+      files.forEach((f) => form.append('attachments', f));
+      const response = await api.post(`${LOAN_API_BASE}/${id}/documents`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  deleteDocument: async (id, docId) => {
+    try {
+      const response = await api.delete(`${LOAN_API_BASE}/${id}/documents/${docId}`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  // Approval chain: HR forwards → GM HR → AVP → CEO (final)
+  forwardLoan: async (id, { assignedHod, assignedAvp }) => {
+    try {
+      const response = await api.put(`${LOAN_API_BASE}/${id}/forward`, { assignedHod, assignedAvp });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  workflowAction: async (id, action, comments = '') => {
+    try {
+      const response = await api.put(`${LOAN_API_BASE}/${id}/workflow`, { action, comments });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  getWorkflowMe: async () => {
+    try {
+      const response = await api.get(`${LOAN_API_BASE}/workflow/me`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
   deleteLoan: async (id) => {
     try {
       const response = await api.delete(`${LOAN_API_BASE}/${id}`);

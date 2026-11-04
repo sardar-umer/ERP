@@ -22,7 +22,7 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-// Only records explicitly sent to Finance; "Approved by CEO" stays with HR until Finance hand-off is enabled
+// Records reach Finance when the Audit Director approves them (GM HR → AVP Taj → Audit → Finance)
 const PENDING_FINANCE_STATUSES = ['Pending Finance'];
 const PAYABLE_STATUSES = [...PENDING_FINANCE_STATUSES];
 

@@ -35,6 +35,8 @@ const statusColor = (status) => {
     case 'Pending AVP': return 'info';
     case 'Forwarded to CEO': return 'secondary';
     case 'Approved by CEO': return 'success';
+    case 'Pending Audit': return 'secondary';
+    case 'Forwarded to Audit Director': return 'secondary';
     case 'Pending Finance': return 'warning';
     case 'Payment Pending': return 'info';
     case 'Paid': return 'success';
@@ -55,7 +57,7 @@ const fmtDateTime = (d) => (d ? new Date(d).toLocaleString('en-GB', {
 }) : '');
 
 /** Statuses after HR where the record can no longer be edited / deleted */
-const LOCKED_STATUSES = ['Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Pending Finance', 'Payment Pending', 'Paid'];
+const LOCKED_STATUSES = ['Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Pending Audit', 'Forwarded to Audit Director', 'Pending Finance', 'Payment Pending', 'Paid'];
 
 const AMOUNT_FIELDS = [
   ['Basic Salary', 'basicSalary'],
@@ -72,7 +74,7 @@ const AMOUNT_FIELDS = [
   ['Net Payable', 'netPayable']
 ];
 
-/** Approval trail: Initiated → GM HR → AVP → CEO → Finance */
+/** Approval trail: Initiated → GM HR → AVP Taj → Audit → Audit Director → Finance */
 const approvalSteps = (r) => {
   const status = r.workflowStatus || 'Pending HOD HR';
   const steps = [
@@ -93,13 +95,30 @@ const approvalSteps = (r) => {
       current: status === 'Pending AVP',
       note: r.avpComments
     },
-    {
-      label: 'CEO',
+    // Records approved under the old flow keep their CEO step in the trail
+    ...(r.ceoApprovedAt || status === 'Forwarded to CEO' ? [{
+      label: 'CEO (old flow)',
       by: personName(r.ceoApprovedBy),
       at: r.ceoApprovedAt,
       done: Boolean(r.ceoApprovedAt),
       current: status === 'Forwarded to CEO',
       note: r.ceoComments
+    }] : []),
+    {
+      label: 'Pre-Audit',
+      by: personName(r.preAuditInitialApprovedBy),
+      at: r.preAuditInitialApprovedAt,
+      done: Boolean(r.preAuditInitialApprovedAt) || Boolean(r.auditApprovedAt),
+      current: ['Pending Audit', 'Approved by CEO'].includes(status),
+      note: r.preAuditInitialComments
+    },
+    {
+      label: 'Audit Director',
+      by: personName(r.auditApprovedBy),
+      at: r.auditApprovedAt,
+      done: Boolean(r.auditApprovedAt),
+      current: status === 'Forwarded to Audit Director',
+      note: r.auditComments
     },
     {
       label: 'Finance Payment',
@@ -228,7 +247,10 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
 
       doc.setFontSize(18);
       doc.setTextColor(0, 51, 102);
-      doc.text('SARDAR GROUP OF COMPANIES', doc.internal.pageSize.width / 2, 15, { align: 'center' });
+      // Company on the sheet: the records' company when they share one
+      const sheetCompanies = [...new Set(records.map((r) => r.companyName).filter(Boolean))];
+      const sheetTitle = sheetCompanies.length === 1 ? sheetCompanies[0] : 'Sardar Group of Companies';
+      doc.text(sheetTitle.toUpperCase(), doc.internal.pageSize.width / 2, 15, { align: 'center' });
 
       doc.setFontSize(12);
       doc.setTextColor(50, 50, 50);
@@ -302,7 +324,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                 Manual Salary Processing
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Approval: GM HR → AVP Taj Fahad Farid → CEO
+                Approval: GM HR → AVP Taj Fahad Farid → Audit → Finance
               </Typography>
             </Box>
             <Button
@@ -342,6 +364,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                         <TableCell>Name</TableCell>
                         <TableCell>Designation</TableCell>
                         <TableCell>Project</TableCell>
+                        <TableCell>Company</TableCell>
                         <TableCell>Status</TableCell>
                         <TableCell align="right" sx={{ bgcolor: 'yellow', fontWeight: 'bold' }}>Net Payable</TableCell>
                         <TableCell align="center">Actions</TableCell>
@@ -357,6 +380,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                             <TableCell>{row.name}</TableCell>
                             <TableCell>{row.designation}</TableCell>
                             <TableCell>{row.project}</TableCell>
+                            <TableCell>{row.companyName || '—'}</TableCell>
                             <TableCell>
                               <Chip
                                 size="small"
@@ -412,7 +436,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                         );
                       })}
                       <TableRow sx={{ bgcolor: 'grey.300' }}>
-                        <TableCell colSpan={6} align="right" sx={{ fontWeight: 'bold' }}>Total</TableCell>
+                        <TableCell colSpan={7} align="right" sx={{ fontWeight: 'bold' }}>Total</TableCell>
                         <TableCell align="right" sx={{ fontWeight: 'bold', bgcolor: 'yellow' }}>{formatCurrency(group.totalNet)}</TableCell>
                         <TableCell />
                       </TableRow>
@@ -445,7 +469,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
               <Box>
                 <Typography variant="h6" component="div">{detailRecord.name}</Typography>
                 <Typography variant="body2" color="text.secondary">
-                  {[detailRecord.empId, detailRecord.designation, detailRecord.project].filter(Boolean).join(' · ')}
+                  {[detailRecord.empId, detailRecord.designation, detailRecord.project, detailRecord.companyName].filter(Boolean).join(' · ')}
                   {' · '}{months[detailRecord.month - 1]} {detailRecord.year}
                 </Typography>
               </Box>

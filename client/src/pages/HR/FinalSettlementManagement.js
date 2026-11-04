@@ -54,6 +54,9 @@ import {
   WORKFLOW_COLORS,
   workflowLabel,
   canForward,
+  canSendToFinance,
+  inFinance,
+  SendToFinanceDialog,
   IN_APPROVAL
 } from '../../components/HR/FinalSettlementWorkflow';
 
@@ -76,6 +79,7 @@ const FinalSettlementManagement = () => {
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
   const [forwardFor, setForwardFor] = useState(null);
   const [processFor, setProcessFor] = useState(null);
+  const [financeFor, setFinanceFor] = useState(null);
   const [workflowMe, setWorkflowMe] = useState({ isAdmin: false, isCeoApprover: false });
 
   useEffect(() => {
@@ -85,6 +89,7 @@ const FinalSettlementManagement = () => {
   const workflowDone = (message) => {
     setForwardFor(null);
     setProcessFor(null);
+    setFinanceFor(null);
     setSnackbar({ open: true, message, severity: 'success' });
     loadSettlements();
   };
@@ -263,6 +268,18 @@ const FinalSettlementManagement = () => {
         );
         break;
       case 'approved':
+        // CEO-approved settlements are paid by Finance from Payables; HR only resends if the hand-off failed
+        if (inFinance(settlement)) break;
+        if (canSendToFinance(settlement)) {
+          buttons.push(
+            <Tooltip key="finance" title={settlement.financePostError ? `Send to Finance — last try: ${settlement.financePostError}` : 'Send to Finance (Payables)'}>
+              <IconButton size="small" color="warning" onClick={() => setFinanceFor(settlement)}>
+                <PaymentIcon />
+              </IconButton>
+            </Tooltip>
+          );
+          break;
+        }
         buttons.push(
           <Tooltip key="process" title="Process Settlement">
             <IconButton
@@ -276,6 +293,7 @@ const FinalSettlementManagement = () => {
         );
         break;
       case 'processed':
+        if (inFinance(settlement)) break;
         buttons.push(
           <Tooltip key="paid" title="Mark as Paid">
             <IconButton
@@ -293,7 +311,7 @@ const FinalSettlementManagement = () => {
     }
 
     // Cancel button (for non-paid settlements)
-    if (settlement.status !== 'paid' && settlement.status !== 'cancelled') {
+    if (settlement.status !== 'paid' && settlement.status !== 'cancelled' && !settlement.financeApBillId) {
       buttons.push(
         <Tooltip key="cancel" title="Cancel Settlement">
           <IconButton
@@ -555,6 +573,11 @@ const FinalSettlementManagement = () => {
                         <Typography variant="caption" color="textSecondary">
                           {String(settlement.employeeId || '')} • {String(settlement.department || '')}
                         </Typography>
+                        {settlement.companyName && (
+                          <Typography variant="caption" color="textSecondary" display="block">
+                            {settlement.companyName}
+                          </Typography>
+                        )}
                       </Box>
                     </TableCell>
                     <TableCell>
@@ -577,9 +600,9 @@ const FinalSettlementManagement = () => {
                             color: 'white'
                           }}
                         />
-                        {settlement.status === 'pending' && (
+                        {(settlement.status === 'pending' || settlement.workflowStatus === 'Pending Finance' || canSendToFinance(settlement)) && (
                           <Chip
-                            label={workflowLabel(settlement)}
+                            label={canSendToFinance(settlement) ? 'Not sent to Finance' : workflowLabel(settlement)}
                             size="small"
                             variant="outlined"
                             color={WORKFLOW_COLORS[settlement.workflowStatus || 'Draft']}
@@ -646,6 +669,7 @@ const FinalSettlementManagement = () => {
 
       {/* Snackbar */}
       <ForwardSettlementDialog settlement={forwardFor} onClose={() => setForwardFor(null)} onDone={workflowDone} />
+      <SendToFinanceDialog settlement={financeFor} onClose={() => setFinanceFor(null)} onDone={workflowDone} />
       <SettlementProcessDialog
         settlement={processFor}
         onClose={() => setProcessFor(null)}

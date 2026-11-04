@@ -1,10 +1,68 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = express.Router();
 const Loan = require('../models/hr/Loan');
 const { assertPauseAllowed } = require('../utils/loanPauseSchedule');
 const Employee = require('../models/hr/Employee');
 const { authMiddleware } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
+const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
+
+// ─── Attachments (PDF / image / Word / Excel, 10 MB each, up to 10 at a time) ───
+const loanUploadDir = path.join(__dirname, '../uploads/loans');
+const ALLOWED_ATTACHMENT_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+];
+const loanUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      if (!fs.existsSync(loanUploadDir)) fs.mkdirSync(loanUploadDir, { recursive: true });
+      cb(null, loanUploadDir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `loan-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || ALLOWED_ATTACHMENT_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Attachments must be PDF, image, Word or Excel files'), false);
+  }
+});
+const handleLoanUpload = (req, res, next) => {
+  loanUpload.array('attachments', 10)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ message: 'Each attachment must be 10 MB or less' });
+    if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ message: 'Maximum 10 attachments at a time' });
+    return res.status(400).json({ message: err.message || 'File upload error' });
+  });
+};
+const removeUploadedFiles = (files = []) => files.forEach((f) => fs.unlink(f.path, () => {}));
+
+// ─── Approval chain (same as Final Settlement): HR forwards → GM HR → AVP → CEO → Approved (final) ───
+const ADMIN_ROLES = ['super_admin', 'admin', 'developer'];
+const isAdminUser = (user) => ADMIN_ROLES.includes(user?.role);
+const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
+const FORWARDABLE = ['Draft', 'Returned', undefined, null, ''];
+const APPROVER_FIELDS = ['forwardedBy', 'assignedHod', 'hodApprovedBy', 'assignedAvp', 'avpApprovedBy', 'ceoApprovedBy', 'returnedBy'];
+const approverPopulate = APPROVER_FIELDS.map((path) => ({ path, select: 'firstName lastName email digitalSignature' }));
+const sameUser = (a, b) => Boolean(a && b) && String(a._id || a) === String(b._id || b);
+
+/** Which step the user can act on: 'HOD' | 'AVP' | 'CEO' | null */
+const workflowRoleFor = (loan, user) => {
+  const ws = loan.workflowStatus;
+  if (loan.status !== 'Pending') return null;
+  if (ws === 'Pending HOD HR' && (sameUser(loan.assignedHod, user._id || user.id) || isAdminUser(user))) return 'HOD';
+  if (ws === 'Pending AVP' && (sameUser(loan.assignedAvp, user._id || user.id) || isAdminUser(user))) return 'AVP';
+  if (ws === 'Forwarded to CEO' && isDesignatedCeoApprover(user)) return 'CEO';
+  return null;
+};
 
 const EMPLOYEE_DETAIL_POPULATE = {
   path: 'employee',
@@ -72,7 +130,8 @@ router.get('/', authMiddleware, async (req, res) => {
       populate: [
         { path: 'employee', select: 'employeeId firstName lastName email department designation' },
         { path: 'approvedBy', select: 'firstName lastName' },
-        { path: 'disbursedBy', select: 'firstName lastName' }
+        { path: 'disbursedBy', select: 'firstName lastName' },
+        ...approverPopulate
       ],
       sort: { createdAt: -1, applicationDate: -1 }
     };
@@ -85,6 +144,7 @@ router.get('/', authMiddleware, async (req, res) => {
       loanObj.progressPercentage = loan.progressPercentage;
       loanObj.remainingInstallments = loan.remainingInstallments;
       loanObj.nextDueDate = loan.nextDueDate;
+      loanObj.myWorkflowRole = workflowRoleFor(loanObj, req.user);
       return loanObj;
     });
 
@@ -139,6 +199,171 @@ router.get('/employee/:employeeId', authMiddleware, async (req, res) => {
 });
 
 // Get loan by ID
+// @route   POST /api/loans/:id/documents — add attachments (multipart field "attachments"; optional "names" JSON array)
+router.post('/:id/documents', authMiddleware, handleLoanUpload, async (req, res) => {
+  const files = req.files || [];
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) { removeUploadedFiles(files); return res.status(404).json({ message: 'Loan not found' }); }
+    if (!files.length) return res.status(400).json({ message: 'Choose at least one file to attach' });
+    // While an approver has it, only admins can change its papers
+    if (IN_APPROVAL.includes(loan.workflowStatus) && !isAdminUser(req.user)) {
+      removeUploadedFiles(files);
+      return res.status(400).json({ message: 'Attachments are locked while the loan is out for approval. Ask the approver to return it.' });
+    }
+    let names = [];
+    try { names = JSON.parse(req.body.names || '[]'); } catch (e) { names = []; }
+    files.forEach((f, i) => {
+      loan.documents.push({
+        name: String(names[i] || f.originalname || 'Attachment').trim().slice(0, 200) || 'Attachment',
+        filePath: `/uploads/loans/${f.filename}`,
+        mimeType: f.mimetype,
+        size: f.size,
+        uploadedBy: req.user.id,
+        uploadedAt: new Date()
+      });
+    });
+    loan.updatedBy = req.user.id;
+    await loan.save();
+    const data = await Loan.findById(loan._id).select('documents').populate('documents.uploadedBy', 'firstName lastName').lean();
+    res.json({ message: `${files.length} attachment(s) added`, documents: data.documents });
+  } catch (error) {
+    removeUploadedFiles(files);
+    console.error('Error adding loan attachments:', error);
+    res.status(500).json({ message: 'Error adding attachments', error: error.message });
+  }
+});
+
+// @route   DELETE /api/loans/:id/documents/:docId
+router.delete('/:id/documents/:docId', authMiddleware, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+    const doc = loan.documents.id(req.params.docId);
+    if (!doc) return res.status(404).json({ message: 'Attachment not found' });
+    const locked = loan.status !== 'Pending' || IN_APPROVAL.includes(loan.workflowStatus);
+    if (locked && !isAdminUser(req.user)) {
+      return res.status(400).json({ message: 'Attachments can only be removed while the loan is with HR (not forwarded / returned)' });
+    }
+    const filePath = doc.filePath;
+    doc.deleteOne();
+    loan.updatedBy = req.user.id;
+    await loan.save();
+    if (filePath && filePath.startsWith('/uploads/loans/')) {
+      fs.unlink(path.join(loanUploadDir, path.basename(filePath)), () => {});
+    }
+    res.json({ message: 'Attachment removed', documents: loan.documents });
+  } catch (error) {
+    console.error('Error removing loan attachment:', error);
+    res.status(500).json({ message: 'Error removing attachment', error: error.message });
+  }
+});
+
+// @route   GET /api/loans/workflow/me — what the current user may do in the approval chain
+router.get('/workflow/me', authMiddleware, (req, res) => {
+  res.json({ success: true, data: { isCeoApprover: isDesignatedCeoApprover(req.user), isAdmin: isAdminUser(req.user) } });
+});
+
+// @route   PUT /api/loans/:id/forward — HR forwards to GM HR → AVP → CEO
+router.put('/:id/forward', authMiddleware, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+    if (loan.status !== 'Pending' || !FORWARDABLE.includes(loan.workflowStatus)) {
+      return res.status(400).json({ message: `Cannot forward while the loan is ${loan.workflowStatus || loan.status}` });
+    }
+    const { assignedHod, assignedAvp } = req.body || {};
+    if (!assignedHod || !assignedAvp) {
+      return res.status(400).json({ message: 'Select the GM HR and the AVP who will approve this loan.' });
+    }
+    Object.assign(loan, {
+      assignedHod,
+      assignedAvp,
+      forwardedBy: req.user.id,
+      forwardedAt: new Date(),
+      workflowStatus: 'Pending HOD HR',
+      updatedBy: req.user.id
+    });
+    ['hodApprovedBy', 'hodApprovedAt', 'hodComments', 'avpApprovedBy', 'avpApprovedAt', 'avpComments',
+      'ceoApprovedBy', 'ceoApprovedAt', 'ceoComments'].forEach((k) => { loan[k] = undefined; });
+    await loan.save();
+    const data = await Loan.findById(loan._id).populate(approverPopulate).populate('employee', 'employeeId firstName lastName').lean();
+    res.json({ message: 'Loan forwarded to GM HR for approval', loan: data });
+  } catch (error) {
+    console.error('Error forwarding loan:', error);
+    res.status(500).json({ message: 'Error forwarding loan', error: error.message });
+  }
+});
+
+// @route   PUT /api/loans/:id/workflow — { action: 'approve' | 'return' | 'reject' (CEO), comments }
+router.put('/:id/workflow', authMiddleware, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+    const action = String(req.body?.action || '');
+    const comments = String(req.body?.comments || '').trim();
+    if (!['approve', 'return', 'reject'].includes(action)) {
+      return res.status(400).json({ message: 'Action must be approve, return or reject' });
+    }
+    if (action !== 'approve' && !comments) {
+      return res.status(400).json({ message: `Comments are required to ${action} a loan` });
+    }
+    const role = workflowRoleFor(loan, req.user);
+    if (!role) return res.status(403).json({ message: 'You are not the current approver for this loan' });
+    if (action === 'reject' && role !== 'CEO') {
+      return res.status(403).json({ message: 'Only the CEO can reject a loan — return it to HR instead' });
+    }
+
+    const now = new Date();
+    const uid = req.user.id;
+    let message;
+    if (action === 'return') {
+      Object.assign(loan, {
+        workflowStatus: 'Returned',
+        returnedBy: uid,
+        returnedAt: now,
+        returnComments: `${role === 'HOD' ? 'GM HR' : role}: ${comments}`
+      });
+      message = 'Loan returned to HR';
+    } else if (action === 'reject') {
+      Object.assign(loan, {
+        workflowStatus: 'Rejected by CEO',
+        status: 'Rejected',
+        ceoApprovedBy: uid,
+        ceoApprovedAt: now,
+        ceoComments: comments,
+        rejectionReason: comments.slice(0, 500)
+      });
+      message = 'Loan rejected by CEO';
+    } else if (role === 'HOD') {
+      Object.assign(loan, { workflowStatus: 'Pending AVP', hodApprovedBy: uid, hodApprovedAt: now, hodComments: comments });
+      message = 'Loan approved by GM HR — sent to AVP';
+    } else if (role === 'AVP') {
+      Object.assign(loan, { workflowStatus: 'Forwarded to CEO', avpApprovedBy: uid, avpApprovedAt: now, avpComments: comments });
+      message = 'Loan approved by AVP — forwarded to CEO';
+    } else {
+      // CEO approval is final: the loan is Approved and HR can disburse it (no Finance step)
+      Object.assign(loan, {
+        workflowStatus: 'Approved by CEO',
+        ceoApprovedBy: uid,
+        ceoApprovedAt: now,
+        ceoComments: comments,
+        status: 'Approved',
+        approvedBy: uid,
+        approvalDate: now
+      });
+      message = 'Loan approved by CEO — final approval';
+    }
+    loan.updatedBy = uid;
+    await loan.save();
+    const data = await Loan.findById(loan._id).populate(approverPopulate).populate('employee', 'employeeId firstName lastName').lean();
+    res.json({ message, loan: data });
+  } catch (error) {
+    console.error('Error in loan workflow:', error);
+    res.status(500).json({ message: 'Error updating loan approval', error: error.message });
+  }
+});
+
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const loan = await Loan.findById(req.params.id)
@@ -146,7 +371,9 @@ router.get('/:id', authMiddleware, async (req, res) => {
       .populate('approvedBy', 'firstName lastName')
       .populate('disbursedBy', 'firstName lastName')
       .populate('createdBy', 'firstName lastName')
-      .populate('updatedBy', 'firstName lastName');
+      .populate('updatedBy', 'firstName lastName')
+      .populate('documents.uploadedBy', 'firstName lastName')
+      .populate(approverPopulate);
 
     if (!loan) {
       return res.status(404).json({ message: 'Loan not found' });
@@ -157,6 +384,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     loanWithVirtuals.progressPercentage = loan.progressPercentage;
     loanWithVirtuals.remainingInstallments = loan.remainingInstallments;
     loanWithVirtuals.nextDueDate = loan.nextDueDate;
+    loanWithVirtuals.myWorkflowRole = workflowRoleFor(loanWithVirtuals, req.user);
 
     res.json(loanWithVirtuals);
   } catch (error) {
@@ -274,6 +502,9 @@ router.post('/', authMiddleware, async (req, res) => {
       loanData.approvedBy = req.user.id;
       loanData.disbursedBy = req.user.id;
       loanData.status = 'Active';
+    } else {
+      // New applications are forwarded for approval: GM HR → AVP → CEO
+      loanData.workflowStatus = 'Draft';
     }
 
     const loan = new Loan(loanData);
@@ -330,6 +561,12 @@ router.put('/:id', authMiddleware, async (req, res) => {
         message: 'Cannot update loan application after it has been processed'
       });
     }
+    // Locked while it is out for approval (admins may still correct it)
+    if (IN_APPROVAL.includes(loan.workflowStatus) && !isAdminUser(req.user)) {
+      return res.status(400).json({
+        message: `Cannot edit while the loan is ${loan.workflowStatus === 'Pending HOD HR' ? 'Pending GM HR' : loan.workflowStatus}. Ask the approver to return it.`
+      });
+    }
 
     const updateData = {
       ...req.body,
@@ -352,7 +589,7 @@ router.put('/:id', authMiddleware, async (req, res) => {
     const editable = [
       'employee', 'loanType', 'loanAmount', 'interestRate', 'loanTerm',
       'purpose', 'collateral', 'collateralValue', 'guarantor', 'salaryDeduction',
-      'documents', 'updatedBy'
+      'updatedBy'
     ];
     editable.forEach((k) => {
       if (updateData[k] !== undefined) loan[k] = updateData[k];
@@ -408,6 +645,11 @@ router.patch('/:id/approve', authMiddleware, checkPermission('hr.loan.approve'),
         message: 'Loan can only be approved if it is in pending status'
       });
     }
+    // Approval goes through Forward → GM HR → AVP → CEO; direct approval is for admins only
+    if (!isAdminUser(req.user)) {
+      return res.status(400).json({ message: 'Forward the loan for approval (GM HR → AVP → CEO). The CEO gives the final approval.' });
+    }
+    loan.workflowStatus = 'Approved by CEO';
 
     loan.status = 'Approved';
     loan.approvalDate = new Date();
@@ -454,6 +696,9 @@ router.patch('/:id/reject', authMiddleware, checkPermission('hr.loan.approve'), 
       return res.status(400).json({
         message: 'Loan can only be rejected if it is in pending status'
       });
+    }
+    if (!isAdminUser(req.user)) {
+      return res.status(400).json({ message: 'Loans are rejected by the CEO in the approval chain. Approvers can return it to HR.' });
     }
 
     loan.status = 'Rejected';
@@ -875,6 +1120,9 @@ router.delete('/:id', authMiddleware, checkPermission('loan_management'), async 
       return res.status(400).json({
         message: 'Only pending loans can be deleted'
       });
+    }
+    if (IN_APPROVAL.includes(loan.workflowStatus) && !isDeveloper) {
+      return res.status(400).json({ message: 'Cannot delete a loan while it is out for approval' });
     }
 
     await Loan.findByIdAndDelete(req.params.id);

@@ -61,6 +61,7 @@ import { useData } from '../../contexts/DataContext';
 import api from '../../services/authService';
 import MonthlyPayrollApprovalSection from '../../components/HR/MonthlyPayrollApprovalSection';
 import PayrollMonthlyComparisonDialog from '../../components/HR/PayrollMonthlyComparisonDialog';
+import { payrollExportGross } from '../../utils/payrollExportGross';
 import ImportFuelAllowanceDialog from '../../components/HR/ImportFuelAllowanceDialog';
 import ImportSalaryPercentageCutDialog from '../../components/HR/ImportSalaryPercentageCutDialog';
 import SalaryCutList from '../../components/HR/SalaryCutList';
@@ -356,7 +357,8 @@ const Payroll = () => {
         }
         acc[key].payrolls.push(payroll);
         acc[key].totalEmployees++;
-        acc[key].totalGrossSalary += payroll.grossSalary || 0;
+        // Same Gross as the monthly PDF / Excel export (Total Earn, full before any salary cut)
+        acc[key].totalGrossSalary += payrollExportGross(payroll);
         // Match monthly CSV Net Payable: exclude attendance deduction from net
         acc[key].totalNetSalary +=
           (payroll.netSalary || 0) + (payroll.attendanceDeduction || 0);
@@ -2805,7 +2807,7 @@ Do you want to:
                                               </Box>
                                             </TableCell>
                                             <TableCell>{formatCurrency(payroll.basicSalary)}</TableCell>
-                                            <TableCell>{formatCurrency(payroll.grossSalary)}</TableCell>
+                                            <TableCell>{formatCurrency(payrollExportGross(payroll))}</TableCell>
                                             <TableCell>{formatCurrency(payroll.netSalary)}</TableCell>
                                             <TableCell>
                                               <Chip

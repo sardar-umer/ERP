@@ -31,6 +31,17 @@ const manualSalarySchema = new mongoose.Schema({
     trim: true,
     default: ''
   },
+  // Company whose name is printed on the salary and whose books Finance pays it from
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlacementCompany',
+    index: true
+  },
+  companyName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
   doj: {
     type: String,
     trim: true,
@@ -99,6 +110,8 @@ const manualSalarySchema = new mongoose.Schema({
       'Pending AVP',
       'Forwarded to CEO',
       'Approved by CEO',
+      'Pending Audit',
+      'Forwarded to Audit Director',
       'Pending Finance',
       'Payment Pending',
       'Paid',
@@ -131,6 +144,31 @@ const manualSalarySchema = new mongoose.Schema({
 
   rejectionComments: { type: String },
   returnComments: { type: String },
+  returnedFromStatus: { type: String },
+
+  // Audit (after AVP): pre-audit staff initial approval → forward → Audit Director final approval → Finance
+  preAuditInitialApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  preAuditInitialApprovedAt: { type: Date },
+  preAuditInitialComments: { type: String },
+  auditForwardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  auditForwardedAt: { type: Date },
+  auditApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  auditApprovedAt: { type: Date },
+  auditComments: { type: String },
+  auditObservations: [{
+    observation: { type: String, trim: true },
+    severity: { type: String, enum: ['low', 'medium', 'high', 'critical'], default: 'medium' },
+    addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    addedAt: { type: Date, default: Date.now }
+  }],
+  workflowHistory: [{
+    fromStatus: String,
+    toStatus: String,
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now },
+    comments: String,
+    module: String
+  }],
 
   // Finance payment
   paymentApplicationId: { type: mongoose.Schema.Types.ObjectId, ref: 'ManualSalaryPaymentApplication' },

@@ -32,6 +32,18 @@ const finalSettlementSchema = new mongoose.Schema({
     required: true
   },
 
+  // Company whose name is printed on the settlement and whose books Finance pays it from
+  companyId: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'PlacementCompany',
+    index: true
+  },
+  companyName: {
+    type: String,
+    trim: true,
+    default: ''
+  },
+
   // Settlement Details
   settlementType: {
     type: String,
@@ -202,7 +214,7 @@ const finalSettlementSchema = new mongoose.Schema({
   // Approval workflow (same as Manual Salary): HR forwards → GM HR → AVP → CEO → status "approved"
   workflowStatus: {
     type: String,
-    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Returned', 'Rejected by CEO'],
+    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Pending Finance', 'Paid', 'Returned', 'Rejected by CEO'],
     default: 'Draft',
     index: true
   },
@@ -222,6 +234,18 @@ const finalSettlementSchema = new mongoose.Schema({
   returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   returnedAt: { type: Date },
   returnComments: { type: String, trim: true },
+
+  // Finance hand-off: after CEO approval a payable (AP bill) is created for the employee under companyId and
+  // paid from Finance → Payables (Bills, POs & Cash Approvals)
+  financeApBillId: { type: mongoose.Schema.Types.ObjectId, ref: 'AccountsPayable' },
+  financeApBillNumber: { type: String, trim: true },
+  financePostedAt: { type: Date },
+  financePostedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  financePostError: { type: String, trim: true },
+  paidAt: { type: Date },
+  // Loan recovery: the settlement's loan deduction is applied to the employee's loans once Finance pays it
+  loansSettledAt: { type: Date },
+  loanRecoveryNote: { type: String, trim: true },
 
   // Status and Workflow
   status: {

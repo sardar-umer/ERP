@@ -30,7 +30,7 @@ import { formatPKR } from '../../utils/currency';
 
 /**
  * Final settlement approval workflow (same as Manual Salary):
- * HR forwards → GM HR → AVP → CEO → "approved" (then Process → Paid as before).
+ * HR forwards → GM HR → AVP → CEO → Finance (paid from Payables) → Paid.
  */
 
 export const WORKFLOW_COLORS = {
@@ -39,12 +39,17 @@ export const WORKFLOW_COLORS = {
   'Pending AVP': 'info',
   'Forwarded to CEO': 'secondary',
   'Approved by CEO': 'success',
+  'Pending Finance': 'primary',
+  Paid: 'success',
   Returned: 'error',
   'Rejected by CEO': 'error'
 };
 
 export const workflowLabel = (s) => (s?.workflowStatus === 'Pending HOD HR' ? 'Pending GM HR' : (s?.workflowStatus || 'Draft'));
 export const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
+/** CEO-approved but not yet in Finance (e.g. the hand-off failed or the Finance bill was voided) */
+export const canSendToFinance = (s) => s?.status === 'approved' && s?.workflowStatus === 'Approved by CEO' && !s?.financeApBillId;
+export const inFinance = (s) => Boolean(s?.financeApBillId) || ['Pending Finance', 'Paid'].includes(s?.workflowStatus);
 export const canForward = (s) => s?.status === 'pending' && ['Draft', 'Returned', 'Rejected by CEO'].includes(s?.workflowStatus || 'Draft');
 
 const personName = (u) => (u && typeof u === 'object'
@@ -62,8 +67,15 @@ const approvalSteps = (s) => {
     { label: 'GM HR', by: personName(s.hodApprovedBy) || personName(s.assignedHod), at: s.hodApprovedAt, done: Boolean(s.hodApprovedAt), current: ws === 'Pending HOD HR', note: s.hodComments },
     { label: 'AVP', by: personName(s.avpApprovedBy) || personName(s.assignedAvp), at: s.avpApprovedAt, done: Boolean(s.avpApprovedAt), current: ws === 'Pending AVP', note: s.avpComments },
     { label: 'CEO', by: personName(s.ceoApprovedBy), at: s.ceoApprovedAt, done: Boolean(s.ceoApprovedAt), current: ws === 'Forwarded to CEO', note: s.ceoComments },
-    { label: 'Processed', by: personName(s.processedBy), at: s.processedDate, done: ['processed', 'paid'].includes(s.status), current: s.status === 'approved' },
-    { label: 'Paid', by: '', at: null, done: s.status === 'paid', current: s.status === 'processed' }
+    {
+      label: 'Finance',
+      by: s.financeApBillNumber ? `Bill ${s.financeApBillNumber}${s.companyName ? ` · ${s.companyName}` : ''}` : '',
+      at: s.financePostedAt,
+      done: Boolean(s.financeApBillId) || s.status === 'paid',
+      current: s.status === 'approved' && !s.financeApBillId,
+      note: !s.financeApBillId && s.financePostError ? s.financePostError : ''
+    },
+    { label: 'Paid', by: '', at: s.paidAt, done: s.status === 'paid', current: s.workflowStatus === 'Pending Finance' }
   ];
 };
 
@@ -115,7 +127,7 @@ export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
       <DialogTitle>Forward for approval — {settlement?.employeeName}</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Approval: GM HR → AVP → CEO. After the CEO approves, the settlement can be processed and paid.
+          Approval: GM HR → AVP → CEO. After the CEO approves, it goes to Finance and is paid from Payables.
           Net settlement: <strong>{formatPKR(settlement?.netSettlementAmount || 0)}</strong>
         </Typography>
         {settlement?.returnComments && settlement?.workflowStatus === 'Returned' ? (
@@ -277,6 +289,62 @@ export const SettlementProcessDialog = ({ settlement, onClose, onDone, onEdit })
           <Button onClick={() => onEdit(s)}>Edit</Button>
         ) : null}
         <Button onClick={onClose}>Close</Button>
+      </DialogActions>
+    </Dialog>
+  );
+};
+
+/** Send a CEO-approved settlement to Finance → Payables; asks for the company when the settlement has none. */
+export const SendToFinanceDialog = ({ settlement, onClose, onDone }) => {
+  const [companies, setCompanies] = useState([]);
+  const [companyId, setCompanyId] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    if (!settlement) return;
+    setError('');
+    setCompanyId(settlement.companyId?._id || settlement.companyId || '');
+    api.get('/hr/companies').then((res) => setCompanies(res.data?.data || [])).catch(() => setCompanies([]));
+  }, [settlement]);
+
+  const submit = async () => {
+    if (!companyId) { setError('Select the company'); return; }
+    try {
+      setSaving(true);
+      const res = await finalSettlementService.sendToFinance(settlement._id, companyId);
+      onDone(res.message || 'Sent to Finance');
+    } catch (e) {
+      setError(e.response?.data?.message || 'Could not send to Finance');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={Boolean(settlement)} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Send to Finance — {settlement?.employeeName}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Creates a bill payable to the employee for <strong>{formatPKR(settlement?.netSettlementAmount || 0)}</strong> under
+          the selected company. Finance pays it from Payables — Bills, POs &amp; Cash Approvals.
+        </Typography>
+        {settlement?.financePostError ? (
+          <Typography variant="body2" color="error" sx={{ mb: 2 }}>Last try: {settlement.financePostError}</Typography>
+        ) : null}
+        <FormControl fullWidth size="small" required>
+          <InputLabel>Company</InputLabel>
+          <Select label="Company" value={companyId} onChange={(e) => setCompanyId(e.target.value)}>
+            {companies.map((c) => <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>)}
+          </Select>
+        </FormControl>
+        {error ? <Typography color="error" variant="body2" sx={{ mt: 1.5 }}>{error}</Typography> : null}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" startIcon={saving ? <CircularProgress size={16} /> : <ForwardIcon />} disabled={saving} onClick={submit}>
+          Send to Finance
+        </Button>
       </DialogActions>
     </Dialog>
   );

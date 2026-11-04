@@ -46,7 +46,8 @@ const SOURCES = [
   ['cash_approval', 'Cash approvals'],
   ['po_advance', 'PO advances'],
   ['ipc', 'Subcontractor IPCs'],
-  ['utility', 'Utility / store bills']
+  ['utility', 'Utility / store bills'],
+  ['final_settlement', 'Final settlements (HR)']
 ];
 const ACTION_LABEL = { pay_bill: 'Pay', cash_approval: 'Process', po_advance: 'Pay advance' };
 
@@ -252,7 +253,7 @@ export default function PayablesHub() {
             <Typography variant="h5" fontWeight={700}>Payables — Bills, POs &amp; Cash Approvals</Typography>
           </Stack>
           <Typography variant="body2" color="text.secondary">
-            Every bill and payment owed — vendor bills, purchases, IPCs, utilities, cash approvals and advances — paid from one place
+            Every bill and payment owed — vendor bills, purchases, IPCs, utilities, final settlements, cash approvals and advances — paid from one place
           </Typography>
         </Box>
         <Stack direction="row" gap={1} alignItems="center" flexWrap="wrap">

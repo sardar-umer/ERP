@@ -41,13 +41,23 @@ import {
   AccountBalance as DisburseIcon,
   FilterList as FilterIcon,
   Refresh as RefreshIcon,
-  TrendingUp as StatsIcon
+  TrendingUp as StatsIcon,
+  Send as ForwardIcon,
+  FactCheck as WorkflowIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
 import { formatPKR } from '../../utils/currency';
 import LoanProgressIndicator from '../../components/LoanProgressIndicator';
 import { useAuth } from '../../contexts/AuthContext';
+import {
+  ForwardLoanDialog,
+  LoanApprovalDialog,
+  LOAN_WORKFLOW_COLORS,
+  LOAN_IN_APPROVAL,
+  loanWorkflowLabel,
+  canForwardLoan
+} from '../../components/HR/LoanWorkflow';
 
 const LoanManagement = () => {
   const navigate = useNavigate();
@@ -56,6 +66,9 @@ const LoanManagement = () => {
     user?.role === 'developer' ||
     (Array.isArray(user?.roles) && user.roles.includes('developer'));
   const [loans, setLoans] = useState([]);
+  const [forwardFor, setForwardFor] = useState(null);
+  const [approvalFor, setApprovalFor] = useState(null);
+  const [workflowNote, setWorkflowNote] = useState('');
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [page, setPage] = useState(0);
@@ -435,6 +448,14 @@ const LoanManagement = () => {
                           color={getStatusColor(loan.status)}
                           size="small"
                         />
+                        {loan.status === 'Pending' && !loan.isOngoingLoan && (
+                          <Chip
+                            label={loanWorkflowLabel(loan)}
+                            color={LOAN_WORKFLOW_COLORS[loan.workflowStatus || 'Draft']}
+                            size="small"
+                            variant="outlined"
+                          />
+                        )}
                         {loan.isOngoingLoan && (
                           <Chip
                             label="Already Ongoing"
@@ -484,7 +505,23 @@ const LoanManagement = () => {
                           </IconButton>
                         </Tooltip>
                         
-                        {loan.status === 'Pending' && (
+                        {!loan.isOngoingLoan && (loan.workflowStatus || loan.status === 'Pending') && (
+                          <Tooltip title={loan.myWorkflowRole ? 'Your approval is needed' : 'Approvals'}>
+                            <IconButton size="small" color={loan.myWorkflowRole ? 'warning' : 'info'} onClick={() => setApprovalFor(loan)}>
+                              <WorkflowIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+
+                        {canForwardLoan(loan) && (
+                          <Tooltip title="Forward for approval (GM HR → AVP → CEO)">
+                            <IconButton size="small" color="primary" onClick={() => setForwardFor(loan)}>
+                              <ForwardIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+
+                        {loan.status === 'Pending' && !LOAN_IN_APPROVAL.includes(loan.workflowStatus) && (
                           <Tooltip title="Edit">
                             <IconButton
                               size="small"
@@ -495,7 +532,7 @@ const LoanManagement = () => {
                           </Tooltip>
                         )}
 
-                        {(loan.status === 'Pending' || isDeveloper) && (
+                        {((loan.status === 'Pending' && !LOAN_IN_APPROVAL.includes(loan.workflowStatus)) || isDeveloper) && (
                           <Tooltip title={loan.status === 'Pending' ? 'Delete' : 'Delete (Developer)'}>
                             <IconButton
                               size="small"
@@ -542,6 +579,24 @@ const LoanManagement = () => {
           rowsPerPageOptions={[5, 10, 25, 50]}
         />
       </Paper>
+
+      <ForwardLoanDialog
+        loan={forwardFor}
+        onClose={() => setForwardFor(null)}
+        onDone={(msg) => { setForwardFor(null); setWorkflowNote(msg); fetchLoans(); }}
+      />
+      {approvalFor && (
+        <LoanApprovalDialog
+          loan={approvalFor}
+          onClose={() => setApprovalFor(null)}
+          onDone={(msg) => { setApprovalFor(null); setWorkflowNote(msg); fetchLoans(); fetchStats(); }}
+        />
+      )}
+      {workflowNote && (
+        <Alert severity="success" onClose={() => setWorkflowNote('')} sx={{ position: 'fixed', bottom: 16, right: 16, zIndex: 1400 }}>
+          {workflowNote}
+        </Alert>
+      )}
 
       {/* Delete Confirmation Dialog */}
       <Dialog open={deleteDialog.open} onClose={() => setDeleteDialog({ open: false, loanId: null, status: null })}>

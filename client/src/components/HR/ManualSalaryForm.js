@@ -23,6 +23,7 @@ const emptyForm = () => ({
   name: '',
   designation: '',
   project: '',
+  companyId: '',
   doj: '',
   basicSalary: 0,
   houseRentAllowance: 0,
@@ -50,6 +51,7 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
   const { user } = useAuth();
   const [loading, setLoading] = useState(false);
   const [users, setUsers] = useState([]);
+  const [companies, setCompanies] = useState([]);
   const [formData, setFormData] = useState(emptyForm());
 
   useEffect(() => {
@@ -59,12 +61,20 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
         ...emptyForm(),
         ...editData,
         assignedHod: editData.assignedHod?._id || editData.assignedHod || '',
-        assignedAvp: editData.assignedAvp?._id || editData.assignedAvp || ''
+        assignedAvp: editData.assignedAvp?._id || editData.assignedAvp || '',
+        companyId: editData.companyId?._id || editData.companyId || ''
       });
     } else {
       setFormData(emptyForm());
     }
   }, [editData, open]);
+
+  useEffect(() => {
+    if (!open) return;
+    api.get('/hr/companies')
+      .then((res) => setCompanies(res.data?.data || []))
+      .catch(() => setCompanies([]));
+  }, [open]);
 
   useEffect(() => {
     if (!open) return;
@@ -129,6 +139,10 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    if (!formData.companyId) {
+      alert('Please select the company.');
+      return;
+    }
     if (!formData.assignedHod || !formData.assignedAvp) {
       alert('Please select GM HR and AVP Taj Fahad Farid.');
       return;
@@ -205,6 +219,22 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField
+                select
+                fullWidth
+                required
+                label="Company (Finance)"
+                name="companyId"
+                value={formData.companyId}
+                onChange={handleChange}
+                helperText="Printed on the salary sheet; Finance pays from this company"
+              >
+                {companies.map((c) => (
+                  <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>
+                ))}
+              </TextField>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField
                 fullWidth
                 label="Date of Joining"
                 name="doj"
@@ -221,7 +251,7 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
               <Divider sx={{ my: 1 }} />
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Approval authorities</Typography>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                Flow: GM HR → AVP Taj Fahad Farid → CEO (no Chairman / Sr Director)
+                Flow: GM HR → AVP Taj Fahad Farid → Audit (Pre-Audit → Audit Director) → Finance
               </Typography>
             </Grid>
             <Grid item xs={12} sm={6}>

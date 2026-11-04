@@ -9,6 +9,7 @@ const PaymentSettlement = require('../models/hr/PaymentSettlement');
 const NonEmployeeRecord = require('../models/hr/NonEmployeeRecord');
 const ManualSalary = require('../models/hr/ManualSalary');
 const FinalSettlement = require('../models/hr/FinalSettlement');
+const Loan = require('../models/hr/Loan');
 const Indent = require('../models/general/Indent');
 const UtilityBill = require('../models/hr/UtilityBill');
 const AccountsPayable = require('../models/finance/AccountsPayable');
@@ -79,6 +80,7 @@ const card = (partial) => ({
   isOnboarding: partial.type === 'onboarding',
   isManualSalary: partial.type === 'manual_salary',
   isFinalSettlement: partial.type === 'final_settlement',
+  isLoan: partial.type === 'loan',
   isIndent: partial.type === 'indent',
   isUtilityBill: partial.type === 'utility_bill',
   isVendorBill: partial.type === 'vendor_bill',
@@ -542,10 +544,59 @@ async function fetchFinalSettlementsForUser(user) {
       date: r.forwardedAt || r.updatedAt || r.createdAt,
       amount: r.netSettlementAmount,
       party: r.employeeName,
-      company: null,
+      company: r.companyName || null,
       subtitle: `Final settlement${type ? ` (${type})` : ''}${r.designation && r.designation !== 'Unknown' ? ` · ${r.designation}` : ''}`,
       department: 'HR',
       path: `/hr/settlements/${r._id}`,
+      ceoViewOnly,
+      canAct,
+      raw: r
+    });
+  }).filter(Boolean);
+}
+
+/** Employee loans waiting on this user: GM HR / AVP (assigned) or CEO (Forwarded to CEO) */
+async function fetchLoansForUser(user) {
+  const uid = String(user._id || user.id || '');
+  const isCeo = isDesignatedCeoApprover(user);
+  const canViewCeoQueue = canViewCeoForwardedQueue(user);
+  const or = [
+    { workflowStatus: 'Pending HOD HR', assignedHod: uid },
+    { workflowStatus: 'Pending AVP', assignedAvp: uid }
+  ];
+  if (canViewCeoQueue) or.push({ workflowStatus: 'Forwarded to CEO' });
+
+  const docs = await Loan.find({ status: 'Pending', $or: or })
+    .populate('employee', 'employeeId firstName lastName')
+    .sort({ updatedAt: -1 })
+    .limit(100)
+    .lean();
+
+  return docs.map((r) => {
+    const ws = r.workflowStatus;
+    let canAct = false;
+    let ceoViewOnly = false;
+    if (ws === 'Forwarded to CEO') {
+      canAct = isCeo;
+      ceoViewOnly = !isCeo && canViewCeoQueue;
+    } else if (ws === 'Pending HOD HR' && sameUserId(r.assignedHod, uid)) canAct = true;
+    else if (ws === 'Pending AVP' && sameUserId(r.assignedAvp, uid)) canAct = true;
+    if (!canAct && !ceoViewOnly) return null;
+
+    const emp = r.employee || {};
+    return card({
+      id: r._id,
+      type: 'loan',
+      itemType: 'Employee Loan',
+      number: r.loanNumber || emp.employeeId || String(r._id).slice(-6),
+      status: ws,
+      date: r.forwardedAt || r.updatedAt || r.createdAt,
+      amount: r.loanAmount,
+      party: [emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.employeeId || 'Employee',
+      company: null,
+      subtitle: `${r.loanType || ''} loan · ${r.loanTerm || 0} months · EMI ${Math.round(Number(r.monthlyInstallment) || 0).toLocaleString()}`,
+      department: 'HR',
+      path: `/hr/loans/${r._id}`,
       ceoViewOnly,
       canAct,
       raw: r
@@ -601,7 +652,7 @@ async function fetchManualSalariesForUser(user) {
       date: r.updatedAt || r.createdAt,
       amount: r.netPayable,
       party: r.name,
-      company: r.project || null,
+      company: r.companyName || r.project || null,
       subtitle: `Manual salary — ${period}${r.designation ? ` · ${r.designation}` : ''}`,
       department: 'HR',
       path: `/hr/payroll`,
@@ -930,7 +981,8 @@ async function buildExecutiveMyApprovals(user) {
     utilityBills,
     vendorBills,
     projectIpcs,
-    finalSettlements
+    finalSettlements,
+    loans
   ] = await Promise.all([
     fetchPurchaseOrdersForUser(user).catch((e) => {
       console.error('[executiveMyApprovals] PO', e.message);
@@ -971,6 +1023,10 @@ async function buildExecutiveMyApprovals(user) {
     fetchFinalSettlementsForUser(user).catch((e) => {
       console.error('[executiveMyApprovals] FinalSettlement', e.message);
       return [];
+    }),
+    fetchLoansForUser(user).catch((e) => {
+      console.error('[executiveMyApprovals] Loan', e.message);
+      return [];
     })
   ]);
 
@@ -984,7 +1040,8 @@ async function buildExecutiveMyApprovals(user) {
     ...utilityBills,
     ...vendorBills,
     ...projectIpcs,
-    ...finalSettlements
+    ...finalSettlements,
+    ...loans
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   const counts = {
@@ -998,6 +1055,7 @@ async function buildExecutiveMyApprovals(user) {
     vendor_bill: vendorBills.length,
     project_ipc: projectIpcs.length,
     final_settlement: finalSettlements.length,
+    loan: loans.length,
     total: items.length
   };
 

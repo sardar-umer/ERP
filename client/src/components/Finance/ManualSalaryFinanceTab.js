@@ -208,7 +208,9 @@ export default function ManualSalaryFinanceTab({ onSnackbar }) {
       bankAccountId: ''
     });
     setActiveDraftId(null);
-    setPayingCompanyId(selectedCompanyId || '');
+    // Default to the company HR chose on the records when they share one
+    const recordCompanies = [...new Set(pendingRecords.map((r) => String(r.companyId?._id || r.companyId || '')).filter(Boolean))];
+    setPayingCompanyId(recordCompanies.length === 1 ? recordCompanies[0] : (selectedCompanyId || ''));
     setPaymentDialogOpen(true);
   };
 

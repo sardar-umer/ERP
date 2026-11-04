@@ -69,6 +69,7 @@ const FinalSettlementForm = () => {
   const [loansLoading, setLoansLoading] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [companies, setCompanies] = useState([]);
 
   // Filter employees based on search term
   const filteredEmployees = employees.filter((employee) => {
@@ -92,6 +93,14 @@ const FinalSettlementForm = () => {
       employee.phone?.includes(searchTerm)
     );
   });
+
+  // Fields show whole rupees only; the exact prorated amount is kept underneath so the total still
+  // rounds once like Sidat (a line may show 1 rupee off its exact share — same as the Final Dues PDF)
+  const wholeRupees = (value) => {
+    if (value === '' || value === null || value === undefined) return value ?? '';
+    const num = Number(value);
+    return Number.isFinite(num) ? Math.round(num) : value;
+  };
 
   // Amounts keep 2 decimals (prorated salary lines); only the totals are rounded to whole rupees (Sidat)
   const parseAmount = (value) => {
@@ -199,6 +208,7 @@ const FinalSettlementForm = () => {
 
     return {
       employeeId: values.employeeId,
+      companyId: values.companyId,
       settlementType: values.settlementType,
       reason: values.reason,
       lastWorkingDate: values.lastWorkingDate,
@@ -248,6 +258,7 @@ const FinalSettlementForm = () => {
   // Form validation schema
   const validationSchema = Yup.object({
     employeeId: Yup.string().required('Employee is required'),
+    companyId: Yup.string().required('Company is required'),
     settlementType: Yup.string().required('Settlement type is required'),
     reason: Yup.string().required('Reason is required').min(10, 'Reason must be at least 10 characters'),
     lastWorkingDate: Yup.date().required('Last working date is required'),
@@ -282,6 +293,7 @@ const FinalSettlementForm = () => {
   const formik = useFormik({
     initialValues: {
       employeeId: '',
+      companyId: '',
       settlementType: '',
       reason: '',
       lastWorkingDate: '',
@@ -468,6 +480,12 @@ const FinalSettlementForm = () => {
 
       setSelectedEmployee(processedEmployee);
 
+      // Default the paying company to the employee's placement company (HR can change it)
+      const placementCompanyId = employee.placementCompany?._id || employee.placementCompany;
+      if (placementCompanyId && !id) {
+        formik.setFieldValue('companyId', String(placementCompanyId));
+      }
+
       // Helper to safely extract numeric allowance amount
       const getAllow = (key) => {
         const a = employee.allowances?.[key] || employee.salary?.[key];
@@ -588,6 +606,7 @@ const FinalSettlementForm = () => {
 
       formik.setValues({
         employeeId: settlement.employeeId,
+        companyId: settlement.companyId?._id || settlement.companyId || '',
         settlementType: settlement.settlementType,
         reason: settlement.reason,
         lastWorkingDate: settlement.lastWorkingDate.split('T')[0],
@@ -685,6 +704,12 @@ const FinalSettlementForm = () => {
   };
 
   useEffect(() => {
+    api.get('/hr/companies')
+      .then((res) => setCompanies(res.data?.data || []))
+      .catch(() => setCompanies([]));
+  }, []);
+
+  useEffect(() => {
     fetchEmployees();
     if (id) {
       loadSettlementData();
@@ -726,7 +751,7 @@ const FinalSettlementForm = () => {
   const getStepFields = (step) => {
     switch (step) {
       case 0: // Employee & Basic Info
-        return ['employeeId'];
+        return ['employeeId', 'companyId'];
       case 1: // Settlement Details
         return ['settlementType', 'reason', 'lastWorkingDate'];
       case 2: // Salary & Calculations
@@ -1026,6 +1051,28 @@ const FinalSettlementForm = () => {
               </FormControl>
             </Grid>
 
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth required error={formik.touched.companyId && Boolean(formik.errors.companyId)}>
+                <InputLabel>Company (Finance)</InputLabel>
+                <Select
+                  name="companyId"
+                  value={formik.values.companyId}
+                  onChange={formik.handleChange}
+                  onBlur={formik.handleBlur}
+                  label="Company (Finance)"
+                >
+                  {companies.map((c) => (
+                    <MenuItem key={c._id} value={c._id}>{c.name}</MenuItem>
+                  ))}
+                </Select>
+                <FormHelperText>
+                  {formik.touched.companyId && formik.errors.companyId
+                    ? formik.errors.companyId
+                    : 'Company whose name is printed on the settlement and whose books Finance pays it from'}
+                </FormHelperText>
+              </FormControl>
+            </Grid>
+
             {selectedEmployee && (
               <Grid item xs={12}>
                 <Card variant="outlined">
@@ -1128,7 +1175,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="dailyRate"
                     label="Daily Rate"
-                    value={formik.values.dailyRate}
+                    value={wholeRupees(formik.values.dailyRate)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText={`Gross salary ÷ ${getCalendarDaysInMonth(
@@ -1157,12 +1204,10 @@ const FinalSettlementForm = () => {
                 <Grid item xs={12} md={3}>
                   <TextField
                     fullWidth
-                    type="number"
                     name="actualSalary"
                     label="Actual Salary"
-                    value={actualSalaryAmount}
-                    InputProps={amountInputProps}
-                    disabled
+                    value={formatPKR(actualSalaryAmount)}
+                    InputProps={{ readOnly: true, sx: { fontWeight: 700, color: 'primary.main' } }}
                     helperText="Gross daily rate × notice period served days"
                   />
                 </Grid>
@@ -1220,7 +1265,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.basicSalary"
                     label="Gross Salary (Earning)"
-                    value={formik.values.earnings.basicSalary}
+                    value={wholeRupees(formik.values.earnings.basicSalary)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText="Gross salary for the days served, included in total earnings"
@@ -1233,7 +1278,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.medicalAllowance"
                     label="Medical Allowance"
-                    value={formik.values.earnings.medicalAllowance}
+                    value={wholeRupees(formik.values.earnings.medicalAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1245,7 +1290,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.houseRent"
                     label="House Rent Allowance"
-                    value={formik.values.earnings.houseRent}
+                    value={wholeRupees(formik.values.earnings.houseRent)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1257,7 +1302,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.transportAllowance"
                     label="Transport / Conveyance Allowance"
-                    value={formik.values.earnings.transportAllowance}
+                    value={wholeRupees(formik.values.earnings.transportAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1269,7 +1314,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.foodAllowance"
                     label="Food Allowance"
-                    value={formik.values.earnings.foodAllowance}
+                    value={wholeRupees(formik.values.earnings.foodAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1281,7 +1326,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.mobileAllowance"
                     label="Mobile Allowance"
-                    value={formik.values.earnings.mobileAllowance}
+                    value={wholeRupees(formik.values.earnings.mobileAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1293,7 +1338,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.vehicleAllowance"
                     label="Vehicle Allowance"
-                    value={formik.values.earnings.vehicleAllowance}
+                    value={wholeRupees(formik.values.earnings.vehicleAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1305,7 +1350,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.fuelAllowance"
                     label="Fuel Allowance"
-                    value={formik.values.earnings.fuelAllowance}
+                    value={wholeRupees(formik.values.earnings.fuelAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1317,7 +1362,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.specialAllowance"
                     label="Special Allowance"
-                    value={formik.values.earnings.specialAllowance}
+                    value={wholeRupees(formik.values.earnings.specialAllowance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1329,7 +1374,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.otherAllowances"
                     label="Other Allowances"
-                    value={formik.values.earnings.otherAllowances}
+                    value={wholeRupees(formik.values.earnings.otherAllowances)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1341,7 +1386,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.leaveEncashment"
                     label="Leave Encashment"
-                    value={formik.values.earnings.leaveEncashment}
+                    value={wholeRupees(formik.values.earnings.leaveEncashment)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1353,7 +1398,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.noticePay"
                     label="Notice Pay"
-                    value={formik.values.earnings.noticePay}
+                    value={wholeRupees(formik.values.earnings.noticePay)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText={
@@ -1378,7 +1423,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.gratuity"
                     label="Gratuity"
-                    value={formik.values.earnings.gratuity}
+                    value={wholeRupees(formik.values.earnings.gratuity)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText={`Enter only when gratuity applies · ${yearsOfService} year(s) of service`}
@@ -1391,7 +1436,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.bonus"
                     label="Bonus"
-                    value={formik.values.earnings.bonus}
+                    value={wholeRupees(formik.values.earnings.bonus)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1403,7 +1448,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.overtime"
                     label="Overtime"
-                    value={formik.values.earnings.overtime}
+                    value={wholeRupees(formik.values.earnings.overtime)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1415,7 +1460,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="earnings.otherEarnings"
                     label="Other Earnings"
-                    value={formik.values.earnings.otherEarnings}
+                    value={wholeRupees(formik.values.earnings.otherEarnings)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1434,7 +1479,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.noticePeriodDeduction"
                     label="Notice Period Deduction"
-                    value={formik.values.deductions.noticePeriodDeduction}
+                    value={wholeRupees(formik.values.deductions.noticePeriodDeduction)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText={
@@ -1451,7 +1496,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.loanDeductions"
                     label="Loan Deductions"
-                    value={formik.values.deductions.loanDeductions}
+                    value={wholeRupees(formik.values.deductions.loanDeductions)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                     helperText={loansLoading ? 'Loading loans...' : `${employeeLoans.length} active loan(s)`}
@@ -1464,7 +1509,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.advanceDeductions"
                     label="Advance Deductions"
-                    value={formik.values.deductions.advanceDeductions}
+                    value={wholeRupees(formik.values.deductions.advanceDeductions)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1476,7 +1521,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.taxDeductions"
                     label="Tax Deductions"
-                    value={formik.values.deductions.taxDeductions}
+                    value={wholeRupees(formik.values.deductions.taxDeductions)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1488,7 +1533,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.healthInsurance"
                     label="Health Insurance"
-                    value={formik.values.deductions.healthInsurance}
+                    value={wholeRupees(formik.values.deductions.healthInsurance)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1500,7 +1545,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.providentFund"
                     label="Provident Fund"
-                    value={formik.values.deductions.providentFund}
+                    value={wholeRupees(formik.values.deductions.providentFund)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1514,7 +1559,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.security"
                     label="Employee Security"
-                    value={formik.values.deductions.security}
+                    value={wholeRupees(formik.values.deductions.security)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1526,7 +1571,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.pension"
                     label="Pension"
-                    value={formik.values.deductions.pension}
+                    value={wholeRupees(formik.values.deductions.pension)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />
@@ -1538,7 +1583,7 @@ const FinalSettlementForm = () => {
                     type="number"
                     name="deductions.otherDeductions"
                     label="Other Deductions"
-                    value={formik.values.deductions.otherDeductions}
+                    value={wholeRupees(formik.values.deductions.otherDeductions)}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
                   />

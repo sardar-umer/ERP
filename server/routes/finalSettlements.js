@@ -6,6 +6,18 @@ const Loan = require('../models/hr/Loan');
 const { authMiddleware } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
+const PlacementCompany = require('../models/hr/Company');
+const { postFinalSettlementToFinance, syncFinalSettlementPayments } = require('../utils/finalSettlementFinance');
+
+/** Validate a company id from the form → { companyId, companyName } (throws 400 when missing / unknown) */
+const resolveSettlementCompany = async (companyId) => {
+  if (!companyId || !require('mongoose').Types.ObjectId.isValid(String(companyId))) {
+    throw Object.assign(new Error('Select the company for this settlement'), { statusCode: 400 });
+  }
+  const company = await PlacementCompany.findById(companyId).select('name').lean();
+  if (!company) throw Object.assign(new Error('Selected company not found'), { statusCode: 400 });
+  return { companyId: company._id, companyName: company.name };
+};
 
 // ─── Approval workflow (same as Manual Salary): HR forwards → GM HR → AVP → CEO → "approved" ───
 const ADMIN_ROLES = ['super_admin', 'admin', 'developer'];
@@ -81,6 +93,7 @@ router.get('/', authMiddleware, async (req, res) => {
     };
 
     const settlements = await FinalSettlement.paginate(query, options);
+    await syncFinalSettlementPayments(settlements.docs).catch((e) => console.error('Settlement payment sync failed:', e.message));
 
     // Add virtual fields to each document
     settlements.docs = settlements.docs.map(doc => {
@@ -259,12 +272,46 @@ router.put('/:id/workflow', authMiddleware, async (req, res) => {
     }
     settlement.updatedBy = req.user._id;
     await settlement.save();
+    // CEO approval sends the settlement to Finance (Payables) as a bill payable to the employee
+    let financeNote = '';
+    if (settlement.workflowStatus === 'Approved by CEO') {
+      const fin = await postFinalSettlementToFinance(settlement, req.user);
+      financeNote = fin.posted
+        ? ` and sent to Finance (bill ${fin.billNumber})`
+        : ` — could not send to Finance: ${fin.error}`;
+    }
     const data = await FinalSettlement.findById(settlement._id).populate(approverPopulate).lean();
-    const next = { 'Pending AVP': 'sent to AVP', 'Forwarded to CEO': 'forwarded to CEO', 'Approved by CEO': 'approved — ready to process', Returned: 'returned to HR' };
-    res.json({ success: true, message: `Settlement ${next[settlement.workflowStatus] || 'updated'}`, data });
+    const next = { 'Pending AVP': 'sent to AVP', 'Forwarded to CEO': 'forwarded to CEO', 'Approved by CEO': 'approved by CEO', 'Pending Finance': 'approved by CEO', Returned: 'returned to HR' };
+    res.json({ success: true, message: `Settlement ${next[settlement.workflowStatus] || 'updated'}${financeNote}`, data });
   } catch (error) {
     console.error('Error in settlement workflow:', error);
     res.status(500).json({ success: false, message: 'Error updating settlement workflow', error: error.message });
+  }
+});
+
+// @route   PUT /api/final-settlements/:id/send-to-finance — (re)send a CEO-approved settlement to Finance Payables
+router.put('/:id/send-to-finance', authMiddleware, checkPermission('settlement_management'), async (req, res) => {
+  try {
+    const settlement = await FinalSettlement.findById(req.params.id);
+    if (!settlement) return res.status(404).json({ success: false, message: 'Settlement not found' });
+    if (settlement.financeApBillId && settlement.workflowStatus === 'Pending Finance') {
+      return res.status(400).json({ success: false, message: `Already in Finance (bill ${settlement.financeApBillNumber})` });
+    }
+    // Settlements approved before the company field existed pick their company here
+    if (req.body?.companyId) {
+      try {
+        Object.assign(settlement, await resolveSettlementCompany(req.body.companyId));
+      } catch (err) {
+        return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+      }
+    }
+    const fin = await postFinalSettlementToFinance(settlement, req.user);
+    if (!fin.posted) return res.status(fin.statusCode || 400).json({ success: false, message: fin.error });
+    const data = await FinalSettlement.findById(settlement._id).populate(approverPopulate).lean();
+    res.json({ success: true, message: `Sent to Finance — bill ${fin.billNumber} is in Payables`, data });
+  } catch (error) {
+    console.error('Error sending settlement to Finance:', error);
+    res.status(500).json({ success: false, message: 'Error sending settlement to Finance', error: error.message });
   }
 });
 
@@ -296,6 +343,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
       });
     }
 
+    await syncFinalSettlementPayments([settlement]).catch((e) => console.error('Settlement payment sync failed:', e.message));
     // Add virtual fields
     const settlementData = settlement.toObject();
     settlementData.settlementProgress = settlement.settlementProgress;
@@ -322,6 +370,7 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
   try {
     const {
       employeeId,
+      companyId: clientCompanyId,
       settlementType,
       reason,
       lastWorkingDate,
@@ -344,6 +393,13 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       loans: clientLoans,
       standardEarnings: clientStandardEarnings
     } = req.body;
+
+    let company;
+    try {
+      company = await resolveSettlementCompany(clientCompanyId);
+    } catch (err) {
+      return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+    }
 
     // Get employee details with populated department and position
     const employee = await Employee.findOne({ employeeId })
@@ -450,6 +506,8 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       employeeName: `${employee.firstName} ${employee.lastName}`,
       department: employee.placementDepartment?.name || employee.department?.name || 'Unknown',
       designation: employee.placementDesignation?.title || employee.position?.title || 'Unknown',
+      companyId: company.companyId,
+      companyName: company.companyName,
       settlementType,
       reason,
       noticePeriod,
@@ -519,8 +577,16 @@ router.put('/:id', authMiddleware, checkPermission('settlement_management'), asy
       });
     }
     // Never take workflow fields from the edit form
-    ['workflowStatus', ...APPROVER_FIELDS, 'hodApprovedAt', 'avpApprovedAt', 'ceoApprovedAt', 'forwardedAt', 'returnedAt']
+    ['workflowStatus', ...APPROVER_FIELDS, 'hodApprovedAt', 'avpApprovedAt', 'ceoApprovedAt', 'forwardedAt', 'returnedAt',
+      'financeApBillId', 'financeApBillNumber', 'financePostedAt', 'financePostedBy', 'financePostError', 'paidAt', 'companyName']
       .forEach((k) => { delete req.body[k]; });
+    if (req.body.companyId !== undefined || !settlement.companyId) {
+      try {
+        Object.assign(req.body, await resolveSettlementCompany(req.body.companyId));
+      } catch (err) {
+        return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+      }
+    }
 
     const body = { ...req.body };
     // Map form transportAllowance into schema conveyanceAllowance
@@ -589,10 +655,13 @@ router.patch('/:id/approve', authMiddleware, checkPermission('settlement_approva
     settlement.updatedBy = req.user._id;
 
     await settlement.save();
+    const fin = await postFinalSettlementToFinance(settlement, req.user);
 
     res.json({
       success: true,
-      message: 'Settlement approved successfully',
+      message: fin.posted
+        ? `Settlement approved and sent to Finance (bill ${fin.billNumber})`
+        : `Settlement approved — could not send to Finance: ${fin.error}`,
       data: settlement
     });
   } catch (error) {
@@ -620,6 +689,12 @@ router.patch('/:id/process', authMiddleware, checkPermission('settlement_process
       return res.status(400).json({
         success: false,
         message: 'Settlement must be approved before processing'
+      });
+    }
+    if (settlement.financeApBillId) {
+      return res.status(400).json({
+        success: false,
+        message: `This settlement is paid by Finance (bill ${settlement.financeApBillNumber || ''}) — it is marked Paid automatically`
       });
     }
 
@@ -665,6 +740,12 @@ router.patch('/:id/paid', authMiddleware, checkPermission('settlement_processing
         message: 'Settlement must be processed before marking as paid'
       });
     }
+    if (settlement.financeApBillId) {
+      return res.status(400).json({
+        success: false,
+        message: `This settlement is paid by Finance (bill ${settlement.financeApBillNumber || ''}) — it is marked Paid automatically`
+      });
+    }
 
     settlement.status = 'paid';
     settlement.updatedBy = req.user._id;
@@ -701,6 +782,12 @@ router.patch('/:id/cancel', authMiddleware, checkPermission('settlement_manageme
       return res.status(400).json({
         success: false,
         message: 'Cannot cancel a paid settlement'
+      });
+    }
+    if (settlement.financeApBillId) {
+      return res.status(400).json({
+        success: false,
+        message: `Finance bill ${settlement.financeApBillNumber || ''} is open for this settlement — ask Finance to void it first`
       });
     }
 

@@ -61,6 +61,15 @@ import { loanService } from '../../services/loanService';
 import { formatPKR } from '../../utils/currency';
 import { downloadLoanDetailPDF } from '../../utils/loanDetailPDF';
 import { useAuth } from '../../contexts/AuthContext';
+import LoanAttachments from '../../components/HR/LoanAttachments';
+import {
+  ForwardLoanDialog,
+  LoanApprovalDialog,
+  LOAN_WORKFLOW_COLORS,
+  LOAN_IN_APPROVAL,
+  loanWorkflowLabel,
+  canForwardLoan
+} from '../../components/HR/LoanWorkflow';
 
 const MONTH_NAMES = [
   'January', 'February', 'March', 'April', 'May', 'June',
@@ -109,6 +118,18 @@ const LoanDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [pauseDialog, setPauseDialog] = useState(false);
   const [adjustDialog, setAdjustDialog] = useState(false);
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const [workflowMe, setWorkflowMe] = useState({ isAdmin: false });
+  useEffect(() => {
+    loanService.getWorkflowMe().then((r) => setWorkflowMe(r.data || {})).catch(() => {});
+  }, []);
+  const workflowDone = (message) => {
+    setForwardOpen(false);
+    setApprovalsOpen(false);
+    setSuccess(message);
+    fetchLoan();
+  };
 
   // Form states
   const [rejectionReason, setRejectionReason] = useState('');
@@ -637,6 +658,26 @@ const LoanDetail = () => {
     </Card>
   );
 
+  // HR can add papers while the loan is with them; admins any time
+  const attachmentsEditable = Boolean(loan) && (workflowMe.isAdmin || !LOAN_IN_APPROVAL.includes(loan.workflowStatus));
+  const attachmentsRemovable = Boolean(loan) && (workflowMe.isAdmin
+    || (loan.status === 'Pending' && !LOAN_IN_APPROVAL.includes(loan.workflowStatus)));
+  const renderAttachments = () => (
+    <Card sx={{ mb: 3 }}>
+      <CardContent>
+        <Typography variant="h6" gutterBottom>Attachments</Typography>
+        <LoanAttachments
+          loanId={loan._id}
+          documents={loan.documents || []}
+          canUpload={attachmentsEditable}
+          canDelete={attachmentsRemovable}
+          onChange={(documents) => { setLoan((prev) => ({ ...prev, documents })); setSuccess('Attachments updated'); }}
+          onError={(msg) => setError(msg)}
+        />
+      </CardContent>
+    </Card>
+  );
+
   const renderNotes = () => (
     <Card sx={{ mb: 3 }}>
       <CardContent>
@@ -680,7 +721,35 @@ const LoanDetail = () => {
   const renderActionButtons = () => {
     const buttons = [];
 
-    if (loan.status === 'Pending') {
+    // Approval chain: HR forwards → GM HR → AVP → CEO (final)
+    if (loan.status === 'Pending' && !loan.isOngoingLoan) {
+      buttons.push(
+        <Chip key="wf" label={loanWorkflowLabel(loan)} color={LOAN_WORKFLOW_COLORS[loan.workflowStatus || 'Draft']} sx={{ mr: 1 }} />
+      );
+      if (canForwardLoan(loan)) {
+        buttons.push(
+          <Button key="forward" variant="contained" startIcon={<ApproveIcon />} onClick={() => setForwardOpen(true)} sx={{ mr: 1 }}>
+            Forward for Approval
+          </Button>
+        );
+      }
+    }
+    if (!loan.isOngoingLoan && (loan.workflowStatus || loan.status === 'Pending')) {
+      buttons.push(
+        <Button
+          key="approvals"
+          variant={loan.myWorkflowRole ? 'contained' : 'outlined'}
+          color={loan.myWorkflowRole ? 'success' : 'primary'}
+          onClick={() => setApprovalsOpen(true)}
+          sx={{ mr: 1 }}
+        >
+          {loan.myWorkflowRole ? 'Approve / Return' : 'Approvals'}
+        </Button>
+      );
+    }
+
+    // Direct approve / reject is an admin override only
+    if (loan.status === 'Pending' && workflowMe.isAdmin && !LOAN_IN_APPROVAL.includes(loan.workflowStatus)) {
       buttons.push(
         <Button
           key="approve"
@@ -690,7 +759,7 @@ const LoanDetail = () => {
           onClick={() => setApprovalDialog(true)}
           sx={{ mr: 1 }}
         >
-          Approve
+          Approve (admin)
         </Button>,
         <Button
           key="reject"
@@ -700,7 +769,7 @@ const LoanDetail = () => {
           onClick={() => setRejectionDialog(true)}
           sx={{ mr: 1 }}
         >
-          Reject
+          Reject (admin)
         </Button>
       );
     }
@@ -720,7 +789,7 @@ const LoanDetail = () => {
       );
     }
 
-    if (loan.status === 'Pending') {
+    if (loan.status === 'Pending' && !LOAN_IN_APPROVAL.includes(loan.workflowStatus)) {
       buttons.push(
         <Button
           key="edit"
@@ -821,6 +890,7 @@ const LoanDetail = () => {
       {renderDeductionManagement()}
       {renderLoanSchedule()}
       {renderGuarantorInfo()}
+      {renderAttachments()}
       {renderNotes()}
 
       {/* Approval Dialog */}
@@ -1101,8 +1171,12 @@ const LoanDetail = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <ForwardLoanDialog loan={forwardOpen ? loan : null} onClose={() => setForwardOpen(false)} onDone={workflowDone} />
+      {approvalsOpen && (
+        <LoanApprovalDialog loan={loan} onClose={() => setApprovalsOpen(false)} onDone={workflowDone} />
+      )}
     </Box>
   );
 };
 
-export default LoanDetail; 
+export default LoanDetail;

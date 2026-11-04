@@ -70,6 +70,7 @@ import {
   Business as VendorIcon
 } from '@mui/icons-material';
 import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
+import ManualSalaryAuditView from '../../components/Audit/ManualSalaryAuditView';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
@@ -389,7 +390,11 @@ const PreAudit = () => {
       const doc = approveDialog.document;
 
       let approveResponse;
-      if (doc.isProjectIpc) {
+      if (doc.isManualSalary) {
+        approveResponse = await api.put(`/hr/manual-salary/${doc._id}/audit-approve`, {
+          approvalComments
+        });
+      } else if (doc.isProjectIpc) {
         approveResponse = await api.put(`/project-management/ipcs/${doc._id}/audit-approve`, {
           approvalComments
         });
@@ -456,7 +461,11 @@ const PreAudit = () => {
       setError(null);
       const doc = returnDialog.document;
       
-      if (doc.isProjectIpc) {
+      if (doc.isManualSalary) {
+        await api.put(`/hr/manual-salary/${doc._id}/audit-return`, {
+          returnComments
+        });
+      } else if (doc.isProjectIpc) {
         await api.put(`/project-management/ipcs/${doc._id}/audit-return`, {
           returnComments
         });
@@ -516,7 +525,13 @@ const PreAudit = () => {
         return;
       }
 
-      if (doc.isProjectIpc) {
+      if (doc.isManualSalary) {
+        await api.put(`/hr/manual-salary/${doc._id}/audit-reject`, {
+          rejectionComments: rejectionComments || 'Returned with observations',
+          observations: observations.length > 0 ? observations : undefined
+        });
+        setSuccess('Manual salary returned to HR with your observations.');
+      } else if (doc.isProjectIpc) {
         await api.put(`/project-management/ipcs/${doc._id}/audit-reject`, {
           rejectionComments: rejectionComments || 'Rejected with observations',
           observations: observations.length > 0 ? observations : undefined
@@ -2815,6 +2830,10 @@ const PreAudit = () => {
                                                         setIpcReviewId(doc._id);
                                                         return;
                                                       }
+                                                      if (doc.isManualSalary) {
+                                                        setViewDialog({ open: true, document: doc, fullDocument: doc.originalDocument, loading: false });
+                                                        return;
+                                                      }
                                                       setViewDialog({ open: true, document: doc, fullDocument: null, loading: true });
                                                       
                                                       // If it's a Purchase Order, fetch full PO and related Comparative Statement data (quotations by indent)
@@ -3048,7 +3067,7 @@ const PreAudit = () => {
                                                             </IconButton>
                                                           </Tooltip>
                                                         )}
-                                                        {!doc.isProjectIpc && (
+                                                        {!doc.isProjectIpc && !doc.isManualSalary && (
                                                         <Tooltip title="Add Observation">
                                                           <IconButton
                                                             size="small"
@@ -3284,7 +3303,9 @@ const PreAudit = () => {
               fontFamily: (viewDialog.document.isPurchaseOrder || viewDialog.document.isCashApproval || (viewDialog.document.isWorkflowDocument && (viewDialog.fullDocument?.isPurchaseOrder || viewDialog.document?.workflowSubmodule === 'utility_bills_management' || viewDialog.document?.workflowSubmodule === 'payment_settlement' || viewDialog.document?.workflowSubmodule === 'rental_management'))) ? 'Arial, sans-serif' : '"Times New Roman", serif'
             }} className={(viewDialog.document.isPurchaseOrder || viewDialog.document.isCashApproval || (viewDialog.document.isWorkflowDocument && (viewDialog.fullDocument?.isPurchaseOrder || viewDialog.document?.workflowSubmodule === 'utility_bills_management' || viewDialog.document?.workflowSubmodule === 'payment_settlement' || viewDialog.document?.workflowSubmodule === 'rental_management'))) ? "print-content" : ""}>
               {/* Show Purchase Order + Comparative Statement + Quotations when it's a PO (for audit) */}
-              {(viewDialog.document.isPurchaseOrder && viewDialog.fullDocument) ? (
+              {(viewDialog.document.isManualSalary && viewDialog.fullDocument) ? (
+                <ManualSalaryAuditView record={viewDialog.fullDocument} />
+              ) : (viewDialog.document.isPurchaseOrder && viewDialog.fullDocument) ? (
                 <>
                   <Tabs
                     value={viewDialog.poAuditTab ?? 0}

@@ -64,6 +64,8 @@ import ResubmissionHistory from '../../pages/HR/NonEmployeeOnboarding/Resubmissi
 import manualSalaryService from '../../services/manualSalaryService';
 import finalSettlementService from '../../services/finalSettlementService';
 import { SettlementProcessDialog } from '../HR/FinalSettlementWorkflow';
+import { LoanApprovalDialog } from '../HR/LoanWorkflow';
+import { loanService } from '../../services/loanService';
 import executiveApprovalsService from '../../services/executiveApprovalsService';
 import indentService from '../../services/indentService';
 import utilityBillService from '../../services/utilityBillService';
@@ -208,6 +210,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
           isOnboarding: Boolean(item.isOnboarding),
           isManualSalary: Boolean(item.isManualSalary),
           isFinalSettlement: Boolean(item.isFinalSettlement),
+          isLoan: Boolean(item.isLoan),
           isIndent: Boolean(item.isIndent),
           isUtilityBill: Boolean(item.isUtilityBill),
           isProjectIpc: Boolean(item.isProjectIpc),
@@ -252,7 +255,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   const poItems = payments.filter((p) => p.isPurchaseOrder);
   const caItems = payments.filter((p) => p.isCashApproval);
   const settlementItems = payments.filter((p) => p.isPaymentSettlement);
-  const onboardingItems = payments.filter((p) => p.isOnboarding || p.isManualSalary || p.isFinalSettlement);
+  const onboardingItems = payments.filter((p) => p.isOnboarding || p.isManualSalary || p.isFinalSettlement || p.isLoan);
   const otherItems = payments.filter((p) => p.isIndent || p.isUtilityBill || p.isVendorBill);
   const ipcItems = payments.filter((p) => p.isProjectIpc);
 
@@ -266,7 +269,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     if (filterTab === 1 && !p.isPurchaseOrder) return false;
     if (filterTab === 2 && !p.isCashApproval) return false;
     if (filterTab === 3 && !p.isPaymentSettlement) return false;
-    if (filterTab === 4 && !(p.isOnboarding || p.isManualSalary || p.isFinalSettlement)) return false;
+    if (filterTab === 4 && !(p.isOnboarding || p.isManualSalary || p.isFinalSettlement || p.isLoan)) return false;
     if (filterTab === 5 && !(p.isIndent || p.isUtilityBill || p.isVendorBill)) return false;
     if (filterTab === 6 && !p.isProjectIpc) return false;
     return true;
@@ -394,6 +397,10 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   const openView = async (settlement) => {
     if (settlement.isFinalSettlement) {
       openFinalSettlement(settlement);
+      return;
+    }
+    if (settlement.isLoan) {
+      openLoan(settlement);
       return;
     }
     if (settlement.isProjectIpc) {
@@ -764,7 +771,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     const isPaymentSettlement =
       Boolean(flags.isPaymentSettlement) ||
       Boolean(doc.isPaymentSettlement) ||
-      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill && !isProjectIpc && !doc.isFinalSettlement);
+      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill && !isProjectIpc && !doc.isFinalSettlement && !doc.isLoan);
 
     return {
       ...doc,
@@ -816,9 +823,20 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     }
   };
 
+  // Employee loans: View / Approve / Reject / Return all open the loan's own approval dialog
+  const [loanDialog, setLoanDialog] = useState(null);
+  const openLoan = async (item) => {
+    try {
+      setLoanDialog(await loanService.getLoanById(item._id));
+    } catch (e) {
+      toast.error(e.message || 'Could not load the loan');
+    }
+  };
+
   // Action Dialog Openers
   const openApprove = (item, flags = {}) => {
     if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
+    if (item?.isLoan) { openLoan(item); return; }
     setApproveDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setApprovalComments('');
     setApprovalAgree(false);
@@ -826,6 +844,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
 
   const openReject = (item, flags = {}) => {
     if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
+    if (item?.isLoan) { openLoan(item); return; }
     setRejectDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setRejectionComments('');
     setRejectionAgree(false);
@@ -834,6 +853,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
 
   const openReturn = (item, flags = {}) => {
     if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
+    if (item?.isLoan) { openLoan(item); return; }
     setReturnDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setReturnComments('');
     setReturnAgree(false);
@@ -1328,7 +1348,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   </style>
 </head>
 <body>
-  <div class="company">Sardar Group Of Companies</div>
+  <div class="company">${escapeHtml(settlement.companyName || 'Sardar Group Of Companies')}</div>
   <h1>Manual Salary Details</h1>
   <div class="sub">Status: ${display(settlement.workflowStatus || settlement.status)} · Period: ${display(period)}</div>
 
@@ -3762,6 +3782,17 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
         />
       )}
       <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
+      {loanDialog && (
+        <LoanApprovalDialog
+          loan={loanDialog}
+          onClose={() => setLoanDialog(null)}
+          onDone={(message) => {
+            setLoanDialog(null);
+            toast.success(message);
+            fetchCeoPayments();
+          }}
+        />
+      )}
       {finalSettlementDialog && (
         <SettlementProcessDialog
           settlement={finalSettlementDialog}

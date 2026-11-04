@@ -5,6 +5,26 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
 
 const ManualSalary = require('../models/hr/ManualSalary');
+const PlacementCompany = require('../models/hr/Company');
+const manualSalaryAudit = require('../utils/manualSalaryAudit');
+
+/** Audit helper errors carry statusCode */
+const auditAction = (fn) => asyncHandler(async (req, res) => {
+  try {
+    const { record, message } = await fn(req);
+    res.json({ success: true, message, data: await populateApprovers(ManualSalary.findById(record._id)) });
+  } catch (err) {
+    if (!err.statusCode) throw err;
+    res.status(err.statusCode).json({ success: false, message: err.message });
+  }
+});
+
+/** Company id from the form → { companyId, companyName }; null when missing / unknown */
+const resolveCompany = async (companyId) => {
+  if (!companyId || !require('mongoose').Types.ObjectId.isValid(String(companyId))) return null;
+  const company = await PlacementCompany.findById(companyId).select('name').lean();
+  return company ? { companyId: company._id, companyName: company.name } : null;
+};
 
 const optionalUserId = (value) => {
   if (!value) return null;
@@ -33,6 +53,8 @@ const populateApprovers = (q) => q
   .populate('hodApprovedBy', 'firstName lastName email digitalSignature')
   .populate('avpApprovedBy', 'firstName lastName email digitalSignature')
   .populate('ceoApprovedBy', 'firstName lastName email digitalSignature')
+  .populate('preAuditInitialApprovedBy', 'firstName lastName email digitalSignature')
+  .populate('auditApprovedBy', 'firstName lastName email digitalSignature')
   .populate('paidBy', 'firstName lastName email');
 
 // @route   GET /api/hr/manual-salary
@@ -58,11 +80,16 @@ router.post('/', [
   body('month').isInt({ min: 1, max: 12 }).withMessage('Valid month is required'),
   body('year').isInt({ min: 2000, max: 2100 }).withMessage('Valid year is required'),
   body('assignedHod').notEmpty().withMessage('GM HR (HOD) is required'),
-  body('assignedAvp').notEmpty().withMessage('AVP is required')
+  body('assignedAvp').notEmpty().withMessage('AVP is required'),
+  body('companyId').notEmpty().withMessage('Company is required')
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
   if (!errors.isEmpty()) {
     return res.status(400).json({ success: false, errors: errors.array() });
+  }
+  const company = await resolveCompany(req.body.companyId);
+  if (!company) {
+    return res.status(400).json({ success: false, message: 'Select a valid company' });
   }
 
   const payload = {
@@ -72,6 +99,7 @@ router.post('/', [
     requesterSignature: actorSignature(req.user, req.body.requesterSignature),
     assignedHod: optionalUserId(req.body.assignedHod),
     assignedAvp: optionalUserId(req.body.assignedAvp),
+    ...company,
     workflowStatus: 'Pending HOD HR'
   };
 
@@ -104,6 +132,8 @@ router.put('/:id', [
     'Pending AVP',
     'Forwarded to CEO',
     'Approved by CEO',
+    'Pending Audit',
+    'Forwarded to Audit Director',
     'Pending Finance',
     'Payment Pending',
     'Paid'
@@ -117,6 +147,14 @@ router.put('/:id', [
   }
 
   const update = { ...req.body };
+  delete update.companyName;
+  if (req.body.companyId !== undefined || !existing.companyId) {
+    const company = await resolveCompany(req.body.companyId);
+    if (!company) {
+      return res.status(400).json({ success: false, message: 'Select a valid company' });
+    }
+    Object.assign(update, company);
+  }
   if (req.body.assignedHod !== undefined) update.assignedHod = optionalUserId(req.body.assignedHod);
   if (req.body.assignedAvp !== undefined) update.assignedAvp = optionalUserId(req.body.assignedAvp);
 
@@ -145,7 +183,7 @@ router.delete('/:id', asyncHandler(async (req, res) => {
   if (!record) {
     return res.status(404).json({ success: false, message: 'Record not found' });
   }
-  if (['Approved by CEO', 'Pending Finance', 'Payment Pending', 'Paid', 'Forwarded to CEO', 'Pending AVP'].includes(record.workflowStatus)) {
+  if (['Approved by CEO', 'Pending Audit', 'Forwarded to Audit Director', 'Pending Finance', 'Payment Pending', 'Paid', 'Forwarded to CEO', 'Pending AVP'].includes(record.workflowStatus)) {
     return res.status(400).json({
       success: false,
       message: `Cannot delete while status is ${record.workflowStatus}`
@@ -211,15 +249,14 @@ router.put('/:id/approve-avp', asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: deny });
   }
 
-  // Skip Chairman + Sr Director — go straight to CEO
-  record.workflowStatus = 'Forwarded to CEO';
+  // GM HR → AVP Taj → Audit → Finance (no CEO step)
   record.avpApprovedBy = req.user.id;
   record.avpApprovedAt = new Date();
   record.avpComments = req.body.comments || '';
   record.avpSignature = actorSignature(req.user, req.body.signature);
-  await record.save();
+  await manualSalaryAudit.sendToAudit(record, req.user.id, req.body.comments ? `AVP: ${req.body.comments}` : 'AVP approved — sent to Audit');
 
-  res.json({ success: true, data: await populateApprovers(ManualSalary.findById(record._id)) });
+  res.json({ success: true, message: 'AVP approved — sent to Audit', data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
 
 router.put('/:id/reject-avp', asyncHandler(async (req, res) => {
@@ -254,17 +291,16 @@ router.put('/:id/approve-ceo', asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'CEO approval access required' });
   }
 
-  // CEO approval completes the HR workflow; it is NOT sent to Finance yet (Finance hand-off comes later)
-  record.workflowStatus = 'Approved by CEO';
+  // CEO step is no longer part of the flow; records already waiting on the CEO go on to Audit
   record.ceoApprovedBy = req.user.id;
   record.ceoApprovedAt = new Date();
   record.ceoComments = req.body.comments || '';
   record.ceoSignature = actorSignature(req.user, req.body.signature);
-  await record.save();
+  await manualSalaryAudit.sendToAudit(record, req.user.id, 'CEO approved — sent to Audit');
 
   res.json({
     success: true,
-    message: 'CEO approved. Manual salary is approved (not sent to Finance yet).',
+    message: 'CEO approved — sent to Audit.',
     data: await populateApprovers(ManualSalary.findById(record._id))
   });
 }));
@@ -305,5 +341,23 @@ router.put('/:id/return-ceo', asyncHandler(async (req, res) => {
 
   res.json({ success: true, data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
+
+// ─── Audit (after AVP) — also driven from the Pre-Audit screen ────────────────
+
+// @route   PUT /api/hr/manual-salary/:id/audit-approve — initial pre-audit approval, then Audit Director final → Finance
+router.put('/:id/audit-approve', auditAction((req) =>
+  manualSalaryAudit.auditApprove(req.params.id, req.user, req.body.approvalComments || req.body.comments || '')));
+
+// @route   PUT /api/hr/manual-salary/:id/forward-to-audit-director
+router.put('/:id/forward-to-audit-director', auditAction((req) =>
+  manualSalaryAudit.forwardToAuditDirector(req.params.id, req.user, req.body.forwardComments || req.body.comments || '')));
+
+// @route   PUT /api/hr/manual-salary/:id/audit-return (and audit-reject — same: back to HR)
+const auditReturnHandler = auditAction((req) => manualSalaryAudit.auditReturn(req.params.id, req.user, {
+  comments: req.body.returnComments || req.body.rejectionComments || req.body.comments || '',
+  observations: req.body.observations
+}));
+router.put('/:id/audit-return', auditReturnHandler);
+router.put('/:id/audit-reject', auditReturnHandler);
 
 module.exports = router;

@@ -83,10 +83,13 @@ const mapIncrementRow = (increment, empMap = new Map()) => {
   };
 };
 
+const { payrollExportGross } = require('./payrollExportGross');
+
 const aggregatePayrollTotals = (payrolls = []) => {
   const totals = payrolls.reduce(
     (acc, row) => {
-      acc.totalGrossSalary += Number(row.grossSalary) || 0;
+      // Same Gross as the monthly PDF / Excel export (Total Earn, full before any salary cut)
+      acc.totalGrossSalary += payrollExportGross(row);
       // Match monthly CSV Net Payable: exclude attendance deduction from net
       acc.totalNetSalary +=
         (Number(row.netSalary) || 0) + (Number(row.attendanceDeduction) || 0);

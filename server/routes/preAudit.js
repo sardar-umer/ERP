@@ -537,6 +537,14 @@ router.get('/',
       console.error('Error fetching project IPCs for pre-audit:', ipcErr);
     }
 
+    // HR Manual Salary: after AVP Taj, before Finance (same lifecycle as IPCs)
+    try {
+      const { listManualSalariesForPreAudit } = require('../utils/manualSalaryAudit');
+      workflowDocs.push(...await listManualSalariesForPreAudit(search));
+    } catch (msErr) {
+      console.error('Error fetching manual salaries for pre-audit:', msErr);
+    }
+
     // Vendor Bills in audit queue (Pending Audit, Forwarded to Audit Director, Returned from Audit, Approved)
     try {
       const AccountsPayableModel = require('../models/finance/AccountsPayable');
@@ -1216,6 +1224,21 @@ router.put('/:id/forward',
       } catch (error) {
         // Continue to next module
         console.error(`Error checking workflow module ${submodule}:`, error.message);
+      }
+    }
+
+    // HR Manual Salary: Pending Audit -> Forwarded to Audit Director
+    {
+      const ManualSalary = require('../models/hr/ManualSalary');
+      const ms = await ManualSalary.findById(req.params.id).select('_id').lean().catch(() => null);
+      if (ms) {
+        try {
+          const { forwardToAuditDirector } = require('../utils/manualSalaryAudit');
+          const { record, message } = await forwardToAuditDirector(req.params.id, req.user, forwardComments);
+          return res.json({ success: true, message, data: { _id: record._id, isManualSalary: true, workflowStatus: record.workflowStatus } });
+        } catch (err) {
+          return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+        }
       }
     }
 

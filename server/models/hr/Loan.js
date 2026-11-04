@@ -97,6 +97,28 @@ const loanSchema = new mongoose.Schema({
     trim: true,
     maxlength: [500, 'Rejection reason cannot exceed 500 characters']
   },
+  // Approval chain (same as Final Settlement): HR forwards → GM HR → AVP → CEO. CEO approval is final
+  // (status → Approved); nothing goes to Finance. Loans created before the chain have no workflowStatus.
+  workflowStatus: {
+    type: String,
+    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Returned', 'Rejected by CEO']
+  },
+  forwardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  forwardedAt: { type: Date },
+  assignedHod: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  hodApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  hodApprovedAt: { type: Date },
+  hodComments: { type: String, trim: true },
+  assignedAvp: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  avpApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  avpApprovedAt: { type: Date },
+  avpComments: { type: String, trim: true },
+  ceoApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  ceoApprovedAt: { type: Date },
+  ceoComments: { type: String, trim: true },
+  returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  returnedAt: { type: Date },
+  returnComments: { type: String, trim: true },
   // Loan disbursement details
   disbursementMethod: {
     type: String,
@@ -247,6 +269,9 @@ const loanSchema = new mongoose.Schema({
       type: String,
       required: true
     },
+    mimeType: { type: String, trim: true },
+    size: { type: Number },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     uploadedAt: {
       type: Date,
       default: Date.now

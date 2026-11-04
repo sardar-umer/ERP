@@ -37,6 +37,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
 import { formatPKR } from '../../utils/currency';
 import api from '../../services/api';
+import LoanAttachments, { LOAN_ATTACHMENT_ACCEPT, splitLoanFiles } from '../../components/HR/LoanAttachments';
 
 const steps = ['Basic Information', 'Loan Details', 'Guarantor & Documents'];
 
@@ -47,6 +48,10 @@ const LoanForm = () => {
 
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
+  // Files chosen on the form; uploaded right after the loan is saved
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [existingDocs, setExistingDocs] = useState([]);
+  const [existingWorkflow, setExistingWorkflow] = useState('');
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeStep, setActiveStep] = useState(0);
@@ -132,6 +137,8 @@ const LoanForm = () => {
     try {
       setLoading(true);
       const loan = await loanService.getLoanById(id);
+      setExistingDocs(loan.documents || []);
+      setExistingWorkflow(loan.workflowStatus || '');
       setFormData({
         employee: loan.employee._id,
         loanType: loan.loanType,
@@ -368,16 +375,28 @@ const LoanForm = () => {
           : 0
       };
 
+      let savedId = id;
       if (isEdit) {
         await loanService.updateLoan(id, loanData);
         setSuccess('Loan application updated successfully');
       } else {
-        await loanService.createLoan(loanData);
+        const created = await loanService.createLoan(loanData);
+        savedId = created?.loan?._id;
         setSuccess(
           formData.isOngoingLoan
             ? 'Ongoing loan imported successfully'
             : 'Loan application submitted successfully'
         );
+      }
+
+      if (pendingFiles.length && savedId) {
+        try {
+          await loanService.uploadDocuments(savedId, pendingFiles);
+          setPendingFiles([]);
+        } catch (uploadErr) {
+          // Loan is saved; tell HR the files did not go so they can add them from the loan page
+          setError(`Loan saved, but attachments were not uploaded: ${uploadErr.message || uploadErr}. Add them from the loan's page.`);
+        }
       }
 
       setTimeout(() => {
@@ -830,6 +849,52 @@ const LoanForm = () => {
                   <Chip label="Purpose Documentation" size="small" sx={{ mr: 1, mb: 1 }} />
                 </Box>
               </Box>
+            </Grid>
+
+            <Grid item xs={12}>
+              <Typography variant="subtitle1" gutterBottom>Attachments</Typography>
+              {isEdit && (
+                <Box sx={{ mb: 1.5 }}>
+                  <LoanAttachments
+                    loanId={id}
+                    documents={existingDocs}
+                    canDelete={!['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'].includes(existingWorkflow)}
+                    onChange={setExistingDocs}
+                    onError={setError}
+                  />
+                </Box>
+              )}
+              <Button variant="outlined" component="label" startIcon={<DescriptionIcon />}>
+                Choose files
+                <input
+                  type="file"
+                  hidden
+                  multiple
+                  accept={LOAN_ATTACHMENT_ACCEPT}
+                  onChange={(e) => {
+                    const { ok, tooBig } = splitLoanFiles(e.target.files);
+                    if (tooBig.length) setError(`Over 10 MB, not added: ${tooBig.map((f) => f.name).join(', ')}`);
+                    setPendingFiles((prev) => [...prev, ...ok].slice(0, 10));
+                    e.target.value = '';
+                  }}
+                />
+              </Button>
+              <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>
+                PDF, image, Word or Excel — up to 10 MB each. Uploaded when you save the loan.
+              </Typography>
+              {pendingFiles.length > 0 && (
+                <Box sx={{ mt: 1 }}>
+                  {pendingFiles.map((f, i) => (
+                    <Chip
+                      key={`${f.name}-${i}`}
+                      label={`${f.name} (${Math.max(1, Math.round(f.size / 1024))} KB)`}
+                      size="small"
+                      onDelete={() => setPendingFiles((prev) => prev.filter((_, j) => j !== i))}
+                      sx={{ mr: 1, mb: 1 }}
+                    />
+                  ))}
+                </Box>
+              )}
             </Grid>
           </Grid>
         );

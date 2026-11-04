@@ -146,6 +146,12 @@ class FinalSettlementService {
     return response.data;
   }
 
+  /** (Re)send a CEO-approved settlement to Finance → Payables */
+  async sendToFinance(id, companyId) {
+    const response = await api.put(`/final-settlements/${id}/send-to-finance`, companyId ? { companyId } : {});
+    return response.data;
+  }
+
   // Delete settlement
   async deleteSettlement(id) {
     try {

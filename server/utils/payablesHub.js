@@ -1,7 +1,7 @@
 /**
  * Payables Hub — one list of everything the company owes, from every module, for the accountant.
  *
- * Sources: vendor bills (AP: manual, PO/GRN, utility, settlement, subcontractor IPC), cash approvals at Finance,
+ * Sources: vendor bills (AP: manual, PO/GRN, utility, settlement, subcontractor IPC, HR final settlement), cash approvals at Finance,
  * PO advances awaiting Finance, and GRNs received but not yet billed. Payroll is paid from its own queue.
  * Each row has the same shape and a stage:
  *   awaiting_bill → awaiting_approval → ready_to_pay → in_payment_approval → paid
@@ -26,6 +26,7 @@ const AP_SOURCE = {
   grn: { key: 'purchase', label: 'Purchase (GRN)' },
   utility_bill: { key: 'utility', label: 'Utility / store bill' },
   project_ipc: { key: 'ipc', label: 'Subcontractor IPC' },
+  final_settlement: { key: 'final_settlement', label: 'Final settlement' },
   manual: { key: 'vendor_bill', label: 'Vendor bill' },
   bill: { key: 'vendor_bill', label: 'Vendor bill' },
   service: { key: 'vendor_bill', label: 'Vendor bill' },

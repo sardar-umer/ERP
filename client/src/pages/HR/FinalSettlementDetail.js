@@ -53,6 +53,9 @@ import {
   WORKFLOW_COLORS,
   workflowLabel,
   canForward,
+  canSendToFinance,
+  inFinance,
+  SendToFinanceDialog,
   IN_APPROVAL
 } from '../../components/HR/FinalSettlementWorkflow';
 import api from '../../services/api';
@@ -165,6 +168,7 @@ const FinalSettlementDetail = () => {
   };
 
   const [forwardOpen, setForwardOpen] = useState(false);
+  const [financeOpen, setFinanceOpen] = useState(false);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const [workflowMe, setWorkflowMe] = useState({ isAdmin: false });
   useEffect(() => {
@@ -173,18 +177,19 @@ const FinalSettlementDetail = () => {
   const workflowDone = (message) => {
     setForwardOpen(false);
     setApprovalsOpen(false);
+    setFinanceOpen(false);
     setSnackbar({ open: true, message, severity: 'success' });
     loadSettlement();
   };
 
   const handleDownloadPdf = () => {
     if (!settlement) return;
-    downloadFinalSettlementPdf(settlement, company);
+    downloadFinalSettlementPdf(settlement, { ...company, name: settlement.companyName || company.name });
   };
 
   const handlePrint = () => {
     if (!settlement) return;
-    printFinalSettlementPdf(settlement, company);
+    printFinalSettlementPdf(settlement, { ...company, name: settlement.companyName || company.name });
   };
 
   const handleAddComment = async () => {
@@ -337,6 +342,26 @@ const FinalSettlementDetail = () => {
                   <Typography variant="body2" color="textSecondary">Designation</Typography>
                   <Typography variant="body1">{String(settlement.designation || 'N/A')}</Typography>
                 </Grid>
+                <Grid item xs={6}>
+                  <Typography variant="body2" color="textSecondary">Company</Typography>
+                  <Typography variant="body1">{settlement.companyName || 'Not selected — edit to choose'}</Typography>
+                </Grid>
+                {(settlement.financeApBillNumber || settlement.financePostError) && (
+                  <Grid item xs={6}>
+                    <Typography variant="body2" color="textSecondary">Finance</Typography>
+                    <Typography variant="body1" color={settlement.financeApBillNumber ? 'text.primary' : 'error'}>
+                      {settlement.financeApBillNumber
+                        ? `Bill ${settlement.financeApBillNumber} — ${settlement.status === 'paid' ? 'Paid' : 'in Payables'}`
+                        : settlement.financePostError}
+                    </Typography>
+                  </Grid>
+                )}
+                {settlement.loanRecoveryNote && (
+                  <Grid item xs={12}>
+                    <Typography variant="body2" color="textSecondary">Loan recovery</Typography>
+                    <Typography variant="body1">{settlement.loanRecoveryNote}</Typography>
+                  </Grid>
+                )}
               </Grid>
             </CardContent>
           </Card>
@@ -736,7 +761,7 @@ const FinalSettlementDetail = () => {
 
       {/* Action Buttons */}
       <Box sx={{ mt: 3, display: 'flex', gap: 2, justifyContent: 'center' }}>
-        {settlement.status === 'pending' && (
+        {(settlement.status === 'pending' || settlement.workflowStatus === 'Pending Finance') && (
           <Chip
             label={workflowLabel(settlement)}
             color={WORKFLOW_COLORS[settlement.workflowStatus || 'Draft']}
@@ -756,7 +781,19 @@ const FinalSettlementDetail = () => {
           {settlement.myWorkflowRole ? 'Approve / Return' : 'Approvals'}
         </Button>
         
-        {settlement.status === 'approved' && (
+        {canSendToFinance(settlement) && (
+          <Button
+            variant="contained"
+            color="warning"
+            startIcon={<PaymentIcon />}
+            onClick={() => setFinanceOpen(true)}
+            disabled={actionLoading}
+          >
+            Send to Finance
+          </Button>
+        )}
+
+        {settlement.status === 'approved' && !inFinance(settlement) && !canSendToFinance(settlement) && (
           <Button
             variant="contained"
             color="secondary"
@@ -768,7 +805,7 @@ const FinalSettlementDetail = () => {
           </Button>
         )}
         
-        {settlement.status === 'processed' && (
+        {settlement.status === 'processed' && !inFinance(settlement) && (
           <Button
             variant="contained"
             color="success"
@@ -780,7 +817,7 @@ const FinalSettlementDetail = () => {
           </Button>
         )}
         
-        {settlement.status !== 'paid' && settlement.status !== 'cancelled' && (
+        {settlement.status !== 'paid' && settlement.status !== 'cancelled' && !settlement.financeApBillId && (
           <Button
             variant="outlined"
             color="error"
@@ -806,6 +843,7 @@ const FinalSettlementDetail = () => {
       </Box>
 
       <ForwardSettlementDialog settlement={forwardOpen ? settlement : null} onClose={() => setForwardOpen(false)} onDone={workflowDone} />
+      <SendToFinanceDialog settlement={financeOpen ? settlement : null} onClose={() => setFinanceOpen(false)} onDone={workflowDone} />
       {approvalsOpen && (
         <SettlementProcessDialog settlement={settlement} onClose={() => setApprovalsOpen(false)} onDone={workflowDone} />
       )}
