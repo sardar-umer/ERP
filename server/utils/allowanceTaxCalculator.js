@@ -64,7 +64,10 @@ const taxableAndExemptPartsForAllowance = (amount, policy) => {
         ? Math.min(100, Math.max(0, Number(policy.exemptPercent) || 0))
         : 0;
 
-  const exempt = Math.round((amt * exemptPercent) / 100);
+  // A fully exempt allowance is never taxable. Rounding its exempt amount (e.g. fuel 23,436.60 → 23,437)
+  // used to leave a negative taxable part (−0.40) that lowered salary taxable and tipped the tax ±1 off Sidat
+  if (exemptPercent >= 100) return { taxable: 0, exempt: amt };
+  const exempt = Math.min(amt, Math.round((amt * exemptPercent) / 100));
   return { taxable: amt - exempt, exempt };
 };
 
@@ -282,13 +285,14 @@ const calculatePayrollTaxWithSettings = ({
   const { taxable: allowanceTaxable, exempt: allowanceExempt } = taxableAllowances(allowances, allowanceBreakdown);
 
   const salaryExemptPercent = config.salaryMedicalExemptPercent;
-  const salaryExempt = Math.round((gross * salaryExemptPercent) / 100);
+  // Medical exemption is not rounded (Sidat): 224,925 × 90% = 202,432.5 taxable, not 202,432
+  const salaryExempt = (gross * salaryExemptPercent) / 100;
   const salaryAfterMedical = gross - salaryExempt;
   const salaryBase = salaryAfterMedical + allowanceTaxable;
 
   let normalSalaryBase = null;
   if (hasNormal) {
-    const normalAfterMedical = normalGross - Math.round((normalGross * salaryExemptPercent) / 100);
+    const normalAfterMedical = normalGross - (normalGross * salaryExemptPercent) / 100;
     normalSalaryBase = normalAfterMedical + taxableAllowances(normalAllow).taxable;
   }
 
