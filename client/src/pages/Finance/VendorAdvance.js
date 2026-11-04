@@ -58,8 +58,25 @@ import { WorkflowAuditFeedbackPanel } from '../../components/Admin/workflowAudit
 import { formatDateTime } from '../../utils/dateUtils';
 import { numberToWords } from '../../utils/numberToWords';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
+import { fetchFinanceAuthorityCandidates } from '../../services/financeApprovalAuthorityService';
+
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import toast from 'react-hot-toast';
+
+// Default finance voucher signatories (same as Bill Payment / vendor bill form)
+const SR_MANAGER_ACCOUNTS_NAME = 'Muhammad Iftikhar Rashid';
+const GM_FINANCE_NAME = 'Muhammad Faisal Farooq';
+
+const matchUserByName = (list, targetName) => {
+  const norm = (v) => String(v || '').toLowerCase().replace(/\s+/g, ' ').trim();
+  const target = norm(targetName);
+  if (!target) return null;
+  const parts = target.split(' ').filter((p) => p && p !== 'muhammad');
+  return (list || []).find((u) => {
+    const full = norm(`${u?.firstName || ''} ${u?.lastName || ''}`);
+    return full === target || parts.every((p) => full.includes(p));
+  }) || null;
+};
 
 const emptyCategoryLine = () => ({
   id: Date.now() + Math.random(),
@@ -155,6 +172,10 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     financeControllerUser: null
   });
   const [approverPool, setApproverPool] = useState([]);
+  const defaultFinAuth = useCallback(() => ({
+    accountsManagerUser: matchUserByName(approverPool, SR_MANAGER_ACCOUNTS_NAME),
+    financeControllerUser: matchUserByName(approverPool, GM_FINANCE_NAME)
+  }), [approverPool]);
   // PO balance check: earlier advances (any voucher stage) reduce what can still be paid on this PO
   const [poPendingVoucher, setPoPendingVoucher] = useState({ loading: false, hasPending: false, poTotal: 0, alreadyRecorded: 0, remaining: null });
   const [bankAccounts, setBankAccounts] = useState([]);
@@ -584,9 +605,15 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     let cancelled = false;
     (async () => {
       try {
-        const res = await api.get('/indents/approver-candidates', { params: { search: '', limit: 100 } });
-        const list = Array.isArray(res.data?.data) ? res.data.data : [];
-        if (!cancelled) setApproverPool(list);
+        const list = await fetchFinanceAuthorityCandidates();
+        if (cancelled) return;
+        setApproverPool(list);
+        const iftikhar = matchUserByName(list, SR_MANAGER_ACCOUNTS_NAME);
+        const faisal = matchUserByName(list, GM_FINANCE_NAME);
+        setFinAuth((f) => ({
+          accountsManagerUser: f.accountsManagerUser || iftikhar || null,
+          financeControllerUser: f.financeControllerUser || faisal || null
+        }));
       } catch {
         if (!cancelled) setApproverPool([]);
       }
@@ -753,7 +780,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     });
     setCategoryLines([emptyCategoryLine(), emptyCategoryLine()]);
     setSelectedPo(null);
-    setFinAuth({ accountsManagerUser: null, financeControllerUser: null });
+    setFinAuth(defaultFinAuth());
   };
 
   const handleSubmit = async (e) => {
@@ -843,10 +870,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
         });
         setCategoryLines([emptyCategoryLine(), emptyCategoryLine()]);
         setSelectedPo(null);
-        setFinAuth({
-          accountsManagerUser: null,
-          financeControllerUser: null
-        });
+        setFinAuth(defaultFinAuth());
         loadPoQueue();
         if (selectedVendor?._id) loadAdvancesForVendor(selectedVendor._id);
       }
@@ -1426,6 +1450,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
                   value={finAuth.accountsManagerUser}
                   onChange={(_, v) => setFinAuth((f) => ({ ...f, accountsManagerUser: v }))}
                   getOptionLabel={(u) => ([u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() || u?.email || '')}
+                  isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
                   renderInput={(params) => <TextField {...params} label="Sr Manager Accounts *" size="small" required />}
                 />
               </Grid>
@@ -1435,6 +1460,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
                   value={finAuth.financeControllerUser}
                   onChange={(_, v) => setFinAuth((f) => ({ ...f, financeControllerUser: v }))}
                   getOptionLabel={(u) => ([u?.firstName, u?.lastName].filter(Boolean).join(' ').trim() || u?.email || '')}
+                  isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
                   renderInput={(params) => <TextField {...params} label="GM Finance *" size="small" required />}
                 />
               </Grid>
