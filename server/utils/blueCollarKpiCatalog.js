@@ -26,6 +26,10 @@ const getCatalogEntries = () => (Array.isArray(catalog) ? catalog : []);
  */
 const TITLE_ALIASES = {
   masson: 'mason',
+  // "Guard" in the system is a Security Guard — use the Security Guard KPIs from HR's document
+  guard: 'security guard',
+  'security gaurd': 'security guard',
+  gaurd: 'security guard',
   driver: 'driver / htv driver',
   'htv driver': 'driver / htv driver',
   // Loose "driver" matches would otherwise prefer the longer Executive Protection Driver pack
