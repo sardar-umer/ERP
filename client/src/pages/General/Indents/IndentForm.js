@@ -499,6 +499,19 @@ const IndentForm = () => {
     return n || u.email || u.employeeId || '';
   };
 
+  // Rejected by the HOD approver or in Procurement: the resubmission goes back to whoever rejected it
+  const isProcurementRejected = isEdit && indentMeta.status === 'Rejected in Procurement';
+  const isResubmitAfterRejection = isEdit && (indentMeta.status === 'Rejected' || isProcurementRejected);
+  const rejecterName = (() => {
+    const raw = indentMeta.rawIndent;
+    if (!raw) return '';
+    if (isProcurementRejected) return approverLabel(raw.procurementRejection?.rejectedBy);
+    const history = Array.isArray(raw.rejectionHistory) ? raw.rejectionHistory : [];
+    const last = history.length ? history[history.length - 1].rejectedBy : null;
+    const step = (raw.approvalChain || []).find((st) => st?.status === 'rejected');
+    return approverLabel(last && typeof last === 'object' ? last : step?.approver);
+  })();
+
   const handleApproverSearchInput = (value) => {
     if (approverSearchDebounceRef.current) clearTimeout(approverSearchDebounceRef.current);
     approverSearchDebounceRef.current = setTimeout(() => {
@@ -643,7 +656,8 @@ const IndentForm = () => {
       return;
     }
 
-    if (submitForApproval) {
+    // A rejected indent goes back to the person who rejected it — no approver to choose
+    if (submitForApproval && !isResubmitAfterRejection) {
       const ids = approverSlots.map((u) => u?._id).filter(Boolean);
       if (ids.length !== 1) {
         setError('Submitting for approval requires Head of Department approver.');
@@ -719,14 +733,20 @@ const IndentForm = () => {
       }
 
       if (submitForApproval && savedId) {
-        const approverIds = approverSlots.map((u) => u?._id).filter(Boolean);
-        await indentService.submitIndent(savedId, { approverIds });
+        if (isProcurementRejected) {
+          await indentService.resubmitToProcurement(savedId);
+        } else {
+          const approverIds = isResubmitAfterRejection ? [] : approverSlots.map((u) => u?._id).filter(Boolean);
+          await indentService.submitIndent(savedId, { approverIds });
+        }
       }
 
       setSnackbar({
         open: true,
-        message: submitForApproval 
-          ? 'Indent submitted for approval successfully' 
+        message: submitForApproval
+          ? isResubmitAfterRejection
+            ? `Indent resubmitted to ${rejecterName || 'the person who rejected it'}`
+            : 'Indent submitted for approval successfully'
           : isEdit 
             ? 'Indent updated successfully' 
             : 'Indent created successfully',
@@ -1366,10 +1386,18 @@ const IndentForm = () => {
         <Typography variant="subtitle1" fontWeight={600} sx={{ mb: 2 }}>
           Approvals
         </Typography>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Choose Head of Department approver before submitting (you may select yourself if you are the HOD).
-          Approval status appears here automatically after submit.
-        </Typography>
+        {isResubmitAfterRejection ? (
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Edit the indent as requested, then click <strong>Save &amp; Resubmit</strong>. It goes back to{' '}
+            <strong>{rejecterName || 'the person who rejected it'}</strong>
+            {isProcurementRejected ? ' in Procurement.' : ' for approval.'}
+          </Alert>
+        ) : (
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Choose Head of Department approver before submitting (you may select yourself if you are the HOD).
+            Approval status appears here automatically after submit.
+          </Typography>
+        )}
         {isEdit && indentMeta.status && indentMeta.status !== 'Draft' && (indentMeta.approvalChain || []).length > 0 ? (
           <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
             <Table size="small">
@@ -1497,15 +1525,21 @@ const IndentForm = () => {
               loading ||
               !!indentNoError ||
               indentNoChecking ||
-              (isEdit && indentMeta.status && !['Draft', 'Rejected'].includes(indentMeta.status))
+              (isEdit && indentMeta.status && !['Draft', 'Rejected', 'Rejected in Procurement'].includes(indentMeta.status))
             }
             title={
-              isEdit && indentMeta.status && !['Draft', 'Rejected'].includes(indentMeta.status)
+              isEdit && indentMeta.status && !['Draft', 'Rejected', 'Rejected in Procurement'].includes(indentMeta.status)
                 ? 'Only draft or rejected indents can be submitted from this form'
-                : indentNoError || ''
+                : isResubmitAfterRejection && rejecterName
+                  ? `Saves your changes and sends the indent back to ${rejecterName}`
+                  : indentNoError || ''
             }
           >
-            {loading ? 'Submitting...' : (isEdit && indentMeta.status === 'Rejected') ? 'Resubmit for Approval' : 'Submit for Approval'}
+            {loading
+              ? 'Submitting...'
+              : isResubmitAfterRejection
+                ? `Save & Resubmit${rejecterName ? ` to ${rejecterName}` : ''}`
+                : 'Submit for Approval'}
           </Button>
         </Stack>
       </Paper>

@@ -223,6 +223,17 @@ function isIndentApprovalE2EBypassEnabled() {
   return v === '1' || String(v).toLowerCase() === 'true';
 }
 
+const refId = (v) => (v ? String(v._id || v) : null);
+
+/** Approver who rejected the indent (latest rejection), so a resubmission goes back to them. */
+function lastIndentRejecterId(indent) {
+  const history = Array.isArray(indent?.rejectionHistory) ? indent.rejectionHistory : [];
+  const fromHistory = history.length ? refId(history[history.length - 1].rejectedBy) : null;
+  if (fromHistory) return fromHistory;
+  const step = (indent?.approvalChain || []).find((s) => s.status === 'rejected');
+  return step ? refId(step.approver) : null;
+}
+
 const INDENT_TARGET_ROUTES = {
   storeDashboard: '/procurement/store',
   procurementRequisitions: '/procurement/requisitions'
@@ -1387,7 +1398,9 @@ router.post('/:id/submit',
 
     const fromBody = Array.isArray(req.body?.approverIds) ? req.body.approverIds.map(String).filter(Boolean) : [];
     const fromDraft = (indent.draftApproverIds || []).map((id) => id.toString());
-    const merged = fromBody.length ? fromBody : fromDraft;
+    // A rejected indent goes back to the exact approver who rejected it
+    const rejectedById = indent.status === 'Rejected' ? lastIndentRejecterId(indent) : null;
+    const merged = rejectedById ? [rejectedById] : (fromBody.length ? fromBody : fromDraft);
     const requesterId = indent.requestedBy.toString();
     const e2eBypass = isIndentApprovalE2EBypassEnabled();
     let unique = [...new Set(merged)];
@@ -1413,7 +1426,9 @@ router.post('/:id/submit',
     if (approverUsers.length !== 1) {
       return res.status(400).json({
         success: false,
-        message: 'Selected approver must be a valid active user.'
+        message: rejectedById
+          ? 'The approver who rejected this indent is no longer an active user. Ask an admin to reassign it.'
+          : 'Selected approver must be a valid active user.'
       });
     }
 
@@ -1446,8 +1461,10 @@ router.post('/:id/submit',
     const approver = approverUsers[0];
     await createAndEmitNotification({
       recipientIds: [approver._id],
-      title: 'Indent submitted for your approval',
-      message: `Indent ${indent.indentNumber || ''} has been submitted and is awaiting your approval.`,
+      title: rejectedById ? 'Rejected indent resubmitted to you' : 'Indent submitted for your approval',
+      message: rejectedById
+        ? `Indent ${indent.indentNumber || ''} you rejected has been edited by the requester and resubmitted for your approval.`
+        : `Indent ${indent.indentNumber || ''} has been submitted and is awaiting your approval.`,
       priority: 'high',
       type: 'info',
       category: 'approval',
@@ -1723,6 +1740,15 @@ router.post('/:id/resubmit-to-procurement',
       });
     }
 
+    // Goes back to the exact procurement user who rejected it (assigned to them)
+    const rejecterId = refId(indent.procurementRejection?.rejectedBy);
+    const rejecter = rejecterId
+      ? await User.findOne({ _id: rejecterId, isActive: true }).select('_id firstName lastName email').lean()
+      : null;
+    const rejecterName = rejecter
+      ? [rejecter.firstName, rejecter.lastName].filter(Boolean).join(' ').trim() || rejecter.email
+      : '';
+
     const previousStatus = indent.status;
     indent.status = 'Approved';
     indent.storeRoutingStatus = 'moved_to_procurement';
@@ -1732,16 +1758,34 @@ router.post('/:id/resubmit-to-procurement',
       observation: ''
     };
     indent.procurementAssignment = indent.procurementAssignment || {};
-    indent.procurementAssignment.status = 'unassigned';
-    indent.procurementAssignment.assignedTo = null;
-    indent.procurementAssignment.note = '';
+    if (rejecter) {
+      const note = 'Resubmitted by requester after your rejection';
+      indent.procurementAssignment.status = 'assigned';
+      indent.procurementAssignment.assignedTo = rejecter._id;
+      indent.procurementAssignment.assignedBy = req.user.id;
+      indent.procurementAssignment.assignedAt = new Date();
+      indent.procurementAssignment.note = note;
+      if (!Array.isArray(indent.procurementAssignment.history)) indent.procurementAssignment.history = [];
+      indent.procurementAssignment.history.push({
+        assignedTo: rejecter._id,
+        assignedBy: req.user.id,
+        assignedAt: new Date(),
+        note
+      });
+    } else {
+      indent.procurementAssignment.status = 'unassigned';
+      indent.procurementAssignment.assignedTo = null;
+      indent.procurementAssignment.note = '';
+    }
     indent.updatedBy = req.user.id;
 
     pushIndentWorkflowHistory(indent, {
       fromStatus: previousStatus,
       toStatus: indent.status,
       changedBy: req.user.id,
-      comments: 'Requester revised and resubmitted to Procurement (no re-approval required).',
+      comments: rejecter
+        ? `Requester revised and resubmitted to Procurement — sent back to ${rejecterName} who rejected it.`
+        : 'Requester revised and resubmitted to Procurement (no re-approval required).',
       module: 'Indent'
     });
 
@@ -1753,19 +1797,23 @@ router.post('/:id/resubmit-to-procurement',
     await indent.populate('procurementRejection.rejectedBy', 'firstName lastName email');
     await indent.populate('workflowHistory.changedBy', 'firstName lastName email');
 
-    const procurementRecipients = await getProcurementWorkflowRecipients();
+    const procurementRecipients = rejecter ? [String(rejecter._id)] : await getProcurementWorkflowRecipients();
     await notifyIndentTransition({
       recipientIds: procurementRecipients,
       actorId: req.user.id,
-      title: 'Requisition resubmitted to Procurement',
-      message: `Requisition ${indent.indentNumber || ''} has been revised by requester and resubmitted.`,
+      title: rejecter ? 'Rejected requisition resubmitted to you' : 'Requisition resubmitted to Procurement',
+      message: rejecter
+        ? `Requisition ${indent.indentNumber || ''} you rejected has been revised by the requester and resubmitted to you.`
+        : `Requisition ${indent.indentNumber || ''} has been revised by requester and resubmitted.`,
       actionUrl: INDENT_TARGET_ROUTES.procurementRequisitions,
       indentId: indent._id
     });
 
     res.json({
       success: true,
-      message: 'Requisition resubmitted to procurement successfully.',
+      message: rejecter
+        ? `Requisition resubmitted to ${rejecterName} who rejected it.`
+        : 'Requisition resubmitted to procurement successfully.',
       data: indent
     });
   })

@@ -348,6 +348,18 @@ const IndentDetail = ({
   const canResubmitToProcurement =
     indent?.status === 'Rejected in Procurement' &&
     indent?.requestedBy?._id === user?.id;
+  // A resubmission goes back to the exact person who rejected the indent
+  const personName = (u) => (u && typeof u === 'object'
+    ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || ''
+    : '');
+  const rejecterName = (() => {
+    if (indent?.status === 'Rejected in Procurement') return personName(indent?.procurementRejection?.rejectedBy);
+    if (indent?.status !== 'Rejected') return '';
+    const history = Array.isArray(indent?.rejectionHistory) ? indent.rejectionHistory : [];
+    const last = history.length ? history[history.length - 1].rejectedBy : null;
+    const step = chain.find((s) => s.status === 'rejected');
+    return personName(last) || personName(step?.approver);
+  })();
 
   if (loading) {
     return (
@@ -413,7 +425,9 @@ const IndentDetail = ({
               startIcon={<SendIcon />}
               onClick={handleSubmit}
             >
-              {indent?.status === 'Rejected' ? 'Resubmit for Approval' : 'Submit for Approval'}
+              {indent?.status === 'Rejected'
+                ? `Resubmit${rejecterName ? ` to ${rejecterName}` : ' for Approval'}`
+                : 'Submit for Approval'}
             </Button>
           )}
           {!hideModuleActions && canResubmitToProcurement && (
@@ -423,7 +437,7 @@ const IndentDetail = ({
               startIcon={<ReplayIcon />}
               onClick={handleResubmitToProcurement}
             >
-              Resubmit to Procurement
+              {rejecterName ? `Resubmit to ${rejecterName}` : 'Resubmit to Procurement'}
             </Button>
           )}
           {!hideModuleActions && canApproveReject && (

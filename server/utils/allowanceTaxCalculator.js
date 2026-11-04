@@ -105,6 +105,12 @@ const buildTaxResult = ({
     const firstCounted = joinedThisFy
       ? fyIndex(pkt.getUTCMonth() + 1) + (pkt.getUTCDate() > 15 ? 1 : 0)
       : (paid.size ? Math.min(...paid) : 12);
+    // Arrears topping up an earlier month paid below the current salary are that month's salary
+    // (Sidat) — e.g. July paid 50,000, August 100,000 + 50,000 arrears for July → medical % exempt
+    const normalTaxable = normalSalaryBase == null ? salaryBase : normalSalaryBase;
+    if ((Array.isArray(priorMonths) ? priorMonths : []).some((m) => Number(m.taxable) < normalTaxable - 1)) {
+      return true;
+    }
     for (let i = firstCounted; i < fyIndex(payrollMonth); i += 1) {
       if (!paid.has(i)) return true;
     }

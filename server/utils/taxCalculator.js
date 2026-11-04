@@ -358,6 +358,14 @@ function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arr
   const prior = Math.max(0, Math.floor(Number(priorPaidMonths) || 0));
   const fyMonths = Math.min(12, prior + 1 + monthsToCome);
 
+  // Salary lowered this month (last month paid in full at a higher salary): Sidat keeps the tax at
+  // the earlier salary for this month — e.g. 66,000 → 65,800 in October keeps 94, not 92
+  if (Array.isArray(priorMonths) && priorMonths.length) {
+    const last = priorMonths[priorMonths.length - 1];
+    if (!last.partial && Number(last.taxable) > normal + 1 && Math.abs(base - normal) < 1) {
+      return calculateMonthlyTaxPaidMonths(last.taxable, last.taxable, arrears, priorPaidMonths, payrollMonth, priorMonths);
+    }
+  }
   if (Array.isArray(priorMonths)) {
     const monthsLeftFrom = (m) => (Number(m) >= 7 ? 19 - Number(m) : 7 - Number(m)); // incl. that month
     const yearTax = (taxable) => (taxable > 0 ? calculateAnnualTaxFromSlabs(taxable) : 0);
