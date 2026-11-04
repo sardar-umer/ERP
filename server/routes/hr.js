@@ -927,8 +927,12 @@ router.get('/employees/:id/history',
       return res.status(400).json({ success: false, message: 'Invalid employee ID' });
     }
     const employee = await Employee.findById(req.params.id)
-      .select('employeeId firstName lastName hireDate appointmentDate confirmationDate terminationDate terminationReason employmentStatus placementDesignation')
+      .select('employeeId firstName lastName hireDate appointmentDate confirmationDate terminationDate terminationReason employmentStatus employeeCategory salary placementDesignation placementDepartment placementProject placementCompany placementLocation profileImage')
       .populate('placementDesignation', 'title')
+      .populate('placementDepartment', 'name')
+      .populate('placementProject', 'name')
+      .populate('placementCompany', 'name')
+      .populate('placementLocation', 'name')
       .lean();
     if (!employee) {
       return res.status(404).json({ success: false, message: 'Employee not found' });
@@ -1000,19 +1004,89 @@ router.get('/employees/:id/history',
       `Final settlement (${s.settlementType}) — ${s.status}`,
       `Net settlement ${pkr(s.netSettlementAmount)}${s.reason ? ` · ${s.reason}` : ''}`));
 
+    // Career events from the change log: transfers, designation changes, salary / allowance revisions, status
+    const TRANSFER_FIELDS = ['placementCompany', 'placementSector', 'placementProject', 'placementDepartment', 'placementSection', 'placementLocation'];
+    const CAREER = [
+      { type: 'transfer', title: 'Transfer', match: (f) => TRANSFER_FIELDS.includes(f) },
+      { type: 'promotion', title: 'Designation change', match: (f) => f === 'placementDesignation' },
+      { type: 'salary_change', title: 'Salary revised', match: (f) => f === 'salary.gross' || f === 'salary.basic' },
+      { type: 'allowance_change', title: 'Allowance revised', match: (f) => f.startsWith('allowances.') },
+      { type: 'status_change', title: 'Status change', match: (f) => f === 'employmentStatus' },
+      { type: 'reporting', title: 'Reporting line change', match: (f) => ['manager', 'hod', 'reportingLine'].includes(f) }
+    ];
+    const salaryChangeMonths = new Set();
+    changeLog.forEach((entry) => {
+      CAREER.forEach((cat) => {
+        const items = (entry.changes || []).filter((ch) => cat.match(ch.field));
+        if (!items.length) return;
+        if (cat.type === 'salary_change') {
+          const d = new Date(entry.changedAt);
+          salaryChangeMonths.add(`${d.getUTCFullYear()}-${d.getUTCMonth() + 1}`);
+        }
+        add(entry.changedAt, cat.type, cat.title,
+          items.map((ch) => `${ch.label}: ${ch.from || '—'} → ${ch.to || '—'}`).join(' · '));
+      });
+    });
+
+    // Earlier salary revisions seen in payroll (full months only): gross differs from the previous full month
+    const fullMonths = payrolls
+      .filter((p) => !p.proration?.isProrated && Number(p.grossSalary) > 1)
+      .sort((a, b) => (a.year - b.year) || (a.month - b.month));
+    for (let i = 1; i < fullMonths.length; i += 1) {
+      const prev = fullMonths[i - 1];
+      const cur = fullMonths[i];
+      if (Math.round(prev.grossSalary) === Math.round(cur.grossSalary)) continue;
+      const key = `${cur.year}-${cur.month}`;
+      const prevKey = cur.month === 1 ? `${cur.year - 1}-12` : `${cur.year}-${cur.month - 1}`;
+      if (salaryChangeMonths.has(key) || salaryChangeMonths.has(prevKey)) continue;
+      add(monthDate(cur.month, cur.year), 'salary_change', `Salary revised (seen in ${monthLabel(cur.month, cur.year)} payroll)`,
+        `Gross ${pkr(prev.grossSalary)} → ${pkr(cur.grossSalary)}`);
+    }
+
     timeline.sort((a, b) => new Date(b.date) - new Date(a.date));
 
     res.json({
       success: true,
       data: {
-        employee: { _id: id, employeeId: employee.employeeId, name: [employee.firstName, employee.lastName].filter(Boolean).join(' ') },
+        employee: {
+          _id: id,
+          employeeId: employee.employeeId,
+          name: [employee.firstName, employee.lastName].filter(Boolean).join(' '),
+          designation: employee.placementDesignation?.title || '',
+          department: employee.placementDepartment?.name || '',
+          project: employee.placementProject?.name || '',
+          company: employee.placementCompany?.name || '',
+          location: employee.placementLocation?.name || '',
+          status: employee.employmentStatus || '',
+          category: employee.employeeCategory || '',
+          grossSalary: employee.salary?.gross || 0,
+          joinedOn: joined || null,
+          leftOn: employee.terminationDate || null
+        },
         timeline,
+        payroll: payrolls
+          .slice()
+          .sort((a, b) => (b.year - a.year) || (b.month - a.month))
+          .map((p) => ({
+            month: p.month,
+            year: p.year,
+            label: monthLabel(p.month, p.year),
+            grossSalary: Math.round(p.grossSalary || 0),
+            days: p.proration?.isProrated ? `${p.proration.payableDays}/${p.proration.daysInMonth}` : 'Full',
+            arrears: Math.round(p.arrears || 0),
+            totalEarnings: Math.round(p.totalEarnings || 0),
+            incomeTax: Math.round(p.incomeTax || 0),
+            totalDeductions: Math.round(p.totalDeductions || 0),
+            netSalary: Math.round(p.netSalary || 0),
+            status: p.status
+          })),
         changes: changeLog.map((c) => ({
           _id: c._id,
           changedAt: c.changedAt,
           changedBy: c.changedBy
             ? [c.changedBy.firstName, c.changedBy.lastName].filter(Boolean).join(' ') || c.changedBy.email
             : 'System',
+          source: c.source || 'live',
           changes: c.changes
         }))
       }

@@ -8,6 +8,7 @@ const CashApproval = require('../models/procurement/CashApproval');
 const PaymentSettlement = require('../models/hr/PaymentSettlement');
 const NonEmployeeRecord = require('../models/hr/NonEmployeeRecord');
 const ManualSalary = require('../models/hr/ManualSalary');
+const FinalSettlement = require('../models/hr/FinalSettlement');
 const Indent = require('../models/general/Indent');
 const UtilityBill = require('../models/hr/UtilityBill');
 const AccountsPayable = require('../models/finance/AccountsPayable');
@@ -77,6 +78,7 @@ const card = (partial) => ({
   isPaymentSettlement: partial.type === 'payment_settlement',
   isOnboarding: partial.type === 'onboarding',
   isManualSalary: partial.type === 'manual_salary',
+  isFinalSettlement: partial.type === 'final_settlement',
   isIndent: partial.type === 'indent',
   isUtilityBill: partial.type === 'utility_bill',
   isVendorBill: partial.type === 'vendor_bill',
@@ -503,6 +505,54 @@ async function fetchSettlementsForUser(user) {
   return cards;
 }
 
+/** Final settlements waiting on this user: GM HR / AVP (assigned) or CEO (Forwarded to CEO) */
+async function fetchFinalSettlementsForUser(user) {
+  const uid = String(user._id || user.id || '');
+  const isCeo = isDesignatedCeoApprover(user);
+  const canViewCeoQueue = canViewCeoForwardedQueue(user);
+  const or = [
+    { workflowStatus: 'Pending HOD HR', assignedHod: uid },
+    { workflowStatus: 'Pending AVP', assignedAvp: uid }
+  ];
+  if (canViewCeoQueue) or.push({ workflowStatus: 'Forwarded to CEO' });
+
+  const docs = await FinalSettlement.find({ status: 'pending', $or: or })
+    .sort({ updatedAt: -1 })
+    .limit(100)
+    .lean();
+
+  return docs.map((r) => {
+    const ws = r.workflowStatus;
+    let canAct = false;
+    let ceoViewOnly = false;
+    if (ws === 'Forwarded to CEO') {
+      canAct = isCeo;
+      ceoViewOnly = !isCeo && canViewCeoQueue;
+    } else if (ws === 'Pending HOD HR' && sameUserId(r.assignedHod, uid)) canAct = true;
+    else if (ws === 'Pending AVP' && sameUserId(r.assignedAvp, uid)) canAct = true;
+    if (!canAct && !ceoViewOnly) return null;
+
+    const type = String(r.settlementType || '').replace(/_/g, ' ');
+    return card({
+      id: r._id,
+      type: 'final_settlement',
+      itemType: 'Final Settlement',
+      number: r.employeeId || String(r._id).slice(-6),
+      status: ws,
+      date: r.forwardedAt || r.updatedAt || r.createdAt,
+      amount: r.netSettlementAmount,
+      party: r.employeeName,
+      company: null,
+      subtitle: `Final settlement${type ? ` (${type})` : ''}${r.designation && r.designation !== 'Unknown' ? ` · ${r.designation}` : ''}`,
+      department: 'HR',
+      path: `/hr/settlements/${r._id}`,
+      ceoViewOnly,
+      canAct,
+      raw: r
+    });
+  }).filter(Boolean);
+}
+
 async function fetchManualSalariesForUser(user) {
   const uid = String(user._id || user.id || '');
   const isCeo = isDesignatedCeoApprover(user);
@@ -879,7 +929,8 @@ async function buildExecutiveMyApprovals(user) {
     indents,
     utilityBills,
     vendorBills,
-    projectIpcs
+    projectIpcs,
+    finalSettlements
   ] = await Promise.all([
     fetchPurchaseOrdersForUser(user).catch((e) => {
       console.error('[executiveMyApprovals] PO', e.message);
@@ -916,6 +967,10 @@ async function buildExecutiveMyApprovals(user) {
     fetchProjectIpcsForUser(user).catch((e) => {
       console.error('[executiveMyApprovals] ProjectIpc', e.message);
       return [];
+    }),
+    fetchFinalSettlementsForUser(user).catch((e) => {
+      console.error('[executiveMyApprovals] FinalSettlement', e.message);
+      return [];
     })
   ]);
 
@@ -928,7 +983,8 @@ async function buildExecutiveMyApprovals(user) {
     ...indents,
     ...utilityBills,
     ...vendorBills,
-    ...projectIpcs
+    ...projectIpcs,
+    ...finalSettlements
   ].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
 
   const counts = {
@@ -941,6 +997,7 @@ async function buildExecutiveMyApprovals(user) {
     utility_bill: utilityBills.length,
     vendor_bill: vendorBills.length,
     project_ipc: projectIpcs.length,
+    final_settlement: finalSettlements.length,
     total: items.length
   };
 

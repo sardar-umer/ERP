@@ -130,6 +130,22 @@ class FinalSettlementService {
     }
   }
 
+  // Approval workflow (GM HR → AVP → CEO)
+  async getWorkflowMe() {
+    const response = await api.get('/final-settlements/workflow/me');
+    return response.data;
+  }
+
+  async forwardSettlement(id, { assignedHod, assignedAvp }) {
+    const response = await api.put(`/final-settlements/${id}/forward`, { assignedHod, assignedAvp });
+    return response.data;
+  }
+
+  async workflowAction(id, action, comments = '') {
+    const response = await api.put(`/final-settlements/${id}/workflow`, { action, comments });
+    return response.data;
+  }
+
   // Delete settlement
   async deleteSettlement(id) {
     try {

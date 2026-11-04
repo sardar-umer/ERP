@@ -53,3 +53,15 @@ export const prorateSettlementAmount = (amount, servedDays, dateInput) => {
   if (!served || served <= 0) return Math.round(baseAmount);
   return Math.round((baseAmount / (days > 0 ? days : 30)) * served);
 };
+/**
+ * Prorated amount kept to 2 decimals (Sidat adds the exact prorated amounts and rounds only the total:
+ * 78,524.19 + 6,290.32 + 2,180.65 + 14,677.42 = 101,672.58 → 101,673).
+ */
+export const prorateSettlementAmountExact = (amount, servedDays, dateInput) => {
+  const baseAmount = Number(amount) || 0;
+  if (baseAmount === 0) return 0;
+  const days = getCalendarDaysInMonth(dateInput);
+  const served = Number(servedDays) || 0;
+  if (!served || served <= 0) return Math.round(baseAmount * 100) / 100;
+  return Math.round(((baseAmount / (days > 0 ? days : 30)) * served) * 100) / 100;
+};

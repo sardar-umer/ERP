@@ -1,346 +1,247 @@
 import jsPDF from 'jspdf';
-import autoTable from 'jspdf-autotable';
-import finalSettlementService from '../services/finalSettlementService';
-import {
-  getCalendarDaysInMonth,
-  resolveSettlementRateDate,
-  getSettlementDailyRate,
-  getSettlementActualSalary
-} from './finalSettlementDays';
-
-const fmtPKR = (amount) =>
-  `PKR ${Number(amount || 0).toLocaleString('en-PK', { minimumFractionDigits: 0, maximumFractionDigits: 0 })}`;
-
-const fmtDate = (date) =>
-  date
-    ? new Date(date).toLocaleDateString('en-PK', { year: 'numeric', month: 'short', day: 'numeric' })
-    : '—';
-
-const earningRows = (earnings = {}) =>
-  [
-    ['Basic Salary', earnings.basicSalary],
-    ['House Rent', earnings.houseRent],
-    ['Medical Allowance', earnings.medicalAllowance],
-    ['Conveyance', earnings.conveyanceAllowance],
-    ['Food Allowance', earnings.foodAllowance],
-    ['Mobile Allowance', earnings.mobileAllowance],
-    ['Vehicle Allowance', earnings.vehicleAllowance],
-    ['Fuel Allowance', earnings.fuelAllowance],
-    ['Special Allowance', earnings.specialAllowance],
-    ['Other Allowances', earnings.otherAllowances],
-    ['Other Earnings', earnings.otherEarnings],
-    ['Overtime', earnings.overtime],
-    ['Bonus', earnings.bonus],
-    ['Gratuity', earnings.gratuity],
-    ['Leave Encashment', earnings.leaveEncashment],
-    ['Notice Pay', earnings.noticePay]
-  ].filter(([, amount]) => Number(amount) > 0);
-
-const deductionRows = (deductions = {}) =>
-  [
-    ['Income Tax', deductions.incomeTax],
-    ['Provident Fund', deductions.providentFund],
-    ['EOBI', deductions.eobi],
-    ['Loan Deductions', deductions.loanDeductions],
-    ['Notice Period Deduction', deductions.noticePeriodDeduction],
-    ['Security', deductions.security],
-    ['Health Insurance', deductions.healthInsurance],
-    ['Advance Deductions', deductions.advanceDeductions],
-    ['Pension', deductions.pension],
-    ['Other Deductions', deductions.otherDeductions]
-  ].filter(([, amount]) => Number(amount) > 0);
-
-const sumRows = (rows) => rows.reduce((s, [, a]) => s + (Number(a) || 0), 0);
+import { getCalendarDaysInMonth, resolveSettlementRateDate } from './finalSettlementDays';
 
 /**
- * Compact single-page A4 Final Settlement statement.
+ * Final Dues (final settlement) — single A4 page in the same layout as Sidat's "FINAL DUES":
+ * employee block, Allowances (Standard / Actual) | Deductions (Actual) | Non-Salary (Actual), Net Payable,
+ * Prepared / Verified / Approved, and the employee's receipt statement.
  */
+
+const amt = (n) => Math.round(Number(n) || 0).toLocaleString('en-PK');
+
+const fmtDate = (date) => {
+  if (!date) return '—';
+  const d = new Date(date);
+  if (Number.isNaN(d.getTime())) return '—';
+  return d.toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' }).replace(/ /g, '-');
+};
+
+const monthYear = (date) => {
+  const d = new Date(date || Date.now());
+  return Number.isNaN(d.getTime()) ? '' : d.toLocaleDateString('en-GB', { month: 'long', year: 'numeric' });
+};
+
+/** Salary components prorated for the last month: [label, earningsKey, standardKey] */
+const PRORATED = [
+  ['Gross Salary', 'basicSalary'],
+  ['House Rent', 'houseRent'],
+  ['Medical Allowance', 'medicalAllowance'],
+  ['Conveyance Allowance', 'conveyanceAllowance'],
+  ['Food Allowance', 'foodAllowance'],
+  ['Mobile Allowance', 'mobileAllowance'],
+  ['Vehicle Allowance', 'vehicleAllowance'],
+  ['Fuel Allowance', 'fuelAllowance'],
+  ['Special Allowance', 'specialAllowance'],
+  ['Other Allowances', 'otherAllowances']
+];
+/** One-off earnings (Standard = Actual) */
+const ONE_OFF = [
+  ['Notice Pay', 'noticePay'],
+  ['Leave Encashment', 'leaveEncashment'],
+  ['Gratuity', 'gratuity'],
+  ['Bonus', 'bonus'],
+  ['Overtime', 'overtime']
+];
+const DEDUCTIONS = [
+  ['Income Tax', 'incomeTax'],
+  ['EOBI', 'eobi'],
+  ['Provident Fund', 'providentFund'],
+  ['Loan Recovery', 'loanDeductions'],
+  ['Advance Recovery', 'advanceDeductions'],
+  ['Notice Period Deduction', 'noticePeriodDeduction'],
+  ['Security', 'security'],
+  ['Health Insurance', 'healthInsurance'],
+  ['Pension', 'pension'],
+  ['Other Deduction', 'otherDeductions']
+];
+
+const personName = (u) => (u && typeof u === 'object' ? [u.firstName, u.lastName].filter(Boolean).join(' ') : '');
+
+const addressText = (address) => {
+  if (!address) return '';
+  if (typeof address === 'string') return address;
+  return [address.street, address.area, typeof address.city === 'object' ? address.city?.name : ''].filter(Boolean).join(', ');
+};
+
 export const generateFinalSettlementPdf = (settlement, company = {}) => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  const pageWidth = doc.internal.pageSize.getWidth();
-  const pageHeight = doc.internal.pageSize.getHeight();
-  const margin = 10;
-  const contentWidth = pageWidth - margin * 2;
+  const W = doc.internal.pageSize.getWidth();
+  const H = doc.internal.pageSize.getHeight();
+  const L = 14;
+  const R = W - 14;
+  const emp = settlement.employee && typeof settlement.employee === 'object' ? settlement.employee : {};
+  const e = settlement.earnings || {};
+  const std = settlement.standardEarnings || {};
+  const d = settlement.deductions || {};
 
-  const rateDate = resolveSettlementRateDate({
-    lastWorkingDate: settlement.lastWorkingDate,
-    settlementDate: settlement.settlementDate
-  });
-  const dailyRate = Math.round(getSettlementDailyRate(settlement.grossSalary || 0, rateDate));
-  const actualSalary =
-    Number(settlement.actualSalary) > 0
-      ? Number(settlement.actualSalary)
-      : getSettlementActualSalary(settlement.grossSalary || 0, settlement.noticePeriodServed, rateDate);
-  const shortfallDays = Math.max(
-    0,
-    (Number(settlement.noticePeriod) || 0) - (Number(settlement.noticePeriodServed) || 0)
-  );
-  // Use stored deduction only (defaults to 0; do not auto-apply computed shortfall)
-  const shortfallDeduction = Number(settlement.deductions?.noticePeriodDeduction) || 0;
+  const rateDate = resolveSettlementRateDate({ lastWorkingDate: settlement.lastWorkingDate, settlementDate: settlement.settlementDate });
   const monthDays = getCalendarDaysInMonth(rateDate);
-  const earningsBody = earningRows(settlement.earnings);
-  const deductionsBody = deductionRows(settlement.deductions);
-  const totalEarnings =
-    Number(settlement.earnings?.totalEarnings) > 0
-      ? Number(settlement.earnings.totalEarnings)
-      : Number(settlement.grossSettlementAmount) || sumRows(earningsBody);
-  const totalDeductions =
-    Number(settlement.deductions?.totalDeductions) > 0
-      ? Number(settlement.deductions.totalDeductions)
-      : sumRows(deductionsBody);
+  const served = Number(settlement.noticePeriodServed) || 0;
+  // Standard (monthly) amount: saved snapshot, else back-calculated from the prorated actual
+  const standardOf = (key) => {
+    if (Number(std[key]) > 0) return Number(std[key]);
+    if (key === 'basicSalary' && Number(settlement.grossSalary) > 0) return Number(settlement.grossSalary);
+    const actual = Number(e[key]) || 0;
+    return served > 0 && actual > 0 ? Math.round((actual / served) * monthDays) : actual;
+  };
 
-  // Header bar
-  doc.setFillColor(25, 118, 210);
-  doc.rect(0, 0, pageWidth, 18, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(13);
-  doc.text(company.name || 'SGC International', margin, 8);
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(9);
-  doc.text('Final Settlement Statement', margin, 14);
-  doc.setFontSize(8);
-  doc.text(`Emp: ${settlement.employeeId || '—'}`, pageWidth - margin, 8, { align: 'right' });
-  doc.text(
-    `Status: ${finalSettlementService.getStatusLabel(settlement.status).toUpperCase()}`,
-    pageWidth - margin,
-    14,
-    { align: 'right' }
-  );
-
-  doc.setTextColor(33, 33, 33);
-  let y = 23;
-
-  // Employee + settlement meta (two columns, compact)
-  autoTable(doc, {
-    startY: y,
-    theme: 'plain',
-    styles: { fontSize: 7.5, cellPadding: 0.8, textColor: [40, 40, 40] },
-    columnStyles: {
-      0: { fontStyle: 'bold', cellWidth: 28 },
-      1: { cellWidth: 55 },
-      2: { fontStyle: 'bold', cellWidth: 30 },
-      3: { cellWidth: contentWidth - 113 }
-    },
-    body: [
-      [
-        'Employee',
-        settlement.employeeName || '—',
-        'Type',
-        finalSettlementService.getSettlementTypeLabel(settlement.settlementType)
-      ],
-      [
-        'Employee ID',
-        settlement.employeeId || '—',
-        'Last Working',
-        fmtDate(settlement.lastWorkingDate)
-      ],
-      [
-        'Department',
-        settlement.department || '—',
-        'Settlement Date',
-        fmtDate(settlement.settlementDate)
-      ],
-      [
-        'Designation',
-        settlement.designation || '—',
-        'Notice Period',
-        `${settlement.noticePeriodServed || 0}/${settlement.noticePeriod || 0} days`
-      ]
-    ],
-    margin: { left: margin, right: margin }
-  });
-
-  y = doc.lastAutoTable.finalY + 3;
-
-  // Salary & Calculations strip
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(25, 118, 210);
-  doc.text('Salary & Calculations (from Gross)', margin, y);
-  y += 1.5;
-
-  autoTable(doc, {
-    startY: y,
-    theme: 'grid',
-    styles: { fontSize: 7, cellPadding: 1.1, halign: 'center' },
-    headStyles: { fillColor: [227, 242, 253], textColor: [13, 71, 161], fontStyle: 'bold', fontSize: 6.5 },
-    bodyStyles: { fontStyle: 'bold', fontSize: 7.5 },
-    head: [['Gross Salary', 'Basic', 'Daily Rate', 'Month Days', 'Actual Salary', 'Shortfall', 'Notice Deduction']],
-    body: [[
-      fmtPKR(settlement.grossSalary),
-      fmtPKR(settlement.basicSalary),
-      fmtPKR(dailyRate),
-      String(monthDays),
-      fmtPKR(actualSalary),
-      `${shortfallDays} d`,
-      fmtPKR(shortfallDeduction)
-    ]],
-    margin: { left: margin, right: margin },
-    tableWidth: contentWidth
-  });
-
-  y = doc.lastAutoTable.finalY + 3;
-
-  // Earnings + Deductions side by side
-  const midGap = 3;
-  const colWidth = (contentWidth - midGap) / 2;
-  const leftX = margin;
-  const rightX = margin + colWidth + midGap;
-
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(9);
-  doc.setTextColor(46, 125, 50);
-  doc.text('Earnings Breakdown', leftX, y);
-  doc.setTextColor(198, 40, 40);
-  doc.text('Deductions Breakdown', rightX, y);
-  y += 1.5;
-
-  const earnTableBody = [
-    ...earningsBody.map(([label, amount]) => [label, fmtPKR(amount)]),
-    ['Total Earnings', fmtPKR(totalEarnings)]
+  const allowanceRows = [
+    ...PRORATED.filter(([, k]) => Number(e[k]) > 0).map(([label, k]) => [label, standardOf(k), Number(e[k]) || 0]),
+    ...ONE_OFF.filter(([, k]) => Number(e[k]) > 0).map(([label, k]) => [label, Number(e[k]), Number(e[k])])
   ];
-  const dedTableBody = [
-    ...deductionsBody.map(([label, amount]) => [label, fmtPKR(amount)]),
-    ['Total Deductions', fmtPKR(totalDeductions)]
-  ];
+  const deductionRows = DEDUCTIONS.filter(([, k]) => Number(d[k]) > 0).map(([label, k]) => [label, Number(d[k])]);
+  const nonSalaryRows = Number(e.otherEarnings) > 0 ? [['Other Earnings', Number(e.otherEarnings)]] : [];
 
-  autoTable(doc, {
-    startY: y,
-    theme: 'striped',
-    styles: { fontSize: 6.5, cellPadding: 0.9 },
-    headStyles: { fillColor: [76, 175, 80], textColor: 255, fontStyle: 'bold', fontSize: 7 },
-    columnStyles: { 0: { cellWidth: colWidth * 0.62 }, 1: { halign: 'right', cellWidth: colWidth * 0.38 } },
-    head: [['Component', 'Amount']],
-    body: earnTableBody.length > 1 ? earnTableBody : [['—', fmtPKR(0)], ['Total Earnings', fmtPKR(totalEarnings)]],
-    margin: { left: leftX, right: pageWidth - leftX - colWidth },
-    tableWidth: colWidth,
-    didParseCell: (data) => {
-      if (data.section === 'body' && data.row.index === earnTableBody.length - 1) {
-        data.cell.styles.fontStyle = 'bold';
-        data.cell.styles.fillColor = [232, 245, 233];
-      }
-    }
-  });
-  const earnEndY = doc.lastAutoTable.finalY;
+  // Lines are shown rounded; totals add the exact amounts and round once (Sidat)
+  const totalStandard = Math.round(allowanceRows.reduce((s, r) => s + r[1], 0));
+  const totalActual = Math.round(allowanceRows.reduce((s, r) => s + r[2], 0));
+  const totalDeductions = Math.round(deductionRows.reduce((s, r) => s + r[1], 0));
+  const totalNonSalary = Math.round(nonSalaryRows.reduce((s, r) => s + r[1], 0));
+  const netPayable = Number(settlement.netSettlementAmount) || (totalActual + totalNonSalary - totalDeductions);
 
-  autoTable(doc, {
-    startY: y,
-    theme: 'striped',
-    styles: { fontSize: 6.5, cellPadding: 0.9 },
-    headStyles: { fillColor: [244, 67, 54], textColor: 255, fontStyle: 'bold', fontSize: 7 },
-    columnStyles: { 0: { cellWidth: colWidth * 0.62 }, 1: { halign: 'right', cellWidth: colWidth * 0.38 } },
-    head: [['Component', 'Amount']],
-    body: dedTableBody.length > 1 ? dedTableBody : [['—', fmtPKR(0)], ['Total Deductions', fmtPKR(totalDeductions)]],
-    margin: { left: rightX, right: margin },
-    tableWidth: colWidth,
-    didParseCell: (data) => {
-      if (data.section === 'body' && data.row.index === dedTableBody.length - 1) {
-        data.cell.styles.fontStyle = 'bold';
-        data.cell.styles.fillColor = [255, 235, 238];
-      }
-    }
-  });
-  const dedEndY = doc.lastAutoTable.finalY;
-  y = Math.max(earnEndY, dedEndY) + 3;
+  const name = settlement.employeeName || personName(emp) || '';
+  const joined = emp.appointmentDate || emp.hireDate;
+  const confirmed = emp.confirmationDate && new Date(emp.confirmationDate) <= new Date(settlement.lastWorkingDate || Date.now());
 
-  // Net summary
-  autoTable(doc, {
-    startY: y,
-    theme: 'grid',
-    styles: { fontSize: 8, cellPadding: 1.4, fontStyle: 'bold' },
-    headStyles: { fillColor: [25, 118, 210], textColor: 255, fontSize: 8 },
-    columnStyles: { 0: { cellWidth: contentWidth * 0.55 }, 1: { halign: 'right', cellWidth: contentWidth * 0.45 } },
-    head: [['Description', 'Amount']],
-    body: [
-      ['Total Earnings (Gross Settlement)', fmtPKR(totalEarnings)],
-      ['Total Deductions', fmtPKR(totalDeductions)],
-      ['Net Settlement Amount', fmtPKR(settlement.netSettlementAmount)]
-    ],
-    margin: { left: margin, right: margin },
-    didParseCell: (data) => {
-      if (data.section === 'body' && data.row.index === 2) {
-        data.cell.styles.fillColor = [232, 245, 233];
-        data.cell.styles.textColor = [27, 94, 32];
-      }
-    }
-  });
-  y = doc.lastAutoTable.finalY + 2;
+  // ---- Header
+  doc.setTextColor(20, 20, 20);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(15);
+  doc.text(company.name || 'Sardar Group of Companies', W / 2, 16, { align: 'center' });
+  doc.setFontSize(11);
+  doc.text('FINAL DUES', W / 2, 23, { align: 'center' });
+  doc.setFontSize(8.5);
+  doc.text(`For the month of ${monthYear(settlement.settlementDate || settlement.lastWorkingDate)}`, W / 2, 29, { align: 'center' });
 
-  // Loans (compact) if any
-  if (Array.isArray(settlement.loans) && settlement.loans.length > 0) {
+  // ---- Employee block (two columns)
+  const info = (x, y, label, value, valueX) => {
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(8);
-    doc.setTextColor(66, 66, 66);
-    doc.text('Loan Settlements', margin, y + 3);
-    y += 4;
-    autoTable(doc, {
-      startY: y,
-      theme: 'striped',
-      styles: { fontSize: 6.5, cellPadding: 0.8 },
-      headStyles: { fillColor: [96, 125, 139], textColor: 255, fontStyle: 'bold', fontSize: 6.5 },
-      head: [['Loan Type', 'Original', 'Outstanding', 'Settled']],
-      body: settlement.loans.slice(0, 4).map((loan) => [
-        loan.loanType || '—',
-        fmtPKR(loan.originalAmount),
-        fmtPKR(loan.outstandingBalance),
-        fmtPKR(loan.settledAmount)
-      ]),
-      margin: { left: margin, right: margin }
-    });
-    y = doc.lastAutoTable.finalY + 2;
-  }
+    doc.text(label, x, y);
+    doc.setFont('helvetica', 'normal');
+    const lines = doc.splitTextToSize(String(value || '—'), (x < W / 2 ? W / 2 - 4 : R) - valueX);
+    doc.text(lines.slice(0, 2), valueX, y);
+    return lines.length > 1 ? 3.4 : 0;
+  };
+  let y = 38;
+  const left = [
+    ['Employee', `${settlement.employeeId || emp.employeeId || ''}      ${name}`],
+    ["Father's Name", emp.guardianName],
+    ['Designation', settlement.designation !== 'Unknown' ? settlement.designation : emp.placementDesignation?.title],
+    ['Service Period :', `${fmtDate(joined)}   to   ${fmtDate(settlement.lastWorkingDate)}`],
+    ['Confirmation Status:', emp.confirmationDate ? (confirmed ? 'Permanent' : 'Probation') : (emp.employmentStatus || '—')],
+    ['CNIC #', emp.idCard]
+  ];
+  const right = [
+    ['Section', emp.placementSection?.name],
+    ['Department', settlement.department !== 'Unknown' ? settlement.department : emp.placementDepartment?.name],
+    ['Project', emp.placementProject?.name],
+    ['Salary Period:', `Up to   ${fmtDate(settlement.lastWorkingDate)}`],
+    ['Settlement Type', String(settlement.settlementType || '').replace(/_/g, ' ').replace(/^./, (c) => c.toUpperCase())],
+    ['Address', addressText(emp.address)]
+  ];
+  let yl = y;
+  let yr = y;
+  left.forEach(([l, v]) => { yl += info(L + 2, yl, l, v, L + 36) + 6; });
+  right.forEach(([l, v]) => { yr += info(W / 2 + 14, yr, l, v, W / 2 + 46) + 6; });
+  y = Math.max(yl, yr);
 
-  // Reason / notes (one line truncated to stay on page)
-  if (settlement.reason || settlement.notes) {
-    doc.setFont('helvetica', 'bold');
-    doc.setFontSize(7.5);
-    doc.setTextColor(66, 66, 66);
-    if (settlement.reason) {
-      doc.text('Reason:', margin, y + 3);
-      doc.setFont('helvetica', 'normal');
-      const reasonLines = doc.splitTextToSize(String(settlement.reason), contentWidth - 16);
-      doc.text(reasonLines.slice(0, 2), margin + 16, y + 3);
-      y += 3 + Math.min(reasonLines.length, 2) * 3.2;
-    }
-    if (settlement.notes) {
-      doc.setFont('helvetica', 'bold');
-      doc.text('Notes:', margin, y + 3);
-      doc.setFont('helvetica', 'normal');
-      const noteLines = doc.splitTextToSize(String(settlement.notes), contentWidth - 14);
-      doc.text(noteLines.slice(0, 2), margin + 14, y + 3);
-      y += 3 + Math.min(noteLines.length, 2) * 3.2;
-    }
-  }
+  // ---- Columns
+  const cols = {
+    allowance: L, standard: L + 64, actual: L + 86, deduction: L + 92, dedActual: L + 138, nonSalary: L + 146, nonActual: R
+  };
+  doc.setLineWidth(0.5);
+  doc.line(L, y - 2, R, y - 2);
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(8.5);
+  doc.text('Allowances', cols.allowance, y + 3);
+  doc.text('Standard', cols.standard, y + 3, { align: 'right' });
+  doc.text('Actual', cols.actual, y + 3, { align: 'right' });
+  doc.text('Deductions', cols.deduction, y + 3);
+  doc.text('Actual', cols.dedActual, y + 3, { align: 'right' });
+  doc.text('Non-Salary', cols.nonSalary, y + 3);
+  doc.text('Actual', cols.nonActual, y + 3, { align: 'right' });
+  doc.line(L, y + 5.5, R, y + 5.5);
 
-  // Signature row
-  const sigY = Math.min(y + 10, pageHeight - 22);
-  doc.setDrawColor(160);
-  doc.setFontSize(7);
-  doc.setTextColor(80, 80, 80);
-  const sigW = contentWidth / 3;
-  ['Prepared By', 'Checked By', 'Approved By'].forEach((label, i) => {
-    const x = margin + i * sigW + 4;
-    doc.line(x, sigY, x + sigW - 12, sigY);
-    doc.text(label, x + (sigW - 12) / 2, sigY + 4, { align: 'center' });
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(8.5);
+  const rowsTop = y + 12;
+  const rowH = 5.6;
+  allowanceRows.forEach(([label, s, a], i) => {
+    const ry = rowsTop + i * rowH;
+    doc.text(label, cols.allowance, ry);
+    doc.text(amt(s), cols.standard, ry, { align: 'right' });
+    doc.text(amt(a), cols.actual, ry, { align: 'right' });
+  });
+  // Deductions & non-salary start lower, like Sidat (aligned to the bottom of the allowance list)
+  const rowCount = Math.max(allowanceRows.length, deductionRows.length, nonSalaryRows.length, 1);
+  const dedStart = rowsTop + (rowCount - deductionRows.length) * rowH;
+  deductionRows.forEach(([label, a], i) => {
+    const ry = dedStart + i * rowH;
+    doc.text(label, cols.deduction, ry);
+    doc.text(amt(a), cols.dedActual, ry, { align: 'right' });
+  });
+  const nonStart = rowsTop + (rowCount - nonSalaryRows.length) * rowH;
+  nonSalaryRows.forEach(([label, a], i) => {
+    const ry = nonStart + i * rowH;
+    doc.text(label, cols.nonSalary, ry);
+    doc.text(amt(a), cols.nonActual, ry, { align: 'right' });
   });
 
-  // Footer
-  doc.setFontSize(7);
-  doc.setTextColor(130, 130, 130);
-  doc.text(
-    company.invoiceFooter || `${company.name || 'SGC International'} — Final Settlement (single page)`,
-    pageWidth / 2,
-    pageHeight - 6,
-    { align: 'center' }
-  );
+  // ---- Totals with double rules
+  const ty = rowsTop + rowCount * rowH;
+  const totalCell = (xRight, width, value) => {
+    doc.setLineWidth(0.35);
+    doc.line(xRight - width, ty - 3, xRight, ty - 3);
+    doc.line(xRight - width, ty - 2.3, xRight, ty - 2.3);
+    doc.setFont('helvetica', 'bold');
+    doc.text(amt(value), xRight, ty + 2, { align: 'right' });
+    doc.line(xRight - width, ty + 3.6, xRight, ty + 3.6);
+    doc.line(xRight - width, ty + 4.3, xRight, ty + 4.3);
+  };
+  totalCell(cols.standard, 20, totalStandard);
+  totalCell(cols.actual, 20, totalActual);
+  totalCell(cols.dedActual, 20, totalDeductions);
+  totalCell(cols.nonActual, 20, totalNonSalary);
+
+  // ---- Net payable + signatures + receipt
+  const ny = ty + 18;
+  doc.setFont('helvetica', 'bold');
+  doc.setFontSize(9);
+  doc.text('Net Payable :', W / 2 + 40, ny, { align: 'right' });
+  doc.setLineWidth(0.4);
+  doc.rect(W / 2 + 44, ny - 5, 34, 8.5);
+  doc.text(amt(netPayable), W / 2 + 76, ny + 0.5, { align: 'right' });
+
+  doc.setFontSize(8.5);
+  [['Prepared By', ny + 4], ['Verified By', ny + 19], ['Approved By', ny + 34]].forEach(([label, sy]) => {
+    doc.text(label, L + 30, sy);
+    doc.setLineWidth(0.25);
+    doc.line(L + 50, sy + 0.5, L + 78, sy + 0.5);
+  });
+
+  const receipt = `I  (  ${name}  ) , Received [Rs.] ${amt(netPayable)} against the full and final settlement of my dues.`;
+  doc.setFont('helvetica', 'bold');
+  doc.text(doc.splitTextToSize(receipt, 52), W / 2 + 14, ny + 23);
+  doc.setLineWidth(0.4);
+  doc.rect(W / 2 + 14, ny + 37, 52, 10);
+
+  // ---- Footer
+  doc.setLineWidth(0.25);
+  doc.line(L, H - 14, R, H - 14);
+  doc.setFont('helvetica', 'normal');
+  doc.setFontSize(7.5);
+  doc.setTextColor(60, 60, 60);
+  doc.text('Human Capital Management · Tovus ERP', L, H - 10);
+  doc.text(`Status: ${String(settlement.status || '').toUpperCase()}`, W / 2, H - 10, { align: 'center' });
+  doc.text(`${new Date().toLocaleString('en-GB')}    Page 1 / 1`, R, H - 10, { align: 'right' });
 
   return doc;
 };
 
 export const downloadFinalSettlementPdf = (settlement, company = {}) => {
   const doc = generateFinalSettlementPdf(settlement, company);
-  const fileName = `final-settlement-${settlement.employeeId || 'record'}-${new Date(settlement.settlementDate || Date.now()).toISOString().slice(0, 10)}.pdf`;
+  const fileName = `final-dues-${settlement.employeeId || 'record'}-${new Date(settlement.settlementDate || Date.now()).toISOString().slice(0, 10)}.pdf`;
   doc.save(fileName);
 };
 

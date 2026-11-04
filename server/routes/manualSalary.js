@@ -32,7 +32,8 @@ const populateApprovers = (q) => q
   .populate('assignedAvp', 'firstName lastName email digitalSignature')
   .populate('hodApprovedBy', 'firstName lastName email digitalSignature')
   .populate('avpApprovedBy', 'firstName lastName email digitalSignature')
-  .populate('ceoApprovedBy', 'firstName lastName email digitalSignature');
+  .populate('ceoApprovedBy', 'firstName lastName email digitalSignature')
+  .populate('paidBy', 'firstName lastName email');
 
 // @route   GET /api/hr/manual-salary
 router.get('/', asyncHandler(async (req, res) => {
@@ -253,8 +254,8 @@ router.put('/:id/approve-ceo', asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: 'CEO approval access required' });
   }
 
-  // After CEO approval → Finance payroll queue for payment
-  record.workflowStatus = 'Pending Finance';
+  // CEO approval completes the HR workflow; it is NOT sent to Finance yet (Finance hand-off comes later)
+  record.workflowStatus = 'Approved by CEO';
   record.ceoApprovedBy = req.user.id;
   record.ceoApprovedAt = new Date();
   record.ceoComments = req.body.comments || '';
@@ -263,7 +264,7 @@ router.put('/:id/approve-ceo', asyncHandler(async (req, res) => {
 
   res.json({
     success: true,
-    message: 'CEO approved. Manual salary sent to Finance Payroll for payment.',
+    message: 'CEO approved. Manual salary is approved (not sent to Finance yet).',
     data: await populateApprovers(ManualSalary.findById(record._id))
   });
 }));

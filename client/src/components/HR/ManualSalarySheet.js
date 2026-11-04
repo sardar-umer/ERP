@@ -3,7 +3,7 @@ import {
   Box, Typography, Card, CardContent, Button, Paper,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow,
   IconButton, CircularProgress, Chip, Dialog, DialogTitle, DialogContent,
-  DialogActions, TextField, FormControlLabel, Checkbox
+  DialogActions, TextField, FormControlLabel, Checkbox, Tooltip, Grid, Divider, Stack
 } from '@mui/material';
 import {
   Add as AddIcon,
@@ -11,7 +11,8 @@ import {
   Delete as DeleteIcon,
   PictureAsPdf as PdfIcon,
   CheckCircle as ApproveIcon,
-  Cancel as RejectIcon
+  Cancel as RejectIcon,
+  FactCheck as ProcessIcon
 } from '@mui/icons-material';
 import manualSalaryService from '../../services/manualSalaryService';
 import ManualSalaryForm from './ManualSalaryForm';
@@ -33,7 +34,7 @@ const statusColor = (status) => {
     case 'Pending HOD HR': return 'warning';
     case 'Pending AVP': return 'info';
     case 'Forwarded to CEO': return 'secondary';
-    case 'Approved by CEO':
+    case 'Approved by CEO': return 'success';
     case 'Pending Finance': return 'warning';
     case 'Payment Pending': return 'info';
     case 'Paid': return 'success';
@@ -44,6 +45,73 @@ const statusColor = (status) => {
 };
 
 const sameId = (a, b) => String(a?._id || a || '') === String(b || '');
+
+const personName = (u) => (u && typeof u === 'object'
+  ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || ''
+  : '');
+
+const fmtDateTime = (d) => (d ? new Date(d).toLocaleString('en-GB', {
+  day: '2-digit', month: 'short', year: 'numeric', hour: '2-digit', minute: '2-digit'
+}) : '');
+
+/** Statuses after HR where the record can no longer be edited / deleted */
+const LOCKED_STATUSES = ['Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Pending Finance', 'Payment Pending', 'Paid'];
+
+const AMOUNT_FIELDS = [
+  ['Basic Salary', 'basicSalary'],
+  ['House Rent', 'houseRentAllowance'],
+  ['Medical Allowance', 'medicalAllowance'],
+  ['Conveyance Allowance', 'conveyanceAllowance'],
+  ['Vehicle Allowance', 'vehicleAllowance'],
+  ['Fuel Allowance', 'fuelAllowance'],
+  ['Food Allowance', 'foodAllowance'],
+  ['Special Allowance', 'specialAllowance'],
+  ['Other Allowance', 'otherAllowance'],
+  ['Gross Salary', 'grossSalary'],
+  ['Income Tax', 'incomeTax'],
+  ['Net Payable', 'netPayable']
+];
+
+/** Approval trail: Initiated → GM HR → AVP → CEO → Finance */
+const approvalSteps = (r) => {
+  const status = r.workflowStatus || 'Pending HOD HR';
+  const steps = [
+    { label: 'Initiated', by: personName(r.initiator), at: r.initiatedAt || r.createdAt, done: true, note: r.requesterSignature ? `Signed: ${r.requesterSignature}` : '' },
+    {
+      label: 'GM HR',
+      by: personName(r.hodApprovedBy) || personName(r.assignedHod),
+      at: r.hodApprovedAt,
+      done: Boolean(r.hodApprovedAt),
+      current: status === 'Pending HOD HR',
+      note: r.hodComments
+    },
+    {
+      label: 'AVP',
+      by: personName(r.avpApprovedBy) || personName(r.assignedAvp),
+      at: r.avpApprovedAt,
+      done: Boolean(r.avpApprovedAt),
+      current: status === 'Pending AVP',
+      note: r.avpComments
+    },
+    {
+      label: 'CEO',
+      by: personName(r.ceoApprovedBy),
+      at: r.ceoApprovedAt,
+      done: Boolean(r.ceoApprovedAt),
+      current: status === 'Forwarded to CEO',
+      note: r.ceoComments
+    },
+    {
+      label: 'Finance Payment',
+      by: personName(r.paidBy),
+      at: r.paidAt,
+      done: status === 'Paid',
+      current: ['Pending Finance', 'Payment Pending'].includes(status),
+      note: ''
+    }
+  ];
+  return steps;
+};
 
 const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
   const { user } = useAuth();
@@ -88,10 +156,12 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
     return null;
   };
 
-  const canEdit = (row) => {
-    const status = row.workflowStatus || 'Pending HOD HR';
-    return ['Pending HOD HR', 'Draft', 'Returned', 'Rejected by CEO'].includes(status);
-  };
+  const isAdmin = ['super_admin', 'admin', 'developer'].includes(user?.role);
+  const isLocked = (row) => LOCKED_STATUSES.includes(row.workflowStatus || 'Pending HOD HR');
+  // Admins may still edit a locked record (the server allows it); nobody can delete one
+  const canEdit = (row) => !isLocked(row) || isAdmin;
+  const canDelete = (row) => !isLocked(row);
+  const [detailRecord, setDetailRecord] = useState(null);
 
   const handleDelete = async (id) => {
     if (!window.confirm('Are you sure you want to delete this record?')) return;
@@ -298,6 +368,11 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                               {formatCurrency(row.netPayable)}
                             </TableCell>
                             <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                              <Tooltip title="Process — details & approvals">
+                                <IconButton size="small" color="info" onClick={() => setDetailRecord(row)}>
+                                  <ProcessIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
                               {actRole && (
                                 <>
                                   <IconButton size="small" color="success" title="Approve" onClick={() => openAction('approve', row)}>
@@ -308,16 +383,30 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                                   </IconButton>
                                 </>
                               )}
-                              {canEdit(row) && (
-                                <IconButton size="small" color="primary" onClick={() => { setEditData(row); setFormOpen(true); }}>
-                                  <EditIcon fontSize="small" />
-                                </IconButton>
-                              )}
-                              {canEdit(row) && (
-                                <IconButton size="small" color="error" onClick={() => handleDelete(row._id)}>
-                                  <DeleteIcon fontSize="small" />
-                                </IconButton>
-                              )}
+                              <Tooltip title={canEdit(row) ? 'Edit' : `Locked: ${row.workflowStatus}`}>
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    color="primary"
+                                    disabled={!canEdit(row)}
+                                    onClick={() => { setEditData(row); setFormOpen(true); }}
+                                  >
+                                    <EditIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
+                              <Tooltip title={canDelete(row) ? 'Delete' : `Locked: ${row.workflowStatus}`}>
+                                <span>
+                                  <IconButton
+                                    size="small"
+                                    color="error"
+                                    disabled={!canDelete(row)}
+                                    onClick={() => handleDelete(row._id)}
+                                  >
+                                    <DeleteIcon fontSize="small" />
+                                  </IconButton>
+                                </span>
+                              </Tooltip>
                             </TableCell>
                           </TableRow>
                         );
@@ -348,6 +437,98 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
         onRefresh={onRefresh}
         editData={editData}
       />
+
+      <Dialog open={Boolean(detailRecord)} onClose={() => setDetailRecord(null)} maxWidth="md" fullWidth>
+        {detailRecord && (
+          <>
+            <DialogTitle sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: 2 }}>
+              <Box>
+                <Typography variant="h6" component="div">{detailRecord.name}</Typography>
+                <Typography variant="body2" color="text.secondary">
+                  {[detailRecord.empId, detailRecord.designation, detailRecord.project].filter(Boolean).join(' · ')}
+                  {' · '}{months[detailRecord.month - 1]} {detailRecord.year}
+                </Typography>
+              </Box>
+              <Chip label={detailRecord.workflowStatus || 'Pending HOD HR'} color={statusColor(detailRecord.workflowStatus)} />
+            </DialogTitle>
+            <DialogContent dividers>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Salary</Typography>
+              <Grid container spacing={1.5} sx={{ mb: 2 }}>
+                {AMOUNT_FIELDS.filter(([, k]) => Number(detailRecord[k]) > 0 || ['grossSalary', 'netPayable'].includes(k)).map(([label, k]) => (
+                  <Grid item xs={6} sm={4} md={3} key={k}>
+                    <Paper variant="outlined" sx={{ p: 1.25, bgcolor: k === 'netPayable' ? '#fffde7' : undefined }}>
+                      <Typography variant="caption" color="text.secondary">{label}</Typography>
+                      <Typography variant="body2" fontWeight={k === 'netPayable' || k === 'grossSalary' ? 700 : 500}>
+                        {formatCurrency(detailRecord[k])}
+                      </Typography>
+                    </Paper>
+                  </Grid>
+                ))}
+              </Grid>
+              {detailRecord.doj ? (
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>Date of joining: {detailRecord.doj}</Typography>
+              ) : null}
+              {detailRecord.remarks ? (
+                <Typography variant="body2" sx={{ mb: 2 }}><strong>Remarks:</strong> {detailRecord.remarks}</Typography>
+              ) : null}
+
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="subtitle2" sx={{ mb: 1.5 }}>Approval trail</Typography>
+              <Stack spacing={1}>
+                {approvalSteps(detailRecord).map((st) => (
+                  <Paper
+                    key={st.label}
+                    variant="outlined"
+                    sx={{
+                      p: 1.25,
+                      borderLeft: 4,
+                      borderLeftColor: st.done ? 'success.main' : st.current ? 'warning.main' : 'grey.300'
+                    }}
+                  >
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" useFlexGap spacing={1}>
+                      <Typography variant="body2" fontWeight={700}>{st.label}</Typography>
+                      <Chip
+                        size="small"
+                        label={st.done ? 'Done' : st.current ? 'Waiting' : 'Not yet'}
+                        color={st.done ? 'success' : st.current ? 'warning' : 'default'}
+                        variant={st.done ? 'filled' : 'outlined'}
+                      />
+                    </Stack>
+                    <Typography variant="body2" color="text.secondary">
+                      {[st.by, st.at ? fmtDateTime(st.at) : ''].filter(Boolean).join(' · ') || '—'}
+                    </Typography>
+                    {st.note ? <Typography variant="body2" sx={{ mt: 0.5 }}>“{st.note}”</Typography> : null}
+                  </Paper>
+                ))}
+              </Stack>
+              {(detailRecord.rejectionComments || detailRecord.returnComments) && (
+                <Paper variant="outlined" sx={{ p: 1.25, mt: 1.5, borderLeft: 4, borderLeftColor: 'error.main' }}>
+                  <Typography variant="body2" fontWeight={700} color="error.main">Rejected / Returned</Typography>
+                  <Typography variant="body2">{detailRecord.rejectionComments || detailRecord.returnComments}</Typography>
+                </Paper>
+              )}
+            </DialogContent>
+            <DialogActions>
+              {canActOn(detailRecord) && (
+                <>
+                  <Button color="error" startIcon={<RejectIcon />} onClick={() => { openAction('reject', detailRecord); setDetailRecord(null); }}>
+                    Reject / Return
+                  </Button>
+                  <Button variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => { openAction('approve', detailRecord); setDetailRecord(null); }}>
+                    Approve
+                  </Button>
+                </>
+              )}
+              {canEdit(detailRecord) && (
+                <Button startIcon={<EditIcon />} onClick={() => { setEditData(detailRecord); setFormOpen(true); setDetailRecord(null); }}>
+                  Edit
+                </Button>
+              )}
+              <Button onClick={() => setDetailRecord(null)}>Close</Button>
+            </DialogActions>
+          </>
+        )}
+      </Dialog>
 
       <Dialog open={actionDialog.open} onClose={() => setActionDialog({ open: false, type: 'approve', record: null })} maxWidth="sm" fullWidth>
         <DialogTitle>

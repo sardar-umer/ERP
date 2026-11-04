@@ -5,6 +5,25 @@ const Employee = require('../models/hr/Employee');
 const Loan = require('../models/hr/Loan');
 const { authMiddleware } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
+const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
+
+// ─── Approval workflow (same as Manual Salary): HR forwards → GM HR → AVP → CEO → "approved" ───
+const ADMIN_ROLES = ['super_admin', 'admin', 'developer'];
+const isAdminUser = (user) => ADMIN_ROLES.includes(user?.role);
+const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
+const FORWARDABLE = ['Draft', 'Returned', 'Rejected by CEO'];
+const APPROVER_FIELDS = ['forwardedBy', 'assignedHod', 'hodApprovedBy', 'assignedAvp', 'avpApprovedBy', 'ceoApprovedBy', 'returnedBy'];
+const approverPopulate = APPROVER_FIELDS.map((path) => ({ path, select: 'firstName lastName email' }));
+const sameUser = (a, b) => Boolean(a && b) && String(a._id || a) === String(b._id || b);
+
+/** Which step the user can act on: 'HOD' | 'AVP' | 'CEO' | null */
+const workflowRoleFor = (settlement, user) => {
+  const ws = settlement.workflowStatus || 'Draft';
+  if (ws === 'Pending HOD HR' && (sameUser(settlement.assignedHod, user._id) || isAdminUser(user))) return 'HOD';
+  if (ws === 'Pending AVP' && (sameUser(settlement.assignedAvp, user._id) || isAdminUser(user))) return 'AVP';
+  if (ws === 'Forwarded to CEO' && isDesignatedCeoApprover(user)) return 'CEO';
+  return null;
+};
 const {
   resolveSettlementRateDate,
   getSettlementDailyRate,
@@ -54,8 +73,9 @@ router.get('/', authMiddleware, async (req, res) => {
       limit: parseInt(limit),
       populate: [
         { path: 'employee', select: 'employeeId name department designation' },
-        { path: 'approvedBy', select: 'name' },
-        { path: 'processedBy', select: 'name' }
+        { path: 'approvedBy', select: 'firstName lastName email' },
+        { path: 'processedBy', select: 'firstName lastName email' },
+        ...approverPopulate
       ],
       sort: { createdAt: -1 }
     };
@@ -68,6 +88,7 @@ router.get('/', authMiddleware, async (req, res) => {
       settlement.settlementProgress = settlement.settlementProgress;
       settlement.noticePeriodShortfallDays = settlement.noticePeriodShortfallDays;
       settlement.totalOutstandingLoans = settlement.totalOutstandingLoans;
+      settlement.myWorkflowRole = workflowRoleFor(settlement, req.user);
       return settlement;
     });
 
@@ -163,11 +184,105 @@ router.get('/employee/:employeeId', authMiddleware, async (req, res) => {
 });
 
 // Get settlement by ID
+// @route   GET /api/final-settlements/workflow/me — what the current user may do in the approval workflow
+router.get('/workflow/me', authMiddleware, (req, res) => {
+  res.json({ success: true, data: { isCeoApprover: isDesignatedCeoApprover(req.user), isAdmin: isAdminUser(req.user) } });
+});
+
+// @route   PUT /api/final-settlements/:id/forward — HR forwards to GM HR → AVP → CEO
+router.put('/:id/forward', authMiddleware, checkPermission('settlement_management'), async (req, res) => {
+  try {
+    const settlement = await FinalSettlement.findById(req.params.id);
+    if (!settlement) return res.status(404).json({ success: false, message: 'Settlement not found' });
+    if (settlement.status !== 'pending' || !FORWARDABLE.includes(settlement.workflowStatus || 'Draft')) {
+      return res.status(400).json({ success: false, message: `Cannot forward while status is ${settlement.workflowStatus || settlement.status}` });
+    }
+    const { assignedHod, assignedAvp } = req.body || {};
+    if (!assignedHod || !assignedAvp) {
+      return res.status(400).json({ success: false, message: 'Select the GM HR and the AVP who will approve this settlement.' });
+    }
+    settlement.assignedHod = assignedHod;
+    settlement.assignedAvp = assignedAvp;
+    settlement.forwardedBy = req.user._id;
+    settlement.forwardedAt = new Date();
+    settlement.workflowStatus = 'Pending HOD HR';
+    ['hodApprovedBy', 'hodApprovedAt', 'hodComments', 'avpApprovedBy', 'avpApprovedAt', 'avpComments',
+      'ceoApprovedBy', 'ceoApprovedAt', 'ceoComments'].forEach((k) => { settlement[k] = undefined; });
+    settlement.updatedBy = req.user._id;
+    await settlement.save();
+    const data = await FinalSettlement.findById(settlement._id).populate(approverPopulate).lean();
+    res.json({ success: true, message: 'Settlement forwarded to GM HR for approval', data });
+  } catch (error) {
+    console.error('Error forwarding settlement:', error);
+    res.status(500).json({ success: false, message: 'Error forwarding settlement', error: error.message });
+  }
+});
+
+// @route   PUT /api/final-settlements/:id/workflow — { action: 'approve' | 'return', comments }
+router.put('/:id/workflow', authMiddleware, async (req, res) => {
+  try {
+    const settlement = await FinalSettlement.findById(req.params.id);
+    if (!settlement) return res.status(404).json({ success: false, message: 'Settlement not found' });
+    const action = String(req.body?.action || '');
+    const comments = String(req.body?.comments || '').trim();
+    if (!['approve', 'return'].includes(action)) {
+      return res.status(400).json({ success: false, message: 'Action must be approve or return' });
+    }
+    if (action === 'return' && !comments) {
+      return res.status(400).json({ success: false, message: 'Comments are required to return a settlement' });
+    }
+    const role = workflowRoleFor(settlement, req.user);
+    if (!role) {
+      return res.status(403).json({ success: false, message: 'You are not the current approver for this settlement' });
+    }
+    const now = new Date();
+    if (action === 'return') {
+      settlement.workflowStatus = 'Returned';
+      settlement.returnedBy = req.user._id;
+      settlement.returnedAt = now;
+      settlement.returnComments = `${role === 'HOD' ? 'GM HR' : role}: ${comments}`;
+    } else if (role === 'HOD') {
+      Object.assign(settlement, { workflowStatus: 'Pending AVP', hodApprovedBy: req.user._id, hodApprovedAt: now, hodComments: comments });
+    } else if (role === 'AVP') {
+      Object.assign(settlement, { workflowStatus: 'Forwarded to CEO', avpApprovedBy: req.user._id, avpApprovedAt: now, avpComments: comments });
+    } else {
+      // CEO approval completes the workflow → existing Process / Paid steps follow
+      Object.assign(settlement, {
+        workflowStatus: 'Approved by CEO',
+        ceoApprovedBy: req.user._id,
+        ceoApprovedAt: now,
+        ceoComments: comments,
+        status: 'approved',
+        approvedBy: req.user._id,
+        approvalDate: now
+      });
+    }
+    settlement.updatedBy = req.user._id;
+    await settlement.save();
+    const data = await FinalSettlement.findById(settlement._id).populate(approverPopulate).lean();
+    const next = { 'Pending AVP': 'sent to AVP', 'Forwarded to CEO': 'forwarded to CEO', 'Approved by CEO': 'approved — ready to process', Returned: 'returned to HR' };
+    res.json({ success: true, message: `Settlement ${next[settlement.workflowStatus] || 'updated'}`, data });
+  } catch (error) {
+    console.error('Error in settlement workflow:', error);
+    res.status(500).json({ success: false, message: 'Error updating settlement workflow', error: error.message });
+  }
+});
+
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const settlement = await FinalSettlement.findById(req.params.id)
-      .populate('employee', 'employeeId name department designation joiningDate salary')
+      .populate({
+        path: 'employee',
+        select: 'employeeId firstName lastName guardianName idCard address hireDate appointmentDate confirmationDate employmentStatus salary allowances placementProject placementSection placementDepartment placementDesignation',
+        populate: [
+          { path: 'placementProject', select: 'name' },
+          { path: 'placementSection', select: 'name' },
+          { path: 'placementDepartment', select: 'name' },
+          { path: 'placementDesignation', select: 'title' }
+        ]
+      })
       .populate('loans.loanId')
+      .populate(approverPopulate)
       .populate('approvedBy', 'name')
       .populate('processedBy', 'name')
       .populate('createdBy', 'name')
@@ -186,6 +301,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
     settlementData.settlementProgress = settlement.settlementProgress;
     settlementData.noticePeriodShortfallDays = settlement.noticePeriodShortfallDays;
     settlementData.totalOutstandingLoans = settlement.totalOutstandingLoans;
+    settlementData.myWorkflowRole = workflowRoleFor(settlementData, req.user);
 
     res.json({
       success: true,
@@ -225,13 +341,16 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       grossSettlementAmount: clientGrossSettlement,
       netSettlementAmount: clientNetSettlement,
       leaveBalance: clientLeaveBalance,
-      loans: clientLoans
+      loans: clientLoans,
+      standardEarnings: clientStandardEarnings
     } = req.body;
 
     // Get employee details with populated department and position
     const employee = await Employee.findOne({ employeeId })
       .populate('department', 'name')
-      .populate('position', 'title');
+      .populate('position', 'title')
+      .populate('placementDepartment', 'name')
+      .populate('placementDesignation', 'title');
     if (!employee) {
       return res.status(404).json({
         success: false,
@@ -249,8 +368,9 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       ? clientNoticeShortfall
       : Math.max(0, (noticePeriod || 0) - (noticePeriodServed || 0));
 
-    const basicSalary = clientBasicSalary ?? employee.salary?.basic ?? 0;
+    // Basic in the settlement = the full monthly salary (gross); allowances are paid on top (Sidat "Final Dues")
     const grossSalary = clientGrossSalary ?? employee.salary?.gross ?? 0;
+    const basicSalary = clientBasicSalary ?? grossSalary;
     const netSalary = clientNetSalary ?? employee.salary?.net ?? 0;
 
     const defaultEarnings = {
@@ -328,8 +448,8 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       employee: employee._id,
       employeeId: employee.employeeId,
       employeeName: `${employee.firstName} ${employee.lastName}`,
-      department: employee.department?.name || 'Unknown',
-      designation: employee.position?.title || 'Unknown',
+      department: employee.placementDepartment?.name || employee.department?.name || 'Unknown',
+      designation: employee.placementDesignation?.title || employee.position?.title || 'Unknown',
       settlementType,
       reason,
       noticePeriod,
@@ -347,6 +467,7 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       deductions,
       loans,
       leaveBalance: clientLeaveBalance,
+      standardEarnings: clientStandardEarnings,
       grossSettlementAmount,
       netSettlementAmount,
       paymentMethod,
@@ -390,6 +511,16 @@ router.put('/:id', authMiddleware, checkPermission('settlement_management'), asy
         message: 'Cannot update settlement that is not pending'
       });
     }
+    // Locked while it is out for approval (admins may still correct it)
+    if (IN_APPROVAL.includes(settlement.workflowStatus) && !isAdminUser(req.user)) {
+      return res.status(400).json({
+        success: false,
+        message: `Cannot edit while the settlement is ${settlement.workflowStatus}. Ask the approver to return it.`
+      });
+    }
+    // Never take workflow fields from the edit form
+    ['workflowStatus', ...APPROVER_FIELDS, 'hodApprovedAt', 'avpApprovedAt', 'ceoApprovedAt', 'forwardedAt', 'returnedAt']
+      .forEach((k) => { delete req.body[k]; });
 
     const body = { ...req.body };
     // Map form transportAllowance into schema conveyanceAllowance
@@ -443,8 +574,16 @@ router.patch('/:id/approve', authMiddleware, checkPermission('settlement_approva
         message: 'Settlement is not in pending status'
       });
     }
+    // Approval goes through Forward → GM HR → AVP → CEO; direct approval is for admins only
+    if (!isAdminUser(req.user)) {
+      return res.status(400).json({
+        success: false,
+        message: 'Forward the settlement for approval (GM HR → AVP → CEO).'
+      });
+    }
 
     settlement.status = 'approved';
+    settlement.workflowStatus = 'Approved by CEO';
     settlement.approvalDate = new Date();
     settlement.approvedBy = req.user._id;
     settlement.updatedBy = req.user._id;

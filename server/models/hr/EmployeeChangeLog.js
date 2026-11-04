@@ -9,6 +9,8 @@ const employeeChangeLogSchema = new mongoose.Schema(
     employee: { type: mongoose.Schema.Types.ObjectId, ref: 'Employee', required: true, index: true },
     changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     changedAt: { type: Date, default: Date.now, index: true },
+    /** live = recorded when the edit was saved; audit = rebuilt from the audit trail of earlier edits */
+    source: { type: String, enum: ['live', 'audit'], default: 'live' },
     changes: [
       {
         _id: false,

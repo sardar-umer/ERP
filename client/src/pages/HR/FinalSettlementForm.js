@@ -21,7 +21,8 @@ import {
   CircularProgress,
   Chip,
   FormHelperText,
-  InputAdornment
+  InputAdornment,
+  Link
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -44,7 +45,7 @@ import {
   getSettlementDailyRateRounded,
   getSettlementActualSalary,
   getSettlementShortfallDeduction,
-  prorateSettlementAmount
+  prorateSettlementAmountExact
 } from '../../utils/finalSettlementDays';
 import { PageLoading, LoadingSpinner } from '../../components/LoadingSpinner';
 
@@ -92,9 +93,10 @@ const FinalSettlementForm = () => {
     );
   });
 
+  // Amounts keep 2 decimals (prorated salary lines); only the totals are rounded to whole rupees (Sidat)
   const parseAmount = (value) => {
     const num = Number(value);
-    return Number.isFinite(num) ? Math.round(num) : 0;
+    return Number.isFinite(num) ? Math.round(num * 100) / 100 : 0;
   };
 
   const computeSettlementTotals = (values) => {
@@ -128,11 +130,13 @@ const FinalSettlementForm = () => {
       parseAmount(d.pension) +
       parseAmount(d.otherDeductions);
 
+    const roundedEarnings = Math.round(totalEarnings);
+    const roundedDeductions = Math.round(totalDeductions);
     return {
-      totalEarnings,
-      totalDeductions,
-      grossSettlementAmount: totalEarnings,
-      netSettlementAmount: Math.max(0, totalEarnings - totalDeductions)
+      totalEarnings: roundedEarnings,
+      totalDeductions: roundedDeductions,
+      grossSettlementAmount: roundedEarnings,
+      netSettlementAmount: Math.max(0, roundedEarnings - roundedDeductions)
     };
   };
 
@@ -212,6 +216,7 @@ const FinalSettlementForm = () => {
       dailyRate: getSettlementDailyRateRounded(gross, rateDate),
       earnings,
       deductions,
+      standardEarnings: values.standardEarnings || undefined,
       grossSettlementAmount: totals.grossSettlementAmount,
       netSettlementAmount: totals.netSettlementAmount,
       leaveBalance: {
@@ -246,7 +251,16 @@ const FinalSettlementForm = () => {
     settlementType: Yup.string().required('Settlement type is required'),
     reason: Yup.string().required('Reason is required').min(10, 'Reason must be at least 10 characters'),
     lastWorkingDate: Yup.date().required('Last working date is required'),
-    noticePeriodServed: Yup.number().min(0, 'Notice period served cannot be negative'),
+    // Days served are the days paid in the last working month — never more than that month has
+    noticePeriodServed: Yup.number()
+      .min(0, 'Days served cannot be negative')
+      .test('max-month-days', 'Days served cannot be more than the days in the last working month', function maxMonthDays(value) {
+        const days = getCalendarDaysInMonth(resolveSettlementRateDate({
+          lastWorkingDate: this.parent.lastWorkingDate,
+          settlementDate: this.parent.settlementDate
+        }));
+        return value == null || Number(value) <= days;
+      }),
     paymentMethod: Yup.string().required('Payment method is required'),
     bankDetails: Yup.object({
       bankName: Yup.string().when('paymentMethod', {
@@ -478,11 +492,8 @@ const FinalSettlementForm = () => {
       const otherAllowances = getAllow('other');
       const transportAllowance = getAllow('conveyance') || getAllow('transport');
 
-      const basicSalary = Math.round(
-        Number(employee.salary?.basic) > 0
-          ? employee.salary.basic
-          : Math.max(0, grossSalary - medicalAllowance - houseRentAllowance - foodAllowance - mobileAllowance - vehicleAllowance - fuelAllowance - specialAllowance - otherAllowances - transportAllowance)
-      );
+      // Basic in Final Dues = the full monthly salary (gross); allowances are paid on top of it (Sidat)
+      const basicSalary = grossSalary;
 
       // Calculate daily rate from calendar days in last-working / settlement month
       const rateDate = resolveSettlementRateDate({
@@ -492,10 +503,8 @@ const FinalSettlementForm = () => {
       const dailyRate = getSettlementDailyRateRounded(grossSalary, rateDate);
       const leaveEncashment = 0; // Default to 0, user will input manually
 
-      // Calculate gratuity based on years of service (using Gross Salary)
-      const yearsOfService = employee.dateOfJoining ?
-        Math.floor((new Date() - new Date(employee.dateOfJoining)) / (1000 * 60 * 60 * 24 * 365)) : 0;
-      const gratuity = Math.round(grossSalary * Math.min(yearsOfService, 5)); // Max 5 years
+      // Gratuity is entered by HR when it applies (not auto-calculated)
+      const gratuity = 0;
 
       const leaveBalance = employee.leaveBalance || {};
       const taxDeduction = employee.deductions?.incomeTax || employee.salary?.tax || 0;
@@ -628,10 +637,11 @@ const FinalSettlementForm = () => {
           healthInsurance: deductions.healthInsurance || 0,
           providentFund: deductions.providentFund || 0,
           eobi: deductions.eobi || 0,
-          security: deductions.security || (deductions.otherDeductions > 0 && !deductions.security ? deductions.otherDeductions : 0),
+          security: deductions.security || 0,
           pension: deductions.pension || 0,
-          otherDeductions: deductions.security ? (deductions.otherDeductions || 0) : 0
+          otherDeductions: deductions.otherDeductions || 0
         },
+        standardEarnings: settlement.standardEarnings || undefined,
         leaveBalance: {
           annual: leaveBalance.annual || 0,
           sick: leaveBalance.sick || 0,
@@ -789,23 +799,10 @@ const FinalSettlementForm = () => {
     const otherAllowances = getAllow('other');
     const transportAllowance = getAllow('conveyance') || getAllow('transport');
 
-    const basicSalaryBase = Number(selectedEmployee.salary?.basic) > 0
-      ? Number(selectedEmployee.salary.basic)
-      : Math.max(
-        0,
-        grossSalary -
-          medicalAllowance -
-          houseRentAllowance -
-          foodAllowance -
-          mobileAllowance -
-          vehicleAllowance -
-          fuelAllowance -
-          specialAllowance -
-          otherAllowances -
-          transportAllowance
-      );
+    // Basic in Final Dues = the full monthly salary (gross); allowances are paid on top of it (Sidat)
+    const basicSalaryBase = grossSalary;
 
-    const prorate = (amount) => prorateSettlementAmount(amount, servedDays, rateDate);
+    const prorate = (amount) => prorateSettlementAmountExact(amount, servedDays, rateDate);
     const dailyRate = getSettlementDailyRateRounded(grossSalary, rateDate);
     const shortfallDeduction = getSettlementShortfallDeduction(
       grossSalary,
@@ -827,6 +824,19 @@ const FinalSettlementForm = () => {
       dailyRate,
       basicSalary: basicSalaryBase,
       grossSalary,
+      // Monthly amounts the actual earnings come from ("Standard" column of Final Dues)
+      standardEarnings: {
+        basicSalary: basicSalaryBase,
+        houseRent: houseRentAllowance,
+        medicalAllowance,
+        conveyanceAllowance: transportAllowance,
+        foodAllowance,
+        mobileAllowance,
+        vehicleAllowance,
+        fuelAllowance,
+        specialAllowance,
+        otherAllowances
+      },
       earnings: {
         ...prevValues.earnings,
         basicSalary: prorate(basicSalaryBase),
@@ -891,8 +901,9 @@ const FinalSettlementForm = () => {
     rateDateForUi
   );
 
-  const yearsOfService = selectedEmployee?.dateOfJoining
-    ? Math.floor((new Date() - new Date(selectedEmployee.dateOfJoining)) / (1000 * 60 * 60 * 24 * 365))
+  const joinedOn = selectedEmployee?.appointmentDate || selectedEmployee?.hireDate || selectedEmployee?.dateOfJoining;
+  const yearsOfService = joinedOn
+    ? Math.floor((new Date(formik.values.lastWorkingDate || Date.now()) - new Date(joinedOn)) / (1000 * 60 * 60 * 24 * 365))
     : 0;
 
   // Render step content
@@ -1115,19 +1126,6 @@ const FinalSettlementForm = () => {
                   <TextField
                     fullWidth
                     type="number"
-                    name="basicSalary"
-                    label="Basic Salary (Reference)"
-                    value={formik.values.basicSalary}
-                    onChange={formik.handleChange}
-                    InputProps={amountInputProps}
-                    helperText="Stored on settlement record"
-                  />
-                </Grid>
-
-                <Grid item xs={12} md={3}>
-                  <TextField
-                    fullWidth
-                    type="number"
                     name="dailyRate"
                     label="Daily Rate"
                     value={formik.values.dailyRate}
@@ -1150,8 +1148,9 @@ const FinalSettlementForm = () => {
                     label="Notice Period Served (Days)"
                     value={formik.values.noticePeriodServed}
                     onChange={formik.handleChange}
-                    error={formik.touched.noticePeriodServed && Boolean(formik.errors.noticePeriodServed)}
-                    helperText={formik.touched.noticePeriodServed && formik.errors.noticePeriodServed}
+                    inputProps={{ min: 0, max: getCalendarDaysInMonth(rateDateForUi) }}
+                    error={Boolean(formik.errors.noticePeriodServed)}
+                    helperText={formik.errors.noticePeriodServed || `Days paid in the last working month (max ${getCalendarDaysInMonth(rateDateForUi)})`}
                   />
                 </Grid>
 
@@ -1220,11 +1219,11 @@ const FinalSettlementForm = () => {
                     fullWidth
                     type="number"
                     name="earnings.basicSalary"
-                    label="Basic Salary (Earning)"
+                    label="Gross Salary (Earning)"
                     value={formik.values.earnings.basicSalary}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
-                    helperText="Prorated basic included in total earnings"
+                    helperText="Gross salary for the days served, included in total earnings"
                   />
                 </Grid>
 
@@ -1357,7 +1356,19 @@ const FinalSettlementForm = () => {
                     value={formik.values.earnings.noticePay}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
-                    helperText="Notice pay earning (defaults to 0)"
+                    helperText={
+                      <span>
+                        Notice pay earning (defaults to 0).{' '}
+                        <Link
+                          component="button"
+                          type="button"
+                          variant="caption"
+                          onClick={() => formik.setFieldValue('earnings.noticePay', Math.round(Number(formik.values.grossSalary) || 0))}
+                        >
+                          Use one month salary ({formatPKR(formik.values.grossSalary || 0)})
+                        </Link>
+                      </span>
+                    }
                   />
                 </Grid>
 
@@ -1370,7 +1381,7 @@ const FinalSettlementForm = () => {
                     value={formik.values.earnings.gratuity}
                     onChange={formik.handleChange}
                     InputProps={amountInputProps}
-                    helperText={`${Math.min(yearsOfService, 5)} years of service`}
+                    helperText={`Enter only when gratuity applies · ${yearsOfService} year(s) of service`}
                   />
                 </Grid>
 
@@ -1730,8 +1741,8 @@ const FinalSettlementForm = () => {
                       <Typography fontWeight={700}>{formatPKR(formik.values.grossSalary)}</Typography>
                     </Grid>
                     <Grid item xs={6} md={3}>
-                      <Typography variant="body2" color="text.secondary">Basic (Reference)</Typography>
-                      <Typography fontWeight={700}>{formatPKR(formik.values.basicSalary)}</Typography>
+                      <Typography variant="body2" color="text.secondary">Gross Salary (Days Served)</Typography>
+                      <Typography fontWeight={700}>{formatPKR(Math.round(Number(formik.values.earnings?.basicSalary) || 0))}</Typography>
                     </Grid>
                     <Grid item xs={6} md={3}>
                       <Typography variant="body2" color="text.secondary">Daily Rate (Gross)</Typography>

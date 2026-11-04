@@ -160,7 +160,7 @@ export default function ManualSalaryFinanceTab({ onSnackbar }) {
 
   const pendingRecords = useMemo(
     () => (detail?.records || []).filter((r) =>
-      ['Pending Finance', 'Approved by CEO'].includes(r.workflowStatus)
+      r.workflowStatus === 'Pending Finance'
     ),
     [detail]
   );

@@ -22,7 +22,8 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-const PENDING_FINANCE_STATUSES = ['Pending Finance', 'Approved by CEO'];
+// Only records explicitly sent to Finance; "Approved by CEO" stays with HR until Finance hand-off is enabled
+const PENDING_FINANCE_STATUSES = ['Pending Finance'];
 const PAYABLE_STATUSES = [...PENDING_FINANCE_STATUSES];
 
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;

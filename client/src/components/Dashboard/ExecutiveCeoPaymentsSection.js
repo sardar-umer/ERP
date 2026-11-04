@@ -62,6 +62,8 @@ import api from '../../services/api';
 import nonEmployeeService from '../../services/nonEmployeeService';
 import ResubmissionHistory from '../../pages/HR/NonEmployeeOnboarding/ResubmissionHistory';
 import manualSalaryService from '../../services/manualSalaryService';
+import finalSettlementService from '../../services/finalSettlementService';
+import { SettlementProcessDialog } from '../HR/FinalSettlementWorkflow';
 import executiveApprovalsService from '../../services/executiveApprovalsService';
 import indentService from '../../services/indentService';
 import utilityBillService from '../../services/utilityBillService';
@@ -205,6 +207,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
           isPaymentSettlement: Boolean(item.isPaymentSettlement),
           isOnboarding: Boolean(item.isOnboarding),
           isManualSalary: Boolean(item.isManualSalary),
+          isFinalSettlement: Boolean(item.isFinalSettlement),
           isIndent: Boolean(item.isIndent),
           isUtilityBill: Boolean(item.isUtilityBill),
           isProjectIpc: Boolean(item.isProjectIpc),
@@ -249,7 +252,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   const poItems = payments.filter((p) => p.isPurchaseOrder);
   const caItems = payments.filter((p) => p.isCashApproval);
   const settlementItems = payments.filter((p) => p.isPaymentSettlement);
-  const onboardingItems = payments.filter((p) => p.isOnboarding || p.isManualSalary);
+  const onboardingItems = payments.filter((p) => p.isOnboarding || p.isManualSalary || p.isFinalSettlement);
   const otherItems = payments.filter((p) => p.isIndent || p.isUtilityBill || p.isVendorBill);
   const ipcItems = payments.filter((p) => p.isProjectIpc);
 
@@ -263,7 +266,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     if (filterTab === 1 && !p.isPurchaseOrder) return false;
     if (filterTab === 2 && !p.isCashApproval) return false;
     if (filterTab === 3 && !p.isPaymentSettlement) return false;
-    if (filterTab === 4 && !(p.isOnboarding || p.isManualSalary)) return false;
+    if (filterTab === 4 && !(p.isOnboarding || p.isManualSalary || p.isFinalSettlement)) return false;
     if (filterTab === 5 && !(p.isIndent || p.isUtilityBill || p.isVendorBill)) return false;
     if (filterTab === 6 && !p.isProjectIpc) return false;
     return true;
@@ -389,6 +392,10 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
 
   // Full Audit / View Opener (identical to Payments.js)
   const openView = async (settlement) => {
+    if (settlement.isFinalSettlement) {
+      openFinalSettlement(settlement);
+      return;
+    }
     if (settlement.isProjectIpc) {
       setIpcReviewId(settlement._id);
       return;
@@ -757,7 +764,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     const isPaymentSettlement =
       Boolean(flags.isPaymentSettlement) ||
       Boolean(doc.isPaymentSettlement) ||
-      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill && !isProjectIpc);
+      (!isPurchaseOrder && !isCashApproval && !isOnboarding && !isManualSalary && !isIndent && !isUtilityBill && !isVendorBill && !isProjectIpc && !doc.isFinalSettlement);
 
     return {
       ...doc,
@@ -798,14 +805,27 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     };
   };
 
+  // Final settlements: View / Approve / Reject / Return all open the settlement's own approval dialog
+  const [finalSettlementDialog, setFinalSettlementDialog] = useState(null);
+  const openFinalSettlement = async (item) => {
+    try {
+      const res = await finalSettlementService.getSettlement(item._id);
+      setFinalSettlementDialog(res.data || item);
+    } catch (e) {
+      toast.error(e.response?.data?.message || 'Could not load the final settlement');
+    }
+  };
+
   // Action Dialog Openers
   const openApprove = (item, flags = {}) => {
+    if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
     setApproveDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setApprovalComments('');
     setApprovalAgree(false);
   };
 
   const openReject = (item, flags = {}) => {
+    if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
     setRejectDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setRejectionComments('');
     setRejectionAgree(false);
@@ -813,6 +833,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
   };
 
   const openReturn = (item, flags = {}) => {
+    if (item?.isFinalSettlement) { openFinalSettlement(item); return; }
     setReturnDialog({ open: true, settlement: withCeoDocTypeFlags(item, flags) });
     setReturnComments('');
     setReturnAgree(false);
@@ -3741,6 +3762,17 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
         />
       )}
       <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
+      {finalSettlementDialog && (
+        <SettlementProcessDialog
+          settlement={finalSettlementDialog}
+          onClose={() => setFinalSettlementDialog(null)}
+          onDone={(message) => {
+            setFinalSettlementDialog(null);
+            toast.success(message);
+            fetchCeoPayments();
+          }}
+        />
+      )}
     </Card>
   );
 };

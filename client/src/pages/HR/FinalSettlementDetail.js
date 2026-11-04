@@ -47,6 +47,14 @@ import {
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import finalSettlementService from '../../services/finalSettlementService';
+import {
+  ForwardSettlementDialog,
+  SettlementProcessDialog,
+  WORKFLOW_COLORS,
+  workflowLabel,
+  canForward,
+  IN_APPROVAL
+} from '../../components/HR/FinalSettlementWorkflow';
 import api from '../../services/api';
 import { formatPKR } from '../../utils/currency';
 import {
@@ -148,12 +156,25 @@ const FinalSettlementDetail = () => {
       console.error(`Error performing ${action}:`, error);
       setSnackbar({
         open: true,
-        message: `Error performing ${action}`,
+        message: error.response?.data?.message || `Error performing ${action}`,
         severity: 'error'
       });
     } finally {
       setActionLoading(false);
     }
+  };
+
+  const [forwardOpen, setForwardOpen] = useState(false);
+  const [approvalsOpen, setApprovalsOpen] = useState(false);
+  const [workflowMe, setWorkflowMe] = useState({ isAdmin: false });
+  useEffect(() => {
+    finalSettlementService.getWorkflowMe().then((r) => setWorkflowMe(r.data || {})).catch(() => {});
+  }, []);
+  const workflowDone = (message) => {
+    setForwardOpen(false);
+    setApprovalsOpen(false);
+    setSnackbar({ open: true, message, severity: 'success' });
+    loadSettlement();
   };
 
   const handleDownloadPdf = () => {
@@ -256,6 +277,7 @@ const FinalSettlementDetail = () => {
             <Button
               variant="outlined"
               startIcon={<EditIcon />}
+              disabled={IN_APPROVAL.includes(settlement.workflowStatus) && !workflowMe.isAdmin}
               onClick={() => navigate(`/hr/settlements/${id}/edit`)}
             >
               Edit
@@ -383,10 +405,6 @@ const FinalSettlementDetail = () => {
                   <Typography variant="body1" fontWeight="bold">{formattedSettlement.formattedGrossSalary}</Typography>
                 </Grid>
                 <Grid item xs={6} md={3}>
-                  <Typography variant="body2" color="textSecondary">Basic Salary</Typography>
-                  <Typography variant="body1" fontWeight="bold">{formattedSettlement.formattedBasicSalary}</Typography>
-                </Grid>
-                <Grid item xs={6} md={3}>
                   <Typography variant="body2" color="textSecondary">Daily Rate (from Gross)</Typography>
                   <Typography variant="body1" fontWeight="bold">{formattedSettlement.formattedDailyRate}</Typography>
                 </Grid>
@@ -470,7 +488,7 @@ const FinalSettlementDetail = () => {
                 <Table size="small">
                   <TableBody>
                     <TableRow>
-                      <TableCell>Basic Salary</TableCell>
+                      <TableCell>Gross Salary</TableCell>
                       <TableCell align="right">{formattedEarnings.basicSalary}</TableCell>
                     </TableRow>
                     <TableRow>
@@ -719,16 +737,24 @@ const FinalSettlementDetail = () => {
       {/* Action Buttons */}
       <Box sx={{ mt: 3, display: 'flex', gap: 2, justifyContent: 'center' }}>
         {settlement.status === 'pending' && (
-          <Button
-            variant="contained"
-            color="success"
-            startIcon={<ApproveIcon />}
-            onClick={() => handleAction('approve')}
-            disabled={actionLoading}
-          >
-            Approve Settlement
+          <Chip
+            label={workflowLabel(settlement)}
+            color={WORKFLOW_COLORS[settlement.workflowStatus || 'Draft']}
+            sx={{ alignSelf: 'center' }}
+          />
+        )}
+        {canForward(settlement) && (
+          <Button variant="contained" startIcon={<ApproveIcon />} onClick={() => setForwardOpen(true)}>
+            Forward for Approval
           </Button>
         )}
+        <Button
+          variant={settlement.myWorkflowRole ? 'contained' : 'outlined'}
+          color={settlement.myWorkflowRole ? 'success' : 'primary'}
+          onClick={() => setApprovalsOpen(true)}
+        >
+          {settlement.myWorkflowRole ? 'Approve / Return' : 'Approvals'}
+        </Button>
         
         {settlement.status === 'approved' && (
           <Button
@@ -772,12 +798,17 @@ const FinalSettlementDetail = () => {
             color="error"
             startIcon={<DeleteIcon />}
             onClick={() => handleAction('delete')}
-            disabled={actionLoading}
+            disabled={actionLoading || IN_APPROVAL.includes(settlement.workflowStatus)}
           >
             Delete Settlement
           </Button>
         )}
       </Box>
+
+      <ForwardSettlementDialog settlement={forwardOpen ? settlement : null} onClose={() => setForwardOpen(false)} onDone={workflowDone} />
+      {approvalsOpen && (
+        <SettlementProcessDialog settlement={settlement} onClose={() => setApprovalsOpen(false)} onDone={workflowDone} />
+      )}
 
       {/* Comment Dialog */}
       <Dialog open={commentDialog} onClose={() => setCommentDialog(false)} maxWidth="sm" fullWidth>

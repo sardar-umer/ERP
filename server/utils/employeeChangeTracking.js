@@ -110,11 +110,14 @@ const display = async (path, raw) => {
   return raw;
 };
 
-/** Compare two snapshots and save one log entry with every changed tracked field. */
-const recordChanges = async (employeeId, before, after) => {
-  if (!before || !after) return;
+/**
+ * Changed tracked fields between two employee snapshots, as readable { field, label, from, to }.
+ * `paths` limits the comparison (e.g. only fields present in an audited form body).
+ */
+const diffSnapshots = async (before, after, paths = TRACKED_PATHS) => {
+  if (!before || !after) return [];
   const changes = [];
-  for (const path of TRACKED_PATHS) {
+  for (const path of paths) {
     const a = rawValue(before, path);
     const b = rawValue(after, path);
     if (a === b) continue;
@@ -122,6 +125,12 @@ const recordChanges = async (employeeId, before, after) => {
     if (TRACKED[path].kind === 'json' && [a, b].every((x) => !x || !JSON.parse(x).isActive)) continue;
     changes.push({ field: path, label: TRACKED[path].label, from: await display(path, a), to: await display(path, b) });
   }
+  return changes;
+};
+
+/** Compare two snapshots and save one log entry with every changed tracked field. */
+const recordChanges = async (employeeId, before, after) => {
+  const changes = await diffSnapshots(before, after);
   if (!changes.length) return;
   await mongoose.model('EmployeeChangeLog').create({ employee: employeeId, changedBy: currentUserId(), changedAt: new Date(), changes });
 };
@@ -157,4 +166,4 @@ function employeeChangeTracking(schema) {
   }
 }
 
-module.exports = { employeeChangeTracking, TRACKED };
+module.exports = { employeeChangeTracking, diffSnapshots, rawValue, getPath, TRACKED, TRACKED_PATHS };

@@ -36,17 +36,26 @@ import {
   Visibility as ViewIcon,
   Edit as EditIcon,
   Delete as DeleteIcon,
-  CheckCircle as ApproveIcon,
   PlayArrow as ProcessIcon,
   Payment as PaymentIcon,
   Cancel as CancelIcon,
   Assessment as StatsIcon,
   Search as SearchIcon,
   FilterList as FilterIcon,
-  Refresh as RefreshIcon
+  Refresh as RefreshIcon,
+  Send as ForwardIcon,
+  FactCheck as WorkflowIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import finalSettlementService from '../../services/finalSettlementService';
+import {
+  ForwardSettlementDialog,
+  SettlementProcessDialog,
+  WORKFLOW_COLORS,
+  workflowLabel,
+  canForward,
+  IN_APPROVAL
+} from '../../components/HR/FinalSettlementWorkflow';
 
 const FinalSettlementManagement = () => {
   const navigate = useNavigate();
@@ -65,6 +74,20 @@ const FinalSettlementManagement = () => {
   });
   const [showFilters, setShowFilters] = useState(false);
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  const [forwardFor, setForwardFor] = useState(null);
+  const [processFor, setProcessFor] = useState(null);
+  const [workflowMe, setWorkflowMe] = useState({ isAdmin: false, isCeoApprover: false });
+
+  useEffect(() => {
+    finalSettlementService.getWorkflowMe().then((r) => setWorkflowMe(r.data || {})).catch(() => {});
+  }, []);
+
+  const workflowDone = (message) => {
+    setForwardFor(null);
+    setProcessFor(null);
+    setSnackbar({ open: true, message, severity: 'success' });
+    loadSettlements();
+  };
 
   // Load settlements
   const loadSettlements = async () => {
@@ -164,7 +187,7 @@ const FinalSettlementManagement = () => {
       console.error(`Error performing ${action}:`, error);
       setSnackbar({
         open: true,
-        message: `Error performing ${action}`,
+        message: error.response?.data?.message || `Error performing ${action}`,
         severity: 'error'
       });
     }
@@ -187,40 +210,55 @@ const FinalSettlementManagement = () => {
       </Tooltip>
     );
 
+    // Process: details + approval trail (Approve / Return when it is this user's turn)
+    buttons.push(
+      <Tooltip key="workflow" title={settlement.myWorkflowRole ? 'Your approval is needed' : 'Process — details & approvals'}>
+        <IconButton size="small" color={settlement.myWorkflowRole ? 'warning' : 'info'} onClick={() => setProcessFor(settlement)}>
+          <WorkflowIcon />
+        </IconButton>
+      </Tooltip>
+    );
+
     // Status-specific actions
+    const inApproval = IN_APPROVAL.includes(settlement.workflowStatus);
+    const lockedTip = `Locked: ${workflowLabel(settlement)}`;
     switch (settlement.status) {
       case 'pending':
+        if (canForward(settlement)) {
+          buttons.push(
+            <Tooltip key="forward" title="Forward for approval (GM HR → AVP → CEO)">
+              <IconButton size="small" color="primary" onClick={() => setForwardFor(settlement)}>
+                <ForwardIcon />
+              </IconButton>
+            </Tooltip>
+          );
+        }
         buttons.push(
-          <Tooltip key="approve" title="Approve Settlement">
-            <IconButton
-              size="small"
-              onClick={() => handleAction('approve', settlement._id)}
-              color="success"
-            >
-              <ApproveIcon />
-            </IconButton>
+          <Tooltip key="edit" title={inApproval && !workflowMe.isAdmin ? lockedTip : 'Edit Settlement'}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={inApproval && !workflowMe.isAdmin}
+                onClick={() => navigate(`/hr/settlements/${settlement._id}/edit`)}
+                color="primary"
+              >
+                <EditIcon />
+              </IconButton>
+            </span>
           </Tooltip>
         );
         buttons.push(
-          <Tooltip key="edit" title="Edit Settlement">
-            <IconButton
-              size="small"
-              onClick={() => navigate(`/hr/settlements/${settlement._id}/edit`)}
-              color="primary"
-            >
-              <EditIcon />
-            </IconButton>
-          </Tooltip>
-        );
-        buttons.push(
-          <Tooltip key="delete" title="Delete Settlement">
-            <IconButton
-              size="small"
-              onClick={() => handleAction('delete', settlement._id)}
-              color="error"
-            >
-              <DeleteIcon />
-            </IconButton>
+          <Tooltip key="delete" title={inApproval ? lockedTip : 'Delete Settlement'}>
+            <span>
+              <IconButton
+                size="small"
+                disabled={inApproval}
+                onClick={() => handleAction('delete', settlement._id)}
+                color="error"
+              >
+                <DeleteIcon />
+              </IconButton>
+            </span>
           </Tooltip>
         );
         break;
@@ -530,14 +568,24 @@ const FinalSettlementManagement = () => {
                       />
                     </TableCell>
                     <TableCell>
-                      <Chip
-                        label={finalSettlementService.getStatusLabel(settlement.status)}
-                        size="small"
-                        sx={{
-                          backgroundColor: finalSettlementService.getStatusColor(settlement.status),
-                          color: 'white'
-                        }}
-                      />
+                      <Box sx={{ display: 'flex', flexDirection: 'column', gap: 0.5, alignItems: 'flex-start' }}>
+                        <Chip
+                          label={finalSettlementService.getStatusLabel(settlement.status)}
+                          size="small"
+                          sx={{
+                            backgroundColor: finalSettlementService.getStatusColor(settlement.status),
+                            color: 'white'
+                          }}
+                        />
+                        {settlement.status === 'pending' && (
+                          <Chip
+                            label={workflowLabel(settlement)}
+                            size="small"
+                            variant="outlined"
+                            color={WORKFLOW_COLORS[settlement.workflowStatus || 'Draft']}
+                          />
+                        )}
+                      </Box>
                     </TableCell>
                     <TableCell>
                       {new Date(settlement.lastWorkingDate).toLocaleDateString()}
@@ -597,6 +645,14 @@ const FinalSettlementManagement = () => {
       </Fab>
 
       {/* Snackbar */}
+      <ForwardSettlementDialog settlement={forwardFor} onClose={() => setForwardFor(null)} onDone={workflowDone} />
+      <SettlementProcessDialog
+        settlement={processFor}
+        onClose={() => setProcessFor(null)}
+        onDone={workflowDone}
+        onEdit={(st) => navigate(`/hr/settlements/${st._id}/edit`)}
+      />
+
       <Snackbar
         open={snackbar.open}
         autoHideDuration={6000}

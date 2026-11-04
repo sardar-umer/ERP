@@ -116,6 +116,20 @@ const finalSettlementSchema = new mongoose.Schema({
     totalEarnings: { type: Number, default: 0 }
   },
 
+  /** Monthly (standard) amounts the actual earnings were prorated from — the "Standard" column of Final Dues */
+  standardEarnings: {
+    basicSalary: { type: Number, default: 0 },
+    houseRent: { type: Number, default: 0 },
+    medicalAllowance: { type: Number, default: 0 },
+    conveyanceAllowance: { type: Number, default: 0 },
+    foodAllowance: { type: Number, default: 0 },
+    mobileAllowance: { type: Number, default: 0 },
+    vehicleAllowance: { type: Number, default: 0 },
+    fuelAllowance: { type: Number, default: 0 },
+    specialAllowance: { type: Number, default: 0 },
+    otherAllowances: { type: Number, default: 0 }
+  },
+
   // Deductions
   deductions: {
     incomeTax: { type: Number, default: 0 },
@@ -184,6 +198,30 @@ const finalSettlementSchema = new mongoose.Schema({
     accountNumber: String,
     accountTitle: String
   },
+
+  // Approval workflow (same as Manual Salary): HR forwards → GM HR → AVP → CEO → status "approved"
+  workflowStatus: {
+    type: String,
+    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Returned', 'Rejected by CEO'],
+    default: 'Draft',
+    index: true
+  },
+  forwardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  forwardedAt: { type: Date },
+  assignedHod: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  hodApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  hodApprovedAt: { type: Date },
+  hodComments: { type: String, trim: true },
+  assignedAvp: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  avpApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  avpApprovedAt: { type: Date },
+  avpComments: { type: String, trim: true },
+  ceoApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  ceoApprovedAt: { type: Date },
+  ceoComments: { type: String, trim: true },
+  returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  returnedAt: { type: Date },
+  returnComments: { type: String, trim: true },
 
   // Status and Workflow
   status: {
@@ -284,6 +322,11 @@ finalSettlementSchema.pre('save', function(next) {
     settlementDate: this.settlementDate
   });
   const servedDays = Math.max(0, Number(this.noticePeriodServed) || 0);
+  // Days served are days paid in the last working month — reject impossible values (e.g. 50,000)
+  const monthDays = getCalendarDaysInMonth(rateDate);
+  if (servedDays > monthDays) {
+    return next(new Error(`Days served (${servedDays}) cannot be more than the ${monthDays} days in the last working month`));
+  }
   const shortfallDays = Math.max(0, (Number(this.noticePeriod) || 0) - servedDays);
 
   // Actual salary = GROSS daily rate × days served (matches Salary & Calculations)
@@ -332,7 +375,9 @@ finalSettlementSchema.pre('save', function(next) {
     (d.pension || 0) +
     (d.otherDeductions || 0);
 
-  // Prefer client-provided settlement totals when they match the breakdown
+  // Lines may keep 2 decimals (prorated salary); totals are whole rupees, rounded once (Sidat Final Dues)
+  this.earnings.totalEarnings = Math.round(this.earnings.totalEarnings);
+  this.deductions.totalDeductions = Math.round(this.deductions.totalDeductions);
   const computedGross = this.earnings.totalEarnings;
   const computedNet = computedGross - this.deductions.totalDeductions;
   if (!(Number(this.grossSettlementAmount) > 0)) {
