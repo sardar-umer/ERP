@@ -139,6 +139,22 @@ const adjustAttendanceForJoiningProration = (attendanceData, proration, prorated
     return attendanceData;
   }
 
+  // Partial pay: the salary is already cut to the days HR set as payable (e.g. 28/31 calendar days),
+  // so those days are not absences. Comparing them with the month's working days (27) used to deduct
+  // a fake absent day on top of the cut (Sidat pays the payable days only, no attendance deduction).
+  if (proration.type === 'partial_salary') {
+    const totalWorkingDays = attendanceData.totalWorkingDays;
+    const presentDays = Math.min(attendanceData.presentDays ?? totalWorkingDays, totalWorkingDays);
+    return {
+      ...attendanceData,
+      totalWorkingDays,
+      presentDays,
+      absentDays: 0,
+      dailyRate: totalWorkingDays > 0 ? proratedGross / totalWorkingDays : 0,
+      attendanceDeduction: 0
+    };
+  }
+
   const totalWorkingDays = proration.workingDaysFromJoining || attendanceData.totalWorkingDays;
   const presentDays = Math.min(attendanceData.presentDays ?? totalWorkingDays, totalWorkingDays);
   const leaveDays = Math.min(attendanceData.leaveDays || 0, totalWorkingDays);
