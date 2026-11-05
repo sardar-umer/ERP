@@ -1,0 +1,81 @@
+[
+ {
+  "_id": {
+   "$oid": "6abe33442adaed3894fbe965"
+  },
+  "project": {
+   "$oid": "6a3112c6238e2d09e1e5da0e"
+  },
+  "masterProject": null,
+  "contractor": null,
+  "invoiceType": "Client_Invoice",
+  "ipcNumber": {
+   "$numberInt": "1"
+  },
+  "items": [],
+  "grossAmount": {
+   "$numberInt": "1360000"
+  },
+  "retentionPercentage": {
+   "$numberInt": "0"
+  },
+  "retentionAmount": {
+   "$numberInt": "0"
+  },
+  "advanceRecoveryAmount": {
+   "$numberInt": "954720"
+  },
+  "whtPercentage": {
+   "$numberInt": "0"
+  },
+  "whtAmount": {
+   "$numberInt": "0"
+  },
+  "netPayableAmount": {
+   "$numberInt": "405280"
+  },
+  "milestoneId": null,
+  "milestoneName": "",
+  "boqItemId": null,
+  "clientName": "SGC",
+  "clientContact": "",
+  "clientAddress": "",
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "billingPercentage": {
+   "$numberInt": "0"
+  },
+  "invoiceAmount": {
+   "$numberInt": "1360000"
+  },
+  "description": "Supply of DB Foundations, including Concrete 1:2:4, 3000 PSI Strength Size : 23\"x19\"x18\" MS Bars 10 mm Ø , curing complete work as per design, specification and instruction of QA/QC , Lab and site Engineer",
+  "issueDate": {
+   "$date": {
+    "$numberLong": "1785110400000"
+   }
+  },
+  "status": "Sent",
+  "paidAmount": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "createdBy": {
+   "$oid": "6a2a57cdc2bb4b89c60aa340"
+  },
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790849860217"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790849907225"
+   }
+  },
+  "invoiceNumber": "PI-2026-0002",
+  "__v": {
+   "$numberInt": "0"
+  }
+ }
+]

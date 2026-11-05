@@ -1,0 +1,90 @@
+[
+ {
+  "_id": {
+   "$oid": "6abe23992adaed3894f1cfc0"
+  },
+  "project": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "task": null,
+  "category": "Consultancy",
+  "description": "Advance payment",
+  "amount": {
+   "$numberInt": "1083221"
+  },
+  "expenseDate": {
+   "$date": {
+    "$numberLong": "1791158400000"
+   }
+  },
+  "vendor": "Design House Consulting Engineers",
+  "invoiceNumber": "",
+  "paymentStatus": "Pending",
+  "paymentMethod": "Cheque",
+  "linkedPurchaseOrder": null,
+  "approvedBy": null,
+  "notes": "Advance Payment against Agreement for Structural Design of Grand Minar",
+  "createdBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "attachments": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790845849708"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790845849708"
+   }
+  },
+  "expenseNumber": "EXP-2026-0001",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6abe43ff2adaed389407a7bc"
+  },
+  "project": {
+   "$oid": "6a31101d238e2d09e1e5108c"
+  },
+  "task": null,
+  "category": "Civil Works",
+  "description": "Shifting and installation of DB Foundation at four Sectors (Tulip, Lily, Orchid & Gardenia) from Store Yard to DB Location, Works includes Excavation Leveling Dressing, Sub Base Laying/ Lean Concrete & Compaction including Back Filling  as per Drawings & instruction of Engineer in charge",
+  "amount": {
+   "$numberInt": "284412"
+  },
+  "expenseDate": {
+   "$date": {
+    "$numberLong": "1790812800000"
+   }
+  },
+  "vendor": "Z-H Builders Developers",
+  "invoiceNumber": "1st",
+  "paymentStatus": "Paid",
+  "paymentMethod": "Cheque",
+  "linkedPurchaseOrder": null,
+  "approvedBy": null,
+  "notes": "1st IPC Paid",
+  "createdBy": {
+   "$oid": "6a2a57cdc2bb4b89c60aa340"
+  },
+  "attachments": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790854143910"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790854774430"
+   }
+  },
+  "expenseNumber": "EXP-2026-0003",
+  "__v": {
+   "$numberInt": "0"
+  }
+ }
+]

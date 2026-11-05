@@ -1,0 +1,4864 @@
+[
+ {
+  "_id": {
+   "$oid": "6a2152195815f9dfa65ebe78"
+  },
+  "name": "05- Marla Villa- Finishes works including Civil & MEP works \" Work with Material\".",
+  "description": "Estimated BOQ of 05-Marla Villas - Finishing work including MEP Works on Turnkey basis",
+  "projectType": "Villa",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia Project",
+  "sector": "Geranium",
+  "plotNumber": "Randomly - Plot#1, Street # 11",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC-Sardar Group of Companies.",
+  "clientContact": "+92 300 0900040",
+  "projectManager": null,
+  "startDate": {
+   "$date": {
+    "$numberLong": "1781481600000"
+   }
+  },
+  "expectedEndDate": {
+   "$date": {
+    "$numberLong": "1789430400000"
+   }
+  },
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe79"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7a"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7b"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7c"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7d"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7e"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe7f"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe80"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2152195815f9dfa65ebe81"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a21497e5815f9dfa65c3e59"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1780568601272"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781159420116"
+   }
+  },
+  "projectNumber": "CP-2026-0001",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2a7113c2bb4b89c65171ba"
+  },
+  "name": "Construction and Renovation of H-CO Villas at Grand  Avenue",
+  "description": "",
+  "projectType": "Villa",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia Project",
+  "sector": "Lily",
+  "plotNumber": "9&10",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC- Sardar Group of Companies",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171bb"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171bc"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171bd"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171be"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171bf"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c0"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c1"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c2"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c3"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c4"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2a7113c2bb4b89c65171c5"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781166355644"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781256092695"
+   }
+  },
+  "projectNumber": "CP-2026-0002",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2b8a08688c1919d64eb6be"
+  },
+  "name": "Construction of Pipe Drain , RCC Dain & wings walls of Culvert-7",
+  "description": "Construction of Pipe Drain , RCC Dain & wings walls of Culvert-7  - work with Material",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC-Sardar Group of Companies.",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6bf"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c0"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c1"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c2"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c3"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c4"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c5"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c6"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c7"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c8"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b8a08688c1919d64eb6c9"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Approved",
+  "budgetApprovedBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "updatedBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781238280967"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781256430670"
+   }
+  },
+  "projectNumber": "CP-2026-0003",
+  "__v": {
+   "$numberInt": "0"
+  },
+  "budgetSubmittedAt": {
+   "$date": {
+    "$numberLong": "1781240182518"
+   }
+  },
+  "budgetApprovedAt": {
+   "$date": {
+    "$numberLong": "1781240204116"
+   }
+  },
+  "budgetNotes": ""
+ },
+ {
+  "_id": {
+   "$oid": "6a2b9436688c1919d6511963"
+  },
+  "name": "Development of Sectors including cutting, filling and transportation.",
+  "description": "Development works of sectors, including earth cutting, filling, and transportation.",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Lilly, Iris, Iris Extension , Geranium ,Cosmos, Jasmine and Blue Bell",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC- Sardar Group of Companies",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511964"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511965"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511966"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511967"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511968"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d6511969"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d651196a"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d651196b"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d651196c"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d651196d"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9436688c1919d651196e"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "updatedBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781240886633"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781256421864"
+   }
+  },
+  "projectNumber": "CP-2026-0004",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2b9821688c1919d6525823"
+  },
+  "name": "Footpath Work -  Labour Rate",
+  "description": "Fixing of Kerbstones & Pavers at Miscellaneous Locations – Sectors Daffodil, Tulip, Rose, Orchid, Main Gate, Grand Avenue, and Lower Cafeteria Building Parking (Labour Rate Works).",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Miscellaneous Locations.",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC- Sardar Group of Companies",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525824"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525825"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525826"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525827"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525828"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d6525829"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d652582a"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d652582b"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d652582c"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d652582d"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2b9821688c1919d652582e"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "updatedBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781241889922"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781256408036"
+   }
+  },
+  "projectNumber": "CP-2026-0005",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2bd46b688c1919d661635d"
+  },
+  "name": "Lower Ground Floor area of Cafeteria building - Leftover job \" Work With Material",
+  "description": "",
+  "projectType": "Commercial Building",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Cafeteria Building",
+  "sector": "Gardenia",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d661635e"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d661635f"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616360"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616361"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616362"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616363"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616364"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616365"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616366"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616367"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2bd46b688c1919d6616368"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781257323407"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781322925769"
+   }
+  },
+  "projectNumber": "CP-2026-0006",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2cd34790f677d5b5fd27c7"
+  },
+  "name": "Construction of Cat Cafe “Grey Structure\" work with material",
+  "description": "Construction of Cat Cafe “Grey Structure\" work with material at Sector -  Gardenia \nRate is Covered Area Per Sft.",
+  "projectType": "Commercial Building",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Gardenia",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC- Sardar Group of Companies",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27c8"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27c9"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27ca"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27cb"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27cc"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27cd"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27ce"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27cf"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27d0"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27d1"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27d2"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2cd34790f677d5b5fd27d3"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a2a57a1c2bb4b89c60a26b0"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781322567639"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1782881254652"
+   }
+  },
+  "projectNumber": "CP-2026-0007",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2d06fd90f677d5b5110a69"
+  },
+  "name": "Construction of 05- Marla Villas - On barter Deal 50% on Cash Payment and50% Value Shall be Adjusted against Plots.at Sector Orchid\" Grey Structure only",
+  "description": "50% on Barter Deal = Rs. 57,511,800 - Excluding of Tax and 50% Rs.57,511,800 Shall be adjusted against Plots for 20 Villas/- as agreed by Management - Contractor ZY VISION Construction World Pvt Ltd",
+  "projectType": "Villa",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Orchid",
+  "plotNumber": "01 to 09 & 19 to 25 = 20 Nos",
+  "address": "Link Road I-14, Rawalpidi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6a"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6b"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6c"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6d"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6e"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a6f"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a70"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a71"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a72"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a73"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a74"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2d06fd90f677d5b5110a75"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781335805770"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781336692671"
+   }
+  },
+  "projectNumber": "CP-2026-0008",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2f813f5350ec65d0878606"
+  },
+  "name": "Dr. Qaisar Ali Associates. Provide engineering design services for the master-Planned Development of 3.922 Kanal of Cosmos & Bluebell Sector of Phase-3",
+  "description": "",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Resdidencia",
+  "sector": "Cosmos & Bluebell",
+  "plotNumber": "General",
+  "address": "Taj Residencia Peoject link road I-14, Rawalpindi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878607"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878608"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878609"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860a"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860b"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860c"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860d"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860e"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d087860f"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878610"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878611"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f813f5350ec65d0878612"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "Deliverable- ( RDA Complaint Drawings/ Documents, Road Profile, Geo-metric design, X-sections and road design, Design of Culverts, Bridges, Appurtenances, Landscape, Road Furniture, Control Devises, layout of water distribution network, power distribution, Rain water, harvesting system, tub Ewell design etc",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781498175592"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781601302599"
+   }
+  },
+  "projectNumber": "CP-2026-0009",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2f90245350ec65d08aec80"
+  },
+  "name": "Dr Qaiser Ali- Review and revise the Engineering Desing for 2424 & 1907 Kanal",
+  "description": "Review and revised \n\nReview and Revise the engineering design services for the Master Development of 2424 & 1907 Kanals at Taj Residencia.",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia Project",
+  "sector": "Tulip, Lily, Orchid & Gardenia",
+  "plotNumber": "",
+  "address": "Taj Residencia Project link road I-14, Rawalpindi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec81"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec82"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec83"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec84"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec85"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec86"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec87"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec88"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec89"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec8a"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec8b"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f90245350ec65d08aec8c"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781501988933"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781601553350"
+   }
+  },
+  "projectNumber": "CP-2026-0010",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a2f9e9f5350ec65d0902f0f"
+  },
+  "name": "HT,LT cable Laying, Termination, commissioning of transformers and earthing components - Labour rate works",
+  "description": "External Electrification of HT, LT and sub station work",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Tulip, Lily , Orchid & Gardinia",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f10"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f11"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f12"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f13"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f14"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f15"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f16"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f17"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f18"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f19"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f1a"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a2f9e9f5350ec65d0902f1b"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "2799533"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781505695591"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781601521853"
+   }
+  },
+  "projectNumber": "CP-2026-0011",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a30eb94238e2d09e1d7be9c"
+  },
+  "name": "Grand Minar - Structure Design ( Dr. Qaisar Ali Associates)",
+  "description": "Provide services for Structure design drawings, \nBOQ  and BBS.",
+  "projectType": "Commercial Building",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Lily",
+  "plotNumber": "",
+  "address": "Taj Residencia Link Road I-14, Rawalpindi",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7be9d"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7be9e"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7be9f"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea0"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea1"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea2"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea3"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea4"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea5"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea6"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea7"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30eb94238e2d09e1d7bea8"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "81778"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781590932956"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781594216456"
+   }
+  },
+  "projectNumber": "CP-2026-0012",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a30f9a7238e2d09e1dd1108"
+  },
+  "name": "Grand Minar - Architectural Engineering Design- M/S EDMS (Pvt) Limited Consultant",
+  "description": "Architectural engineering design services for the The Grand Minar",
+  "projectType": "Commercial Building",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Lily",
+  "plotNumber": "",
+  "address": "Taj Residencia Project",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1109"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110a"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110b"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110c"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110d"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110e"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd110f"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1110"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1111"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1112"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1113"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30f9a7238e2d09e1dd1114"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781594535257"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781601500783"
+   }
+  },
+  "projectNumber": "CP-2026-0013",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a30fdc0238e2d09e1de8f93"
+  },
+  "name": "Grand Minar - MEP Design - RECKON CONSULTING ENGINEERS",
+  "description": "MEP Design for Grand Minar",
+  "projectType": "Commercial Building",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Lily",
+  "plotNumber": "",
+  "address": "Taj Residencia Project",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f94"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f95"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f96"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f97"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f98"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f99"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9a"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9b"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9c"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9d"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9e"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a30fdc0238e2d09e1de8f9f"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "9544"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781595584998"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1781601493071"
+   }
+  },
+  "projectNumber": "CP-2026-0014",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a31101d238e2d09e1e5108c"
+  },
+  "name": "Shifting and installation of DB's Foundation- ZH-Builders & Developers.",
+  "description": "",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Tulip, Lily, Orchid & Gardinia",
+  "plotNumber": "",
+  "address": "Taj Residencia Project",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e5108d"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e5108e"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e5108f"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51090"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51091"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51092"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51093"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51094"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51095"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51096"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51097"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a31101d238e2d09e1e51098"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "284412"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781600285204"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790854774437"
+   }
+  },
+  "projectNumber": "CP-2026-0015",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a3112c6238e2d09e1e5da0e"
+  },
+  "name": "Supply of DB's Foundation - ZH- Builders & Developers",
+  "description": "Supply of DB's Foundations for four sectors",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Tulip, Lily, Orchid & Gardenia",
+  "plotNumber": "",
+  "address": "",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da0f"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da10"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da11"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da12"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da13"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da14"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da15"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da16"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da17"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da18"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da19"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a3112c6238e2d09e1e5da1a"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "1360000"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781600966137"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790849907232"
+   }
+  },
+  "projectNumber": "CP-2026-0016",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a324ee01dd52edcb0c7b669"
+  },
+  "name": "Sewerage net working - Remaining work CA # 353",
+  "description": "Sewerage work - Work with material",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia Project",
+  "sector": "Tulip",
+  "plotNumber": "",
+  "address": "",
+  "clientName": "SGC",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66a"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66b"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66c"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66d"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66e"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b66f"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b670"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b671"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b672"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b673"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b674"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a324ee01dd52edcb0c7b675"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1781681888611"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1782881088541"
+   }
+  },
+  "projectNumber": "CP-2026-0017",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a4376a4ca3771892fef2dce"
+  },
+  "name": "Sewerage Network - Amendment # 01-CA # 353",
+  "description": "Sewerage Networking- Amendment # 01",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Dafodil",
+  "plotNumber": "",
+  "address": "Taj Residencia Project",
+  "clientName": "",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dcf"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd0"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd1"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd2"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd3"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd4"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd5"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd6"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd7"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd8"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dd9"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4376a4ca3771892fef2dda"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "14721705"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1782806180894"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1782881098302"
+   }
+  },
+  "projectNumber": "CP-2026-0018",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a43a8ba3b58fee5107b887f"
+  },
+  "name": "Sewerage Networking - Amendment # 02- CA # 353",
+  "description": "",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Lily, Orchid & Daffodil",
+  "plotNumber": "",
+  "address": "Link Road I-14, Rawalpindi",
+  "clientName": "",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8880"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8881"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8882"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8883"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8884"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8885"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8886"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8887"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8888"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b8889"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b888a"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a43a8ba3b58fee5107b888b"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "0"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1782819002962"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1782881108558"
+   }
+  },
+  "projectNumber": "CP-2026-0019",
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6a449e997c0eddd197028008"
+  },
+  "name": "Chaghi Enterprises - Sui Gas Networking - Remaining Works \".Work with material\" CA# 361",
+  "description": "Supply and installation of Sui Gas Networking for 1907 Kanal as per approved Plan by RDA.",
+  "projectType": "Infrastructure",
+  "status": "Active",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "1907 Kanal",
+  "plotNumber": "",
+  "address": "Link Road I-14, Rawalpindi",
+  "clientName": "",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028009"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800a"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800b"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800c"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800d"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800e"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd19702800f"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028010"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028011"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028012"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028013"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a449e997c0eddd197028014"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": null,
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1782881945482"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790839709841"
+   }
+  },
+  "projectNumber": "CP-2026-0020",
+  "__v": {
+   "$numberInt": "0"
+  },
+  "isMasterProject": false,
+  "parentProject": null
+ },
+ {
+  "_id": {
+   "$oid": "6a4ca16e21adafd3ca044118"
+  },
+  "name": "CA # Taj/Ext-WSW/TE-372 - Supply and Installation of Water Supply  work \" work with Material\"",
+  "description": "",
+  "projectType": "Infrastructure",
+  "status": "Draft",
+  "linkedProperty": null,
+  "society": "Taj Residencia Project",
+  "sector": "Tulip, Lily, Gardenia & Rose.",
+  "plotNumber": "",
+  "address": "Link road I-14, Rawalpindi",
+  "clientName": "",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044119"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411a"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411b"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411c"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411d"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411e"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca04411f"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044120"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044121"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044122"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044123"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a4ca16e21adafd3ca044124"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": null,
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "524528"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1783406958857"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790841462070"
+   }
+  },
+  "projectNumber": "CP-2026-0021",
+  "__v": {
+   "$numberInt": "0"
+  },
+  "isMasterProject": false,
+  "parentProject": null
+ },
+ {
+  "_id": {
+   "$oid": "6a644615aec8fc9a3ae9c356"
+  },
+  "name": "CA# Taj/FM&C-401 Duct Line work \" work with material\"",
+  "description": "",
+  "projectType": "Infrastructure",
+  "status": "Draft",
+  "linkedProperty": null,
+  "society": "Taj Residencia",
+  "sector": "Grand Avenue ( On service Road)",
+  "plotNumber": "",
+  "address": "Link Road I-14, Rawalpindi",
+  "clientName": "",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c357"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c358"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c359"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35a"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35b"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35c"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35d"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35e"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c35f"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c360"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c361"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6a644615aec8fc9a3ae9c362"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Draft",
+  "budgetApprovedBy": null,
+  "contractValue": null,
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "0"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "0"
+  },
+  "notes": "",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "milestones": [],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1784956437320"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790841446648"
+   }
+  },
+  "projectNumber": "CP-2026-0022",
+  "__v": {
+   "$numberInt": "0"
+  },
+  "isMasterProject": false,
+  "parentProject": null
+ },
+ {
+  "_id": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "name": "Grand Minar - Structural desig of Grand Minar",
+  "description": "Consultancy charges for  the Structural design Services of Grand Minar",
+  "projectType": "Commercial Building",
+  "status": "Cancelled",
+  "isMasterProject": true,
+  "parentProject": null,
+  "linkedProperty": null,
+  "society": "Construction of Taj Grand Minar Tower",
+  "sector": "Grand Avenue",
+  "plotNumber": "",
+  "address": "Taj Residencia Project Link Road I-14, Rawalpindi",
+  "clientName": "Taj Residencia Project",
+  "clientContact": "",
+  "projectManager": null,
+  "budgetCategories": [
+   {
+    "category": "Civil Works",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fbd"
+    }
+   },
+   {
+    "category": "Finishes",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fbe"
+    }
+   },
+   {
+    "category": "Electrical",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fbf"
+    }
+   },
+   {
+    "category": "Plumbing",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc0"
+    }
+   },
+   {
+    "category": "HVAC System",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc1"
+    }
+   },
+   {
+    "category": "Sewerage",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc2"
+    }
+   },
+   {
+    "category": "Water Supply & Gas",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc3"
+    }
+   },
+   {
+    "category": "Labor",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc4"
+    }
+   },
+   {
+    "category": "Consultancy",
+    "estimatedAmount": {
+     "$numberInt": "3610737"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc5"
+    }
+   },
+   {
+    "category": "Materials",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc6"
+    }
+   },
+   {
+    "category": "Contingency",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc7"
+    }
+   },
+   {
+    "category": "Miscellaneous",
+    "estimatedAmount": {
+     "$numberInt": "0"
+    },
+    "approvedAmount": {
+     "$numberInt": "0"
+    },
+    "_id": {
+     "$oid": "6abdfe3b83368e7efdeb8fc8"
+    }
+   }
+  ],
+  "totalEstimatedCost": {
+   "$numberInt": "0"
+  },
+  "totalApprovedBudget": {
+   "$numberInt": "0"
+  },
+  "budgetStatus": "Submitted",
+  "budgetApprovedBy": null,
+  "contractValue": {
+   "$numberInt": "3610737"
+  },
+  "totalCommitted": {
+   "$numberInt": "0"
+  },
+  "totalActualSpent": {
+   "$numberInt": "1083221"
+  },
+  "totalInvoiced": {
+   "$numberInt": "0"
+  },
+  "boqDiscountAmount": {
+   "$numberInt": "0"
+  },
+  "overallProgress": {
+   "$numberInt": "10"
+  },
+  "notes": "Design Services for Grand Minar at Sector Lily.",
+  "tags": [],
+  "createdBy": {
+   "$oid": "6a225416fd1596bd8f1e5d1a"
+  },
+  "updatedBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "milestones": [
+   {
+    "title": "SCHEMATIC STRUCTURAL DRAWINGS",
+    "description": "Schematic structural drawings of Grand Minar Received for review of client and Co ordination with MEP and Architectural consultants for feed back",
+    "plannedDate": {
+     "$date": {
+      "$numberLong": "1791158400000"
+     }
+    },
+    "status": "Pending",
+    "completionPercentage": {
+     "$numberInt": "30"
+    },
+    "billingTrigger": false,
+    "billingPercentage": {
+     "$numberInt": "30"
+    },
+    "notes": "",
+    "_id": {
+     "$oid": "6abe1a3a2adaed3894ed5234"
+    }
+   }
+  ],
+  "documents": [],
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790836283846"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790928048413"
+   }
+  },
+  "projectNumber": "CP-2026-0023",
+  "__v": {
+   "$numberInt": "1"
+  },
+  "budgetSubmittedAt": {
+   "$date": {
+    "$numberLong": "1790839271326"
+   }
+  },
+  "expectedEndDate": {
+   "$date": {
+    "$numberLong": "1798675200000"
+   }
+  },
+  "startDate": {
+   "$date": {
+    "$numberLong": "1791158400000"
+   }
+  }
+ }
+]

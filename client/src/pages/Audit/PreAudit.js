@@ -4993,16 +4993,30 @@ const PreAudit = () => {
             )}
           </Box>
           <Box>
-            {(viewDialog.document?.isWorkflowDocument || viewDialog.document?.isCashApproval || viewDialog.document?.isVendorBill) && viewDialog.fullDocument && (
-              <Button
-                variant="outlined"
-                startIcon={<HistoryIcon />}
-                onClick={() => setWorkflowHistoryDialog({ open: true, document: viewDialog.fullDocument })}
-                sx={{ minWidth: 150, mr: 1, '@media print': { display: 'none' } }}
-              >
-                See Workflow History
-              </Button>
-            )}
+            {(() => {
+              // Same Workflow History view as Procurement → Purchase Orders, for every document type
+              // in Pre Audit (PO, cash approval, vendor bill, memos, manual salary, generic documents).
+              const hasHistory = (d) => Boolean(d) && (
+                (Array.isArray(d.fullWorkflowHistory) && d.fullWorkflowHistory.length > 0) ||
+                (Array.isArray(d.workflowHistory) && d.workflowHistory.length > 0)
+              );
+              const historySource = [
+                viewDialog.fullDocument,
+                viewDialog.document?.originalDocument,
+                viewDialog.document
+              ].find(hasHistory);
+              if (!historySource) return null;
+              return (
+                <Button
+                  variant="outlined"
+                  startIcon={<HistoryIcon />}
+                  onClick={() => setWorkflowHistoryDialog({ open: true, document: historySource })}
+                  sx={{ minWidth: 150, mr: 1, '@media print': { display: 'none' } }}
+                >
+                  See Workflow History
+                </Button>
+              );
+            })()}
             <Button 
               onClick={() => setViewDialog({ open: false, document: null, fullDocument: null, loading: false, quotations: [], grns: [], caLinkedDocs: [], poAuditTab: 0 })}
               variant="outlined"
@@ -5095,7 +5109,11 @@ const PreAudit = () => {
         open={workflowHistoryDialog.open}
         onClose={() => setWorkflowHistoryDialog({ open: false, document: null })}
         document={workflowHistoryDialog.document}
-        documentType="preAudit"
+        documentType={
+          workflowHistoryDialog.document?.orderNumber || workflowHistoryDialog.document?.billNumber
+            ? 'document' // titled "Purchase Order" / "Vendor Bill", same as in Procurement
+            : 'preAudit'
+        }
       />
 
       {/* Image Viewer Modal */}

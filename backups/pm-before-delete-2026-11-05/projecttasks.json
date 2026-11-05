@@ -1,0 +1,236 @@
+[
+ {
+  "_id": {
+   "$oid": "6abe27002adaed3894f4137f"
+  },
+  "project": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "parentTask": null,
+  "level": {
+   "$numberInt": "0"
+  },
+  "orderIndex": {
+   "$numberInt": "0"
+  },
+  "title": "Structural Design Drawings",
+  "description": "Structural Design Drawings for Grand Minar Project",
+  "plannedStartDate": {
+   "$date": {
+    "$numberLong": "1789430400000"
+   }
+  },
+  "plannedEndDate": {
+   "$date": {
+    "$numberLong": "1798675200000"
+   }
+  },
+  "status": "In Progress",
+  "progressPercent": {
+   "$numberInt": "100"
+  },
+  "assignedTo": "Design House Consulting Engineers",
+  "estimatedLaborCost": {
+   "$numberInt": "3610737"
+  },
+  "actualLaborCost": {
+   "$numberInt": "0"
+  },
+  "dependencies": [],
+  "notes": "",
+  "isPhysicallyVerified": false,
+  "createdBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790846720212"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790847597820"
+   }
+  },
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6abe279a2adaed3894f48ce9"
+  },
+  "project": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "parentTask": {
+   "$oid": "6abe27002adaed3894f4137f"
+  },
+  "level": {
+   "$numberInt": "1"
+  },
+  "orderIndex": {
+   "$numberInt": "0"
+  },
+  "title": "Schematic Structural Drawings",
+  "description": "Preparation of Schematic Structural Drawings for the review of client and other external consultants for coordination",
+  "plannedStartDate": {
+   "$date": {
+    "$numberLong": "1791590400000"
+   }
+  },
+  "plannedEndDate": {
+   "$date": {
+    "$numberLong": "1792454400000"
+   }
+  },
+  "status": "In Progress",
+  "progressPercent": {
+   "$numberInt": "30"
+  },
+  "assignedTo": "Design House Consulting Engineers",
+  "estimatedLaborCost": {
+   "$numberInt": "1083221"
+  },
+  "actualLaborCost": {
+   "$numberInt": "0"
+  },
+  "dependencies": [],
+  "notes": "",
+  "isPhysicallyVerified": false,
+  "createdBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790846874927"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790847706044"
+   }
+  },
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6abe29682adaed3894f5a1d8"
+  },
+  "project": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "parentTask": {
+   "$oid": "6abe27002adaed3894f4137f"
+  },
+  "level": {
+   "$numberInt": "1"
+  },
+  "orderIndex": {
+   "$numberInt": "0"
+  },
+  "title": "Structural Submission Drawings",
+  "description": "Preparation of Final Working structural drawings after the review of schematic structural drawings",
+  "plannedStartDate": {
+   "$date": {
+    "$numberLong": "1792540800000"
+   }
+  },
+  "plannedEndDate": {
+   "$date": {
+    "$numberLong": "1793404800000"
+   }
+  },
+  "status": "Not Started",
+  "progressPercent": {
+   "$numberInt": "0"
+  },
+  "assignedTo": "Design House Consulting Engineers",
+  "estimatedLaborCost": {
+   "$numberInt": "1444295"
+  },
+  "actualLaborCost": {
+   "$numberInt": "0"
+  },
+  "dependencies": [],
+  "notes": "",
+  "isPhysicallyVerified": false,
+  "createdBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790847336989"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790847823457"
+   }
+  },
+  "__v": {
+   "$numberInt": "0"
+  }
+ },
+ {
+  "_id": {
+   "$oid": "6abe29e82adaed3894f60e6e"
+  },
+  "project": {
+   "$oid": "6abdfe3b83368e7efdeb8fbc"
+  },
+  "parentTask": {
+   "$oid": "6abe27002adaed3894f4137f"
+  },
+  "level": {
+   "$numberInt": "1"
+  },
+  "orderIndex": {
+   "$numberInt": "0"
+  },
+  "title": "Structural Working Drawings",
+  "description": "Submission of Structural Working Drawings",
+  "plannedStartDate": {
+   "$date": {
+    "$numberLong": "1793491200000"
+   }
+  },
+  "plannedEndDate": {
+   "$date": {
+    "$numberLong": "1794700800000"
+   }
+  },
+  "status": "Not Started",
+  "progressPercent": {
+   "$numberInt": "0"
+  },
+  "assignedTo": "Design House Consulting Engineers",
+  "estimatedLaborCost": {
+   "$numberInt": "1083221"
+  },
+  "actualLaborCost": {
+   "$numberInt": "0"
+  },
+  "dependencies": [],
+  "notes": "",
+  "isPhysicallyVerified": false,
+  "createdBy": {
+   "$oid": "69ea50888cc61d92c5f634f4"
+  },
+  "createdAt": {
+   "$date": {
+    "$numberLong": "1790847464149"
+   }
+  },
+  "updatedAt": {
+   "$date": {
+    "$numberLong": "1790847842147"
+   }
+  },
+  "__v": {
+   "$numberInt": "0"
+  }
+ }
+]
