@@ -455,6 +455,23 @@ const ComparativeStatements = () => {
     return quotations.filter((q) => selectedQuotationIds.includes(q._id));
   }, [quotations, selectedQuotationIds]);
 
+  // Only the selected lot's quotations belong on that lot's comparative statement.
+  const lotQuotations = useMemo(
+    () => quotations.filter((q) => (q.lotNumber || 'A') === selectedLot),
+    [quotations, selectedLot]
+  );
+  const lotActiveQuotations = useMemo(
+    () => activeQuotations.filter((q) => (q.lotNumber || 'A') === selectedLot),
+    [activeQuotations, selectedLot]
+  );
+
+  // If the selected lot has no quotations (e.g. indent only has Lot B), jump to the first lot that does.
+  useEffect(() => {
+    if (!quotations.length) return;
+    const lots = [...new Set(quotations.map((q) => q.lotNumber || 'A'))].sort();
+    if (!lots.includes(selectedLot)) setSelectedLot(lots[0]);
+  }, [quotations, selectedLot]);
+
   const handleSelectVendor = async (quotation) => {
     if (!selectedRequisition?._id || !quotation?._id) return;
     setSelectDialog({ open: true, quotation });
@@ -673,93 +690,6 @@ const ComparativeStatements = () => {
               />
             )}
 
-            {/* Quotations Included / Scope Selector Toolbar */}
-            {quotations.length > 0 && (
-              <Paper
-                variant="outlined"
-                sx={{
-                  p: 2,
-                  mb: 2.5,
-                  bgcolor: (theme) => (theme.palette.mode === 'dark' ? 'grey.900' : '#f8fbfd'),
-                  borderColor: 'primary.light',
-                  borderRadius: 2
-                }}
-              >
-                <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" spacing={1.5} sx={{ mb: 1.5 }}>
-                  <Box>
-                    <Typography variant="subtitle2" fontWeight={700} color="primary.main">
-                      Quotations Included in Statement ({activeQuotations.length} of {quotations.length} active)
-                    </Typography>
-                    <Typography variant="caption" color="text.secondary">
-                      Toggle quotations to compare. Only the items quoted in the active selection will appear in the statement.
-                    </Typography>
-                  </Box>
-                  <Stack direction="row" spacing={1} alignItems="center">
-                    <Button
-                      size="small"
-                      variant={selectedQuotationIds.length === quotations.length ? 'contained' : 'outlined'}
-                      onClick={() => setSelectedQuotationIds(quotations.map((q) => q._id))}
-                      sx={{ fontSize: '0.75rem', py: 0.25, textTransform: 'none' }}
-                    >
-                      All Quotes ({quotations.length})
-                    </Button>
-                    {selectedRequisition?.status === 'Partially Fulfilled' && (
-                      <Button
-                        size="small"
-                        color="secondary"
-                        variant="outlined"
-                        onClick={() => {
-                          const unfulfilledQuotes = quotations.filter((q) =>
-                            (q.items || []).some((qi) => {
-                              const matchingIndentItem = (selectedRequisition?.items || []).find(
-                                (it) => (it.itemName || it.description || '').trim().toLowerCase() === (qi.description || '').trim().toLowerCase()
-                              );
-                              const isRemaining = matchingIndentItem ? (matchingIndentItem.orderedQuantity || 0) < matchingIndentItem.quantity : true;
-                              return isRemaining && (Number(qi.quantity) > 0 || Number(qi.unitPrice) > 0);
-                            })
-                          );
-                          if (unfulfilledQuotes.length > 0) {
-                            setSelectedQuotationIds(unfulfilledQuotes.map((q) => q._id));
-                          }
-                        }}
-                        sx={{ fontSize: '0.75rem', py: 0.25, textTransform: 'none', fontWeight: 600 }}
-                      >
-                        Remaining Items Quotes Only
-                      </Button>
-                    )}
-                  </Stack>
-                </Stack>
-                <Stack direction="row" flexWrap="wrap" gap={1}>
-                  {quotations.map((q) => {
-                    const isSelected = selectedQuotationIds.includes(q._id);
-                    const quotedItemCount = (q.items || []).filter((i) => Number(i.quantity) > 0 || Number(i.unitPrice) > 0).length;
-                    return (
-                      <Chip
-                        key={q._id}
-                        label={`${q.vendor?.name || 'Vendor'} • ${q.quotationNumber || 'Quote'} (${quotedItemCount} items) [${q.status || 'Received'}]`}
-                        color={isSelected ? 'primary' : 'default'}
-                        variant={isSelected ? 'filled' : 'outlined'}
-                        onClick={() => {
-                          setSelectedQuotationIds((prev) => {
-                            if (prev.includes(q._id)) {
-                              if (prev.length === 1) return prev; // Keep at least one selected
-                              return prev.filter((id) => id !== q._id);
-                            }
-                            return [...prev, q._id];
-                          });
-                        }}
-                        sx={{
-                          fontWeight: isSelected ? 700 : 500,
-                          cursor: 'pointer'
-                        }}
-                      />
-                    );
-                  })}
-                </Stack>
-              </Paper>
-            )}
-
-            
             {(() => {
               const lots = [...new Set(quotations.map(q => q.lotNumber || 'A'))].sort();
               return (
@@ -793,14 +723,108 @@ const ComparativeStatements = () => {
               );
             })()}
 
+            {/* Quotations Included / Scope Selector Toolbar */}
+            {lotQuotations.length > 0 && (
+              <Paper
+                variant="outlined"
+                sx={{
+                  p: 2,
+                  mb: 2.5,
+                  bgcolor: (theme) => (theme.palette.mode === 'dark' ? 'grey.900' : '#f8fbfd'),
+                  borderColor: 'primary.light',
+                  borderRadius: 2
+                }}
+              >
+                <Stack direction={{ xs: 'column', sm: 'row' }} alignItems={{ sm: 'center' }} justifyContent="space-between" spacing={1.5} sx={{ mb: 1.5 }}>
+                  <Box>
+                    <Typography variant="subtitle2" fontWeight={700} color="primary.main">
+                      Lot {selectedLot} Quotations Included in Statement ({lotActiveQuotations.length} of {lotQuotations.length} active)
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Toggle quotations to compare. Only the items quoted in the active selection will appear in the statement.
+                    </Typography>
+                  </Box>
+                  <Stack direction="row" spacing={1} alignItems="center">
+                    <Button
+                      size="small"
+                      variant={lotActiveQuotations.length === lotQuotations.length ? 'contained' : 'outlined'}
+                      onClick={() => setSelectedQuotationIds((prev) => [
+                        ...new Set([...prev, ...lotQuotations.map((q) => q._id)])
+                      ])}
+                      sx={{ fontSize: '0.75rem', py: 0.25, textTransform: 'none' }}
+                    >
+                      All Lot {selectedLot} Quotes ({lotQuotations.length})
+                    </Button>
+                    {selectedRequisition?.status === 'Partially Fulfilled' && (
+                      <Button
+                        size="small"
+                        color="secondary"
+                        variant="outlined"
+                        onClick={() => {
+                          const unfulfilledQuotes = lotQuotations.filter((q) =>
+                            (q.items || []).some((qi) => {
+                              const matchingIndentItem = (selectedRequisition?.items || []).find(
+                                (it) => (it.itemName || it.description || '').trim().toLowerCase() === (qi.description || '').trim().toLowerCase()
+                              );
+                              const isRemaining = matchingIndentItem ? (matchingIndentItem.orderedQuantity || 0) < matchingIndentItem.quantity : true;
+                              return isRemaining && (Number(qi.quantity) > 0 || Number(qi.unitPrice) > 0);
+                            })
+                          );
+                          if (unfulfilledQuotes.length > 0) {
+                            // Replace this lot's selection only; other lots keep theirs.
+                            const lotIds = new Set(lotQuotations.map((q) => q._id));
+                            setSelectedQuotationIds((prev) => [
+                              ...prev.filter((id) => !lotIds.has(id)),
+                              ...unfulfilledQuotes.map((q) => q._id)
+                            ]);
+                          }
+                        }}
+                        sx={{ fontSize: '0.75rem', py: 0.25, textTransform: 'none', fontWeight: 600 }}
+                      >
+                        Remaining Items Quotes Only
+                      </Button>
+                    )}
+                  </Stack>
+                </Stack>
+                <Stack direction="row" flexWrap="wrap" gap={1}>
+                  {lotQuotations.map((q) => {
+                    const isSelected = selectedQuotationIds.includes(q._id);
+                    const quotedItemCount = (q.items || []).filter((i) => Number(i.quantity) > 0 || Number(i.unitPrice) > 0).length;
+                    return (
+                      <Chip
+                        key={q._id}
+                        label={`${q.vendor?.name || 'Vendor'} • ${q.quotationNumber || 'Quote'} (${quotedItemCount} items) [${q.status || 'Received'}]`}
+                        color={isSelected ? 'primary' : 'default'}
+                        variant={isSelected ? 'filled' : 'outlined'}
+                        onClick={() => {
+                          setSelectedQuotationIds((prev) => {
+                            if (prev.includes(q._id)) {
+                              // Keep at least one quotation of this lot selected
+                              if (lotQuotations.filter((lq) => prev.includes(lq._id)).length <= 1) return prev;
+                              return prev.filter((id) => id !== q._id);
+                            }
+                            return [...prev, q._id];
+                          });
+                        }}
+                        sx={{
+                          fontWeight: isSelected ? 700 : 500,
+                          cursor: 'pointer'
+                        }}
+                      />
+                    );
+                  })}
+                </Stack>
+              </Paper>
+            )}
+
+            
+
             <ComparativeStatementView
               selectedLot={selectedLot}
               requisition={selectedRequisition}
               quotations={(() => {
-                const lotQuotes = quotations.filter((q) => (q.lotNumber || 'A') === selectedLot);
-                const selectedLotQuotes = activeQuotations.filter((q) => (q.lotNumber || 'A') === selectedLot);
                 // If chip filter dropped a fulfilled lot (common on Partially Fulfilled), still show that lot's CS.
-                return selectedLotQuotes.length > 0 ? selectedLotQuotes : lotQuotes;
+                return lotActiveQuotations.length > 0 ? lotActiveQuotations : lotQuotations;
               })()}
               approvalAuthority={approvalAuthority}
               note={comparativeNote}
