@@ -94,6 +94,9 @@ const PAYMENT_MODES = [
   { value: 'Mixed', label: 'Mixed', text: 'Part money (bank / cash), part property — each contract sets its property share.' }
 ];
 
+/** Sub Project contract type */
+const SUB_CONTRACT_TYPES = ['Barter', 'Labor Rate', 'Finishing'];
+
 const defaultForm = {
   hierarchyLevel: 'main',
   name: '',
@@ -114,6 +117,7 @@ const defaultForm = {
   status: 'Draft',
   contractBasis: '',
   paymentMode: 'Cash',
+  contractType: '',
   projectManagerEmployee: null // { _id, name, employeeId, designation } — Sub Projects only
 };
 
@@ -301,6 +305,7 @@ const ProjectFormDialog = ({
         status: editing.status || 'Draft',
         companyId: editing.companyId?._id || editing.companyId || '',
         contractBasis: editing.contractBasis || '',
+        contractType: editing.contractType || '',
         paymentMode: editing.paymentMode || 'Cash',
         projectManagerEmployee: editing.projectManagerEmployee?._id
           ? {
@@ -419,6 +424,10 @@ const ProjectFormDialog = ({
       setError('Select the Main Project this sub-project belongs to');
       return;
     }
+    if (form.hierarchyLevel === 'sub' && !form.contractType) {
+      setError('Select the Contract Type');
+      return;
+    }
     if (form.hierarchyLevel === 'sub' && !form.sector) {
       setError('Select a Sector / Block');
       return;
@@ -456,6 +465,7 @@ const ProjectFormDialog = ({
         payload.projectManagerEmployee = form.projectManagerEmployee?._id || null;
         payload.street = (form.street || '').trim();
         payload.side = form.side || '';
+        payload.contractType = form.contractType;
         payload.sizeValue = Number(form.sizeValue) > 0 ? Number(form.sizeValue) : null;
         payload.sizeUnit = Number(form.sizeValue) > 0 ? form.sizeUnit || sizeSpecFor(form.projectType)?.units[0] || '' : '';
       }
@@ -696,6 +706,17 @@ const ProjectFormDialog = ({
               placeholder={DEFAULT_SOCIETY}
             />
           </Grid>
+
+          {form.hierarchyLevel === 'sub' && (
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth required>
+                <InputLabel>Contract Type</InputLabel>
+                <Select value={form.contractType || ''} label="Contract Type" onChange={set('contractType')}>
+                  {SUB_CONTRACT_TYPES.map((t) => <MenuItem key={t} value={t}>{t}</MenuItem>)}
+                </Select>
+              </FormControl>
+            </Grid>
+          )}
 
           {form.hierarchyLevel === 'sub' && (
             <Grid item xs={12} md={6}>
@@ -1299,6 +1320,7 @@ const ProjectManagement = () => {
                               <Stack gap={0.5} alignItems="flex-start">
                                 <Typography variant="body2">{project.projectType || '—'}</Typography>
                                 {project.contractBasis && <ContractTypeTag type={project.contractBasis} />}
+                                {project.contractType && <Chip size="small" variant="outlined" label={project.contractType} />}
                               </Stack>
                             )}
                           </TableCell>

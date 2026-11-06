@@ -387,6 +387,7 @@ router.get('/projects/statistics', asyncHandler(async (req, res) => {
 const MAIN_PROJECT_TYPES = ['INFRASTRUCTURE DEVELOPMENT', 'COMMERCIAL', 'VILLAS'];
 const CONTRACT_BASES = ['BOQ', 'Slab'];
 const PAYMENT_MODES = ['Cash', 'Barter', 'Mixed'];
+const SUB_CONTRACT_TYPES = ['Barter', 'Labor Rate', 'Finishing'];
 
 /**
  * Property (barter) share of a contract from its project's payment mode: Cash 0%, Barter 100%,
@@ -1400,6 +1401,9 @@ router.post('/projects', asyncHandler(async (req, res) => {
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
   if (!name || !name.trim()) return badRequest(res, 'Project name is required');
+  if (parentProject && !SUB_CONTRACT_TYPES.includes(req.body.contractType)) {
+    return badRequest(res, 'Select the Contract Type: Barter, Labor Rate or Finishing');
+  }
   // The Main Project carries the Finance company; Sub Projects, contracts and IPCs inherit it
   if (!parentProject && !(companyId && isValidId(companyId))) {
     return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
@@ -1429,6 +1433,7 @@ router.post('/projects', asyncHandler(async (req, res) => {
   const project = new ConstructionProject({
     name: name.trim(),
     projectType: type, contractBasis, paymentMode, description, society, sector, plotNumber, address,
+    contractType: parentProject ? req.body.contractType : '',
     street: street || '',
     sizeValue: parentProject && Number(sizeValue) > 0 ? Number(sizeValue) : null,
     sizeUnit: parentProject && Number(sizeValue) > 0 ? String(sizeUnit || '').trim() : '',
@@ -1479,7 +1484,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
     'parentProject', 'contractValue', 'companyId', 'contractBasis', 'paymentMode', 'projectManagerEmployee',
-    'sizeValue', 'sizeUnit'
+    'sizeValue', 'sizeUnit', 'contractType'
   ];
 
   const updates = {};
@@ -1490,6 +1495,9 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     const v = Number(updates.sizeValue);
     updates.sizeValue = v > 0 ? v : null;
     updates.sizeUnit = v > 0 ? String(updates.sizeUnit || '').trim() : '';
+  }
+  if (updates.contractType !== undefined && !['', ...SUB_CONTRACT_TYPES].includes(updates.contractType)) {
+    return badRequest(res, 'Select the Contract Type: Barter, Labor Rate or Finishing');
   }
   updates.updatedBy = req.user?._id;
 

@@ -142,6 +142,8 @@ const constructionProjectSchema = new mongoose.Schema({
    * Independent of contractBasis, which is how the work is measured.
    */
   paymentMode: { type: String, enum: ['Cash', 'Barter', 'Mixed'], default: 'Cash' },
+  /** Sub Project contract type: Barter, Labor Rate or Finishing ('' = not set / Main Project) */
+  contractType: { type: String, enum: ['', 'Barter', 'Labor Rate', 'Finishing'], default: '' },
 
   // Project Hierarchy
   isMasterProject: {
