@@ -29,6 +29,10 @@ import { getKhasraSummary } from '../../services/landAcquisitionRegistryService'
 import { formatKMS } from '../../utils/landAreaUnits';
 import KhasraDetailDialog from './KhasraDetailDialog';
 
+const hasArea = (a) => Boolean(a && ((a.kanal || 0) > 0 || (a.marla || 0) > 0 || (a.sarsai || 0) > 0));
+const linkedLabel = (p) =>
+  `${p.possessionRef || 'POS'} → ${p.possessedKhasraNo || '—'} (${formatKMS(p.possessedArea)})`;
+
 const KhasraSummaryViewer = () => {
   const [khasras, setKhasras] = useState([]);
   const [mozas, setMozas] = useState([]);
@@ -106,15 +110,22 @@ const KhasraSummaryViewer = () => {
         'Land in Khasra': formatKMS(row.landInKhasra),
         'Purchased (Registry)': formatKMS(row.totalAcquired),
         'Pending Purchased': formatKMS(row.remainingToRegister),
+        'Over Registered': hasArea(row.overRegistered) ? formatKMS(row.overRegistered) : '',
         'Possession': formatKMS(row.totalPossessed),
+        'Linked Possession': formatKMS(row.linkedPossessed),
+        'Linked Possession Details': (row.linkedPossessions || []).map(linkedLabel).join('; ') || '—',
         'Pending Possession': formatKMS(row.remainingToPossess),
+        'Over Possessed': hasArea(row.overPossessed) ? formatKMS(row.overPossessed) : '',
         'Pending Possession Registries': (row.pendingByRegistry || [])
           .map((r) => `${r.registryNo || '—'} (${formatKMS(r.pendingPossession)})`)
           .join('; ') || '—',
         'Registries Count': row.registriesCount || 0,
         'Linked Registries': (row.registries || []).map(r => `${r.registryNo || '—'} (${formatKMS(r.acquiredArea)})`).join('; '),
         'Possessions Count': row.possessionsCount || 0,
-        'Linked Possessions': (row.possessions || []).map(p => `${p.possessionRef || '—'} (${formatKMS(p.possessedArea)})`).join('; ')
+        'Possessions in Khasra': (row.possessions || []).map(p => `${p.possessionRef || '—'} (${formatKMS(p.possessedArea)})`).join('; '),
+        'Handed Over Here for Other Khasras': (row.handedOverPossessions || [])
+          .map((p) => `${p.possessionRef || 'POS'} for ${p.registryKhasraNo || '—'} (${formatKMS(p.possessedArea)})`)
+          .join('; ')
       }));
 
       const ws = XLSX.utils.json_to_sheet(rows);
@@ -177,14 +188,39 @@ const KhasraSummaryViewer = () => {
               <Typography variant="caption" color="warning.main" display="block" fontWeight={600}>Pending Purchased</Typography>
               <Typography variant="body2" fontWeight={700} color="warning.dark">{formatKMS(grandTotal.remainingToRegister)}</Typography>
             </Box>
+            {(grandTotal.overRegisteredCount || 0) > 0 && (
+              <Tooltip title="Registered more than the land in khasra — Land − Purchased + Over Registered = Pending Purchased">
+                <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: 'warning.dark', color: 'common.white' }}>
+                  <Typography variant="caption" display="block" fontWeight={600}>Over Registered</Typography>
+                  <Typography variant="body2" fontWeight={700}>
+                    {formatKMS(grandTotal.overRegistered)} · {grandTotal.overRegisteredCount} khasras
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
             <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: 'primary.50', border: '1px solid', borderColor: 'primary.200' }}>
               <Typography variant="caption" color="primary.main" display="block" fontWeight={600}>Total Possession</Typography>
               <Typography variant="body2" fontWeight={700} color="primary.dark">{formatKMS(grandTotal.possessed)}</Typography>
+              {hasArea(grandTotal.linkedPossessed) && (
+                <Typography variant="caption" color="text.secondary" display="block">
+                  incl. linked {formatKMS(grandTotal.linkedPossessed)}
+                </Typography>
+              )}
             </Box>
             <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: 'error.50', border: '1px solid', borderColor: 'error.200' }}>
               <Typography variant="caption" color="error.main" display="block" fontWeight={600}>Pending Possession</Typography>
               <Typography variant="body2" fontWeight={700} color="error.dark">{formatKMS(grandTotal.remainingToPossess)}</Typography>
             </Box>
+            {(grandTotal.overPossessedCount || 0) > 0 && (
+              <Tooltip title="Possessed more than registered — Purchased − Possession + Over Possessed = Pending Possession">
+                <Box sx={{ px: 1.25, py: 0.5, borderRadius: 1, bgcolor: 'error.main', color: 'common.white' }}>
+                  <Typography variant="caption" display="block" fontWeight={600}>Over Possessed</Typography>
+                  <Typography variant="body2" fontWeight={700}>
+                    {formatKMS(grandTotal.overPossessed)} · {grandTotal.overPossessedCount} khasras
+                  </Typography>
+                </Box>
+              </Tooltip>
+            )}
           </Stack>
         )}
 
@@ -223,6 +259,11 @@ const KhasraSummaryViewer = () => {
                 <TableCell align="center"><strong>Purchased (Registry)</strong></TableCell>
                 <TableCell align="center"><strong>Pending Purchased</strong></TableCell>
                 <TableCell align="center"><strong>Possession</strong></TableCell>
+                <TableCell align="center">
+                  <Tooltip title="Possession taken in another khasra against this khasra's registry">
+                    <strong>Linked Possession</strong>
+                  </Tooltip>
+                </TableCell>
                 <TableCell align="center"><strong>Pending Possession</strong></TableCell>
                 <TableCell><strong>Registries in Khasra</strong></TableCell>
                 <TableCell><strong>Possessions in Khasra</strong></TableCell>
@@ -243,9 +284,19 @@ const KhasraSummaryViewer = () => {
                     </Typography>
                   </TableCell>
                   <TableCell align="center">
-                    <Typography variant="body2" fontWeight={600} color="warning.dark">
-                      {formatKMS(row.remainingToRegister)}
-                    </Typography>
+                    {hasArea(row.overRegistered) ? (
+                      <Tooltip title="Registered more than the land in this khasra — check the registries">
+                        <Chip
+                          size="small"
+                          label={`Over by ${formatKMS(row.overRegistered)}`}
+                          sx={{ fontWeight: 700, bgcolor: 'warning.dark', color: 'common.white' }}
+                        />
+                      </Tooltip>
+                    ) : (
+                      <Typography variant="body2" fontWeight={600} color="warning.dark">
+                        {formatKMS(row.remainingToRegister)}
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell align="center">
                     <Typography variant="body2" fontWeight={700} color="primary.dark">
@@ -253,9 +304,36 @@ const KhasraSummaryViewer = () => {
                     </Typography>
                   </TableCell>
                   <TableCell align="center">
-                    <Typography variant="body2" fontWeight={600} color="error.dark">
-                      {formatKMS(row.remainingToPossess)}
-                    </Typography>
+                    {(row.linkedPossessions || []).length > 0 ? (
+                      <Stack spacing={0.25} alignItems="center">
+                        <Typography variant="body2" fontWeight={700} color="secondary.dark">
+                          {formatKMS(row.linkedPossessed)}
+                        </Typography>
+                        {row.linkedPossessions.map((p, i) => (
+                          <Typography key={p.lineId || i} variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                            {linkedLabel(p)}
+                          </Typography>
+                        ))}
+                      </Stack>
+                    ) : (
+                      <Typography variant="caption" color="text.secondary">—</Typography>
+                    )}
+                  </TableCell>
+                  <TableCell align="center">
+                    {hasArea(row.overPossessed) ? (
+                      <Tooltip title="Possessed more than registered — check for duplicate possessions">
+                        <Chip
+                          size="small"
+                          color="error"
+                          label={`Over by ${formatKMS(row.overPossessed)}`}
+                          sx={{ fontWeight: 700 }}
+                        />
+                      </Tooltip>
+                    ) : (
+                      <Typography variant="body2" fontWeight={600} color="error.dark">
+                        {formatKMS(row.remainingToPossess)}
+                      </Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     {(row.registries || []).length > 0 ? (
@@ -305,8 +383,30 @@ const KhasraSummaryViewer = () => {
                           />
                         )}
                       </Stack>
-                    ) : (
+                    ) : !(row.handedOverPossessions || []).length ? (
                       <Typography variant="caption" color="text.secondary">—</Typography>
+                    ) : null}
+                    {(row.handedOverPossessions || []).length > 0 && (
+                      <Stack direction="row" spacing={0.5} flexWrap="wrap" useFlexGap sx={{ mt: (row.possessions || []).length ? 0.5 : 0 }}>
+                        {row.handedOverPossessions.slice(0, 2).map((p, i) => (
+                          <Tooltip key={p.lineId || i} title={`Handed over here against registry khasra ${p.registryKhasraNo || '—'} — counted there, not here`}>
+                            <Chip
+                              size="small"
+                              label={`${p.possessionRef || 'POS'} for ${p.registryKhasraNo || '—'} (${formatKMS(p.possessedArea)})`}
+                              variant="outlined"
+                              sx={{ fontSize: '0.7rem', borderStyle: 'dashed', color: 'text.secondary' }}
+                            />
+                          </Tooltip>
+                        ))}
+                        {row.handedOverPossessions.length > 2 && (
+                          <Chip
+                            size="small"
+                            label={`+${row.handedOverPossessions.length - 2} more`}
+                            variant="outlined"
+                            onClick={() => setDetailKhasra(row)}
+                          />
+                        )}
+                      </Stack>
                     )}
                   </TableCell>
                   <TableCell align="center">

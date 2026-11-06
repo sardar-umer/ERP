@@ -17,7 +17,8 @@ import {
   Button,
   Chip,
   Stack,
-  Divider
+  Divider,
+  Alert
 } from '@mui/material';
 import { AttachFile } from '@mui/icons-material';
 import { formatKMS } from '../../utils/landAreaUnits';
@@ -48,11 +49,79 @@ const StatCard = ({ label, value, color = 'text.primary', bgcolor = 'background.
   </Paper>
 );
 
+const hasArea = (a) => Boolean(a && ((a.kanal || 0) > 0 || (a.marla || 0) > 0 || (a.sarsai || 0) > 0));
+
+const khasraLabel = (khewat, khasra) => `${khasra || '—'}${khewat ? ` (Khewat ${khewat})` : ''}`;
+
+const PossessionTable = ({ rows, khasraColumn, emptyText }) => {
+  if (!rows.length) {
+    return (
+      <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', bgcolor: 'background.paper' }}>
+        <Typography variant="body2" color="text.secondary">{emptyText}</Typography>
+      </Paper>
+    );
+  }
+  return (
+    <TableContainer component={Paper} variant="outlined">
+      <Table size="small">
+        <TableHead sx={{ bgcolor: 'grey.100' }}>
+          <TableRow>
+            <TableCell><strong>Possession Date</strong></TableCell>
+            <TableCell><strong>Possession Ref</strong></TableCell>
+            <TableCell><strong>Linked Registry</strong></TableCell>
+            {khasraColumn && <TableCell><strong>{khasraColumn.label}</strong></TableCell>}
+            <TableCell align="center"><strong>Possessed Area</strong></TableCell>
+            <TableCell><strong>Remarks</strong></TableCell>
+          </TableRow>
+        </TableHead>
+        <TableBody>
+          {rows.map((pos, idx) => (
+            <TableRow key={pos.lineId || `${pos._id}-${idx}`} hover>
+              <TableCell>{formatDate(pos.possessionDate)}</TableCell>
+              <TableCell><strong>{pos.possessionRef || '—'}</strong></TableCell>
+              <TableCell>
+                {pos.registryNo ? (
+                  <Stack spacing={0.25}>
+                    <Typography variant="body2" fontWeight={600}>{pos.registryNo}</Typography>
+                    {(pos.inteqalNo || pos.dealNo) && (
+                      <Typography variant="caption" color="text.secondary">
+                        {[pos.inteqalNo && `Inteqal: ${pos.inteqalNo}`, pos.dealNo && `Deal: #${pos.dealNo}`]
+                          .filter(Boolean)
+                          .join(' · ')}
+                      </Typography>
+                    )}
+                  </Stack>
+                ) : (
+                  <Typography variant="caption" color="text.secondary">Not linked</Typography>
+                )}
+              </TableCell>
+              {khasraColumn && (
+                <TableCell><strong>{khasraColumn.render(pos)}</strong></TableCell>
+              )}
+              <TableCell align="center">
+                <Chip
+                  label={formatKMS(pos.possessedArea)}
+                  size="small"
+                  color="primary"
+                  sx={{ fontWeight: 700 }}
+                />
+              </TableCell>
+              <TableCell>{pos.remarks || '—'}</TableCell>
+            </TableRow>
+          ))}
+        </TableBody>
+      </Table>
+    </TableContainer>
+  );
+};
+
 const KhasraDetailDialog = ({ open, onClose, khasra }) => {
   if (!khasra) return null;
 
   const registries = khasra.registries || [];
   const possessions = khasra.possessions || [];
+  const linkedPossessions = khasra.linkedPossessions || [];
+  const handedOverPossessions = khasra.handedOverPossessions || [];
   const pendingByRegistry = khasra.pendingByRegistry
     || registries.filter((r) => {
       const p = r.pendingPossession || {};
@@ -78,7 +147,7 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
       <DialogContent dividers sx={{ bgcolor: 'grey.50' }}>
         {/* Metric Cards */}
         <Grid container spacing={1.5} sx={{ mb: 3 }}>
-          <Grid item xs={12} sm={6} md={2.4}>
+          <Grid item xs={12} sm={6} md={2}>
             <StatCard
               label="Land in Khasra"
               value={khasra.landInKhasra}
@@ -86,7 +155,7 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
               borderColor="#cbd5e1"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={2.4}>
+          <Grid item xs={12} sm={6} md={2}>
             <StatCard
               label="Purchased (Registry)"
               value={khasra.totalAcquired}
@@ -95,7 +164,7 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
               borderColor="#bbf7d0"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={2.4}>
+          <Grid item xs={12} sm={6} md={2}>
             <StatCard
               label="Pending Purchased"
               value={khasra.remainingToRegister}
@@ -104,7 +173,7 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
               borderColor="#fde68a"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={2.4}>
+          <Grid item xs={12} sm={6} md={2}>
             <StatCard
               label="Possession"
               value={khasra.totalPossessed}
@@ -113,7 +182,16 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
               borderColor="#bfdbfe"
             />
           </Grid>
-          <Grid item xs={12} sm={6} md={2.4}>
+          <Grid item xs={12} sm={6} md={2}>
+            <StatCard
+              label="Linked Possession"
+              value={khasra.linkedPossessed}
+              color="secondary.dark"
+              bgcolor="#faf5ff"
+              borderColor="#e9d5ff"
+            />
+          </Grid>
+          <Grid item xs={12} sm={6} md={2}>
             <StatCard
               label="Pending Possession"
               value={khasra.remainingToPossess}
@@ -123,6 +201,22 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
             />
           </Grid>
         </Grid>
+
+        {hasArea(khasra.overRegistered) && (
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            <strong>Over registered by {formatKMS(khasra.overRegistered)}.</strong>{' '}
+            Registered area ({formatKMS(khasra.totalAcquired)}) is more than the land in this khasra
+            ({formatKMS(khasra.landInKhasra)}) — check the registries below or the khasra&apos;s land figure.
+          </Alert>
+        )}
+
+        {hasArea(khasra.overPossessed) && (
+          <Alert severity="error" sx={{ mb: 3 }}>
+            <strong>Over possessed by {formatKMS(khasra.overPossessed)}.</strong>{' '}
+            Possession recorded against this khasra&apos;s registries (own + linked) is more than registered.
+            This usually means the same registry land was possessed twice — check the possessions below.
+          </Alert>
+        )}
 
         {/* Pending Possession — which registries */}
         <Box sx={{ mb: 3 }}>
@@ -235,7 +329,8 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
                 <TableBody>
                   {registries.map((reg, idx) => {
                     const pending = reg.pendingPossession || { kanal: 0, marla: 0, sarsai: 0 };
-                    const hasPending = (pending.kanal || 0) > 0 || (pending.marla || 0) > 0 || (pending.sarsai || 0) > 0;
+                    const hasPending = hasArea(pending);
+                    const isOver = hasArea(reg.overPossessed);
                     return (
                       <TableRow key={reg._id || idx} hover>
                         <TableCell>{formatDate(reg.registryDate)}</TableCell>
@@ -265,7 +360,14 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
                           />
                         </TableCell>
                         <TableCell align="center">
-                          {hasPending ? (
+                          {isOver ? (
+                            <Chip
+                              label={`Over by ${formatKMS(reg.overPossessed)}`}
+                              size="small"
+                              color="error"
+                              sx={{ fontWeight: 700 }}
+                            />
+                          ) : hasPending ? (
                             <Chip
                               label={formatKMS(pending)}
                               size="small"
@@ -277,6 +379,15 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
                             <Typography variant="caption" color="success.main" fontWeight={600}>
                               Fully possessed
                             </Typography>
+                          )}
+                          {(reg.possessionRefs || []).length > 0 && (
+                            <Stack spacing={0} sx={{ mt: 0.5 }}>
+                              {reg.possessionRefs.map((p, i) => (
+                                <Typography key={i} variant="caption" color="text.secondary" sx={{ whiteSpace: 'nowrap' }}>
+                                  {p.possessionRef || 'POS'} {p.isLinked ? `→ ${p.possessedKhasraNo || '—'} ` : ''}({formatKMS(p.possessedArea)})
+                                </Typography>
+                              ))}
+                            </Stack>
                           )}
                         </TableCell>
                         <TableCell>
@@ -358,70 +469,63 @@ const KhasraDetailDialog = ({ open, onClose, khasra }) => {
 
         <Divider sx={{ my: 2 }} />
 
-        {/* Section 2: Linked Possessions */}
-        <Box>
+        {/* Section 2: Possessions taken in this khasra (own registry) */}
+        <Box sx={{ mb: 3 }}>
           <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
             <Typography variant="subtitle1" fontWeight={700}>
-              Linked Possessions
+              Possessions in this Khasra
             </Typography>
             <Chip size="small" label={`${possessions.length} records`} color="primary" variant="outlined" />
           </Stack>
-
-          {!possessions.length ? (
-            <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', bgcolor: 'background.paper' }}>
-              <Typography variant="body2" color="text.secondary">
-                No physical possession records found for this khasra yet.
-              </Typography>
-            </Paper>
-          ) : (
-            <TableContainer component={Paper} variant="outlined">
-              <Table size="small">
-                <TableHead sx={{ bgcolor: 'grey.100' }}>
-                  <TableRow>
-                    <TableCell><strong>Possession Date</strong></TableCell>
-                    <TableCell><strong>Possession Ref</strong></TableCell>
-                    <TableCell><strong>Linked Registry</strong></TableCell>
-                    <TableCell align="center"><strong>Possessed Area</strong></TableCell>
-                    <TableCell><strong>Remarks</strong></TableCell>
-                  </TableRow>
-                </TableHead>
-                <TableBody>
-                  {possessions.map((pos, idx) => (
-                    <TableRow key={pos._id || idx} hover>
-                      <TableCell>{formatDate(pos.possessionDate)}</TableCell>
-                      <TableCell><strong>{pos.possessionRef || '—'}</strong></TableCell>
-                      <TableCell>
-                        {pos.registryNo ? (
-                          <Stack spacing={0.25}>
-                            <Typography variant="body2" fontWeight={600}>{pos.registryNo}</Typography>
-                            {(pos.inteqalNo || pos.dealNo) && (
-                              <Typography variant="caption" color="text.secondary">
-                                {[pos.inteqalNo && `Inteqal: ${pos.inteqalNo}`, pos.dealNo && `Deal: #${pos.dealNo}`]
-                                  .filter(Boolean)
-                                  .join(' · ')}
-                              </Typography>
-                            )}
-                          </Stack>
-                        ) : (
-                          <Typography variant="caption" color="text.secondary">Not linked</Typography>
-                        )}
-                      </TableCell>
-                      <TableCell align="center">
-                        <Chip
-                          label={formatKMS(pos.possessedArea)}
-                          size="small"
-                          color="primary"
-                          sx={{ fontWeight: 700 }}
-                        />
-                      </TableCell>
-                      <TableCell>{pos.remarks || '—'}</TableCell>
-                    </TableRow>
-                  ))}
-                </TableBody>
-              </Table>
-            </TableContainer>
-          )}
+          <PossessionTable
+            rows={possessions}
+            emptyText="No possession taken in this khasra against its own registry."
+          />
         </Box>
+
+        {/* Section 3: Linked possessions — this khasra's registry, possessed in another khasra */}
+        <Box sx={{ mb: 3 }}>
+          <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+            <Typography variant="subtitle1" fontWeight={700} color="secondary.dark">
+              Linked Possessions (possessed in other khasras)
+            </Typography>
+            <Chip size="small" label={`${linkedPossessions.length} records`} color="secondary" variant="outlined" />
+            <Typography variant="caption" color="text.secondary">
+              Total: {formatKMS(khasra.linkedPossessed)}
+            </Typography>
+          </Stack>
+          <PossessionTable
+            rows={linkedPossessions}
+            khasraColumn={{
+              label: 'Possessed Khasra',
+              render: (p) => khasraLabel(p.possessedKhewatNo, p.possessedKhasraNo)
+            }}
+            emptyText="No possession of this khasra's registered land was taken in another khasra."
+          />
+        </Box>
+
+        {/* Section 4: handed over here for other khasras (informational) */}
+        {handedOverPossessions.length > 0 && (
+          <Box>
+            <Stack direction="row" alignItems="center" spacing={1} sx={{ mb: 1.5 }}>
+              <Typography variant="subtitle1" fontWeight={700} color="text.secondary">
+                Land Handed Over Here for Other Khasras
+              </Typography>
+              <Chip size="small" label={`${handedOverPossessions.length} records`} variant="outlined" />
+            </Stack>
+            <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
+              Physically handed over in this khasra against another khasra&apos;s registry — counted under that khasra, not here.
+            </Typography>
+            <PossessionTable
+              rows={handedOverPossessions}
+              khasraColumn={{
+                label: 'Registry Khasra',
+                render: (p) => khasraLabel(p.registryKhewatNo, p.registryKhasraNo)
+              }}
+              emptyText=""
+            />
+          </Box>
+        )}
       </DialogContent>
 
       <DialogActions sx={{ px: 3, py: 1.5 }}>

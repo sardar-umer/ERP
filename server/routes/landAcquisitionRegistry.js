@@ -1334,11 +1334,31 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
     });
   });
 
+  // Possessions are attributed to the REGISTRY khasra (the land the registry is for).
+  // When the land was physically handed over in a different khasra, the line is a
+  // "linked possession": it reduces the registry khasra's pending possession and is
+  // listed on the possessed khasra only for information ("handed over here").
   const possessionsByKhasra = new Map();
+  const handedOverByKhasra = new Map();
+  const pushTo = (map, key, item) => {
+    if (!key) return;
+    if (!map.has(key)) map.set(key, []);
+    map.get(key).push(item);
+  };
   possessions.forEach((pos) => {
     (pos.lines || []).forEach((line) => {
-      const kId = String(line.khasraEntry || '');
-      const kKey = `${String(pos.moza)}_${String(line.khewatNo || '').trim()}_${String(line.khasraNo || '').trim()}`;
+      const mozaKey = String(pos.moza);
+      const possKhewat = String(line.khewatNo || '').trim();
+      const possKhasra = String(line.khasraNo || '').trim();
+      const regKhewat = String(line.registryKhewatNo || line.khewatNo || '').trim();
+      const regKhasra = String(line.registryKhasraNo || line.khasraNo || '').trim();
+      const possId = String(line.khasraEntry || '');
+      const regId = String(line.registryKhasraEntry || line.khasraEntry || '');
+      const possKey = `${mozaKey}_${possKhewat}_${possKhasra}`;
+      const regKey = `${mozaKey}_${regKhewat}_${regKhasra}`;
+      const isLinked = regId && possId
+        ? regId !== possId
+        : regKey !== possKey;
       const linkedRegistry = line.registry || pos.registry || null;
       const linkedRegistryId = linkedRegistry
         ? String(linkedRegistry._id || linkedRegistry)
@@ -1346,9 +1366,15 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
       const meta = linkedRegistryId ? registryMetaById.get(linkedRegistryId) : null;
       const item = {
         _id: pos._id,
+        lineId: String(line._id || ''),
         possessionRef: pos.possessionRef,
         possessionDate: pos.possessionDate,
         possessedArea: normalizeArea(line.possessedArea),
+        isLinked,
+        registryKhewatNo: regKhewat,
+        registryKhasraNo: regKhasra,
+        possessedKhewatNo: possKhewat,
+        possessedKhasraNo: possKhasra,
         transferPercent: line.transferPercent,
         remarks: line.remarks,
         registryId: linkedRegistryId || null,
@@ -1368,20 +1394,29 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
           ''
       };
 
-      if (kId) {
-        if (!possessionsByKhasra.has(kId)) possessionsByKhasra.set(kId, []);
-        possessionsByKhasra.get(kId).push(item);
+      pushTo(possessionsByKhasra, regId, item);
+      pushTo(possessionsByKhasra, regKey, item);
+      if (isLinked) {
+        pushTo(handedOverByKhasra, possId, item);
+        pushTo(handedOverByKhasra, possKey, item);
       }
-      if (!possessionsByKhasra.has(kKey)) possessionsByKhasra.set(kKey, []);
-      possessionsByKhasra.get(kKey).push(item);
     });
   });
+
+  const uniqueByLine = (list) =>
+    Array.from(new Map(list.map((p) => [p.lineId || `${p._id}${JSON.stringify(p.possessedArea)}`, p])).values());
 
   let grandBaseline = { kanal: 0, marla: 0, sarsai: 0 };
   let grandRegistered = { kanal: 0, marla: 0, sarsai: 0 };
   let grandRemainingToRegister = { kanal: 0, marla: 0, sarsai: 0 };
   let grandPossessed = { kanal: 0, marla: 0, sarsai: 0 };
+  let grandDirectPossessed = { kanal: 0, marla: 0, sarsai: 0 };
+  let grandLinkedPossessed = { kanal: 0, marla: 0, sarsai: 0 };
   let grandRemainingToPossess = { kanal: 0, marla: 0, sarsai: 0 };
+  let grandOverPossessed = { kanal: 0, marla: 0, sarsai: 0 };
+  let overPossessedCount = 0;
+  let grandOverRegistered = { kanal: 0, marla: 0, sarsai: 0 };
+  let overRegisteredCount = 0;
 
   const enrichedKhasras = allKhasras.map((entry) => {
     const id = String(entry._id);
@@ -1398,7 +1433,11 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
     const uniqueExcOut = Array.from(new Map(excOutList.map(e => [String(e._id) + JSON.stringify(e.surrenderedArea), e])).values());
 
     const posList = possessionsByKhasra.get(id) || possessionsByKhasra.get(fallbackKey) || [];
-    const uniquePossessions = Array.from(new Map(posList.map(p => [String(p._id) + JSON.stringify(p.possessedArea), p])).values());
+    const uniquePossessions = uniqueByLine(posList);
+    const directPossessions = uniquePossessions.filter((p) => !p.isLinked);
+    const linkedPossessions = uniquePossessions.filter((p) => p.isLinked);
+    const handedOverList = handedOverByKhasra.get(id) || handedOverByKhasra.get(fallbackKey) || [];
+    const handedOverPossessions = uniqueByLine(handedOverList);
 
     const baseline = normalizeArea(entry.landInKhasra);
     const directPurchased = addAreas(...uniqueRegistries.map(r => r.acquiredArea));
@@ -1409,15 +1448,29 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
     const afterOut = subtractAreas(directPurchased, exchangedOut);
     const registered = addAreas(afterOut, exchangedIn);
 
-    const possessed = addAreas(...uniquePossessions.map(p => p.possessedArea));
+    const directPossessed = addAreas(...directPossessions.map(p => p.possessedArea));
+    const linkedPossessed = addAreas(...linkedPossessions.map(p => p.possessedArea));
+    const possessed = addAreas(directPossessed, linkedPossessed);
     const remainingToRegister = subtractAreas(baseline, registered);
     const remainingToPossess = subtractAreas(registered, possessed);
+    const overPossessed = subtractAreas(possessed, registered);
+    const overRegistered = subtractAreas(registered, baseline);
+    if (toSarsais(overRegistered) > 0) {
+      grandOverRegistered = addAreas(grandOverRegistered, overRegistered);
+      overRegisteredCount += 1;
+    }
 
     grandBaseline = addAreas(grandBaseline, baseline);
     grandRegistered = addAreas(grandRegistered, registered);
     grandRemainingToRegister = addAreas(grandRemainingToRegister, remainingToRegister);
     grandPossessed = addAreas(grandPossessed, possessed);
+    grandDirectPossessed = addAreas(grandDirectPossessed, directPossessed);
+    grandLinkedPossessed = addAreas(grandLinkedPossessed, linkedPossessed);
     grandRemainingToPossess = addAreas(grandRemainingToPossess, remainingToPossess);
+    if (toSarsais(overPossessed) > 0) {
+      grandOverPossessed = addAreas(grandOverPossessed, overPossessed);
+      overPossessedCount += 1;
+    }
 
     // Combine direct registries + In Land acquisitions for the khasra detail modal
     const combinedRegistries = [
@@ -1472,7 +1525,19 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
         possessedByRegistryId.set(id, attributed);
       }
       const pendingPossession = subtractAreas(acquired, attributed);
+      const regOverPossessed = subtractAreas(attributed, acquired);
+      const possessionRefs = uniquePossessions
+        .filter((p) => p.registryId && String(p.registryId) === id)
+        .map((p) => ({
+          possessionRef: p.possessionRef,
+          possessedArea: p.possessedArea,
+          isLinked: p.isLinked,
+          possessedKhewatNo: p.possessedKhewatNo,
+          possessedKhasraNo: p.possessedKhasraNo
+        }));
       pendingByRegistry.push({
+        overPossessed: regOverPossessed,
+        possessionRefs,
         _id: reg._id,
         isExchangeIn: Boolean(reg.isExchangeIn),
         registryNo: reg.registryNo || '—',
@@ -1492,7 +1557,9 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
       return {
         ...reg,
         possessedArea: row?.possessedArea || { kanal: 0, marla: 0, sarsai: 0 },
-        pendingPossession: row?.pendingPossession || { kanal: 0, marla: 0, sarsai: 0 }
+        pendingPossession: row?.pendingPossession || { kanal: 0, marla: 0, sarsai: 0 },
+        overPossessed: row?.overPossessed || { kanal: 0, marla: 0, sarsai: 0 },
+        possessionRefs: row?.possessionRefs || []
       };
     });
 
@@ -1505,13 +1572,21 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
       landInKhasra: baseline,
       totalAcquired: registered,
       remainingToRegister,
-      totalPossessed: possessed,
+      overRegistered,
+      // totalPossessed = possession taken in this khasra against its own registry
+      // linkedPossessed = possession taken in another khasra against this khasra's registry
+      totalPossessed: directPossessed,
+      linkedPossessed,
+      possessedAll: possessed,
       remainingToPossess,
+      overPossessed,
       registries: registriesWithPending,
       pendingByRegistry: pendingByRegistry.filter((r) => toSarsais(r.pendingPossession) > 0),
       exchangesOut: uniqueExcOut,
       exchangesIn: uniqueExcIn,
-      possessions: uniquePossessions,
+      possessions: directPossessions,
+      linkedPossessions,
+      handedOverPossessions,
       registriesCount: combinedRegistries.length,
       possessionsCount: uniquePossessions.length,
       remarks: entry.remarks
@@ -1537,7 +1612,13 @@ router.get('/khasra-summary', authMiddleware, asyncHandler(async (req, res) => {
         registered: grandRegistered,
         remainingToRegister: grandRemainingToRegister,
         possessed: grandPossessed,
-        remainingToPossess: grandRemainingToPossess
+        directPossessed: grandDirectPossessed,
+        linkedPossessed: grandLinkedPossessed,
+        remainingToPossess: grandRemainingToPossess,
+        overPossessed: grandOverPossessed,
+        overPossessedCount,
+        overRegistered: grandOverRegistered,
+        overRegisteredCount
       }
     }
   });
