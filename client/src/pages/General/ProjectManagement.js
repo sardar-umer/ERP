@@ -424,7 +424,7 @@ const ProjectFormDialog = ({
       setError('Select the Main Project this sub-project belongs to');
       return;
     }
-    if (form.hierarchyLevel === 'sub' && !form.contractType) {
+    if (form.hierarchyLevel === 'sub' && form.projectType === 'VILLAS' && !form.contractType) {
       setError('Select the Contract Type');
       return;
     }
@@ -465,7 +465,8 @@ const ProjectFormDialog = ({
         payload.projectManagerEmployee = form.projectManagerEmployee?._id || null;
         payload.street = (form.street || '').trim();
         payload.side = form.side || '';
-        payload.contractType = form.contractType;
+        // Contract Type is for Villa Sub Projects only
+        payload.contractType = form.projectType === 'VILLAS' ? form.contractType : '';
         payload.sizeValue = Number(form.sizeValue) > 0 ? Number(form.sizeValue) : null;
         payload.sizeUnit = Number(form.sizeValue) > 0 ? form.sizeUnit || sizeSpecFor(form.projectType)?.units[0] || '' : '';
       }
@@ -707,7 +708,7 @@ const ProjectFormDialog = ({
             />
           </Grid>
 
-          {form.hierarchyLevel === 'sub' && (
+          {form.hierarchyLevel === 'sub' && form.projectType === 'VILLAS' && (
             <Grid item xs={12} md={6}>
               <FormControl fullWidth required>
                 <InputLabel>Contract Type</InputLabel>

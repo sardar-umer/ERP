@@ -1401,9 +1401,6 @@ router.post('/projects', asyncHandler(async (req, res) => {
     budgetCategories, notes, tags, isMasterProject, parentProject, contractValue, linkedProperty, companyId } = req.body;
 
   if (!name || !name.trim()) return badRequest(res, 'Project name is required');
-  if (parentProject && !SUB_CONTRACT_TYPES.includes(req.body.contractType)) {
-    return badRequest(res, 'Select the Contract Type: Barter, Labor Rate or Finishing');
-  }
   // The Main Project carries the Finance company; Sub Projects, contracts and IPCs inherit it
   if (!parentProject && !(companyId && isValidId(companyId))) {
     return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
@@ -1428,12 +1425,16 @@ router.post('/projects', asyncHandler(async (req, res) => {
     type = parent.projectType || projectType;
     contractBasis = parent.contractBasis || null;
     paymentMode = parent.paymentMode || 'Cash';
+    // Contract Type applies to Villa Sub Projects only
+    if (type === 'VILLAS' && !SUB_CONTRACT_TYPES.includes(req.body.contractType)) {
+      return badRequest(res, 'Select the Contract Type: Barter, Labor Rate or Finishing');
+    }
   }
 
   const project = new ConstructionProject({
     name: name.trim(),
     projectType: type, contractBasis, paymentMode, description, society, sector, plotNumber, address,
-    contractType: parentProject ? req.body.contractType : '',
+    contractType: parentProject && type === 'VILLAS' ? req.body.contractType : '',
     street: street || '',
     sizeValue: parentProject && Number(sizeValue) > 0 ? Number(sizeValue) : null,
     sizeUnit: parentProject && Number(sizeValue) > 0 ? String(sizeUnit || '').trim() : '',
