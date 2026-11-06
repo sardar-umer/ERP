@@ -21,6 +21,7 @@ const NotificationService = require('../services/notificationService');
 const WbsActivity = require('../models/projectManagement/WbsActivity');
 const { WBS_PROJECT_TYPES, normalizeProjectType } = require('../models/projectManagement/WbsActivity');
 const SlabSchedule = require('../models/projectManagement/SlabSchedule');
+const ProjectSector = require('../models/projectManagement/ProjectSector');
 const Employee = require('../models/hr/Employee');
 require('../models/hr/Designation');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
@@ -282,6 +283,26 @@ router.get('/employee-options', asyncHandler(async (req, res) => {
       .then((list) => list.filter((e) => `${e.firstName || ''} ${e.lastName || ''}`.trim().toLowerCase() === DEFAULT_PROJECT_MANAGER.toLowerCase()))
   ]);
   res.json({ success: true, data: { options: options.map(employeeOption), defaultManager: defaults[0] ? employeeOption(defaults[0]) : null } });
+}));
+
+// GET /api/project-management/sectors — Sector / Block names added from the project form
+router.get('/sectors', asyncHandler(async (req, res) => {
+  const list = await ProjectSector.find().select('name').sort({ name: 1 }).lean();
+  res.json({ success: true, data: list.map((s) => s.name) });
+}));
+
+// POST /api/project-management/sectors { name } — add a new Sector / Block (returns the existing one if already there)
+router.post('/sectors', asyncHandler(async (req, res) => {
+  const name = String(req.body?.name || '').trim().replace(/\s+/g, ' ');
+  if (!name) return res.status(400).json({ success: false, message: 'Sector name is required' });
+  if (name.length > 100) return res.status(400).json({ success: false, message: 'Sector name is too long' });
+  const nameKey = name.toLowerCase();
+  const sector = await ProjectSector.findOneAndUpdate(
+    { nameKey },
+    { $setOnInsert: { name, nameKey, createdBy: req.user?._id } },
+    { upsert: true, new: true }
+  ).lean();
+  res.json({ success: true, data: sector.name });
 }));
 
 // GET /api/project-management/projects — list with filters + pagination

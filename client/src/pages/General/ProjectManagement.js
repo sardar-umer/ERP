@@ -20,7 +20,8 @@ import dayjs from 'dayjs';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
 import {
-  getProjects, getProjectStats, createProject, updateProject, cancelProject, getEmployeeOptions
+  getProjects, getProjectStats, createProject, updateProject, cancelProject, getEmployeeOptions,
+  getProjectSectors, addProjectSector
 } from '../../services/projectManagementService';
 import PermanentDeleteProjectDialog from '../../components/ProjectManagement/PermanentDeleteProjectDialog';
 import { ContractTypeTag } from '../../components/ProjectManagement/mainProjectUi';
@@ -38,7 +39,7 @@ const PROJECT_STATUSES = ['Draft', 'Planning', 'Active', 'On Hold', 'Completed',
 const TAJ_SECTORS = [
   'Gardenia', 'Iris', 'Rose', 'Geranium', 'Cosmos', 'Zinnia', 'Blue Bell',
   'Lotus (Exec)', 'Cosmos-II', 'Daffodils', 'Lotus', 'Lavender', 'Tulip',
-  'Lily', 'Jasmine', 'Sun Flower', 'Marigold', 'Daisy'
+  'Lily', 'Jasmine', 'Sun Flower', 'Marigold', 'Daisy', 'Orchid'
 ];
 const SECTORS_BY_TYPE = {
   'INFRASTRUCTURE DEVELOPMENT': TAJ_SECTORS,
@@ -252,7 +253,23 @@ const ProjectFormDialog = ({
     if (!open || companies.length) return;
     api.get('/indents/companies').then((res) => setCompanies(res.data?.data || [])).catch(() => setCompanies([]));
   }, [open, companies.length]);
-  const sectorOptions = SECTORS_BY_TYPE[form.projectType] || [];
+  // Sectors added via "+ Add new sector" — shown for every project type
+  const [customSectors, setCustomSectors] = useState([]);
+  const [newSectorOpen, setNewSectorOpen] = useState(false);
+  const [newSectorName, setNewSectorName] = useState('');
+  const [addingSector, setAddingSector] = useState(false);
+  const [sectorError, setSectorError] = useState('');
+  useEffect(() => {
+    if (!open) return;
+    getProjectSectors().then((res) => setCustomSectors(res.data?.data || [])).catch(() => {});
+  }, [open]);
+  const sectorsFor = (type) => {
+    const base = SECTORS_BY_TYPE[type] || [];
+    if (!base.length) return base;
+    const seen = new Set(base.map((s) => s.toLowerCase()));
+    return [...base, ...customSectors.filter((s) => !seen.has(s.toLowerCase()))];
+  };
+  const sectorOptions = sectorsFor(form.projectType);
 
   useEffect(() => {
     if (!open) return;
@@ -328,7 +345,7 @@ const ProjectFormDialog = ({
     const parent = mainProjects.find((m) => String(m._id) === String(e.target.value));
     setForm((prev) => {
       const type = parent?.projectType || prev.projectType;
-      const options = SECTORS_BY_TYPE[type] || [];
+      const options = sectorsFor(type);
       const spec = sizeSpecFor(type);
       const sizeUnit = spec?.units.includes(prev.sizeUnit) ? prev.sizeUnit : spec?.units[0] || '';
       return { ...prev, parentProject: e.target.value, projectType: type, sector: options.includes(prev.sector) ? prev.sector : '', sizeUnit };
@@ -336,7 +353,7 @@ const ProjectFormDialog = ({
   };
 
   const handleProjectTypeChange = (type) => {
-    const options = SECTORS_BY_TYPE[type] || [];
+    const options = sectorsFor(type);
     setForm((prev) => ({
       ...prev,
       projectType: type,
@@ -344,7 +361,34 @@ const ProjectFormDialog = ({
     }));
   };
 
+  const handleAddSector = async () => {
+    const name = newSectorName.trim().replace(/\s+/g, ' ');
+    if (!name) { setSectorError('Enter a sector name'); return; }
+    setAddingSector(true);
+    setSectorError('');
+    try {
+      const res = await addProjectSector(name);
+      const saved = res.data?.data || name;
+      setCustomSectors((prev) => (prev.some((s) => s.toLowerCase() === saved.toLowerCase()) ? prev : [...prev, saved]));
+      // Pick the built-in spelling if it already exists there
+      const existing = (SECTORS_BY_TYPE[form.projectType] || []).find((s) => s.toLowerCase() === saved.toLowerCase());
+      handleSectorChange(existing || saved);
+      setNewSectorOpen(false);
+      setNewSectorName('');
+    } catch (err) {
+      setSectorError(err.response?.data?.message || 'Could not add sector');
+    } finally {
+      setAddingSector(false);
+    }
+  };
+
   const handleSectorChange = (sector) => {
+    if (sector === '__add_new__') {
+      setNewSectorName('');
+      setSectorError('');
+      setNewSectorOpen(true);
+      return;
+    }
     setForm((prev) => ({
       ...prev,
       sector,
@@ -672,8 +716,36 @@ const ProjectFormDialog = ({
                   {form.sector && !sectorOptions.includes(form.sector) && (
                     <MenuItem value={form.sector}>{form.sector} (legacy)</MenuItem>
                   )}
+                  {sectorOptions.length > 0 && <Divider />}
+                  {sectorOptions.length > 0 && (
+                    <MenuItem value="__add_new__" sx={{ color: 'primary.main', fontWeight: 600 }}>
+                      <AddIcon fontSize="small" sx={{ mr: 1 }} /> Add new sector
+                    </MenuItem>
+                  )}
                 </Select>
               </FormControl>
+              <Dialog open={newSectorOpen} onClose={() => !addingSector && setNewSectorOpen(false)} maxWidth="xs" fullWidth>
+                <DialogTitle>Add new sector / block</DialogTitle>
+                <DialogContent>
+                  <TextField
+                    autoFocus
+                    fullWidth
+                    margin="dense"
+                    label="Sector / Block name"
+                    value={newSectorName}
+                    onChange={(e) => setNewSectorName(e.target.value)}
+                    onKeyDown={(e) => { if (e.key === 'Enter') { e.preventDefault(); handleAddSector(); } }}
+                    error={!!sectorError}
+                    helperText={sectorError || 'It will be available in the Sector list for all projects'}
+                  />
+                </DialogContent>
+                <DialogActions>
+                  <Button onClick={() => setNewSectorOpen(false)} disabled={addingSector}>Cancel</Button>
+                  <Button variant="contained" onClick={handleAddSector} disabled={addingSector}>
+                    {addingSector ? 'Adding…' : 'Add'}
+                  </Button>
+                </DialogActions>
+              </Dialog>
             </Grid>
           )}
 

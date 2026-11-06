@@ -338,6 +338,10 @@ export const uploadCheckRequestAttachments = (projectId, files) => {
   return api.post(`${BASE}/projects/${projectId}/check-requests/attachments`, form, { headers: { 'Content-Type': 'multipart/form-data' } });
 };
 
+/** Sector / Block names added from the project form (on top of the built-in Taj sectors) */
+export const getProjectSectors = () => api.get(`${BASE}/sectors`);
+export const addProjectSector = (name) => api.post(`${BASE}/sectors`, { name });
+
 /** Active employees to pick as Project Manager; with no `q`, also the default manager */
 export const getEmployeeOptions = (q = '') =>
   api.get(`${BASE}/employee-options`, { params: { q } });
