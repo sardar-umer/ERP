@@ -1,9 +1,11 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Alert, Grid, TextField, Table, TableHead,
-  TableRow, TableCell, TableBody, TableContainer, Typography, CircularProgress
+  TableRow, TableCell, TableBody, TableContainer, Typography, CircularProgress, Box, Stack, Chip
 } from '@mui/material';
+import { AttachFile as AttachFileIcon } from '@mui/icons-material';
 import api from '../../../services/api';
+import { resolveUploadFileHref } from '../../../utils/uploadPaths';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const toDate = (d) => (d ? new Date(d).toISOString().slice(0, 10) : '');
@@ -20,10 +22,12 @@ export default function GrnDeveloperEditDialog({ open, grnId, onClose, onSaved }
   const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
+  const [newFiles, setNewFiles] = useState([]);
+  const [removeIds, setRemoveIds] = useState([]);
 
   useEffect(() => {
     if (!open || !grnId) return;
-    setGrn(null); setError(''); setReason('');
+    setGrn(null); setError(''); setReason(''); setNewFiles([]); setRemoveIds([]);
     setLoading(true);
     api.get(`/procurement/goods-receive/${grnId}`)
       .then((res) => {
@@ -61,16 +65,21 @@ export default function GrnDeveloperEditDialog({ open, grnId, onClose, onSaved }
   const save = async () => {
     try {
       setSaving(true); setError('');
-      const res = await api.put(`/procurement/goods-receive/${grnId}/developer-edit`, {
+      const payload = {
         ...header,
         reason,
+        removeAttachmentIds: removeIds,
         items: lines.map((l) => ({
           _id: l._id,
           quantity: Number(l.quantity),
           unitPrice: Number(l.unitPrice),
           location: { rack: l.rack, shelf: l.shelf, bin: l.bin }
         }))
-      });
+      };
+      const fd = new FormData();
+      fd.append('data', JSON.stringify(payload));
+      newFiles.forEach((f) => fd.append('attachments', f));
+      const res = await api.put(`/procurement/goods-receive/${grnId}/developer-edit`, fd);
       onSaved?.(res.data?.message || 'GRN updated');
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to save');
@@ -156,6 +165,50 @@ export default function GrnDeveloperEditDialog({ open, grnId, onClose, onSaved }
                 </TableBody>
               </Table>
             </TableContainer>
+            <Box sx={{ mt: 2 }}>
+              <Typography variant="subtitle2" sx={{ mb: 1 }}>Attachments</Typography>
+              <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mb: 1 }}>
+                {(grn.attachments || []).map((a) => {
+                  const removing = removeIds.includes(String(a._id));
+                  return (
+                    <Chip
+                      key={a._id}
+                      icon={<AttachFileIcon />}
+                      label={a.filename || 'Attachment'}
+                      component="a"
+                      href={resolveUploadFileHref(a.path || '') || undefined}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      clickable
+                      color={removing ? 'error' : 'default'}
+                      variant={removing ? 'filled' : 'outlined'}
+                      sx={removing ? { textDecoration: 'line-through' } : undefined}
+                      onDelete={() => setRemoveIds((p) => (removing ? p.filter((x) => x !== String(a._id)) : [...p, String(a._id)]))}
+                    />
+                  );
+                })}
+                {newFiles.map((f, i) => (
+                  <Chip key={`new-${i}`} icon={<AttachFileIcon />} label={`${f.name} (new)`} color="success" variant="outlined"
+                    onDelete={() => setNewFiles((p) => p.filter((_, j) => j !== i))} />
+                ))}
+                {!(grn.attachments || []).length && !newFiles.length && (
+                  <Typography variant="body2" color="text.secondary">No attachments yet</Typography>
+                )}
+              </Stack>
+              <Button size="small" variant="outlined" component="label" startIcon={<AttachFileIcon />}>
+                Add files
+                <input
+                  hidden
+                  multiple
+                  type="file"
+                  accept=".pdf,.doc,.docx,.xls,.xlsx,image/*"
+                  onChange={(e) => { const picked = Array.from(e.target.files || []); setNewFiles((p) => [...p, ...picked].slice(0, 10)); e.target.value = ''; }}
+                />
+              </Button>
+              <Typography variant="caption" color="text.secondary" sx={{ ml: 1 }}>
+                PDF, image or Office file, up to 10 MB each. Click ✕ on an existing file to remove it.
+              </Typography>
+            </Box>
             {Math.abs(valueDelta) > 0.009 && (
               <Alert severity="info" sx={{ mt: 2 }}>
                 Value change PKR {fmt(valueDelta)} — journal: {valueDelta > 0 ? 'Dr Inventory / Cr GRNI' : 'Dr GRNI / Cr Inventory'}

@@ -50,23 +50,24 @@ function summarizeBill(bill) {
     vendorInvoiceNumber: bill.vendorInvoiceNumber || '',
     status: bill.status,
     totalAmount: round2(bill.totalAmount),
+    voidedAt: bill.voidedAt || null,
+    voidReason: bill.voidReason || '',
     auditReturn: auditReturnInfo(bill)
   };
 }
 
-/** Bills (not voided) linked to any of these GRNs, grouped by GRN id. */
+/** Bills linked to any of these GRNs (voided ones included, so the GRN shows them), grouped by GRN id. */
 async function billsByGrn(grnIds) {
   const ids = (grnIds || []).filter(Boolean);
   const map = new Map();
   if (!ids.length) return map;
   const bills = await AccountsPayable.find({
-    status: { $ne: 'cancelled' },
     $or: [
       { 'linkedGRNs.grnId': { $in: ids } },
       { referenceType: 'grn', referenceId: { $in: ids } }
     ]
   })
-    .select('billNumber vendorInvoiceNumber status totalAmount linkedGRNs referenceId referenceType workflowHistory observations updatedAt createdAt')
+    .select('billNumber vendorInvoiceNumber status totalAmount linkedGRNs referenceId referenceType workflowHistory observations voidedAt voidReason updatedAt createdAt')
     .populate('workflowHistory.changedBy', 'firstName lastName')
     .sort({ createdAt: -1 })
     .lean();

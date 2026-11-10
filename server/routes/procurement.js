@@ -5231,15 +5231,22 @@ router.post('/vendor-bills/:id/resubmit',
 // @desc    Developer-only, audited GRN correction (stock, journal, PO kept in step)
 // @access  Private (developer role only)
 router.put('/goods-receive/:id/developer-edit',
-  asyncHandler(async (req, res) => {
+  (req, res, next) => {
+    // Checked before upload so no one else's files ever land on disk
     if (String(req.user?.role || '') !== 'developer') {
       return res.status(403).json({ success: false, message: 'Only the developer can edit a posted GRN' });
     }
+    next();
+  },
+  handleGrnUpload,
+  parseGrnRequestBody,
+  asyncHandler(async (req, res) => {
     const { developerEditGrn, GrnEditError } = require('../utils/grnDeveloperEdit');
     try {
       const result = await developerEditGrn({
         grnId: req.params.id,
         body: req.body || {},
+        newAttachments: mapUploadedGrnAttachments(req.files || []),
         userId: req.user.id,
         matchPoLine: matchPurchaseOrderLineIndex
       });

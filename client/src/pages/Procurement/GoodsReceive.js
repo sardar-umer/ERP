@@ -709,6 +709,13 @@ const GoodsReceive = () => {
                         <Chip label={receive.status} size="small" color={receive.status === 'Complete' || receive.status === 'Received' ? 'success' : receive.status === 'Partial' ? 'warning' : 'default'} />
                         {(receive.bills || []).map((b) => {
                           const rejected = b.status === 'Returned from Audit';
+                          if (b.status === 'cancelled') {
+                            return (
+                              <Tooltip key={b._id} title={`Bill ${b.billNumber} was voided${b.voidedAt ? ` on ${formatDate(b.voidedAt)}` : ''}${b.voidReason ? `: ${b.voidReason}` : ''}. Its journal was reversed; this GRN can be billed again from GRN's & Bills.`}>
+                                <Chip label={`Bill Voided (${b.billNumber})`} size="small" variant="outlined" sx={{ textDecoration: 'line-through' }} />
+                              </Tooltip>
+                            );
+                          }
                           const tip = rejected
                             ? `Bill ${b.billNumber} rejected by Audit${b.auditReturn?.returnedBy ? ` (${b.auditReturn.returnedBy})` : ''}: ${b.auditReturn?.reason || ''}${(b.auditReturn?.observations || []).length ? ` — ${b.auditReturn.observations.map((o) => o.observation).join('; ')}` : ''}. Stock is not affected. Click to correct and resubmit in GRN's & Bills.`
                             : `Bill ${b.billNumber}: ${b.status}`;

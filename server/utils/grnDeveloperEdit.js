@@ -31,7 +31,7 @@ const HEADER_FIELDS = ['receiveDate', 'notes', 'narration', 'observation', 'gate
 const sameDate = (a, b) => (a ? new Date(a).toISOString().slice(0, 10) : '') === (b ? new Date(b).toISOString().slice(0, 10) : '');
 const locStr = (l) => [l?.rack, l?.shelf, l?.bin].map((x) => x || '').join('/');
 
-async function developerEditGrn({ grnId, body, userId, matchPoLine }) {
+async function developerEditGrn({ grnId, body, userId, matchPoLine, newAttachments = [] }) {
   const reason = String(body?.reason || '').trim();
   if (reason.length < 5) throw new GrnEditError('Give a reason for this correction (it is kept in the GRN history)');
 
@@ -55,6 +55,7 @@ async function developerEditGrn({ grnId, body, userId, matchPoLine }) {
   const items = (grn.items || []).map((l) => ({ ...l }));
   const reqLines = new Map((Array.isArray(body.items) ? body.items : []).map((x) => [String(x._id), x]));
   const moves = []; // { line, idx, qtyDelta, valueDelta, oldQty, newQty, oldPrice, newPrice }
+  let linesTouched = false; // location / notes / qty / rate changed on some line
   for (let i = 0; i < items.length; i += 1) {
     const line = items[i];
     const r = reqLines.get(String(line._id));
@@ -69,10 +70,12 @@ async function developerEditGrn({ grnId, body, userId, matchPoLine }) {
     if (r.location && locStr(r.location) !== locStr(line.location)) {
       changes.push({ field: 'location', line: label, from: locStr(line.location), to: locStr(r.location) });
       line.location = { rack: r.location.rack || '', shelf: r.location.shelf || '', bin: r.location.bin || '' };
+      linesTouched = true;
     }
     if (r.notes !== undefined && String(r.notes) !== String(line.notes || '')) {
       changes.push({ field: 'notes', line: label, from: line.notes || '', to: String(r.notes) });
       line.notes = String(r.notes);
+      linesTouched = true;
     }
 
     if (newQty === oldQty && newPrice === oldPrice) continue;
@@ -109,6 +112,17 @@ async function developerEditGrn({ grnId, body, userId, matchPoLine }) {
     const inventoryRevalue = round2(onHandFromLine * (newPrice - oldPrice));
     const cogsShare = round2(rateDiff - inventoryRevalue);
     moves.push({ line, idx: i, invId, label, qtyDelta, valueDelta, newPrice, inventoryRevalue, cogsShare });
+  }
+
+  // ── Attachments (add new files, remove wrong ones) ──
+  let attachments = null;
+  const removeIds = new Set((Array.isArray(body.removeAttachmentIds) ? body.removeAttachmentIds : []).map(String));
+  if (removeIds.size || newAttachments.length) {
+    const current = Array.isArray(grn.attachments) ? grn.attachments : [];
+    const removed = current.filter((a) => removeIds.has(String(a._id)));
+    attachments = current.filter((a) => !removeIds.has(String(a._id))).concat(newAttachments);
+    if (removed.length) changes.push({ field: 'attachments', from: removed.map((a) => a.filename).join(', '), to: 'removed' });
+    if (newAttachments.length) changes.push({ field: 'attachments', from: '', to: `added ${newAttachments.map((a) => a.filename).join(', ')}` });
   }
 
   if (!changes.length) return { changed: false, grn };
@@ -235,13 +249,15 @@ async function developerEditGrn({ grnId, body, userId, matchPoLine }) {
   }
 
   // ── 4. GRN document: lines, totals, history (plain update — post-save would re-sync stock) ──
-  set.items = items;
-  set.totalItems = items.length;
-  set.totalQuantity = round3(items.reduce((s, l) => s + (Number(l.quantity) || 0), 0));
-  const subtotal = items.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0);
-  set.netAmount = round2(subtotal - (Number(grn.discount) || 0) + (Number(grn.otherCharges) || 0));
-  set.total = set.netAmount;
+  // Only what actually changed is written: an attachment-only edit touches attachments + history, nothing else
+  if (attachments) set.attachments = attachments;
+  if (linesTouched || moves.length) set.items = items;
   if (moves.length) {
+    set.totalItems = items.length;
+    set.totalQuantity = round3(items.reduce((s, l) => s + (Number(l.quantity) || 0), 0));
+    const subtotal = items.reduce((s, l) => s + (Number(l.quantity) || 0) * (Number(l.unitPrice) || 0), 0);
+    set.netAmount = round2(subtotal - (Number(grn.discount) || 0) + (Number(grn.otherCharges) || 0));
+    set.total = set.netAmount;
     const billable = round2(set.netAmount - (Number(grn.returnedAmount) || 0) - (Number(grn.billedAmount) || 0));
     set.billingStatus = billable <= 0.009 && (Number(grn.billedAmount) || 0) > 0 ? 'fully_billed' : (Number(grn.billedAmount) || 0) > 0 ? 'waiting_bills' : 'nothing_to_bill';
   }
