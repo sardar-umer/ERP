@@ -75,6 +75,7 @@ import {
   isQuoteLineStillOrderable
 } from '../../utils/comparativeQuoteItemMatch';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
   { key: 'preparedBy', label: 'Prepared By' },
@@ -2819,18 +2820,22 @@ const PurchaseOrders = () => {
                     <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>
                       No Comparative Statement linked to this Purchase Order.
                     </Typography>
-                  ) : (
-                    <ComparativeStatementView
-                      requisition={viewDialog.data.indent}
-                      quotations={viewDialog.quotations || []}
-                      approvalAuthority={viewDialog.data.indent?.comparativeStatementApprovals || {}}
-                      note={viewDialog.data.indent?.notes ?? ''}
-                      readOnly
-                      formatNumber={formatNumber}
-                      loadingQuotations={false}
-                      showPrintButton={false}
-                    />
-                  )}
+                  ) : (() => {
+                    const lotScope = scopeComparativeToDocumentLot(viewDialog.data, viewDialog.quotations);
+                    return (
+                      <ComparativeStatementView
+                        requisition={viewDialog.data.indent}
+                        quotations={lotScope.quotations}
+                        selectedLot={lotScope.selectedLot}
+                        approvalAuthority={viewDialog.data.indent?.comparativeStatementApprovals || {}}
+                        note={viewDialog.data.indent?.notes ?? ''}
+                        readOnly
+                        formatNumber={formatNumber}
+                        loadingQuotations={false}
+                        showPrintButton={false}
+                      />
+                    );
+                  })()}
                 </Box>
               )}
               {viewDialog.poDetailTab === 4 && (

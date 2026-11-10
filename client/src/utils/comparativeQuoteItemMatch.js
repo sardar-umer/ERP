@@ -314,3 +314,34 @@ export const getComparativeQuoteGrandTotal = (quote, indentItems = [], quotation
   if (usedStoredTotalOnly) return Math.max(0, Number(quote.totalAmount) || 0);
   return Math.max(0, visibleTotal - discountAmount);
 };
+
+const refId = (ref) => String(ref?._id || ref || '');
+
+/**
+ * Scope a comparative statement to the lot a PO / Cash Approval was raised from.
+ * Lot comes from the document's quotation (then, failing that, a vendor who quoted in only one lot).
+ * Single-lot indents and unresolved lots are returned unchanged.
+ * @returns {{ quotations: Array, selectedLot: string|undefined }}
+ */
+export const scopeComparativeToDocumentLot = (doc, quotations = []) => {
+  const list = Array.isArray(quotations) ? quotations : [];
+  const lotOf = (q) => q?.lotNumber || 'A';
+  const lots = [...new Set(list.map(lotOf))];
+  if (lots.length <= 1) return { quotations: list, selectedLot: lots[0] };
+
+  let lot = doc?.quotation?.lotNumber || null;
+  const quotationId = refId(doc?.quotation);
+  if (!lot && quotationId) {
+    const hit = list.find((q) => refId(q) === quotationId);
+    if (hit) lot = lotOf(hit);
+  }
+  if (!lot) {
+    const vendorId = refId(doc?.vendor);
+    if (vendorId) {
+      const vendorLots = [...new Set(list.filter((q) => refId(q.vendor) === vendorId).map(lotOf))];
+      if (vendorLots.length === 1) [lot] = vendorLots;
+    }
+  }
+  if (!lot) return { quotations: list, selectedLot: undefined };
+  return { quotations: list.filter((q) => lotOf(q) === lot), selectedLot: lot };
+};

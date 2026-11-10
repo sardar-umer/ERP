@@ -114,6 +114,7 @@ import { canPerformInitialPreAuditActions } from '../../utils/auditAccess';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 /** Comment from the most recent workflow step that moved the document to Pre-Audit (Send to Audit), e.g. resubmit notes. */
 function getLatestSendToAuditWorkflowComment(workflowHistory) {
@@ -3466,16 +3467,22 @@ const PreAudit = () => {
                   {/* Tab 2: Comparative Statement */}
                   {viewDialog.poAuditTab === 2 && (
                     <Box sx={{ p: 2, overflowX: 'auto' }}>
-                      <ComparativeStatementView
-                        requisition={viewDialog.fullDocument?.indent}
-                        quotations={viewDialog.quotations || []}
-                        approvalAuthority={viewDialog.fullDocument?.indent?.comparativeStatementApprovals || {}}
-                        note={viewDialog.fullDocument?.indent?.notes ?? ''}
-                        readOnly
-                        formatNumber={formatNumber}
-                        loadingQuotations={false}
-                        showPrintButton={false}
-                      />
+                      {(() => {
+                        const lotScope = scopeComparativeToDocumentLot(viewDialog.fullDocument, viewDialog.quotations);
+                        return (
+                          <ComparativeStatementView
+                            requisition={viewDialog.fullDocument?.indent}
+                            quotations={lotScope.quotations}
+                            selectedLot={lotScope.selectedLot}
+                            approvalAuthority={viewDialog.fullDocument?.indent?.comparativeStatementApprovals || {}}
+                            note={viewDialog.fullDocument?.indent?.notes ?? ''}
+                            readOnly
+                            formatNumber={formatNumber}
+                            loadingQuotations={false}
+                            showPrintButton={false}
+                          />
+                        );
+                      })()}
                     </Box>
                   )}
 
@@ -3785,7 +3792,10 @@ const PreAudit = () => {
                       ) : (
                         <ComparativeStatementView
                           requisition={viewDialog.fullDocument.poDetail.indent}
-                          quotations={viewDialog.fullDocument.poDetail.quotations || viewDialog.quotations || []}
+                          {...scopeComparativeToDocumentLot(
+                            viewDialog.fullDocument.poDetail.po,
+                            viewDialog.fullDocument.poDetail.quotations || viewDialog.quotations || []
+                          )}
                           approvalAuthority={viewDialog.fullDocument.poDetail.indent?.comparativeStatementApprovals || {}}
                           note={viewDialog.fullDocument.poDetail.indent?.notes ?? ''}
                           readOnly
@@ -4741,7 +4751,7 @@ const PreAudit = () => {
                     <Box sx={{ p: 2, overflowX: 'auto' }}>
                       <ComparativeStatementView
                         requisition={viewDialog.fullDocument?.indent}
-                        quotations={viewDialog.quotations || []}
+                        {...scopeComparativeToDocumentLot(viewDialog.fullDocument, viewDialog.quotations)}
                         approvalAuthority={viewDialog.fullDocument?.indent?.comparativeStatementApprovals || {}}
                         note={viewDialog.fullDocument?.indent?.notes ?? ''}
                         readOnly
