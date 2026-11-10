@@ -1464,6 +1464,95 @@ router.get('/purchase-orders/:id',
   })
 );
 
+// Multer for purchase order attachments
+const poAttachmentsDir = path.join(__dirname, '../uploads/po-attachments');
+const uploadPoAttachment = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      if (!fs.existsSync(poAttachmentsDir)) fs.mkdirSync(poAttachmentsDir, { recursive: true });
+      cb(null, poAttachmentsDir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `po-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname)}`);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024 },
+  fileFilter: (req, file, cb) => {
+    const ok = /\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif|webp)$/i.test(file.originalname) ||
+      file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf';
+    if (ok) cb(null, true);
+    else cb(new Error('Invalid file type. Only images, PDF, Word and Excel files are allowed'), false);
+  }
+});
+
+// PO attachments can be changed while procurement still owns the document
+const PO_ATTACHMENT_EDITABLE_STATUSES = [
+  'Draft', 'Pending Approval', 'Returned from Audit', 'Returned from CEO Secretariat',
+  'Returned from CEO Office', 'Returned from Finance', 'Rejected'
+];
+
+// @route   POST /api/procurement/purchase-orders/:id/attachments
+// @desc    Upload supporting files to a purchase order (shown to Pre-Audit, CEO, Finance, etc.)
+// @access  Private (Procurement and Admin)
+router.post('/purchase-orders/:id/attachments',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  uploadPoAttachment.array('files', 10),
+  asyncHandler(async (req, res) => {
+    const files = req.files || [];
+    const cleanup = () => files.forEach((f) => fs.unlink(f.path, () => {}));
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      cleanup();
+      return res.status(400).json({ success: false, message: 'Invalid purchase order id' });
+    }
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po) {
+      cleanup();
+      return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    }
+    if (!PO_ATTACHMENT_EDITABLE_STATUSES.includes(po.status)) {
+      cleanup();
+      return res.status(400).json({ success: false, message: `Attachments cannot be changed while the PO is ${po.status}` });
+    }
+    if (!files.length) return res.status(400).json({ success: false, message: 'No files uploaded' });
+    files.forEach((f) => {
+      po.attachments.push({
+        filename: f.filename,
+        originalName: f.originalname,
+        url: `/uploads/po-attachments/${f.filename}`,
+        mimeType: f.mimetype,
+        size: f.size,
+        uploadedBy: req.user.id,
+        uploadedAt: new Date()
+      });
+    });
+    po.updatedBy = req.user.id;
+    await po.save();
+    res.status(201).json({ success: true, message: 'Attachments uploaded', data: po.attachments });
+  })
+);
+
+// @route   DELETE /api/procurement/purchase-orders/:id/attachments/:attachmentId
+// @desc    Remove a supporting file from a purchase order
+// @access  Private (Procurement and Admin)
+router.delete('/purchase-orders/:id/attachments/:attachmentId',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const po = await PurchaseOrder.findById(req.params.id);
+    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (!PO_ATTACHMENT_EDITABLE_STATUSES.includes(po.status)) {
+      return res.status(400).json({ success: false, message: `Attachments cannot be changed while the PO is ${po.status}` });
+    }
+    const att = po.attachments.id(req.params.attachmentId);
+    if (!att) return res.status(404).json({ success: false, message: 'Attachment not found' });
+    const diskPath = att.filename ? path.join(poAttachmentsDir, path.basename(att.filename)) : null;
+    att.deleteOne();
+    po.updatedBy = req.user.id;
+    await po.save();
+    if (diskPath && String(att.url || '').startsWith('/uploads/po-attachments/')) fs.unlink(diskPath, () => {});
+    res.json({ success: true, message: 'Attachment removed', data: po.attachments });
+  })
+);
+
 // @route   POST /api/procurement/purchase-orders
 // @desc    Create new purchase order
 // @access  Private (Procurement and Admin)
@@ -1547,6 +1636,7 @@ router.post('/purchase-orders', [
     delete bodyData.revisedFrom;
   }
 
+  delete bodyData.attachments; // files go through POST /purchase-orders/:id/attachments
   const purchaseOrder = new PurchaseOrder({
     ...bodyData,
     status: 'Pending Approval',
@@ -1753,6 +1843,7 @@ router.put('/purchase-orders/:id', [
 
     const bodyData = { ...req.body };
     if (bodyData.costCenter === '') bodyData.costCenter = null;
+    delete bodyData.attachments; // managed only by the PO attachment endpoints
 
     Object.assign(purchaseOrder, bodyData);
     purchaseOrder.updatedBy = req.user.id;

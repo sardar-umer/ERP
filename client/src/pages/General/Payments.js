@@ -83,6 +83,7 @@ import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog'
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -1026,6 +1027,8 @@ const Payments = () => {
           }
         }}
       >
+        <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
+
         {/* Title - Centered */}
         <Typography
           variant="h4"

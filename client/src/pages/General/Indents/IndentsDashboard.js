@@ -68,6 +68,7 @@ import StoreVettingNotice from '../../../components/Procurement/StoreVettingNoti
 import { formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
 import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
 import { scopeComparativeToDocumentLot } from '../../../utils/comparativeQuoteItemMatch';
+import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/PurchaseOrderAttachments';
 
 // Stat Card Component
 const StatCard = ({ title, value, subtitle, icon, color, onClick }) => (
@@ -524,6 +525,8 @@ const IndentsDashboard = () => {
           }
         }}
       >
+        <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
+
         {/* Title - Centered */}
         <Typography
           variant="h4"

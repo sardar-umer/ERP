@@ -268,7 +268,11 @@ const purchaseOrderSchema = new mongoose.Schema({
   }],
   attachments: [{
     filename: String,
+    originalName: String,
     url: String,
+    mimeType: String,
+    size: Number,
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     uploadedAt: {
       type: Date,
       default: Date.now

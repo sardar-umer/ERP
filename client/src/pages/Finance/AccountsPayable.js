@@ -106,6 +106,7 @@ import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import QuickbooksPayBillsModal from '../../components/Finance/QuickbooksPayBillsModal';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 
 const getBillPayeeEmployeeId = (bill) => {
   const pe = bill?.payeeEmployee;
@@ -3210,6 +3211,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                 {/* Tab 4: Purchase Order */}
                 {billViewTab === 4 && (
                     <Box sx={{ p: 2, overflowX: 'auto' }} className="print-content">
+                    <PurchaseOrderAttachmentsPanel attachments={selectedBill?.poDetail?.po?.attachments} />
                     {!selectedBill?.poDetail?.po ? (
                       <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No Purchase Order linked to this Vendor Bill.</Typography>
                     ) : (

@@ -115,6 +115,7 @@ import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthorit
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 
 /** Comment from the most recent workflow step that moved the document to Pre-Audit (Send to Audit), e.g. resubmit notes. */
 function getLatestSendToAuditWorkflowComment(workflowHistory) {
@@ -1887,6 +1888,8 @@ const PreAudit = () => {
           }
         }}
       >
+        <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
+
         {/* Title - Centered */}
         <Typography
           variant="h4"

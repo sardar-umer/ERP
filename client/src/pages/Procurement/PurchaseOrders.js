@@ -75,6 +75,11 @@ import {
   isQuoteLineStillOrderable
 } from '../../utils/comparativeQuoteItemMatch';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
+import {
+  PurchaseOrderAttachmentsEditor,
+  PurchaseOrderAttachmentsPanel,
+  uploadPurchaseOrderAttachments
+} from '../../components/Procurement/PurchaseOrderAttachments';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
@@ -662,6 +667,17 @@ const PurchaseOrders = () => {
     }
   };
 
+  const [poPendingFiles, setPoPendingFiles] = useState([]);
+  const [poExistingAttachments, setPoExistingAttachments] = useState([]);
+  useEffect(() => {
+    if (!formDialog.open) {
+      setPoPendingFiles([]);
+      setPoExistingAttachments([]);
+      return;
+    }
+    setPoExistingAttachments(formDialog.mode === 'edit' && Array.isArray(formDialog.data?.attachments) ? formDialog.data.attachments : []);
+  }, [formDialog.open, formDialog.mode, formDialog.data]);
+
   const handleSubmit = async () => {
     try {
       setLoading(true);
@@ -712,14 +728,30 @@ const PurchaseOrders = () => {
         }
       }
 
+      // Attachments are managed by their own endpoints, never through the PO body
+      delete payload.attachments;
+
       if (formDialog.mode === 'create') {
-        await api.post('/procurement/purchase-orders', payload);
+        const created = await api.post('/procurement/purchase-orders', payload);
+        const newPoId = created.data?.data?._id;
+        if (poPendingFiles.length && newPoId) {
+          try {
+            await uploadPurchaseOrderAttachments(newPoId, poPendingFiles);
+          } catch (uploadErr) {
+            setError(`PO created, but attachments failed to upload: ${uploadErr.response?.data?.message || uploadErr.message}. Edit the PO to attach them again.`);
+          }
+        }
         setSuccess(
           formDialog.revisedFromPO
             ? `New purchase order created; rejected PO ${formDialog.revisedFromPO.orderNumber} is now closed`
             : 'Purchase order created successfully'
         );
       } else {
+        // Upload before saving: a resubmit moves the PO out of procurement, after which files can't be added
+        if (poPendingFiles.length) {
+          await uploadPurchaseOrderAttachments(formDialog.data._id, poPendingFiles);
+          setPoPendingFiles([]);
+        }
         await api.put(`/procurement/purchase-orders/${formDialog.data._id}`, payload);
         setSuccess(
           formDialog.data.status === 'Rejected'
@@ -1885,6 +1917,16 @@ const PurchaseOrders = () => {
               />
             </Grid>
             <Grid item xs={12}>
+              <PurchaseOrderAttachmentsEditor
+                purchaseOrderId={formDialog.mode === 'edit' ? formDialog.data?._id : null}
+                existing={poExistingAttachments}
+                onExistingChange={setPoExistingAttachments}
+                pendingFiles={poPendingFiles}
+                onPendingChange={setPoPendingFiles}
+                onError={setError}
+              />
+            </Grid>
+            <Grid item xs={12}>
               <Paper sx={{ p: 2, bgcolor: alpha(theme.palette.success.main, 0.1) }}>
                 <Typography variant="h6" align="right">
                   Total: {formatPKR(calculateTotal())}
@@ -2097,6 +2139,8 @@ const PurchaseOrders = () => {
                   }
                 }}
               >
+                <PurchaseOrderAttachmentsPanel attachments={viewDialog.data?.attachments} />
+
                 {/* Title - Centered */}
                 <Typography
                   variant="h4"
