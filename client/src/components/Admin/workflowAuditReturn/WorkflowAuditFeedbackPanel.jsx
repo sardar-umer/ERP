@@ -45,6 +45,7 @@ export function WorkflowAuditFeedbackPanel({
 
   return (
     <AuditReturnFeedbackSection
+      documentId={document._id}
       visualVariant={visualVariant}
       auditStatus={auditStatus}
       returnedAuditStatus={returnedAuditStatus}

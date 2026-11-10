@@ -96,6 +96,10 @@ import {
   utilityMemoTableSx
 } from '../../utils/utilityBillMemoUtils';
 import { WorkflowAuditFeedbackPanel } from '../../components/Admin/workflowAuditReturn';
+import {
+  AuditAttachmentPicker,
+  uploadAuditActionAttachments
+} from '../../components/Audit/AuditActionAttachments';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import CentralizedStoreItemsAuditPanel from '../../components/Audit/CentralizedStoreItemsAuditPanel';
 import FinanceVendorsAuditPanel from '../../components/Audit/FinanceVendorsAuditPanel';
@@ -238,6 +242,8 @@ const PreAudit = () => {
   const [returnComments, setReturnComments] = useState('');
   const [rejectionComments, setRejectionComments] = useState('');
   const [rejectObservations, setRejectObservations] = useState([{ observation: '', severity: 'medium' }]);
+  const [rejectFiles, setRejectFiles] = useState([]);
+  const [returnFiles, setReturnFiles] = useState([]);
   const [storeCatalogOpen, setStoreCatalogOpen] = useState(false);
   const [vendorsCatalogOpen, setVendorsCatalogOpen] = useState(false);
 
@@ -456,6 +462,37 @@ const PreAudit = () => {
     }
   };
 
+  const auditDocumentTypeLabel = (doc) => {
+    if (!doc) return '';
+    if (doc.isManualSalary) return 'Manual Salary';
+    if (doc.isProjectIpc) return 'IPC';
+    if (doc.isCashApproval) return 'Cash Approval';
+    if (doc.isPurchaseOrder) return 'Purchase Order';
+    if (doc.isVendorBill) return 'Vendor Bill';
+    if (doc.isWorkflowDocument) return doc.submodule || doc.sourceModule || 'Workflow Document';
+    return doc.sourceModule || 'Pre Audit Document';
+  };
+
+  /** Upload audit attachments after the reject/return succeeded; report a failure without undoing the action. */
+  const uploadActionFiles = async (doc, files, action, comments) => {
+    if (!files.length) return true;
+    try {
+      await uploadAuditActionAttachments(doc._id, files, {
+        action,
+        documentType: auditDocumentTypeLabel(doc),
+        comments
+      });
+      return true;
+    } catch (uploadErr) {
+      toast.error(
+        `Document was ${action === 'return' ? 'returned' : 'rejected'}, but attachments failed to upload: ${
+          uploadErr.response?.data?.message || uploadErr.message
+        }`
+      );
+      return false;
+    }
+  };
+
   const handleReturn = async () => {
     try {
       setError(null);
@@ -498,9 +535,11 @@ const PreAudit = () => {
         });
       }
       
+      await uploadActionFiles(doc, returnFiles, 'return', returnComments);
       setSuccess('Document returned to department successfully');
       setReturnDialog({ open: false, document: null });
       setReturnComments('');
+      setReturnFiles([]);
       fetchDocuments();
     } catch (error) {
       setError(error.response?.data?.message || 'Failed to return document');
@@ -564,9 +603,11 @@ const PreAudit = () => {
         });
         setSuccess('Document rejected and returned to initiator. They can correct and resend.');
       }
+      await uploadActionFiles(doc, rejectFiles, 'reject', rejectionComments);
       setRejectDialog({ open: false, document: null });
       setRejectionComments('');
       setRejectObservations([{ observation: '', severity: 'medium' }]);
+      setRejectFiles([]);
       setUseStampForAction(false);
       fetchDocuments();
     } catch (error) {
@@ -5445,6 +5486,7 @@ const PreAudit = () => {
         onClose={() => {
           setReturnDialog({ open: false, document: null });
           setReturnComments('');
+          setReturnFiles([]);
         }}
       >
         <DialogTitle>Return Document to Department</DialogTitle>
@@ -5458,11 +5500,13 @@ const PreAudit = () => {
             onChange={(e) => setReturnComments(e.target.value)}
             sx={{ mt: 2, minWidth: 400 }}
           />
+          <AuditAttachmentPicker files={returnFiles} onChange={setReturnFiles} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => {
             setReturnDialog({ open: false, document: null });
             setReturnComments('');
+            setReturnFiles([]);
           }}>Cancel</Button>
           <Button onClick={handleReturn} variant="contained" color="warning">
             Return to Department
@@ -5477,6 +5521,7 @@ const PreAudit = () => {
           setRejectDialog({ open: false, document: null });
           setRejectionComments('');
           setRejectObservations([{ observation: '', severity: 'medium' }]);
+          setRejectFiles([]);
           setUseStampForAction(false);
         }}
         maxWidth="md"
@@ -5561,12 +5606,15 @@ const PreAudit = () => {
           >
             Add Another Observation
           </Button>
+
+          <AuditAttachmentPicker files={rejectFiles} onChange={setRejectFiles} />
         </DialogContent>
         <DialogActions>
           <Button onClick={() => {
             setRejectDialog({ open: false, document: null });
             setRejectionComments('');
             setRejectObservations([{ observation: '', severity: 'medium' }]);
+            setRejectFiles([]);
           }}>Cancel</Button>
           <Button 
             onClick={handleReject} 

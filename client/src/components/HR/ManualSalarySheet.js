@@ -18,6 +18,7 @@ import manualSalaryService from '../../services/manualSalaryService';
 import ManualSalaryForm from './ManualSalaryForm';
 import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
+import { AuditActionAttachmentsPanel } from '../Audit/AuditActionAttachments';
 
 const formatCurrency = (amount) => {
   if (amount === undefined || amount === null) return 'Rs 0';
@@ -531,6 +532,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                   <Typography variant="body2">{detailRecord.rejectionComments || detailRecord.returnComments}</Typography>
                 </Paper>
               )}
+              <AuditActionAttachmentsPanel documentId={detailRecord._id} title="Attachments from Audit" sx={{ mt: 1.5, mb: 0 }} />
             </DialogContent>
             <DialogActions>
               {canActOn(detailRecord) && (

@@ -1176,6 +1176,7 @@ const UtilityBillDetails = ({
         </Box>
 
         <AuditReturnFeedbackSection
+          documentId={bill._id}
           visualVariant="settlement"
           auditStatus={bill.auditStatus}
           returnedAuditStatus="Returned from Audit"

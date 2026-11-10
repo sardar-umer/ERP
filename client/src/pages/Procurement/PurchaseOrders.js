@@ -74,6 +74,7 @@ import {
   isBlankQuoteItem,
   isQuoteLineStillOrderable
 } from '../../utils/comparativeQuoteItemMatch';
+import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
   { key: 'preparedBy', label: 'Prepared By' },
@@ -1485,6 +1486,12 @@ const PurchaseOrders = () => {
               </Grid>
             )}
             
+            {formDialog.mode === 'edit' && formDialog.data?._id && ['Rejected', 'Returned from Audit'].includes(formDialog.data?.status) && (
+              <Grid item xs={12}>
+                <AuditActionAttachmentsPanel documentId={formDialog.data._id} title="Attachments from Audit" sx={{ mb: 0 }} />
+              </Grid>
+            )}
+
             {/* Audit Rejection Observations - Show in edit mode if PO was rejected */}
             {formDialog.mode === 'edit' && formDialog.data?.status === 'Rejected' && formDialog.data?.auditRejectObservations && formDialog.data.auditRejectObservations.length > 0 && (
               <Grid item xs={12}>

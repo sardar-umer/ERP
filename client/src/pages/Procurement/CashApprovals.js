@@ -41,6 +41,7 @@ import {
   serializeCashApprovalItemsForSubmit
 } from '../../utils/cashApprovalFormAttachments';
 import { resolveUploadPublicUrl } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
+import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -1860,6 +1861,12 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
                 ))}
               </Grid>
             </Grid>
+            )}
+
+            {formDialog.mode === 'edit' && formDialog.data?._id && ['Rejected', 'Returned from Audit'].includes(formDialog.data?.status) && (
+              <Grid item xs={12}>
+                <AuditActionAttachmentsPanel documentId={formDialog.data._id} title="Attachments from Audit" sx={{ mb: 0 }} />
+              </Grid>
             )}
 
             {formDialog.mode === 'edit' && formDialog.data?.status === 'Returned from Audit' && formDialog.data?.auditObservations?.length > 0 && (

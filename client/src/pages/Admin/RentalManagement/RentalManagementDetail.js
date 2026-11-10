@@ -532,6 +532,7 @@ const RentalManagementDetail = ({
               </Box>
 
               <AuditReturnFeedbackSection
+                documentId={record._id}
                 auditStatus={record.workflowStatus}
                 returnedAuditStatus="Returned from Audit"
                 latestReturnHistory={workflowAudit.latestReturnHistory}

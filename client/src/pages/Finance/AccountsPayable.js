@@ -104,6 +104,7 @@ import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelector';
 import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import QuickbooksPayBillsModal from '../../components/Finance/QuickbooksPayBillsModal';
+import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 
 const getBillPayeeEmployeeId = (bill) => {
   const pe = bill?.payeeEmployee;
@@ -2801,6 +2802,8 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                       }}
                       showChargesSummary={true}
                     />
+
+                    <AuditActionAttachmentsPanel documentId={selectedBill?._id} title="Attachments from Audit" />
 
                     {canApproveCoaDeptBill(selectedBill) && (
                       <Alert severity="info" sx={{ mb: 2 }}

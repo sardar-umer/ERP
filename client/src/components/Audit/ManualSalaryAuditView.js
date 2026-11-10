@@ -2,6 +2,7 @@ import React from 'react';
 import { Box, Chip, Divider, Grid, Paper, Stack, Table, TableBody, TableCell, TableRow, Typography } from '@mui/material';
 import { formatPKR } from '../../utils/currency';
 import { formatDateTime } from '../../utils/dateUtils';
+import { AuditActionAttachmentsPanel } from './AuditActionAttachments';
 
 const MONTHS = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
 const personName = (u) => (u && typeof u === 'object'
@@ -87,6 +88,8 @@ export default function ManualSalaryAuditView({ record: r }) {
           </Grid>
         ))}
       </Grid>
+
+      <AuditActionAttachmentsPanel documentId={r._id} title="Audit attachments" sx={{ mt: 2 }} />
 
       {(r.auditObservations || []).length > 0 && (
         <>

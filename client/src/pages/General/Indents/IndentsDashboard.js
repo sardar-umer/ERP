@@ -66,6 +66,7 @@ import ComparativeStatementView from '../../../components/Procurement/Comparativ
 import QuotationDetailView from '../../../components/Procurement/QuotationDetailView';
 import StoreVettingNotice from '../../../components/Procurement/StoreVettingNotice';
 import { formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
+import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
 
 // Stat Card Component
 const StatCard = ({ title, value, subtitle, icon, color, onClick }) => (
@@ -536,6 +537,8 @@ const IndentsDashboard = () => {
         >
           Purchase Order
         </Typography>
+
+        <AuditActionAttachmentsPanel documentId={poData?._id} title="Attachments from Audit" />
 
         {/* Audit Observations & Procurement Responses */}
         {hasObservations && (

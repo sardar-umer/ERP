@@ -3,6 +3,7 @@ import { Box, Typography, Paper, Divider, Chip, Table, TableBody, TableCell, Tab
 import { DigitalSignatureImage, ProcurementDigitalSignaturesRow } from '../../../components/common/DigitalSignatureImage';
 import StoreVettingNotice from '../../../components/Procurement/StoreVettingNotice';
 import { sanitizeApprovalAuthorities, formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
+import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
 
 const formatDateForPrint = (date) => {
   if (!date) return '';
@@ -190,6 +191,8 @@ const PODocumentView = ({ data }) => {
       >
         Purchase Order
       </Typography>
+
+      <AuditActionAttachmentsPanel documentId={data?._id} title="Attachments from Audit" />
 
       {/* Audit Observations & Procurement Responses */}
       {hasObservations && (

@@ -10,6 +10,7 @@ import IpcApprovalTrail, { ipcStageText } from './IpcApprovalTrail';
 import { BudgetDocumentFrame } from './ProjectBudgetPanel';
 import { CheckRequestAttachmentsList } from './CheckRequestAttachments';
 import { certificateTitle, day, ipcCertificateHtml, money, pkr, printIpcCertificate } from './ipcCertificateDocument';
+import { AuditActionAttachmentsPanel } from '../Audit/AuditActionAttachments';
 
 // Same quiet document style as the certificate: hairline rules, small uppercase labels, no colour
 const INK = '#18181b';
@@ -196,6 +197,13 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
       <CompanyContext.Provider value={dossier?.company?.name || ''}>
       <Box sx={{ flex: 1, overflowY: 'auto', bgcolor: '#eceef1', p: tab === 'certificate' || tab === 'budget' ? 0 : { xs: 1.5, sm: 3.5 } }}>
         {error && <Alert severity="error" sx={{ m: 2 }}>{error}</Alert>}
+        {open && ipcId && (
+          <AuditActionAttachmentsPanel
+            documentId={ipcId}
+            title="Attachments from Audit"
+            sx={{ maxWidth: 820, mx: 'auto', mt: 2, bgcolor: '#fff' }}
+          />
+        )}
         {!dossier && !error && (
           <Box sx={{ maxWidth: 820, mx: 'auto', mt: 4, bgcolor: '#fff', p: 6 }}><Skeleton height={40} /><Skeleton height={160} /><Skeleton height={220} /></Box>
         )}

@@ -863,6 +863,63 @@ router.get('/finance-vendors/bills/:id',
   })
 );
 
+// @route   POST /api/pre-audit/:id/audit-attachments
+// @desc    Attach files to an audit rejection / return (any source module, keyed by document id)
+// @access  Private (Audit roles)
+router.post('/:id/audit-attachments',
+  authMiddleware,
+  authorize('super_admin', 'audit_manager', 'auditor', 'audit_director'),
+  upload.array('files', 10),
+  asyncHandler(async (req, res) => {
+    const mongoose = require('mongoose');
+    const AuditActionAttachment = require('../models/audit/AuditActionAttachment');
+    const files = req.files || [];
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      files.forEach((f) => fs.unlink(f.path, () => {}));
+      return res.status(400).json({ success: false, message: 'Invalid document id' });
+    }
+    if (files.length === 0) {
+      return res.status(400).json({ success: false, message: 'No files uploaded' });
+    }
+    const action = ['reject', 'return', 'observation'].includes(req.body.action) ? req.body.action : 'reject';
+    const record = await AuditActionAttachment.create({
+      documentId: req.params.id,
+      documentType: String(req.body.documentType || '').slice(0, 100),
+      action,
+      comments: String(req.body.comments || '').slice(0, 2000),
+      files: files.map((f) => ({
+        filename: f.filename,
+        originalName: f.originalname,
+        path: `/uploads/pre-audit/${f.filename}`,
+        mimeType: f.mimetype,
+        size: f.size
+      })),
+      uploadedBy: req.user.id
+    });
+    await record.populate('uploadedBy', 'firstName lastName email');
+    res.status(201).json({ success: true, message: 'Attachments uploaded', data: record });
+  })
+);
+
+// @route   GET /api/pre-audit/:id/audit-attachments
+// @desc    Files attached by audit when rejecting / returning this document (visible to the initiator)
+// @access  Private (any authenticated user who can open the document)
+router.get('/:id/audit-attachments',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const mongoose = require('mongoose');
+    const AuditActionAttachment = require('../models/audit/AuditActionAttachment');
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.json({ success: true, data: [] });
+    }
+    const rows = await AuditActionAttachment.find({ documentId: req.params.id })
+      .sort({ createdAt: -1 })
+      .populate('uploadedBy', 'firstName lastName email')
+      .lean();
+    res.json({ success: true, data: rows });
+  })
+);
+
 // @route   GET /api/pre-audit/:id
 // @desc    Get a single pre-audit document by ID
 // @access  Private (Super Admin, Audit Manager, Auditor)

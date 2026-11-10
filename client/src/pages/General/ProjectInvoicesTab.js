@@ -21,6 +21,7 @@ import IpcKindDialog from '../../components/ProjectManagement/IpcKindDialog';
 import ClientBillingLines from '../../components/ProjectManagement/ClientBillingLines';
 import IpcApprovalTrail, { IPC_APPROVAL_COLOR, ipcStageText } from '../../components/ProjectManagement/IpcApprovalTrail';
 import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
+import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 
 const isIpc = (inv) => inv?.invoiceType === 'Subcontractor_IPC';
 /** Documents that travel the approval chain: every IPC, and client invoices raised since the chain existed */
@@ -719,6 +720,9 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                   <Alert severity="error" sx={{ mb: 1 }}>
                     <strong>{ipcStageText(editInvoice)}:</strong> {editInvoice.rejection.comments}
                   </Alert>
+                )}
+                {editInvoice.approvalStatus === 'Rejected' && (
+                  <AuditActionAttachmentsPanel documentId={editInvoice._id} title="Attachments from Audit" sx={{ mb: 1 }} />
                 )}
                 <Alert severity="info">
                   Change quantities (up to the verified work) or deductions. The rate stays the verified rate.

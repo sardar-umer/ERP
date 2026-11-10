@@ -7,6 +7,7 @@ import {
   Stack,
   Typography
 } from '@mui/material';
+import { AuditActionAttachmentsPanel } from '../../Audit/AuditActionAttachments';
 
 const SETTLEMENT_PANEL_SX = {
   mb: 3,
@@ -37,6 +38,8 @@ function severityIsElevated(sev) {
  * Read-only panel: audit return context + structured observations (shared across admin workflow modules).
  */
 export function AuditReturnFeedbackSection({
+  /** When set, files Audit attached on reject/return are listed inside the panel. */
+  documentId,
   auditStatus,
   returnedAuditStatus = 'Returned from Audit',
   latestReturnHistory,
@@ -240,6 +243,9 @@ export function AuditReturnFeedbackSection({
           {emptyReturnFallback}
         </Typography>
       )}
+      {documentId ? (
+        <AuditActionAttachmentsPanel documentId={documentId} sx={{ mt: 2, mb: 0, bgcolor: '#fff' }} />
+      ) : null}
     </Box>
   );
 }
