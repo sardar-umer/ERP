@@ -93,6 +93,7 @@ import {
   getNewHiringAuthorityCards,
   getNewHiringEmployees
 } from '../../utils/newHiringEmployees';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 /** `showIpcTab`: give contractor IPCs their own tab (President Dashboard) */
 const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
@@ -2499,7 +2500,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
                     <Box sx={{ p: 2, overflowX: 'auto' }}>
                       <ComparativeStatementView
                         requisition={viewDialog.settlement?.indent}
-                        quotations={viewDialog.poQuotations || []}
+                        {...scopeComparativeToDocumentLot(viewDialog.settlement, viewDialog.poQuotations)}
                         approvalAuthority={viewDialog.settlement?.indent?.comparativeStatementApprovals || {}}
                         note={viewDialog.settlement?.indent?.notes ?? ''}
                         readOnly

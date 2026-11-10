@@ -82,6 +82,7 @@ import { formatDateTime } from '../../utils/dateUtils';
 import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthority';
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -2228,7 +2229,7 @@ const Payments = () => {
                     <Box sx={{ p: 2, overflowX: 'auto' }}>
                       <ComparativeStatementView
                         requisition={viewDialog.settlement?.indent}
-                        quotations={viewDialog.poQuotations || []}
+                        {...scopeComparativeToDocumentLot(viewDialog.settlement, viewDialog.poQuotations)}
                         approvalAuthority={viewDialog.settlement?.indent?.comparativeStatementApprovals || {}}
                         note={viewDialog.settlement?.indent?.notes ?? ''}
                         readOnly

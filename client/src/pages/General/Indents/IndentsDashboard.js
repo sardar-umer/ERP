@@ -67,6 +67,7 @@ import QuotationDetailView from '../../../components/Procurement/QuotationDetail
 import StoreVettingNotice from '../../../components/Procurement/StoreVettingNotice';
 import { formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
 import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
+import { scopeComparativeToDocumentLot } from '../../../utils/comparativeQuoteItemMatch';
 
 // Stat Card Component
 const StatCard = ({ title, value, subtitle, icon, color, onClick }) => (
@@ -2068,7 +2069,7 @@ const IndentsDashboard = () => {
                     <Box sx={{ p: 2, overflowX: 'auto' }}>
                       <ComparativeStatementView
                         requisition={viewDialog.settlement?.indent}
-                        quotations={viewDialog.poQuotations || []}
+                        {...scopeComparativeToDocumentLot(viewDialog.settlement, viewDialog.poQuotations)}
                         approvalAuthority={viewDialog.settlement?.indent?.comparativeStatementApprovals || {}}
                         note={viewDialog.settlement?.indent?.notes ?? ''}
                         readOnly

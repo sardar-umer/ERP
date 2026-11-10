@@ -105,6 +105,7 @@ import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelec
 import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import QuickbooksPayBillsModal from '../../components/Finance/QuickbooksPayBillsModal';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const getBillPayeeEmployeeId = (bill) => {
   const pe = bill?.payeeEmployee;
@@ -3194,7 +3195,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                     ) : (
                       <ComparativeStatementView
                         requisition={selectedBill.poDetail.indent}
-                        quotations={selectedBill.poDetail.quotations || []}
+                        {...scopeComparativeToDocumentLot(selectedBill.poDetail.po, selectedBill.poDetail.quotations)}
                         approvalAuthority={selectedBill.poDetail.indent?.comparativeStatementApprovals || {}}
                         note={selectedBill.poDetail.indent?.notes ?? ''}
                         readOnly

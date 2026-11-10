@@ -62,6 +62,7 @@ import { fetchFinanceAuthorityCandidates } from '../../services/financeApprovalA
 
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import toast from 'react-hot-toast';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 // Default finance voucher signatories (same as Bill Payment / vendor bill form)
 const SR_MANAGER_ACCOUNTS_NAME = 'Muhammad Iftikhar Rashid';
@@ -2423,7 +2424,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
                 <Box sx={{ p: 2, overflowX: 'auto' }}>
                   <ComparativeStatementView
                     requisition={viewDialog.po?.indent}
-                    quotations={viewDialog.poQuotations || []}
+                    {...scopeComparativeToDocumentLot(viewDialog.po, viewDialog.poQuotations)}
                     approvalAuthority={viewDialog.po?.indent?.comparativeStatementApprovals || {}}
                     note={viewDialog.po?.indent?.notes ?? ''}
                     readOnly

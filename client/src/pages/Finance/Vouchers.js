@@ -64,6 +64,7 @@ import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthorit
 import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
 import DeleteIcon from '@mui/icons-material/Delete';
+import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const formatDateForPrint = (date) => {
   if (!date) return '—';
@@ -1888,7 +1889,7 @@ const Vouchers = () => {
                 >
                   <ComparativeStatementView
                     requisition={viewDialog.po?.indent}
-                    quotations={viewDialog.poQuotations || []}
+                    {...scopeComparativeToDocumentLot(viewDialog.po, viewDialog.poQuotations)}
                     approvalAuthority={viewDialog.po?.indent?.comparativeStatementApprovals || {}}
                     note={viewDialog.po?.indent?.notes ?? ''}
                     readOnly
