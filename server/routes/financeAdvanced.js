@@ -5817,6 +5817,15 @@ router.delete('/accounts-payable/:id',
     bill.voidReason = String(req.body?.reason || req.query?.reason || '').trim();
     await bill.save();
 
+    // A voided GRN bill gives its amount back to the GRN(s), so they can be billed again correctly
+    if (Array.isArray(bill.linkedGRNs) && bill.linkedGRNs.length) {
+      try {
+        await require('../utils/grnBillStatus').releaseGrnBilling(bill);
+      } catch (gErr) {
+        console.warn('Could not release GRN billing on void', gErr.message);
+      }
+    }
+
     res.json({
       success: true,
       message: `Bill ${bill.billNumber} voided${reversals.length ? ` — journal reversed (${reversals.join(', ')})` : ''}`,

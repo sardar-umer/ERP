@@ -11,7 +11,7 @@ import {
   LocalShipping as ReceiveIcon, Add as AddIcon, Visibility as ViewIcon,
   Search as SearchIcon, Refresh as RefreshIcon, Close as CloseIcon, Print as PrintIcon,
   Inventory as InventoryIcon, QrCode as QrCodeIcon, AttachFile as AttachFileIcon,
-  Delete as DeleteIcon
+  Delete as DeleteIcon, Undo as ReturnIcon, Edit as EditIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { getDocCompanyName } from '../../utils/documentCompany';
@@ -21,6 +21,8 @@ import { useAuth } from '../../contexts/AuthContext';
 import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
 import BarcodePrintLabel from '../../components/Procurement/Store/BarcodePrintLabel';
 import LocationSelector from '../../components/Procurement/Store/LocationSelector';
+import GrnReturnDialog from '../../components/Procurement/Store/GrnReturnDialog';
+import GrnDeveloperEditDialog from '../../components/Procurement/Store/GrnDeveloperEditDialog';
 import { resolveUploadFileHref } from '../../utils/uploadPaths';
 
 const makeEmptyItem = () => ({
@@ -129,6 +131,9 @@ const GoodsReceive = () => {
   const { user } = useAuth();
   const location = useLocation();
   const navigate = useNavigate();
+  const [returnGrn, setReturnGrn] = useState(null);
+  const [devEditGrnId, setDevEditGrnId] = useState(null);
+  const isDeveloper = String(user?.role || '') === 'developer';
   const [searchParams, setSearchParams] = useSearchParams();
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -702,7 +707,34 @@ const GoodsReceive = () => {
                     <TableCell>
                       <Stack direction="row" gap={0.5} flexWrap="wrap">
                         <Chip label={receive.status} size="small" color={receive.status === 'Complete' || receive.status === 'Received' ? 'success' : receive.status === 'Partial' ? 'warning' : 'default'} />
-                        {receive.billingStatus === 'fully_billed' && <Chip label="Billed" size="small" color="info" />}
+                        {(receive.bills || []).map((b) => {
+                          const rejected = b.status === 'Returned from Audit';
+                          const tip = rejected
+                            ? `Bill ${b.billNumber} rejected by Audit${b.auditReturn?.returnedBy ? ` (${b.auditReturn.returnedBy})` : ''}: ${b.auditReturn?.reason || ''}${(b.auditReturn?.observations || []).length ? ` — ${b.auditReturn.observations.map((o) => o.observation).join('; ')}` : ''}. Stock is not affected. Click to correct and resubmit in GRN's & Bills.`
+                            : `Bill ${b.billNumber}: ${b.status}`;
+                          return (
+                            <Tooltip key={b._id} title={tip}>
+                              <Chip
+                                label={rejected ? `Bill Rejected (${b.billNumber})` : `Bill: ${b.status}`}
+                                size="small"
+                                color={rejected ? 'error' : (b.status === 'paid' ? 'success' : 'info')}
+                                variant={rejected ? 'filled' : 'outlined'}
+                                onClick={() => navigate(`/procurement/vendor-bills?bill=${b._id}`)}
+                              />
+                            </Tooltip>
+                          );
+                        })}
+                        {receive.billingStatus === 'fully_billed' && !(receive.bills || []).length && <Chip label="Billed" size="small" color="info" />}
+                        {(receive.editHistory || []).length > 0 && (
+                          <Tooltip title={`Corrected ${receive.editHistory.length} time(s) — see View for details`}>
+                            <Chip label="Edited" size="small" color="secondary" variant="outlined" />
+                          </Tooltip>
+                        )}
+                        {receive.returnStatus && receive.returnStatus !== 'none' && (
+                          <Tooltip title={`Returned to vendor: PKR ${Number(receive.returnedAmount || 0).toLocaleString('en-PK')} (${(receive.returnHistory || []).map((h) => h.returnNumber).join(', ')})`}>
+                            <Chip label={receive.returnStatus === 'full' ? 'Fully Returned' : 'Partly Returned'} size="small" color="warning" variant="outlined" />
+                          </Tooltip>
+                        )}
                       </Stack>
                     </TableCell>
                     <TableCell>
@@ -718,6 +750,20 @@ const GoodsReceive = () => {
                           <ViewIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
+                      {isDeveloper && (
+                        <Tooltip title="Developer edit (audited correction)">
+                          <IconButton size="small" color="secondary" onClick={() => setDevEditGrnId(receive._id)}>
+                            <EditIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
+                      {['Received', 'Complete', 'Partial'].includes(receive.status) && receive.returnStatus !== 'full' && (
+                        <Tooltip title="Return to Vendor (goods going back — reduces stock)">
+                          <IconButton size="small" color="warning" onClick={() => setReturnGrn(receive)}>
+                            <ReturnIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      )}
                       <Tooltip title="Sync to inventory">
                         <IconButton size="small" color="primary" onClick={async () => {
                           try {
@@ -1372,6 +1418,26 @@ const GoodsReceive = () => {
                 </Box>
                 <Box sx={{ width: 120, height: 40, border: '1px dashed', borderColor: 'divider' }} />
               </Box>
+              {Array.isArray(viewDialog.data.editHistory) && viewDialog.data.editHistory.length > 0 && (
+                <Box sx={{ mt: 2, '@media print': { display: 'none' } }}>
+                  <Divider sx={{ mb: 1 }} />
+                  <Typography variant="subtitle2" sx={{ mb: 0.5 }}>Correction history</Typography>
+                  {viewDialog.data.editHistory.map((h, idx) => (
+                    <Box key={idx} sx={{ mb: 1 }}>
+                      <Typography variant="body2" fontWeight={600}>
+                        {h.reference} · {formatDate(h.at)} · {h.by?.firstName ? `${h.by.firstName} ${h.by.lastName || ''}`.trim() : 'Developer'}
+                        {h.journalEntry?.entryNumber ? ` · Journal ${h.journalEntry.entryNumber}` : ''}
+                      </Typography>
+                      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>Reason: {h.reason}</Typography>
+                      {(h.changes || []).map((c, j) => (
+                        <Typography key={j} variant="caption" sx={{ display: 'block' }}>
+                          • {c.line ? `${c.line} — ` : ''}{c.field}: {c.from || '—'} → {c.to || '—'}
+                        </Typography>
+                      ))}
+                    </Box>
+                  ))}
+                </Box>
+              )}
               {Array.isArray(viewDialog.data.attachments) && viewDialog.data.attachments.length > 0 && (
                 <Box sx={{ mt: 2, '@media print': { display: 'none' } }}>
                   <Divider sx={{ mb: 1 }} />
@@ -1435,6 +1501,18 @@ const GoodsReceive = () => {
         open={barcodePrintOpen}
         onClose={() => setBarcodePrintOpen(false)}
         items={barcodePrintItems}
+      />
+      <GrnDeveloperEditDialog
+        open={!!devEditGrnId}
+        grnId={devEditGrnId}
+        onClose={() => setDevEditGrnId(null)}
+        onSaved={(msg) => { setDevEditGrnId(null); setSuccess(msg); loadReceives(); loadInventory(); }}
+      />
+      <GrnReturnDialog
+        open={!!returnGrn}
+        grn={returnGrn}
+        onClose={() => setReturnGrn(null)}
+        onPosted={(msg) => { setReturnGrn(null); setSuccess(msg); loadReceives(); loadInventory(); }}
       />
     </Box>
   );

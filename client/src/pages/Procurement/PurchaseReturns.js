@@ -12,13 +12,11 @@ import {
 import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { getDocCompanyName } from '../../utils/documentCompany';
+import GrnReturnDialog from '../../components/Procurement/Store/GrnReturnDialog';
 
 const STATUS_COLOR = { draft: 'default', confirmed: 'info', posted: 'success' };
-const REASONS = ['defective', 'wrong_item', 'over_delivered', 'quality_issue', 'other'];
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2 });
-
-const emptyForm = { goodsReceive: '', reason: 'defective', notes: '', items: [] };
 
 export default function PurchaseReturns() {
   const navigate = useNavigate();
@@ -27,11 +25,11 @@ export default function PurchaseReturns() {
   const [error, setError]     = useState('');
   const [success, setSuccess] = useState('');
   const [open, setOpen]       = useState(false);
-  const [form, setForm]       = useState(emptyForm);
-  const [saving, setSaving]   = useState(false);
   const [viewOpen, setViewOpen] = useState(false);
   const [selected, setSelected] = useState(null);
   const [grns, setGrns]       = useState([]);
+  const [pickGrnId, setPickGrnId] = useState('');
+  const [returnGrn, setReturnGrn] = useState(null);
 
   const load = useCallback(async () => {
     try {
@@ -56,30 +54,14 @@ export default function PurchaseReturns() {
     } catch { setGrns([]); }
   };
 
-  const openAdd = () => { loadGRNs(); setForm(emptyForm); setOpen(true); };
+  const openAdd = () => { loadGRNs(); setPickGrnId(''); setOpen(true); };
 
-  const addItem = () => setForm({ ...form, items: [...form.items, { itemName: '', itemCode: '', quantity: 1, unitPrice: 0, reason: '' }] });
-  const setItem = (idx, field, val) => {
-    const items = [...form.items];
-    items[idx] = { ...items[idx], [field]: val };
-    setForm({ ...form, items });
-  };
-  const removeItem = (idx) => setForm({ ...form, items: form.items.filter((_, i) => i !== idx) });
-
-  const handleSave = async () => {
-    if (!form.goodsReceive) { setError('GRN is required'); return; }
-    if (form.items.length === 0) { setError('Add at least one item'); return; }
-    setSaving(true);
-    try {
-      await api.post('/procurement/purchase-returns', form);
-      setSuccess('Purchase return created');
-      setOpen(false);
-      load();
-    } catch (e) {
-      setError(e.response?.data?.message || 'Failed to create return');
-    } finally {
-      setSaving(false);
-    }
+  // Returns are always made from a GRN's own lines, so stock and the GRN stay in step
+  const continueWithGrn = () => {
+    const g = grns.find((x) => String(x._id) === String(pickGrnId));
+    if (!g) { setError('Select a GRN'); return; }
+    setOpen(false);
+    setReturnGrn(g);
   };
 
   const handleConfirm = async (id) => {
@@ -183,46 +165,35 @@ export default function PurchaseReturns() {
         </TableContainer>
       )}
 
-      {/* New Return Dialog */}
-      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="md" fullWidth>
+      {/* New Return: pick the GRN, then return its lines */}
+      <Dialog open={open} onClose={() => setOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>New Purchase Return</DialogTitle>
         <DialogContent>
           <Stack gap={2} mt={1}>
-            {error && <Alert severity="error">{error}</Alert>}
-            <Stack direction="row" gap={2}>
-              <TextField select label="GRN *" value={form.goodsReceive} onChange={e => setForm({ ...form, goodsReceive: e.target.value })} fullWidth>
-                {grns.map(g => <MenuItem key={g._id} value={g._id}>{g.receiveNumber} — {new Date(g.receiveDate).toLocaleDateString()}</MenuItem>)}
-              </TextField>
-              <TextField select label="Return Reason" value={form.reason} onChange={e => setForm({ ...form, reason: e.target.value })} fullWidth>
-                {REASONS.map(r => <MenuItem key={r} value={r} sx={{ textTransform: 'capitalize' }}>{r.replace('_', ' ')}</MenuItem>)}
-              </TextField>
-            </Stack>
-            <TextField label="Notes" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} multiline rows={2} fullWidth />
-
-            <Stack direction="row" justifyContent="space-between" alignItems="center">
-              <Typography variant="subtitle2" fontWeight={600}>Items to Return</Typography>
-              <Button size="small" startIcon={<AddIcon />} onClick={addItem}>Add Item</Button>
-            </Stack>
-
-            {form.items.map((item, idx) => (
-              <Stack key={idx} direction="row" gap={1} alignItems="center">
-                <TextField label="Item Name" value={item.itemName} onChange={e => setItem(idx, 'itemName', e.target.value)} fullWidth />
-                <TextField label="Code" value={item.itemCode} onChange={e => setItem(idx, 'itemCode', e.target.value)} sx={{ maxWidth: 100 }} />
-                <TextField label="Qty" type="number" value={item.quantity} onChange={e => setItem(idx, 'quantity', Number(e.target.value))} sx={{ maxWidth: 80 }} inputProps={{ min: 0.001, step: 0.001 }} />
-                <TextField label="Unit Price" type="number" value={item.unitPrice} onChange={e => setItem(idx, 'unitPrice', Number(e.target.value))} sx={{ maxWidth: 110 }} inputProps={{ min: 0 }} />
-                <IconButton color="error" size="small" onClick={() => removeItem(idx)}><DeleteIcon fontSize="small" /></IconButton>
-              </Stack>
-            ))}
-            {form.items.length === 0 && (
-              <Typography variant="body2" color="text.secondary" align="center">Click "Add Item" to add items to return</Typography>
-            )}
+            <TextField select label="GRN *" value={pickGrnId} onChange={e => setPickGrnId(e.target.value)} fullWidth>
+              {grns.filter(g => g.returnStatus !== 'full').map(g => (
+                <MenuItem key={g._id} value={g._id}>
+                  {g.receiveNumber} — {g.supplierName || g.supplier?.name || ''} — {new Date(g.receiveDate).toLocaleDateString()}
+                </MenuItem>
+              ))}
+            </TextField>
+            <Typography variant="body2" color="text.secondary">
+              You will pick the quantities from the GRN's own lines. Only goods still in stock can be returned.
+            </Typography>
           </Stack>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setOpen(false)}>Cancel</Button>
-          <Button variant="contained" onClick={handleSave} disabled={saving}>{saving ? 'Creating…' : 'Create Return'}</Button>
+          <Button variant="contained" onClick={continueWithGrn} disabled={!pickGrnId}>Continue</Button>
         </DialogActions>
       </Dialog>
+
+      <GrnReturnDialog
+        open={!!returnGrn}
+        grn={returnGrn}
+        onClose={() => setReturnGrn(null)}
+        onPosted={(msg) => { setReturnGrn(null); setSuccess(msg); load(); }}
+      />
 
       {/* View Dialog */}
       {selected && (

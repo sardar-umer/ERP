@@ -1,18 +1,26 @@
 import React, { useEffect, useMemo, useState, useCallback } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Grid, TextField, MenuItem, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Checkbox,
   Tabs, Tab, Chip, CircularProgress, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material';
+import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 
 const VendorBills = () => {
   const navigate = useNavigate();
-  const [tabIndex, setTabIndex] = useState(0);
+  const [searchParams] = useSearchParams();
+  const focusBillId = searchParams.get('bill') || '';
+  const [tabIndex, setTabIndex] = useState(focusBillId ? 1 : 0);
+  const [reasonBill, setReasonBill] = useState(null);
+  const [editBill, setEditBill] = useState(null);
+  const [editForm, setEditForm] = useState({ vendorInvoiceNumber: '', billDate: '', paymentTerms: 'net_30', notes: '' });
+  const [resubmitBill, setResubmitBill] = useState(null);
+  const [resubmitComments, setResubmitComments] = useState('');
+  const [actionBusy, setActionBusy] = useState(false);
   const [vendors, setVendors] = useState([]);
   const [vendorId, setVendorId] = useState('');
   const [grns, setGrns] = useState([]);
@@ -42,10 +50,11 @@ const VendorBills = () => {
     try {
       setDeletingBill(true);
       await api.delete(`/finance/accounts-payable/${billToDelete._id}`);
-      setSuccess(`✓ Bill ${billToDelete.billNumber} deleted successfully`);
+      setSuccess(`✓ Bill ${billToDelete.billNumber} voided — its GRN amount is billable again`);
       setDeleteDialogOpen(false);
       setBillToDelete(null);
       loadCreatedBills(vendorId);
+      loadGrns(vendorId);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete bill');
     } finally {
@@ -71,8 +80,8 @@ const VendorBills = () => {
       setBillsLoading(true);
       const params = { limit: 100 };
       if (vId) params.vendorId = vId;
-      const res = await api.get('/finance/accounts-payable', { params });
-      setCreatedBills(res.data?.data?.bills || res.data?.data || []);
+      const res = await api.get('/procurement/vendor-bills', { params });
+      setCreatedBills(res.data?.data?.bills || []);
     } catch (e) {
       setError('Failed to load created vendor bills');
     } finally {
@@ -141,6 +150,49 @@ const VendorBills = () => {
       setError(e.response?.data?.message || 'Failed to create vendor bill');
     } finally {
       setLoading(false);
+    }
+  };
+
+  const rejectedCount = useMemo(() => createdBills.filter((b) => b.status === 'Returned from Audit').length, [createdBills]);
+
+  const openEdit = (b) => {
+    setEditForm({
+      vendorInvoiceNumber: b.vendorInvoiceNumber || '',
+      billDate: b.billDate ? String(b.billDate).slice(0, 10) : '',
+      paymentTerms: b.paymentTerms || 'net_30',
+      notes: b.notes || ''
+    });
+    setEditBill(b);
+  };
+
+  const saveEdit = async () => {
+    if (!editBill) return;
+    try {
+      setActionBusy(true);
+      const res = await api.put(`/procurement/vendor-bills/${editBill._id}`, editForm);
+      setSuccess(res.data?.message || 'Bill updated');
+      setEditBill(null);
+      loadCreatedBills(vendorId);
+    } catch (e) {
+      setError(e.response?.data?.message || e.response?.data?.errors?.[0]?.msg || 'Failed to update bill');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  const doResubmit = async () => {
+    if (!resubmitBill) return;
+    try {
+      setActionBusy(true);
+      const res = await api.post(`/procurement/vendor-bills/${resubmitBill._id}/resubmit`, { comments: resubmitComments });
+      setSuccess(res.data?.message || 'Bill resubmitted to Pre-Audit');
+      setResubmitBill(null);
+      setResubmitComments('');
+      loadCreatedBills(vendorId);
+    } catch (e) {
+      setError(e.response?.data?.message || 'Failed to resubmit bill');
+    } finally {
+      setActionBusy(false);
     }
   };
 
@@ -214,7 +266,7 @@ const VendorBills = () => {
       <Paper sx={{ p: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
           <Tab label={`Unbilled GRNs (${grns.length})`} />
-          <Tab label={`Created Vendor Bills (${createdBills.length})`} />
+          <Tab label={`Created Vendor Bills (${createdBills.length})${rejectedCount ? ` · ${rejectedCount} rejected by Audit` : ''}`} />
         </Tabs>
 
         {tabIndex === 0 && (
@@ -299,6 +351,7 @@ const VendorBills = () => {
                 <TableHead>
                   <TableRow>
                     <TableCell>Bill #</TableCell>
+                    <TableCell>GRN(s)</TableCell>
                     <TableCell>Company</TableCell>
                     <TableCell>Vendor Invoice #</TableCell>
                     <TableCell>Supplier / Vendor</TableCell>
@@ -312,13 +365,21 @@ const VendorBills = () => {
                 </TableHead>
                 <TableBody>
                   {billsLoading ? (
-                    <TableRow><TableCell colSpan={10} align="center"><CircularProgress size={24} /></TableCell></TableRow>
+                    <TableRow><TableCell colSpan={11} align="center"><CircularProgress size={24} /></TableCell></TableRow>
                   ) : createdBills.length === 0 ? (
-                    <TableRow><TableCell colSpan={10} align="center">No vendor bills created yet</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={11} align="center">No vendor bills created yet</TableCell></TableRow>
                   ) : (
-                    createdBills.map((b) => (
-                      <TableRow key={b._id} hover>
+                    createdBills.map((b) => {
+                      const rejected = b.status === 'Returned from Audit';
+                      return (
+                      <TableRow
+                        key={b._id}
+                        hover
+                        selected={String(b._id) === focusBillId}
+                        sx={rejected ? { bgcolor: 'rgba(211, 47, 47, 0.06)' } : undefined}
+                      >
                         <TableCell><Typography variant="body2" fontWeight="bold">{b.billNumber}</Typography></TableCell>
+                        <TableCell>{(b.linkedGRNs || []).map((l) => l.grnNumber).filter(Boolean).join(', ') || '—'}</TableCell>
                         <TableCell>{billCompanyName(b)}</TableCell>
                         <TableCell>{b.vendorInvoiceNumber || '—'}</TableCell>
                         <TableCell>{b.vendorName || b.supplierName || '—'}</TableCell>
@@ -326,10 +387,15 @@ const VendorBills = () => {
                         <TableCell>{formatDate(b.dueDate)}</TableCell>
                         <TableCell>
                           <Chip
-                            label={b.status || 'Draft'}
+                            label={rejected ? 'Rejected by Audit' : (b.status || 'Draft')}
                             size="small"
                             color={getBillStatusColor(b.status)}
                           />
+                          {rejected && b.auditReturn?.reason && (
+                            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5, maxWidth: 260 }}>
+                              {b.auditReturn.reason}
+                            </Typography>
+                          )}
                         </TableCell>
                         <TableCell align="right"><Typography variant="body2" fontWeight="bold">{formatPKR(b.totalAmount || b.amount || 0)}</Typography></TableCell>
                         <TableCell align="right">
@@ -337,8 +403,27 @@ const VendorBills = () => {
                             {formatPKR(b.balanceDue != null ? b.balanceDue : (b.totalAmount || 0))}
                           </Typography>
                         </TableCell>
-                        <TableCell align="center">
-                          <Tooltip title={b.amountPaid > 0 ? 'Cannot delete bill with recorded payments' : 'Delete Bill'}>
+                        <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          {rejected && (
+                            <>
+                              <Tooltip title="Why Audit rejected it">
+                                <IconButton size="small" color="error" onClick={() => setReasonBill(b)}>
+                                  <InfoIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Edit bill (invoice #, date, terms, notes)">
+                                <IconButton size="small" color="primary" onClick={() => openEdit(b)}>
+                                  <EditIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                              <Tooltip title="Resubmit to Pre-Audit">
+                                <IconButton size="small" color="warning" onClick={() => { setResubmitComments(''); setResubmitBill(b); }}>
+                                  <SendIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+                          <Tooltip title={b.amountPaid > 0 ? 'Cannot void bill with recorded payments' : 'Void bill (its amount goes back to the GRN for re-billing)'}>
                             <span>
                               <IconButton
                                 size="small"
@@ -352,7 +437,8 @@ const VendorBills = () => {
                           </Tooltip>
                         </TableCell>
                       </TableRow>
-                    ))
+                      );
+                    })
                   )}
                 </TableBody>
               </Table>
@@ -360,6 +446,92 @@ const VendorBills = () => {
           </Box>
         )}
       </Paper>
+
+      {/* Audit rejection reason */}
+      <Dialog open={!!reasonBill} onClose={() => setReasonBill(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Bill {reasonBill?.billNumber} — rejected by Audit</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" gutterBottom>
+            {reasonBill?.auditReturn?.returnedBy ? `By ${reasonBill.auditReturn.returnedBy}` : 'By Audit'}
+            {reasonBill?.auditReturn?.returnedAt ? ` on ${formatDate(reasonBill.auditReturn.returnedAt)}` : ''}
+          </Typography>
+          <Alert severity="error" sx={{ mb: 2 }}>{reasonBill?.auditReturn?.reason || 'No reason recorded'}</Alert>
+          {(reasonBill?.auditReturn?.observations || []).length > 0 && (
+            <>
+              <Typography variant="subtitle2" gutterBottom>Observations</Typography>
+              {reasonBill.auditReturn.observations.map((o, i) => (
+                <Typography key={i} variant="body2" sx={{ mb: 0.5 }}>• [{o.severity}] {o.observation}</Typography>
+              ))}
+            </>
+          )}
+          <Alert severity="info" sx={{ mt: 2 }}>
+            Rejection of a bill does not change stock. If the bill details are wrong, Edit and Resubmit.
+            If the GRN itself is wrong (quantity / item / rate), void this bill — its amount goes back to the GRN — correct the GRN, then create a new bill.
+          </Alert>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setReasonBill(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Edit returned bill */}
+      <Dialog open={!!editBill} onClose={() => !actionBusy && setEditBill(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Edit bill {editBill?.billNumber}</DialogTitle>
+        <DialogContent dividers>
+          <Grid container spacing={2} sx={{ mt: 0 }}>
+            <Grid item xs={12} sm={6}>
+              <TextField fullWidth label="Vendor Bill No." value={editForm.vendorInvoiceNumber} onChange={(e) => setEditForm((f) => ({ ...f, vendorInvoiceNumber: e.target.value }))} />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField fullWidth type="date" label="Bill Date" value={editForm.billDate} onChange={(e) => setEditForm((f) => ({ ...f, billDate: e.target.value }))} InputLabelProps={{ shrink: true }} />
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField fullWidth select label="Terms" value={editForm.paymentTerms} onChange={(e) => setEditForm((f) => ({ ...f, paymentTerms: e.target.value }))}>
+                <MenuItem value="due_on_receipt">Due on receipt</MenuItem>
+                <MenuItem value="net_15">Net 15</MenuItem>
+                <MenuItem value="net_30">Net 30</MenuItem>
+                <MenuItem value="net_45">Net 45</MenuItem>
+                <MenuItem value="net_60">Net 60</MenuItem>
+              </TextField>
+            </Grid>
+            <Grid item xs={12} sm={6}>
+              <TextField fullWidth disabled label="Amount (from GRN)" value={formatPKR(editBill?.totalAmount || 0)} helperText="To change the amount, void and re-bill from the corrected GRN" />
+            </Grid>
+            <Grid item xs={12}>
+              <TextField fullWidth multiline minRows={2} label="Notes" value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
+            </Grid>
+          </Grid>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setEditBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
+          <Button variant="contained" onClick={saveEdit} disabled={actionBusy}>{actionBusy ? 'Saving...' : 'Save'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Resubmit to Pre-Audit */}
+      <Dialog open={!!resubmitBill} onClose={() => !actionBusy && setResubmitBill(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Resubmit {resubmitBill?.billNumber} to Pre-Audit</DialogTitle>
+        <DialogContent dividers>
+          {resubmitBill?.auditReturn?.reason && (
+            <Alert severity="error" sx={{ mb: 2 }}>Audit said: {resubmitBill.auditReturn.reason}</Alert>
+          )}
+          <TextField
+            fullWidth
+            multiline
+            minRows={3}
+            label="What did you correct?"
+            value={resubmitComments}
+            onChange={(e) => setResubmitComments(e.target.value)}
+            required
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setResubmitBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
+          <Button variant="contained" color="warning" onClick={doResubmit} disabled={actionBusy || !resubmitComments.trim()}>
+            {actionBusy ? 'Resubmitting...' : 'Resubmit'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Delete Confirmation Dialog */}
       <Dialog
@@ -369,14 +541,14 @@ const VendorBills = () => {
         fullWidth
       >
         <DialogTitle sx={{ fontWeight: 700, color: 'error.main', display: 'flex', alignItems: 'center', gap: 1 }}>
-          <DeleteIcon /> Delete Vendor Bill
+          <DeleteIcon /> Void Vendor Bill
         </DialogTitle>
         <DialogContent>
           <Typography variant="body1">
-            Are you sure you want to delete bill <strong>{billToDelete?.billNumber}</strong> ({billToDelete?.vendorName || billToDelete?.supplierName}) for <strong>{formatPKR(billToDelete?.totalAmount || billToDelete?.amount || 0)}</strong>?
+            Are you sure you want to void bill <strong>{billToDelete?.billNumber}</strong> ({billToDelete?.vendorName || billToDelete?.supplierName}) for <strong>{formatPKR(billToDelete?.totalAmount || billToDelete?.amount || 0)}</strong>?
           </Typography>
           <Typography variant="caption" color="text.secondary" sx={{ mt: 1.5, display: 'block' }}>
-            This will permanently remove the bill and any linked General Ledger postings.
+            Its journal is reversed and its amount goes back to the GRN(s), which then appear again under Unbilled GRNs. Stock is not changed.
           </Typography>
         </DialogContent>
         <DialogActions sx={{ p: 2 }}>
@@ -389,7 +561,7 @@ const VendorBills = () => {
             onClick={handleConfirmDelete}
             disabled={deletingBill}
           >
-            {deletingBill ? 'Deleting...' : 'Delete Bill'}
+            {deletingBill ? 'Voiding...' : 'Void Bill'}
           </Button>
         </DialogActions>
       </Dialog>

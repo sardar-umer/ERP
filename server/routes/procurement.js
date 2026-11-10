@@ -28,6 +28,7 @@ const Project = require('../models/hr/Project');
 const User = require('../models/User');
 const { canMutateComparativeAuthorityUsers } = require('../utils/comparativeStatementAuthorityLock');
 const { createAndEmitNotification } = require('../services/realtimeNotificationService');
+const { billsByGrn, summarizeBill, auditReturnInfo } = require('../utils/grnBillStatus');
 const { notifyApprovers } = require('../utils/approvalWhatsAppNotifier');
 const { notifyChatApprovers } = require('../utils/approvalChatNotifier');
 const {
@@ -4787,11 +4788,19 @@ router.get('/goods-receive',
       .skip((page - 1) * limit);
     
     const total = await GoodsReceive.countDocuments(query);
+
+    // Show each GRN's vendor bill status (incl. Audit rejection) on the GRN screen
+    const billMap = await billsByGrn(receives.map((r) => r._id));
+    const receivesOut = receives.map((r) => {
+      const o = r.toJSON();
+      o.bills = billMap.get(String(r._id)) || [];
+      return o;
+    });
     
     res.json({
       success: true,
       data: {
-        receives,
+        receives: receivesOut,
         pagination: {
           currentPage: parseInt(page),
           totalPages: Math.ceil(total / limit),
@@ -4814,13 +4823,18 @@ router.get('/goods-receive/:id',
       .populate({ path: 'purchaseOrder', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('deliveryChallan', 'dcNumber gatePassNo status qaStatus')
       .populate('items.inventoryItem')
-      .populate('receivedBy', 'firstName lastName email');
+      .populate('receivedBy', 'firstName lastName email')
+      .populate('editHistory.by', 'firstName lastName')
+      .populate('editHistory.journalEntry', 'entryNumber');
     
     if (!receive) {
       return res.status(404).json({ success: false, message: 'GRN not found' });
     }
-    
-    res.json({ success: true, data: receive });
+
+    const billMap = await billsByGrn([receive._id]);
+    const out = receive.toJSON();
+    out.bills = billMap.get(String(receive._id)) || [];
+    res.json({ success: true, data: out });
   })
 );
 
@@ -4844,7 +4858,9 @@ router.get('/vendor-bills/billable-grns',
       .lean();
 
     const list = grns.map((g) => {
-      const totalAmount = Math.round((Number(g.netAmount || g.total || 0) || 0) * 100) / 100;
+      // Goods returned to the vendor are no longer billable
+      const returnedAmount = Math.round((Number(g.returnedAmount) || 0) * 100) / 100;
+      const totalAmount = Math.round(((Number(g.netAmount || g.total || 0) || 0) - returnedAmount) * 100) / 100;
       const billedAmount = Math.round((Number(g.billedAmount) || 0) * 100) / 100;
       const remainingAmount = Math.round((totalAmount - billedAmount) * 100) / 100;
       return {
@@ -4857,6 +4873,7 @@ router.get('/vendor-bills/billable-grns',
         poNumber: g.purchaseOrder?.orderNumber || g.poNumber || '',
         companyName: g.purchaseOrder?.companyId?.name || g.purchaseOrder?.indent?.companyId?.name || '',
         amount: totalAmount,
+        returnedAmount,
         billedAmount,
         remainingAmount,
         status: g.status,
@@ -4926,7 +4943,7 @@ router.post('/vendor-bills',
     const allocMap = new Map((grnAllocations || []).map((x) => [String(x.grnId), Number(x.amount) || 0]));
     const grnUpdates = [];
     for (const g of grns) {
-      const gross = Math.round((Number(g.netAmount || g.total || 0) || 0) * 100) / 100;
+      const gross = Math.round(((Number(g.netAmount || g.total || 0) || 0) - (Number(g.returnedAmount) || 0)) * 100) / 100;
       const billed = Math.round((Number(g.billedAmount) || 0) * 100) / 100;
       const remaining = Math.round((gross - billed) * 100) / 100;
       if (remaining <= 0.009) {
@@ -5021,6 +5038,221 @@ router.post('/vendor-bills',
       message: 'Vendor bill created from selected GRN(s)',
       data: apBill
     });
+  })
+);
+
+// ── Procurement vendor bills: list, correct after Audit rejection, resubmit ──
+const VENDOR_BILL_ROLES = ['super_admin', 'admin', 'procurement_manager', 'finance_manager'];
+const isProcurementGrnBill = (bill) => Array.isArray(bill?.linkedGRNs) && bill.linkedGRNs.length > 0;
+
+// @route   GET /api/procurement/vendor-bills
+// @desc    Vendor bills created from GRNs, with Audit rejection details
+// @access  Private
+router.get('/vendor-bills',
+  authorize(...VENDOR_BILL_ROLES),
+  asyncHandler(async (req, res) => {
+    const { vendorId, limit = 200 } = req.query;
+    const query = { 'linkedGRNs.0': { $exists: true } };
+    if (vendorId) query['vendor.vendorId'] = vendorId;
+    const bills = await AccountsPayable.find(query)
+      .populate('companyId', 'name code')
+      .populate('workflowHistory.changedBy', 'firstName lastName')
+      .sort({ createdAt: -1 })
+      .limit(Math.min(Number(limit) || 200, 500))
+      .lean();
+    const list = bills.map((b) => {
+      const paid = Number(b.amountPaid ?? b.paidAmount ?? 0) || 0;
+      return {
+        _id: b._id,
+        billNumber: b.billNumber,
+        vendorInvoiceNumber: b.vendorInvoiceNumber || '',
+        vendorName: b.vendor?.name || '',
+        vendorId: b.vendor?.vendorId || null,
+        companyId: b.companyId,
+        company: b.company || '',
+        billDate: b.billDate,
+        dueDate: b.dueDate,
+        paymentTerms: b.paymentTerms || '',
+        notes: b.notes || '',
+        status: b.status,
+        totalAmount: Math.round((Number(b.totalAmount) || 0) * 100) / 100,
+        amountPaid: paid,
+        balanceDue: Math.round(((Number(b.totalAmount) || 0) - paid) * 100) / 100,
+        linkedGRNs: (b.linkedGRNs || []).map((l) => ({ grnId: l.grnId, grnNumber: l.grnNumber, poNumber: l.poNumber, amount: l.amount })),
+        auditReturn: auditReturnInfo(b)
+      };
+    });
+    res.json({ success: true, data: { bills: list } });
+  })
+);
+
+// @route   PUT /api/procurement/vendor-bills/:id
+// @desc    Correct a GRN bill that Audit returned (header fields only — amounts stay tied to the GRN)
+// @access  Private
+router.put('/vendor-bills/:id',
+  authorize(...VENDOR_BILL_ROLES),
+  [
+    body('vendorInvoiceNumber').optional().isString(),
+    body('billDate').optional().isISO8601(),
+    body('paymentTerms').optional().isIn(['due_on_receipt', 'net_15', 'net_30', 'net_45', 'net_60', 'custom']),
+    body('notes').optional().isString()
+  ],
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) return res.status(400).json({ success: false, errors: errors.array() });
+    const bill = await AccountsPayable.findById(req.params.id);
+    if (!bill || !isProcurementGrnBill(bill)) {
+      return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
+    }
+    if (bill.status !== 'Returned from Audit') {
+      return res.status(400).json({ success: false, message: 'Only bills returned by Audit can be edited here' });
+    }
+
+    const changes = [];
+    const { vendorInvoiceNumber, billDate, paymentTerms, notes } = req.body;
+    if (vendorInvoiceNumber !== undefined) {
+      const next = String(vendorInvoiceNumber).trim() || bill.billNumber;
+      if (next !== (bill.vendorInvoiceNumber || '')) {
+        try {
+          await FinanceHelper.assertUniqueVendorInvoice({
+            companyId: bill.companyId,
+            vendorId: bill.vendor?.vendorId,
+            vendorName: bill.vendor?.name,
+            vendorInvoiceNumber: next,
+            excludeId: bill._id
+          });
+        } catch (dupErr) {
+          return res.status(400).json({ success: false, message: dupErr.message });
+        }
+        changes.push(`Vendor invoice # ${bill.vendorInvoiceNumber || '—'} → ${next}`);
+        bill.vendorInvoiceNumber = next;
+      }
+    }
+    let dateOrTermsChanged = false;
+    if (billDate) {
+      const d = new Date(billDate);
+      d.setHours(0, 0, 0, 0);
+      if (!bill.billDate || d.getTime() !== new Date(bill.billDate).setHours(0, 0, 0, 0)) {
+        changes.push(`Bill date → ${d.toISOString().slice(0, 10)}`);
+        bill.billDate = d;
+        dateOrTermsChanged = true;
+      }
+    }
+    if (paymentTerms && paymentTerms !== bill.paymentTerms) {
+      changes.push(`Terms ${bill.paymentTerms || '—'} → ${paymentTerms}`);
+      bill.paymentTerms = paymentTerms;
+      dateOrTermsChanged = true;
+    }
+    if (dateOrTermsChanged) bill.dueDate = computeDueDateFromTerms(bill.billDate, bill.paymentTerms);
+    if (notes !== undefined && String(notes) !== String(bill.notes || '')) {
+      changes.push('Notes updated');
+      bill.notes = String(notes);
+    }
+
+    if (!changes.length) {
+      return res.json({ success: true, message: 'Nothing changed', data: { _id: bill._id } });
+    }
+    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+    bill.workflowHistory.push({
+      fromStatus: 'Returned from Audit',
+      toStatus: 'Returned from Audit',
+      changedBy: req.user.id,
+      changedAt: new Date(),
+      comments: `Corrected after Audit return: ${changes.join('; ')}`,
+      module: 'Procurement'
+    });
+    bill.lastModifiedBy = req.user.id;
+    await bill.save();
+    res.json({ success: true, message: `Bill ${bill.billNumber} updated`, data: { _id: bill._id } });
+  })
+);
+
+// @route   POST /api/procurement/vendor-bills/:id/resubmit
+// @desc    Resubmit a corrected GRN bill to Pre-Audit (approval restarts from the start)
+// @access  Private
+router.post('/vendor-bills/:id/resubmit',
+  authorize(...VENDOR_BILL_ROLES),
+  asyncHandler(async (req, res) => {
+    const bill = await AccountsPayable.findById(req.params.id);
+    if (!bill || !isProcurementGrnBill(bill)) {
+      return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
+    }
+    if (bill.status !== 'Returned from Audit') {
+      return res.status(400).json({ success: false, message: 'Only bills returned by Audit can be resubmitted' });
+    }
+    const comments = String(req.body?.comments || '').trim();
+    if (!comments) {
+      return res.status(400).json({ success: false, message: 'Say what was corrected before resubmitting' });
+    }
+    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+    bill.workflowHistory.push({
+      fromStatus: 'Returned from Audit',
+      toStatus: 'Pending Audit',
+      changedBy: req.user.id,
+      changedAt: new Date(),
+      comments: `Resubmitted to Pre-Audit: ${comments}`,
+      module: 'Procurement'
+    });
+    bill.status = 'Pending Audit';
+    bill.preAuditInitialApprovedAt = undefined;
+    bill.preAuditInitialApprovedBy = undefined;
+    bill.lastModifiedBy = req.user.id;
+    await bill.save();
+
+    try {
+      const auditors = await User.find({
+        isActive: true,
+        role: { $in: ['audit_manager', 'auditor', 'audit_director', 'super_admin', 'admin'] }
+      }).select('_id').lean();
+      const recipientIds = auditors.map((u) => String(u._id));
+      if (recipientIds.length) {
+        await createAndEmitNotification({
+          recipientIds,
+          title: 'Vendor Bill resubmitted to Pre Audit',
+          message: `Vendor Bill ${bill.billNumber} was corrected and resubmitted: ${comments}`,
+          type: 'info',
+          category: 'approval',
+          priority: 'high',
+          actionUrl: '/audit',
+          createdBy: req.user.id,
+          excludeUserId: req.user.id,
+          metadata: { module: 'audit', entityId: bill._id, entityType: 'AccountsPayable', queueStage: 'pending_audit', targetModule: 'audit', targetTab: 'pre_audit' }
+        });
+      }
+    } catch (nErr) {
+      console.warn('Resubmit notification failed:', nErr.message);
+    }
+
+    res.json({ success: true, message: `Bill ${bill.billNumber} resubmitted to Pre-Audit`, data: summarizeBill(bill) });
+  })
+);
+
+// @route   PUT /api/procurement/goods-receive/:id/developer-edit
+// @desc    Developer-only, audited GRN correction (stock, journal, PO kept in step)
+// @access  Private (developer role only)
+router.put('/goods-receive/:id/developer-edit',
+  asyncHandler(async (req, res) => {
+    if (String(req.user?.role || '') !== 'developer') {
+      return res.status(403).json({ success: false, message: 'Only the developer can edit a posted GRN' });
+    }
+    const { developerEditGrn, GrnEditError } = require('../utils/grnDeveloperEdit');
+    try {
+      const result = await developerEditGrn({
+        grnId: req.params.id,
+        body: req.body || {},
+        userId: req.user.id,
+        matchPoLine: matchPurchaseOrderLineIndex
+      });
+      if (!result.changed) return res.json({ success: true, message: 'Nothing changed' });
+      res.json({
+        success: true,
+        message: `GRN corrected (${result.editRef})${result.journalEntry ? ` — journal ${result.journalEntry.entryNumber}` : ''}`,
+        data: result
+      });
+    } catch (err) {
+      if (err instanceof GrnEditError) return res.status(err.statusCode).json({ success: false, message: err.message });
+      throw err;
+    }
   })
 );
 

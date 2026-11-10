@@ -170,7 +170,9 @@ const goodsReceiveSchema = new mongoose.Schema({
       shelf: { type: String, trim: true },
       bin: { type: String, trim: true }
     },
-    notes: String
+    notes: String,
+    // Quantity sent back to the vendor through posted Purchase Returns
+    returnedQuantity: { type: Number, default: 0, min: 0 }
   }],
   totalItems: {
     type: Number,
@@ -210,6 +212,33 @@ const goodsReceiveSchema = new mongoose.Schema({
     default: 0,
     min: 0
   },
+  // Return to Vendor (Purchase Returns posted against this GRN)
+  returnedAmount: {
+    type: Number,
+    default: 0,
+    min: 0
+  },
+  returnStatus: {
+    type: String,
+    enum: ['none', 'partial', 'full'],
+    default: 'none'
+  },
+  // Developer corrections (audited data fixes)
+  editHistory: [{
+    at: Date,
+    by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    reason: String,
+    reference: String,
+    changes: [{ field: String, line: String, from: String, to: String, _id: false }],
+    journalEntry: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' }
+  }],
+  returnHistory: [{
+    purchaseReturn: { type: mongoose.Schema.Types.ObjectId, ref: 'PurchaseReturn' },
+    returnNumber: String,
+    amount: Number,
+    at: Date,
+    by: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
+  }],
   // AP bill generated from this GRN
   vendorBill: {
     type: mongoose.Schema.Types.ObjectId,
