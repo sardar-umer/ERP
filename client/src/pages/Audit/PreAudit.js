@@ -2199,15 +2199,29 @@ const PreAudit = () => {
         </Box>
 
         {/* Financial Summary - Right Aligned */}
+        {(() => {
+          // totalAmount is already net of line discounts and the order-level discount; show the gross before it.
+          const itemDiscount = (poData.items || []).reduce((sum, it) => sum + (Number(it.discount) || 0), 0)
+            || Number(poData.discountAmount) || 0;
+          const orderDiscount = Number(poData.orderDiscount) || 0;
+          const totalDiscount = itemDiscount + orderDiscount;
+          const netTotal = Number(poData.totalAmount) || 0;
+          return (
         <Box sx={{ mb: 3, display: 'flex', justifyContent: 'flex-end' }}>
           <Box sx={{ width: '300px', fontSize: '0.9rem' }}>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography component="span" fontWeight={600}>Total (Rupees):</Typography>
-              <Typography component="span">{formatNumber(poData.totalAmount || 0)}</Typography>
+              <Typography component="span">{formatNumber(netTotal + totalDiscount)}</Typography>
+            </Box>
+            <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
+              <Typography component="span" fontWeight={600}>Discount:</Typography>
+              <Typography component="span" sx={totalDiscount > 0 ? { color: 'error.main' } : undefined}>
+                {totalDiscount > 0 ? `- ${formatNumber(totalDiscount)}` : formatNumber(0)}
+              </Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
               <Typography component="span" fontWeight={600}>Net Total:</Typography>
-              <Typography component="span">{formatNumber(poData.totalAmount || 0)}</Typography>
+              <Typography component="span">{formatNumber(netTotal)}</Typography>
             </Box>
             <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 2 }}>
               <Typography component="span" fontWeight={600}>Freight Charges:</Typography>
@@ -2218,6 +2232,8 @@ const PreAudit = () => {
             </Typography>
           </Box>
         </Box>
+          );
+        })()}
 
         {/* Terms & Conditions */}
         <Box sx={{ mb: 3, border: '1px solid #ccc', p: 2, fontSize: '0.9rem' }}>
