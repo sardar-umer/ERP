@@ -17,6 +17,7 @@ import {
   MenuItem,
   Paper,
   Select,
+  Snackbar,
   Stack,
   Table,
   TableBody,
@@ -153,6 +154,8 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   const [cancelRow, setCancelRow] = useState(null);
   // Slab re-contract with villas at different stages: pick which group to contract first
   const [groupChoice, setGroupChoice] = useState(null);
+  // Re-contract feedback as a pop-up — the tab's own alerts sit at the top, out of view from the row clicked
+  const [notice, setNotice] = useState(null);
   const [projectUnits, setProjectUnits] = useState(project?.units || []);
   const hasUnits = projectUnits.length > 0;
   const word = unitWord(project?.projectType);
@@ -301,7 +304,10 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       const data = res.data?.data;
       if (!data?.hasRemaining) {
         const taken = (row.replacedBy || []).filter(startedReplacement).map((r) => r.contractNumber);
-        setSuccess(`Nothing left to re-contract on ${row.contractNumber}${taken.length ? ` — its remaining work is with ${taken.join(', ')}` : ' — all its work was done'}`);
+        setNotice({
+          severity: 'info',
+          message: `Nothing left to re-contract on ${row.contractNumber}${taken.length ? ` — its remaining work is already with ${taken.join(', ')}` : ' — all its work was done before it was cancelled'}`
+        });
         return;
       }
       if (data.contract.contractType === 'Slab' && data.groups.length > 1) {
@@ -310,7 +316,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       }
       openRecontractForm(row, data, data.groups[0] || null);
     } catch (err) {
-      setError(err.response?.data?.message || 'Could not load the remaining work');
+      setNotice({ severity: 'error', message: err.response?.data?.message || 'Could not load the remaining work' });
     }
   };
 
@@ -695,13 +701,19 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                         </IconButton>
                       </Tooltip>
                     )}
-                    {row.status === 'Cancelled' && row.activatedAt && (
-                      <Tooltip title="Re-contract remaining work">
-                        <IconButton size="small" color="primary" onClick={() => handleRecontract(row)}>
-                          <RecontractIcon fontSize="small" />
-                        </IconButton>
-                      </Tooltip>
-                    )}
+                    {row.status === 'Cancelled' && row.activatedAt && (() => {
+                      // All of it was done before cancelling → nothing to hand to a new contractor
+                      const allDone = row.cancellation && (Number(row.cancellation.workDone?.amount) || 0) >= (Number(row.totalAmount) || 0) - 0.5;
+                      return (
+                        <Tooltip title={allDone ? 'Nothing to re-contract — all of this contract\'s work was done before it was cancelled' : 'Re-contract remaining work'}>
+                          <span>
+                            <IconButton size="small" color="primary" disabled={allDone} onClick={() => handleRecontract(row)}>
+                              <RecontractIcon fontSize="small" />
+                            </IconButton>
+                          </span>
+                        </Tooltip>
+                      );
+                    })()}
                     {['Draft', 'Active'].includes(row.status) && (
                       <Tooltip title="Cancel">
                         <IconButton size="small" color="error" onClick={() => handleCancel(row)}>
@@ -1222,6 +1234,19 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
           await load();
         }}
       />
+
+      <Snackbar
+        open={Boolean(notice)}
+        autoHideDuration={8000}
+        onClose={() => setNotice(null)}
+        anchorOrigin={{ vertical: 'top', horizontal: 'center' }}
+      >
+        {notice ? (
+          <Alert severity={notice.severity} variant="filled" onClose={() => setNotice(null)} sx={{ maxWidth: 640 }}>
+            {notice.message}
+          </Alert>
+        ) : <span />}
+      </Snackbar>
 
       <Dialog open={Boolean(groupChoice)} onClose={() => setGroupChoice(null)} maxWidth="sm" fullWidth>
         <DialogTitle>Re-contract {groupChoice?.row?.contractNumber} — which {words.toLowerCase()}?</DialogTitle>
