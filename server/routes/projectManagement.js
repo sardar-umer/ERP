@@ -164,13 +164,26 @@ const approvedBudgetAmount = (main) => {
   return main?.budgetStatus === 'Approved' ? Number(main.lumpSumBudget) || 0 : 0;
 };
 
-/** Sum of sublet contract values per Sub Project (Draft, Active and Completed all hold budget) */
+/**
+ * Sum of sublet contract values per Sub Project (Draft, Active and Completed all hold budget).
+ * A cancelled contract keeps holding the value of the work done on it before it was cancelled.
+ */
 const committedBySub = async (subIds, excludeContractId = null) => {
-  const match = { project: { $in: subIds }, status: { $ne: 'Cancelled' } };
+  const match = {
+    project: { $in: subIds },
+    $or: [{ status: { $ne: 'Cancelled' } }, { 'cancellation.workDone.amount': { $gt: 0 } }]
+  };
   if (excludeContractId) match._id = { $ne: new mongoose.Types.ObjectId(String(excludeContractId)) };
+  const isCancelled = { $eq: ['$status', 'Cancelled'] };
   const rows = await SubletContract.aggregate([
     { $match: match },
-    { $group: { _id: '$project', amount: { $sum: { $ifNull: ['$totalAmount', 0] } }, contracts: { $sum: 1 } } }
+    {
+      $group: {
+        _id: '$project',
+        amount: { $sum: { $cond: [isCancelled, { $ifNull: ['$cancellation.workDone.amount', 0] }, { $ifNull: ['$totalAmount', 0] }] } },
+        contracts: { $sum: { $cond: [isCancelled, 0, 1] } }
+      }
+    }
   ]);
   return new Map(rows.map((r) => [String(r._id), { amount: Math.round(r.amount * 100) / 100, contracts: r.contracts }]));
 };
@@ -671,13 +684,32 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
  * BOQ lines: budget (scope qty × estimate rate) → contracted (BOQ-wise sublet) → verified (check requests)
  * → billed (Work IPCs) → approved (CEO). Slab-wise contracts are reported per slab.
  */
+/**
+ * A contract as it holds cost: an open / completed one at its value; a cancelled one only at the work done on it
+ * (its done BOQ quantities, or the slabs done) — the rest of its scope went back to be re-contracted.
+ */
+const asHeldContract = (c) => {
+  if (c.status !== 'Cancelled') return c;
+  const done = c.cancellation?.workDone || {};
+  const doneSlabs = new Map((done.slabs || []).map((s) => [String(s.slabId), s]));
+  return {
+    ...c,
+    originalValue: c.totalAmount,
+    totalAmount: Number(done.amount) || 0,
+    items: (done.lines || []).map((l) => ({ boqItem: l.boqItem, title: l.title, unit: l.unit, quantity: l.quantity, unitPrice: l.unitPrice, amount: l.amount })),
+    slabs: (c.slabs || []).filter((s) => doneSlabs.has(String(s._id))).map((s) => ({ ...s, amount: doneSlabs.get(String(s._id)).amount }))
+  };
+};
+
 const buildSubCostReport = async (projectId) => {
   const pid = new mongoose.Types.ObjectId(String(projectId));
   const { projectFilter } = buildBoqFilter(projectId, { isSubProject: true });
   const [boqItems, contracts, crs, ipcs] = await Promise.all([
     BOQItem.find(projectFilter).select('title description unit cbsCategory estimatedQuantity estimatedUnitPrice discountAmount netEstimatedCost project allocations').lean(),
-    SubletContract.find({ project: pid, status: { $in: ['Active', 'Completed'] } })
-      .populate('contractor', 'name').select('contractNumber contractType status totalAmount items slabs contractor').lean(),
+    // A cancelled contract counts at the work done on it before it was cancelled
+    SubletContract.find({ project: pid, $or: [{ status: { $in: ['Active', 'Completed'] } }, { status: 'Cancelled', 'cancellation.workDone.amount': { $gt: 0 } }] })
+      .populate('contractor', 'name').select('contractNumber contractType status totalAmount items slabs contractor cancellation').lean()
+      .then((list) => list.map(asHeldContract)),
     CheckRequest.find({ project: pid, status: { $in: ['Verified', 'Billed'] } }).select('claimType items slab subletContract verifiedTotal').lean(),
     ProjectInvoice.find({ project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
       .select('ipcKind approvalStatus items grossAmount checkRequest paidAmount retentionAmount advanceRecoveryAmount').lean()
@@ -689,7 +721,7 @@ const buildSubCostReport = async (projectId) => {
     add(contractedQty, i.boqItem, Number(i.quantity) || 0);
     add(contractedAmt, i.boqItem, Number(i.amount) || (Number(i.quantity) || 0) * (Number(i.unitPrice) || 0));
     const names = contractorsByLine.get(String(i.boqItem)) || new Set();
-    names.add(c.contractor?.name); contractorsByLine.set(String(i.boqItem), names);
+    names.add(c.status === 'Cancelled' ? `${c.contractor?.name || ''} (cancelled)` : c.contractor?.name); contractorsByLine.set(String(i.boqItem), names);
   }));
   const verifiedQty = new Map(); const verifiedAmt = new Map();
   crs.filter((c) => c.claimType !== 'Slab').forEach((c) => (c.items || []).forEach((i) => {
@@ -748,6 +780,7 @@ const buildSubCostReport = async (projectId) => {
       contractor: c.contractor?.name,
       status: c.status,
       value: c.totalAmount,
+      ...(c.status === 'Cancelled' ? { originalValue: c.originalValue, cancellationDate: c.cancellation?.cancellationDate || null } : {}),
       slabs: (c.slabs || []).map((sl) => {
         const cr = crForSlab(sl._id);
         const ipc = cr && work.find((i) => String(i.checkRequest) === String(cr._id));
@@ -797,7 +830,9 @@ router.get('/projects/:id/cost-detail', asyncHandler(async (req, res) => {
 
   const [report, contracts, crs, ipcs] = await Promise.all([
     buildSubCostReport(pid),
-    SubletContract.find({ project: pid, status: { $ne: 'Cancelled' } }).select('contractNumber contractType totalAmount items slabs').lean(),
+    // Cancelled contracts that had started stay in the detail — their claims and IPCs belong to them
+    SubletContract.find({ project: pid, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })
+      .select('contractNumber contractType status totalAmount items slabs activatedAt cancellation').lean(),
     CheckRequest.find({ project: pid, status: { $ne: 'Cancelled' } }).select('subletContract claimType slab items claimedTotal verifiedTotal status').lean(),
     ProjectInvoice.find({ project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' } })
       .select('subletContract checkRequest ipcKind ipcNumber issueDate approvalStatus items grossAmount retentionPercentage retentionAmount advanceRecoveryAmount whtPercentage whtAmount netPayableAmount paidAmount payments.amount payments.paidDate payments.paymentMethod payments.paymentReference')
@@ -870,6 +905,13 @@ router.get('/projects/:id/cost-detail', asyncHandler(async (req, res) => {
     };
     money.advanceOutstanding = Math.max(0, round2(money.advancePaid - money.advanceRecovered));
     money.remaining = round2(money.value - money.billed);
+    const isCancelled = c.status === 'Cancelled';
+    if (isCancelled) {
+      // Ends at the work done on it; nothing more is to be billed beyond what was verified
+      money.originalValue = money.value;
+      money.value = round2(c.cancellation?.workDone?.amount);
+      money.remaining = Math.max(0, round2(money.value - money.billed));
+    }
 
     let lines = [];
     let slabs = [];
@@ -904,11 +946,19 @@ router.get('/projects/:id/cost-detail', asyncHandler(async (req, res) => {
           contractedQty: Number(it.quantity) || 0, rate: round2(it.unitPrice), contracted,
           verifiedQty: (verified.get(k) || {}).qty || 0, verified: round2((verified.get(k) || {}).amount),
           billedQty: b.qty, billed: round2(b.amount), approved: round2((approved.get(k) || {}).amount),
-          remaining: round2(contracted - b.amount)
+          remaining: isCancelled
+            ? Math.max(0, round2(((verified.get(k) || {}).amount || 0) - b.amount))
+            : round2(contracted - b.amount)
         };
       });
     }
-    return { _id: c._id, contractNumber: c.contractNumber, contractType: c.contractType, money, lines, slabs };
+    return {
+      _id: c._id, contractNumber: c.contractNumber, contractType: c.contractType, status: c.status || 'Active',
+      cancellation: isCancelled
+        ? { cancellationDate: c.cancellation?.cancellationDate || null, reason: c.cancellation?.reason || '', workDone: round2(c.cancellation?.workDone?.amount) }
+        : null,
+      money, lines, slabs
+    };
   });
 
   // Each IPC with its deductions and where it leaves the contract
@@ -1083,9 +1133,10 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
   const subIds = subs.map((s) => s._id);
 
   const [contracts, crs, ipcs, inspections] = await Promise.all([
-    SubletContract.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
+    // Cancelled contracts that had started stay in the tree, with their claims and IPCs under them
+    SubletContract.find({ project: { $in: subIds }, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })
       .populate('contractor', 'name')
-      .select('project contractNumber title contractor contractType status totalAmount slabs createdAt')
+      .select('project contractNumber title contractor contractType status totalAmount slabs createdAt cancellation replacesContract')
       .sort({ createdAt: 1 }).lean(),
     CheckRequest.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
       .populate('contractor', 'name')
@@ -1151,6 +1202,10 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
       const node = {
         _id: c._id, contractNumber: c.contractNumber, title: c.title, contractor: c.contractor?.name || '',
         contractType: c.contractType, status: c.status, totalAmount: round2(c.totalAmount),
+        replacesContract: c.replacesContract ? String(c.replacesContract) : null,
+        cancellation: c.status === 'Cancelled'
+          ? { cancellationDate: c.cancellation?.cancellationDate || null, reason: c.cancellation?.reason || '', workDone: round2(c.cancellation?.workDone?.amount) }
+          : null,
         checkRequests: cCrs, otherIpcs, totals: rollup(cCrs, otherIpcs)
       };
       if (c.contractType === 'Slab') {
@@ -1206,9 +1261,10 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
 
   const [reports, contracts, crs, ipcs] = await Promise.all([
     Promise.all(subs.map((s) => buildSubCostReport(s._id))),
-    SubletContract.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
+    // Cancelled contracts that had started keep their own bucket, valued at the work done on them
+    SubletContract.find({ project: { $in: subIds }, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })
       .populate('contractor', 'name')
-      .select('project contractNumber title contractor contractType status totalAmount slabs').lean(),
+      .select('project contractNumber title contractor contractType status totalAmount slabs cancellation').lean(),
     CheckRequest.find({ project: { $in: subIds }, status: { $ne: 'Cancelled' } })
       .populate('contractor', 'name')
       .select('project contractor subletContract status claimedTotal verifiedTotal').lean(),
@@ -1234,7 +1290,9 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
         _id: cid || key,
         contract: c ? {
           _id: c._id, contractNumber: c.contractNumber, title: c.title, type: c.contractType, status: c.status,
-          value: round2(c.totalAmount), slabs: (c.slabs || []).length
+          value: round2(c.status === 'Cancelled' ? c.cancellation?.workDone?.amount : c.totalAmount),
+          ...(c.status === 'Cancelled' ? { originalValue: round2(c.totalAmount), cancellationDate: c.cancellation?.cancellationDate || null } : {}),
+          slabs: (c.slabs || []).length
         } : null,
         contractor: c ? party(c.contractor) : contractor,
         subProject: sub ? { _id: sub._id, name: sub.name, projectNumber: sub.projectNumber, projectType: typeOf(sub), sector: sub.sector || '' } : null,
@@ -1761,7 +1819,8 @@ router.put('/projects/:id/budget-status', asyncHandler(async (req, res) => {
 
 /** Default approval chain, in order; people are found by their designation and can be changed before sending */
 const DEFAULT_BUDGET_APPROVERS = [
-  { role: 'Chief Operating Officer', match: /chief operating officer|^coo$/i },
+  // "COO" as a whole word, so "COO & GM Procurement" matches but "Coordinator" does not
+  { role: 'Chief Operating Officer', match: /chief operating officer|\bcoo\b/i },
   { role: 'AVP Taj', match: /^assistant vice president$|^avp$|avp.*taj|assistant vice president.*taj/i },
   { role: 'Chief Executive Officer', match: /^ceo$|chief executive/i }
 ];
@@ -2191,8 +2250,9 @@ router.get('/projects/:id/units/progress', asyncHandler(async (req, res) => {
   if (!units.length) return res.json({ success: true, data: { unitName, unitNamePlural, units: [], columns: [], summary: { units: 0, complete: 0, started: 0, progress: 0 } } });
 
   const [contracts, crs] = await Promise.all([
-    SubletContract.find({ project: project._id, status: { $ne: 'Cancelled' } })
-      .select('contractNumber contractType contractor units slabs totalAmount status').populate('contractor', 'name').sort({ createdAt: 1 }).lean(),
+    // A cancelled contract counts only for the work done on it, on the villas it was done for
+    SubletContract.find({ project: project._id, $or: [{ status: { $ne: 'Cancelled' } }, { 'cancellation.workDone.amount': { $gt: 0 } }] })
+      .select('contractNumber contractType contractor units slabs totalAmount status cancellation').populate('contractor', 'name').sort({ createdAt: 1 }).lean(),
     CheckRequest.find({ project: project._id, status: { $ne: 'Cancelled' } })
       .select('checkRequestNumber claimType subletContract slab units status verifiedTotal claimedTotal contractor').lean()
   ]);
@@ -2207,6 +2267,29 @@ router.get('/projects/:id/units/progress', asyncHandler(async (req, res) => {
   const contractById = new Map();
   contracts.forEach((c) => {
     const covered = coveredBy(c.units).filter((id) => row.has(id));
+    if (c.status === 'Cancelled') {
+      const done = c.cancellation?.workDone || {};
+      const slabCovered = new Map();
+      if (c.contractType === 'Slab') {
+        (done.slabs || []).forEach((ds) => {
+          const ids = (ds.units?.length ? ds.units.map((u) => String(u.unit)) : covered).filter((id) => row.has(id));
+          if (!ids.length) return;
+          slabCovered.set(String(ds.slabId), { ids, amount: Number(ds.amount) || 0 });
+          ids.forEach((id) => { row.get(id).value += (Number(ds.amount) || 0) / ids.length; });
+          const sl = (c.slabs || []).find((x) => String(x._id) === String(ds.slabId));
+          const key = `${c._id}:${ds.slabId}`;
+          columns.push({
+            key, contract: c._id, contractNumber: c.contractNumber, contractor: `${c.contractor?.name || ''} (cancelled)`,
+            slab: sl?.name || ds.name, percentage: sl?.percentage ?? ds.percentage, cancelled: true
+          });
+          ids.forEach((id) => { row.get(id).cells[key] = { status: 'Not claimed' }; });
+        });
+      } else if (covered.length) {
+        covered.forEach((id) => { row.get(id).value += (Number(done.amount) || 0) / covered.length; });
+      }
+      contractById.set(String(c._id), { contract: c, covered, slabCovered });
+      return;
+    }
     contractById.set(String(c._id), { contract: c, covered });
     if (!covered.length) return;
     const share = (Number(c.totalAmount) || 0) / covered.length;
@@ -2228,8 +2311,12 @@ router.get('/projects/:id/units/progress', asyncHandler(async (req, res) => {
       if (!hit) return;
       const key = `${cr.subletContract}:${cr.slab?.slabId}`;
       const slab = (hit.contract.slabs || []).find((sl) => String(sl._id) === String(cr.slab?.slabId));
-      const perUnit = (Number(slab?.amount) || 0) / (hit.covered.length || 1);
-      coveredBy(cr.units).filter((id) => hit.covered.includes(id)).forEach((id) => {
+      // Cancelled contract: only its done slabs (on the villas done) are in the grid
+      const doneSlab = hit.slabCovered?.get(String(cr.slab?.slabId));
+      if (hit.slabCovered && !doneSlab) return;
+      const scope = doneSlab ? doneSlab.ids : hit.covered;
+      const perUnit = doneSlab ? doneSlab.amount / (doneSlab.ids.length || 1) : (Number(slab?.amount) || 0) / (hit.covered.length || 1);
+      coveredBy(cr.units).filter((id) => scope.includes(id)).forEach((id) => {
         const r = row.get(id);
         r.cells[key] = { status: cr.status, checkRequestNumber: cr.checkRequestNumber };
         if (DONE_CR.includes(cr.status)) r.done += perUnit;
@@ -3561,7 +3648,8 @@ const ipcPropertyPercent = async (projectId, contractorId, subletContractId = nu
     const c = await SubletContract.findById(subletContractId).select('propertyPercent').lean();
     return { percent: Number(c?.propertyPercent) || 0 };
   }
-  const contracts = await SubletContract.find({ project: projectId, contractor: contractorId, status: { $ne: 'Cancelled' } })
+  // Retention can be released after a contract is cancelled — its share still applies
+  const contracts = await SubletContract.find({ project: projectId, contractor: contractorId, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })
     .select('propertyPercent').lean();
   const shares = [...new Set(contracts.map((c) => Number(c.propertyPercent) || 0))];
   if (shares.length > 1) {
@@ -4344,14 +4432,17 @@ router.get('/projects/:id/subcontractor-balances', asyncHandler(async (req, res)
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
   const contractorIds = req.query.contractor && isValidId(req.query.contractor)
     ? [req.query.contractor]
-    : (await SubletContract.distinct('contractor', { project: req.params.id, status: { $ne: 'Cancelled' } })).map(String);
+    // Contractors of cancelled contracts stay listed — retention, advances and unpaid bills may still be open
+    : (await SubletContract.distinct('contractor', { project: req.params.id, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })).map(String);
   const suppliers = await Supplier.find({ _id: { $in: contractorIds } }).select('name').lean();
   const nameById = new Map(suppliers.map((sp) => [String(sp._id), sp.name]));
-  const contracts = await SubletContract.find({ project: req.params.id, contractor: { $in: contractorIds }, status: 'Active' })
-    .select('contractNumber title contractType totalAmount contractor').lean();
+  const contracts = await SubletContract.find({ project: req.params.id, contractor: { $in: contractorIds }, status: { $in: ['Active', 'Cancelled'] } })
+    .select('contractNumber title contractType totalAmount contractor status activatedAt cancellation.cancellationDate cancellation.workDone.amount').lean();
   const data = await Promise.all(contractorIds.map(async (cid) => ({
     contractor: { _id: cid, name: nameById.get(String(cid)) || '—' },
-    activeContracts: contracts.filter((c) => String(c.contractor) === String(cid)),
+    activeContracts: contracts.filter((c) => c.status === 'Active' && String(c.contractor) === String(cid)),
+    cancelledContracts: contracts.filter((c) => c.status === 'Cancelled' && c.activatedAt && String(c.contractor) === String(cid))
+      .map((c) => ({ _id: c._id, contractNumber: c.contractNumber, title: c.title, cancellationDate: c.cancellation?.cancellationDate || null, workDone: round2(c.cancellation?.workDone?.amount) })),
     ...(await subcontractorBalances(req.params.id, cid))
   })));
   res.json({ success: true, data });
@@ -5535,7 +5626,13 @@ const populateSublet = (query) =>
     .populate('items.boqItem', 'title description unit estimatedQuantity estimatedUnitPrice contractorUnitPrice contractor')
     .populate('slabSchedule', 'name projectType')
     .populate('createdBy', 'firstName lastName')
-    .populate('activatedBy', 'firstName lastName');
+    .populate('activatedBy', 'firstName lastName')
+    // Re-contracting chain: enough of each linked contract for the history and the rate comparison
+    .populate({
+      path: 'replacesContract replacedBy',
+      select: 'contractNumber title status contractType totalAmount ratePerUnit units items.boqItem items.title items.unit items.quantity items.unitPrice slabs.name slabs.percentage cancellation.cancellationDate cancellation.reason cancellation.workDone.amount activatedAt createdAt',
+      populate: { path: 'contractor', select: 'name' }
+    });
 
 const getAlreadySublettedQty = async (projectId, boqItemId, excludeContractId = null) => {
   const match = {
@@ -5545,13 +5642,23 @@ const getAlreadySublettedQty = async (projectId, boqItemId, excludeContractId = 
   if (excludeContractId) {
     match._id = { $ne: new mongoose.Types.ObjectId(excludeContractId) };
   }
+  const boqId = new mongoose.Types.ObjectId(boqItemId);
   const rows = await SubletContract.aggregate([
     { $match: match },
     { $unwind: '$items' },
-    { $match: { 'items.boqItem': new mongoose.Types.ObjectId(boqItemId) } },
+    { $match: { 'items.boqItem': boqId } },
     { $group: { _id: null, qty: { $sum: '$items.quantity' } } }
   ]);
-  return Number(rows[0]?.qty) || 0;
+  // Quantity done under a cancelled contract stays taken — only the rest can be contracted again
+  const doneMatch = { project: match.project, status: 'Cancelled', 'cancellation.workDone.lines.boqItem': boqId };
+  if (match._id) doneMatch._id = match._id;
+  const done = await SubletContract.aggregate([
+    { $match: doneMatch },
+    { $unwind: '$cancellation.workDone.lines' },
+    { $match: { 'cancellation.workDone.lines.boqItem': boqId } },
+    { $group: { _id: null, qty: { $sum: '$cancellation.workDone.lines.quantity' } } }
+  ]);
+  return (Number(rows[0]?.qty) || 0) + (Number(done[0]?.qty) || 0);
 };
 
 const buildSubletItems = async (projectId, masterProjectId, rawItems = [], excludeContractId = null) => {
@@ -5711,6 +5818,32 @@ const buildSubletSlabs = async (project, { contractValue, slabs: rawSlabs, slabS
         : '';
       fail(`Already covered by sublet contract ${clash.contractNumber}${shared}: ${names.join(', ')}`);
     }
+
+    // Slabs already done under a cancelled contract stay with it (for the villas they were done for)
+    const doneFilter = {
+      project: project._id,
+      contractType: 'Slab',
+      status: 'Cancelled',
+      'cancellation.workDone.slabs.0': { $exists: true }
+    };
+    if (excludeContractId) doneFilter._id = { $ne: excludeContractId };
+    const cancelled = await SubletContract.find(doneFilter).select('contractNumber slabs units cancellation.workDone.slabs').lean();
+    const wanted = new Set(activityIds.map(String));
+    for (const c of cancelled) {
+      for (const ds of c.cancellation.workDone.slabs) {
+        const slab = (c.slabs || []).find((s) => String(s._id) === String(ds.slabId));
+        if (!slab) continue;
+        const doneUnits = ds.units?.length ? ds.units : (c.units || []);
+        if (!unitsOverlap(doneUnits, units)) continue;
+        const hit = slab.activities.filter((a) => wanted.has(String(a.activity))).map((a) => masterById.get(String(a.activity))?.name || a.name);
+        if (hit.length) {
+          const where = units.length && doneUnits.length
+            ? ` for ${doneUnits.filter((u) => units.some((x) => String(x.unit) === String(u.unit))).map((u) => u.name).join(', ')}`
+            : '';
+          fail(`Already done under cancelled contract ${c.contractNumber} (${slab.name})${where}: ${hit.join(', ')}`);
+        }
+      }
+    }
   }
 
   // Round each slab to whole rupees; the last slab absorbs the remainder so slabs sum to the contract value
@@ -5767,6 +5900,348 @@ const syncSubletToBoq = async (contract, projectId) => {
     }
     await boq.save();
   }
+};
+
+// ─── CANCELLING A SUBLET CONTRACT ────────────────────────────────────────────
+
+const DONE_CR_STATUSES = ['Verified', 'Billed'];
+const PENDING_CR_STATUSES = ['Draft', 'Submitted'];
+const PENDING_IPC_STATUSES = ['Draft', ...PENDING_IPC_STAGES];
+
+/**
+ * Where a sublet contract stands: the work done on it (verified claims, per BOQ line or per slab),
+ * its money (billed, paid, payable, retention held, advance not yet recovered) and anything still
+ * in progress (claims not verified, bills not approved) that must be finished before it can be cancelled.
+ */
+const contractSettlement = async (contract) => {
+  const crs = await CheckRequest.find({ subletContract: contract._id, status: { $nin: ['Cancelled', 'Rejected'] } })
+    .select('checkRequestNumber claimType slab units items status verifiedTotal').lean();
+  const crIds = crs.map((c) => c._id);
+  const ipcs = await ProjectInvoice.find({
+    invoiceType: 'Subcontractor_IPC',
+    status: { $ne: 'Cancelled' },
+    $or: [{ subletContract: contract._id }, ...(crIds.length ? [{ checkRequest: { $in: crIds } }] : [])]
+  }).select('invoiceNumber ipcNumber ipcKind approvalStatus grossAmount retentionAmount advanceRecoveryAmount netPayableAmount paidAmount').lean();
+
+  const sum = (list, f) => round2(list.reduce((t, x) => t + (Number(x[f]) || 0), 0));
+  const done = crs.filter((c) => DONE_CR_STATUSES.includes(c.status));
+
+  // Work done per BOQ line / per slab
+  const lines = [];
+  const slabs = [];
+  if (contract.contractType === 'Slab') {
+    const bySlab = new Map();
+    done.filter((c) => c.claimType === 'Slab' && c.slab?.slabId).forEach((c) => {
+      const key = String(c.slab.slabId);
+      const prev = bySlab.get(key) || { amount: 0, units: new Map(), whole: false };
+      prev.amount += Number(c.verifiedTotal) || 0;
+      if (!c.units?.length) prev.whole = true;
+      (c.units || []).forEach((u) => prev.units.set(String(u.unit), { unit: u.unit, name: u.name }));
+      bySlab.set(key, prev);
+    });
+    (contract.slabs || []).forEach((s) => {
+      const d = bySlab.get(String(s._id));
+      if (!d) return;
+      slabs.push({
+        slabId: s._id, name: s.name, percentage: s.percentage, amount: round2(d.amount),
+        units: d.whole ? [] : [...d.units.values()]
+      });
+    });
+  } else {
+    const byLine = new Map();
+    done.forEach((c) => (c.items || []).forEach((it) => {
+      const key = String(it.boqItem);
+      const prev = byLine.get(key) || { qty: 0, amount: 0 };
+      byLine.set(key, { qty: prev.qty + (Number(it.verifiedQuantity) || 0), amount: prev.amount + (Number(it.verifiedAmount) || 0) });
+    }));
+    (contract.items || []).forEach((it) => {
+      const d = byLine.get(String(it.boqItem?._id || it.boqItem));
+      if (!d || d.qty <= 0) return;
+      lines.push({
+        boqItem: it.boqItem?._id || it.boqItem,
+        title: it.title || it.boqItem?.title || it.description || '',
+        unit: it.unit || it.boqItem?.unit || '',
+        contractedQuantity: Number(it.quantity) || 0,
+        quantity: d.qty,
+        unitPrice: round2(it.unitPrice),
+        amount: round2(d.amount)
+      });
+    });
+  }
+  const workDoneAmount = round2([...lines, ...slabs].reduce((t, x) => t + (Number(x.amount) || 0), 0));
+
+  // Money, the same way the cost detail counts it
+  const work = ipcs.filter((i) => !NON_WORK_IPC_KINDS.includes(i.ipcKind));
+  const approved = (list) => list.filter((i) => i.approvalStatus === 'Approved');
+  const advancePaid = sum(approved(ipcs.filter((i) => i.ipcKind === 'Advance')), 'grossAmount');
+  const verified = sum(done, 'verifiedTotal');
+  const billed = sum(work, 'grossAmount');
+  const money = {
+    verified,
+    billed,
+    unbilled: Math.max(0, round2(verified - billed)),
+    paid: sum(ipcs, 'paidAmount'),
+    payable: Math.max(0, round2(sum(approved(ipcs), 'netPayableAmount') - sum(approved(ipcs), 'paidAmount'))),
+    retentionHeld: Math.max(0, round2(sum(approved(work), 'retentionAmount') - sum(ipcs.filter((i) => i.ipcKind === 'Retention Release'), 'grossAmount'))),
+    advanceOutstanding: Math.max(0, round2(advancePaid - sum(work, 'advanceRecoveryAmount')))
+  };
+
+  const pending = [
+    ...crs.filter((c) => PENDING_CR_STATUSES.includes(c.status))
+      .map((c) => ({ kind: 'Check request', number: c.checkRequestNumber, status: c.status })),
+    ...ipcs.filter((i) => PENDING_IPC_STATUSES.includes(i.approvalStatus))
+      .map((i) => ({ kind: i.ipcKind === 'Work' || !i.ipcKind ? 'IPC' : `${i.ipcKind} IPC`, number: i.invoiceNumber || `#${i.ipcNumber}`, status: i.approvalStatus }))
+  ];
+
+  return { workDone: { amount: workDoneAmount, lines, slabs }, money, pending };
+};
+
+/** After a cancellation, a contractor's BOQ allocation on the Sub Project shrinks to what they still hold */
+const resyncBoqAllocationsAfterCancel = async (contract, projectId) => {
+  const boqIds = (contract.items || []).map((it) => it.boqItem?._id || it.boqItem).filter(Boolean);
+  if (!boqIds.length) return;
+  const others = await SubletContract.find({
+    project: projectId, contractor: contract.contractor, _id: { $ne: contract._id },
+    $or: [{ status: { $in: ['Active', 'Completed'] } }, { status: 'Cancelled', 'cancellation.workDone.lines.0': { $exists: true } }]
+  }).select('status items cancellation.workDone.lines').lean();
+  const held = (boqId, own) => {
+    const key = String(boqId);
+    let qty = own;
+    others.forEach((c) => {
+      const list = c.status === 'Cancelled' ? c.cancellation.workDone.lines : c.items;
+      (list || []).forEach((it) => { if (String(it.boqItem) === key) qty += Number(it.quantity) || 0; });
+    });
+    return qty;
+  };
+  const doneQty = new Map((contract.cancellation?.workDone?.lines || []).map((l) => [String(l.boqItem), Number(l.quantity) || 0]));
+  for (const boqId of boqIds) {
+    const boq = await BOQItem.findById(boqId);
+    if (!boq) continue;
+    const row = (boq.allocations || []).find((a) =>
+      String(a.subProject || '') === String(projectId) && String(a.contractor || '') === String(contract.contractor));
+    if (!row) continue;
+    const qty = held(boqId, doneQty.get(String(boqId)) || 0);
+    if (qty > 0) {
+      row.allocatedQuantity = qty;
+    } else {
+      boq.allocations = boq.allocations.filter((a) => a !== row);
+    }
+    await boq.save();
+  }
+};
+
+const loadContractForCancel = async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) { badRequest(res, 'Invalid ID'); return null; }
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id })
+    .populate('items.boqItem', 'title unit');
+  if (!contract) { notFound(res, 'Sublet Contract'); return null; }
+  return contract;
+};
+
+const pendingMessage = (pending) =>
+  `Finish or reject these first — they are still in progress on this contract: ${pending.map((p) => `${p.kind} ${p.number} (${p.status})`).join(', ')}`;
+
+// GET what cancelling would mean: work done, money, properties released, anything blocking it
+router.get('/projects/:id/sublet-contracts/:scId/cancel-preview', asyncHandler(async (req, res) => {
+  const contract = await loadContractForCancel(req, res); if (!contract) return;
+  if (contract.status === 'Cancelled') return badRequest(res, 'This contract is already cancelled');
+  if (contract.status === 'Completed') return badRequest(res, 'Completed contracts cannot be cancelled');
+  const s = contract.status === 'Draft'
+    ? { workDone: { amount: 0, lines: [], slabs: [] }, money: null, pending: [] }
+    : await contractSettlement(contract);
+  res.json({
+    success: true,
+    data: {
+      contractNumber: contract.contractNumber,
+      status: contract.status,
+      contractType: contract.contractType || 'BOQ',
+      contractValue: round2(contract.totalAmount),
+      ...s,
+      budgetReleased: Math.max(0, round2((Number(contract.totalAmount) || 0) - s.workDone.amount)),
+      propertiesToRelease: (contract.barterProperties || []).filter((p) => p.status === 'Reserved')
+        .map((p) => ({ label: p.label || p.plotNumber || 'Property', agreedValue: round2(p.agreedValue) })),
+      canCancel: !s.pending.length
+    }
+  });
+}));
+
+/**
+ * Cancel a sublet contract. Draft: simply cancelled. Active: needs a reason; claims and bills in progress must be
+ * finished first; the work done is frozen on the contract (it keeps that budget and that scope), properties not yet
+ * handed over are released, and the money position at that moment is recorded.
+ */
+const cancelSubletContract = async (req, res) => {
+  const contract = await loadContractForCancel(req, res); if (!contract) return;
+  if (contract.status === 'Cancelled') return badRequest(res, 'This contract is already cancelled');
+  if (contract.status === 'Completed') return badRequest(res, 'Completed contracts cannot be cancelled');
+
+  const reason = String(req.body?.reason || '').trim();
+  const wasActive = contract.status === 'Active';
+  if (wasActive && reason.length < 5) return badRequest(res, 'Write the reason for cancelling this contract');
+  let cancellationDate = new Date();
+  if (req.body?.cancellationDate) {
+    cancellationDate = new Date(req.body.cancellationDate);
+    if (Number.isNaN(cancellationDate.getTime())) return badRequest(res, 'Invalid cancellation date');
+    if (cancellationDate.getTime() > Date.now() + 24 * 3600e3) return badRequest(res, 'The cancellation date cannot be in the future');
+  }
+
+  const s = wasActive ? await contractSettlement(contract) : { workDone: { amount: 0, lines: [], slabs: [] }, money: {}, pending: [] };
+  if (s.pending.length) return badRequest(res, pendingMessage(s.pending));
+
+  let released = 0;
+  (contract.barterProperties || []).forEach((p) => {
+    if (p.status !== 'Reserved') return;
+    p.status = 'Released';
+    p.notes = [p.notes, `Released — contract cancelled ${cancellationDate.toISOString().slice(0, 10)}`].filter(Boolean).join(' · ');
+    released += 1;
+  });
+
+  contract.status = 'Cancelled';
+  contract.cancellation = {
+    reason,
+    cancellationDate,
+    cancelledAt: new Date(),
+    cancelledBy: req.user?._id,
+    cancelledByName: personName(req.user),
+    workDone: s.workDone,
+    settlement: s.money,
+    releasedProperties: released
+  };
+  contract.updatedBy = req.user?._id;
+  await contract.save();
+  if (wasActive && contract.contractType !== 'Slab') await resyncBoqAllocationsAfterCancel(contract, req.params.id);
+  await syncProjectMetrics(req.params.id);
+
+  const freed = Math.max(0, round2((Number(contract.totalAmount) || 0) - s.workDone.amount));
+  const message = wasActive
+    ? `Contract cancelled. Work done ${fmtPkr(s.workDone.amount)} stays with it; ${fmtPkr(freed)} of budget and the remaining scope are free for a new contract${released ? `; ${released} propert${released === 1 ? 'y' : 'ies'} released` : ''}`
+    : 'Draft contract cancelled';
+  const populated = await populateSublet(SubletContract.findById(contract._id)).lean();
+  return res.json({ success: true, message, data: populated });
+};
+
+router.post('/projects/:id/sublet-contracts/:scId/cancel', asyncHandler(cancelSubletContract));
+
+// ─── RE-CONTRACTING THE REMAINING WORK ───────────────────────────────────────
+
+/**
+ * What is left of a cancelled contract, at its old rates, to pre-fill a new contract.
+ * BOQ: each line's contracted quantity minus the quantity done (and minus anything already given to another
+ * replacement contract). Slab: the slabs not yet done, per villa — villas at the same stage are grouped,
+ * since one contract covers one set of villas with one set of slabs.
+ */
+const remainingScope = async (contract) => {
+  const done = contract.cancellation?.workDone || { lines: [], slabs: [] };
+  // Work given to a replacement is not offered again here. If that replacement is cancelled too, what it left
+  // undone is re-contracted from it (the newest contract in the chain); only a replacement cancelled while
+  // still a Draft (never started) hands its share back.
+  const replacements = (await SubletContract.find({ replacesContract: contract._id })
+    .select('contractNumber status activatedAt items units slabs').lean())
+    .filter((r) => r.status !== 'Cancelled' || r.activatedAt);
+  const heldItems = (r) => r.items || [];
+  const heldSlabs = (r) => (r.slabs || []).map((sl) => ({ name: sl.name, units: r.units || [] }));
+
+  if (contract.contractType !== 'Slab') {
+    const doneQty = new Map((done.lines || []).map((l) => [String(l.boqItem), Number(l.quantity) || 0]));
+    const takenQty = new Map();
+    replacements.forEach((r) => heldItems(r).forEach((it) => {
+      const k = String(it.boqItem);
+      takenQty.set(k, (takenQty.get(k) || 0) + (Number(it.quantity) || 0));
+    }));
+    const lines = (contract.items || []).map((it) => {
+      const k = String(it.boqItem?._id || it.boqItem);
+      const contracted = Number(it.quantity) || 0;
+      const doneQ = doneQty.get(k) || 0;
+      const already = takenQty.get(k) || 0;
+      const remaining = Math.max(0, round2(contracted - doneQ - already));
+      return {
+        boqItem: k, title: it.title || it.boqItem?.title || '', unit: it.unit || it.boqItem?.unit || '',
+        contractedQuantity: contracted, doneQuantity: doneQ, recontractedQuantity: already,
+        remainingQuantity: remaining, oldRate: round2(it.unitPrice), oldAmount: round2(remaining * (Number(it.unitPrice) || 0))
+      };
+    }).filter((l) => l.remainingQuantity > 0);
+    return { lines, groups: [], remainingValue: round2(lines.reduce((t, l) => t + l.oldAmount, 0)) };
+  }
+
+  // Slab: which slabs are still to do, villa by villa (a contract with no villas is one "whole" scope)
+  const cUnits = contract.units || [];
+  const scopes = cUnits.length ? cUnits.map((u) => ({ unit: u.unit, name: u.name })) : [null];
+  const doneFor = (slab, scope) => (done.slabs || []).some((ds) => String(ds.slabId) === String(slab._id)
+    && (!ds.units?.length || (scope && ds.units.some((u) => String(u.unit) === String(scope.unit)))));
+  // Villas / slabs already handed to a replacement contract are not offered again
+  const takenBy = (slab, scope) => replacements.some((r) => heldSlabs(r).some((s) => s.name === slab.name
+    && (!scope || !s.units.length || s.units.some((u) => String(u.unit) === String(scope.unit)))));
+
+  const groups = new Map();
+  scopes.forEach((scope) => {
+    const left = (contract.slabs || []).filter((s) => !doneFor(s, scope) && !takenBy(s, scope));
+    if (!left.length) return;
+    const key = left.map((s) => String(s._id)).join(',');
+    const g = groups.get(key) || { units: [], slabs: left };
+    if (scope) g.units.push(scope);
+    groups.set(key, g);
+  });
+
+  const perUnit = Number(contract.ratePerUnit) > 0 && cUnits.length > 0;
+  const out = [...groups.values()].map((g) => {
+    const pct = g.slabs.reduce((t, s) => t + (Number(s.percentage) || 0), 0);
+    const oldValue = perUnit
+      ? round2((Number(contract.ratePerUnit) * g.units.length * pct) / 100)
+      : round2((Number(contract.totalAmount) || 0) * pct / 100);
+    return {
+      units: g.units,
+      remainingPercent: round2(pct),
+      oldValue,
+      // Per villa at the old rate, for the remaining share — the starting point for the new rate
+      oldRatePerUnit: perUnit ? round2((Number(contract.ratePerUnit) * pct) / 100) : 0,
+      // Remaining slabs re-weighted to 100% of the new contract
+      slabs: g.slabs.map((s) => ({
+        slabId: s._id, name: s.name, oldPercentage: s.percentage,
+        percentage: pct > 0 ? round2((Number(s.percentage) * 100) / pct) : 0,
+        notes: s.notes || '',
+        activities: (s.activities || []).map((a) => String(a.activity))
+      }))
+    };
+  });
+  // Rounding: make each group's slabs add up to exactly 100
+  out.forEach((g) => {
+    const diff = round2(100 - g.slabs.reduce((t, s) => t + s.percentage, 0));
+    if (g.slabs.length && diff) g.slabs[g.slabs.length - 1].percentage = round2(g.slabs[g.slabs.length - 1].percentage + diff);
+  });
+  return { lines: [], groups: out, remainingValue: round2(out.reduce((t, g) => t + g.oldValue, 0)) };
+};
+
+// GET the remaining work of a cancelled contract, to start a new contract from
+router.get('/projects/:id/sublet-contracts/:scId/remaining', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
+  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id })
+    .populate('items.boqItem', 'title unit').populate('contractor', 'name').lean();
+  if (!contract) return notFound(res, 'Sublet Contract');
+  if (contract.status !== 'Cancelled') return badRequest(res, 'Only a cancelled contract\'s remaining work can be re-contracted');
+  const scope = await remainingScope(contract);
+  res.json({
+    success: true,
+    data: {
+      contract: {
+        _id: contract._id, contractNumber: contract.contractNumber, title: contract.title,
+        contractType: contract.contractType || 'BOQ', contractor: contract.contractor,
+        propertyPercent: contract.propertyPercent || 0, slabSchedule: contract.slabSchedule || null,
+        ratePerUnit: contract.ratePerUnit || 0, cancellation: contract.cancellation
+      },
+      ...scope,
+      hasRemaining: scope.lines.length > 0 || scope.groups.length > 0
+    }
+  });
+}));
+
+/** Check a new contract's `replacesContract`: a cancelled contract of the same Sub Project */
+const resolveReplacedContract = async (projectId, replacesId) => {
+  if (!replacesId) return { replaced: null };
+  if (!isValidId(replacesId)) return { error: 'Invalid contract being replaced' };
+  const replaced = await SubletContract.findOne({ _id: replacesId, project: projectId }).select('contractNumber status').lean();
+  if (!replaced) return { error: 'The contract being replaced was not found on this Sub Project' };
+  if (replaced.status !== 'Cancelled') return { error: `${replaced.contractNumber} is ${replaced.status} — only a cancelled contract's work can be re-contracted` };
+  return { replaced };
 };
 
 // GET /api/project-management/projects/:id/sublet-contracts
@@ -5842,6 +6317,9 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
   if (unitsError) return badRequest(res, unitsError);
   const { propertyPercent, error: payError } = resolvePropertyPercent(project, req.body.propertyPercent);
   if (payError) return badRequest(res, payError);
+  // Re-contracting the remaining work of a cancelled contract
+  const { replaced, error: replacedError } = await resolveReplacedContract(req.params.id, req.body.replacesContract);
+  if (replacedError) return badRequest(res, replacedError);
   let clientValue = 0;
 
   let typeFields;
@@ -5887,9 +6365,13 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     startDate: startDate ? new Date(startDate) : undefined,
     endDate: endDate ? new Date(endDate) : undefined,
     status: 'Draft',
+    replacesContract: replaced?._id || null,
     createdBy: req.user?._id,
     updatedBy: req.user?._id
   });
+  if (replaced) {
+    await SubletContract.updateOne({ _id: replaced._id }, { $addToSet: { replacedBy: contract._id } });
+  }
 
   // Barter / Mixed contracts wait in Draft until the properties given in exchange are added
   const needsProperties = barterShortfall(contract) > 0;
@@ -5906,7 +6388,7 @@ router.post('/projects/:id/sublet-contracts', asyncHandler(async (req, res) => {
     success: true,
     message: needsProperties
       ? 'Sublet contract created as Draft — add the properties given in exchange, then activate it'
-      : activate ? 'Sublet contract created and activated' : 'Sublet contract created',
+      : `${activate ? 'Sublet contract created and activated' : 'Sublet contract created'}${replaced ? ` — takes over the remaining work of ${replaced.contractNumber}` : ''}`,
     data: populated
   });
 }));
@@ -6167,11 +6649,18 @@ router.put('/projects/:id/sublet-contracts/:scId/barter-properties', asyncHandle
  */
 const barterBalances = async (projectId, contractorId = null) => {
   const pid = new mongoose.Types.ObjectId(String(projectId));
-  const cFilter = { project: pid, status: { $ne: 'Cancelled' }, propertyPercent: { $gt: 0 } };
+  // Cancelled contracts that had started still owe property for the work done on them
+  const cFilter = { project: pid, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }], propertyPercent: { $gt: 0 } };
   if (contractorId) cFilter.contractor = new mongoose.Types.ObjectId(String(contractorId));
-  const contracts = await SubletContract.find(cFilter)
-    .select('contractNumber contractor title totalAmount propertyPercent propertyAmount cashAmount barterProperties status')
-    .populate('contractor', 'name').lean();
+  const contracts = (await SubletContract.find(cFilter)
+    .select('contractNumber contractor title totalAmount propertyPercent propertyAmount cashAmount barterProperties status cancellation.workDone.amount')
+    .populate('contractor', 'name').lean())
+    .map((c) => {
+      if (c.status !== 'Cancelled') return c;
+      const held = Number(c.cancellation?.workDone?.amount) || 0;
+      const propertyAmount = Math.round((held * (Number(c.propertyPercent) || 0)) / 100);
+      return { ...c, totalAmount: held, propertyAmount, cashAmount: Math.max(0, held - propertyAmount) };
+    });
   const contractorIds = [...new Set(contracts.map((c) => String(c.contractor?._id || c.contractor)))];
   const ipcs = contractorIds.length ? await ProjectInvoice.find({
     project: pid, invoiceType: 'Subcontractor_IPC', status: { $ne: 'Cancelled' },
@@ -6337,6 +6826,7 @@ router.post('/projects/:id/sublet-contracts/:scId/complete', asyncHandler(async 
   }
 
   contract.status = 'Completed';
+  contract.completedAt = new Date();
   contract.updatedBy = req.user?._id;
   await contract.save();
   await syncProjectMetrics(req.params.id);
@@ -6345,29 +6835,14 @@ router.post('/projects/:id/sublet-contracts/:scId/complete', asyncHandler(async 
   res.json({ success: true, message: 'Sublet contract marked completed', data: populated });
 }));
 
-// DELETE cancel
-router.delete('/projects/:id/sublet-contracts/:scId', asyncHandler(async (req, res) => {
-  if (!isValidId(req.params.id) || !isValidId(req.params.scId)) return badRequest(res, 'Invalid ID');
-
-  const contract = await SubletContract.findOne({ _id: req.params.scId, project: req.params.id });
-  if (!contract) return notFound(res, 'Sublet Contract');
-  if (contract.status === 'Completed') {
-    return badRequest(res, 'Completed contracts cannot be cancelled');
-  }
-
-  contract.status = 'Cancelled';
-  contract.updatedBy = req.user?._id;
-  await contract.save();
-  await syncProjectMetrics(req.params.id);
-
-  res.json({ success: true, message: 'Sublet contract cancelled' });
-}));
+// DELETE cancel (older clients) — same rules as POST …/cancel
+router.delete('/projects/:id/sublet-contracts/:scId', asyncHandler(cancelSubletContract));
 
 // ─── SUBCONTRACTOR STATEMENT ─────────────────────────────────────────────────
 
 // GET /api/project-management/subcontractors — everyone holding (or who held) a sublet contract
 router.get('/subcontractors', asyncHandler(async (req, res) => {
-  const ids = await SubletContract.distinct('contractor', { status: { $ne: 'Cancelled' } });
+  const ids = await SubletContract.distinct('contractor', { $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] });
   const list = await Supplier.find({ _id: { $in: ids } }).select('name supplierId phone email').sort({ name: 1 }).lean();
   res.json({ success: true, data: list });
 }));
@@ -6380,9 +6855,11 @@ router.get('/subcontractors/:supplierId/statement', asyncHandler(async (req, res
 
   const projectPopulate = { path: 'project', select: 'name projectNumber sector parentProject', populate: { path: 'parentProject', select: 'name' } };
   const [contracts, ipcs] = await Promise.all([
-    SubletContract.find({ contractor: supplier._id, status: { $ne: 'Cancelled' } })
+    // Cancelled contracts stay on the statement (marked), held at the work done on them
+    SubletContract.find({ contractor: supplier._id, $or: [{ status: { $ne: 'Cancelled' } }, { activatedAt: { $ne: null } }] })
       .populate(projectPopulate)
-      .select('contractNumber title contractType status totalAmount startDate endDate project activatedAt')
+      .populate('replacedBy', 'contractNumber status activatedAt')
+      .select('contractNumber title contractType status totalAmount startDate endDate project activatedAt cancellation.cancellationDate cancellation.reason cancellation.workDone.amount replacedBy')
       .sort({ createdAt: 1 }).lean(),
     ProjectInvoice.find({ contractor: supplier._id, invoiceType: 'Subcontractor_IPC' })
       .populate(projectPopulate)
@@ -6405,7 +6882,7 @@ router.get('/subcontractors/:supplierId/statement', asyncHandler(async (req, res
   const approved = live.filter((i) => i.approvalStatus === 'Approved');
   const approvedWork = approved.filter((i) => !NON_WORK_IPC_KINDS.includes(i.ipcKind));
   const totals = {
-    contracted: sum(contracts, 'totalAmount'),
+    contracted: round2(contracts.reduce((t, c) => t + (Number(c.status === 'Cancelled' ? c.cancellation?.workDone?.amount : c.totalAmount) || 0), 0)),
     certifiedWork: sum(approvedWork, 'grossAmount'),
     workInApproval: sum(live.filter((i) => i.approvalStatus !== 'Approved' && !NON_WORK_IPC_KINDS.includes(i.ipcKind)), 'grossAmount'),
     retentionHeld: sum(byProject, 'retentionAvailable'),

@@ -37,6 +37,61 @@ const subletSlabSchema = new mongoose.Schema(
   { _id: true }
 );
 
+/**
+ * Recorded when an Active contract is cancelled: why, and the work done up to then (verified claims).
+ * The work done stays with this contract — it keeps holding that much budget and that BOQ quantity /
+ * those slabs cannot be contracted again. Only the rest of the scope is free for a new contract.
+ */
+const cancellationSchema = new mongoose.Schema(
+  {
+    reason: { type: String, trim: true, default: '' },
+    /** Date the contract ended on site (entered by the user) */
+    cancellationDate: { type: Date },
+    /** When it was recorded */
+    cancelledAt: { type: Date },
+    cancelledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    cancelledByName: { type: String, trim: true, default: '' },
+    workDone: {
+      amount: { type: Number, default: 0 },
+      lines: [
+        {
+          _id: false,
+          boqItem: { type: mongoose.Schema.Types.ObjectId, ref: 'BOQItem' },
+          title: { type: String, trim: true, default: '' },
+          unit: { type: String, trim: true, default: '' },
+          contractedQuantity: { type: Number, default: 0 },
+          quantity: { type: Number, default: 0 },
+          unitPrice: { type: Number, default: 0 },
+          amount: { type: Number, default: 0 }
+        }
+      ],
+      slabs: [
+        {
+          _id: false,
+          slabId: { type: mongoose.Schema.Types.ObjectId },
+          name: { type: String, trim: true, default: '' },
+          percentage: { type: Number, default: 0 },
+          amount: { type: Number, default: 0 },
+          /** Villas the slab was done for (empty = all of the contract's villas / the whole Sub Project) */
+          units: [{ _id: false, unit: { type: mongoose.Schema.Types.ObjectId }, name: { type: String, trim: true, default: '' } }]
+        }
+      ]
+    },
+    /** Money position at cancellation */
+    settlement: {
+      verified: { type: Number, default: 0 },
+      billed: { type: Number, default: 0 },
+      unbilled: { type: Number, default: 0 },
+      paid: { type: Number, default: 0 },
+      payable: { type: Number, default: 0 },
+      retentionHeld: { type: Number, default: 0 },
+      advanceOutstanding: { type: Number, default: 0 }
+    },
+    releasedProperties: { type: Number, default: 0 }
+  },
+  { _id: false }
+);
+
 const SUBLET_CONTRACT_TYPES = ['BOQ', 'Slab'];
 
 const subletContractSchema = new mongoose.Schema(
@@ -167,6 +222,16 @@ const subletContractSchema = new mongoose.Schema(
 
     activatedAt: { type: Date },
     activatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+
+    completedAt: { type: Date },
+
+    /** Set when the contract is cancelled */
+    cancellation: { type: cancellationSchema, default: null },
+
+    /** Re-contracting: this contract takes over the remaining work of a cancelled one … */
+    replacesContract: { type: mongoose.Schema.Types.ObjectId, ref: 'SubletContract', default: null, index: true },
+    /** … and a cancelled contract lists the contracts that took over its remaining work */
+    replacedBy: [{ type: mongoose.Schema.Types.ObjectId, ref: 'SubletContract' }],
 
     createdBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     updatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' }

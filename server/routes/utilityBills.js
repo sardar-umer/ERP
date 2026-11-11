@@ -9,6 +9,7 @@ const permissions = require('../middleware/permissions');
 const { checkSubRoleAccess } = require('../config/permissions');
 const UtilityBill = require('../models/hr/UtilityBill');
 const UtilityStoreItem = require('../models/hr/UtilityStoreItem');
+const UtilityStoreCategory = require('../models/hr/UtilityStoreCategory');
 const User = require('../models/User');
 const Department = require('../models/hr/Department');
 const Employee = require('../models/hr/Employee');
@@ -28,7 +29,11 @@ const {
 } = require('../utils/utilityBillFinance');
 const AccountsPayable = require('../models/finance/AccountsPayable');
 const { applyBillLinesToPayload } = require('../utils/utilityBillLines');
-const { validateBillLinesSameKind } = require('../utils/centralizedStoreBillKind');
+const {
+  UTILITY_BILL_TYPES,
+  isUtilityCategoryName,
+  validateBillLinesSameKind
+} = require('../utils/centralizedStoreBillKind');
 const {
   normalizeApprovalSlots,
   slotsFromApproverIds,
@@ -519,6 +524,23 @@ const buildUtilityBillStoreScope = (queryParams = {}) => {
   return {};
 };
 
+/** Mongo equivalent of isCentralizedUtilityBill, so Bills / Utility Bills can be paginated in the DB. */
+const buildCentralizedUtilityBillCondition = async () => {
+  const categories = await UtilityStoreCategory.find({}).select('name').lean();
+  const utilityCategoryIds = categories
+    .filter((category) => isUtilityCategoryName(category.name))
+    .map((category) => category._id);
+  const utilityItemIds = await UtilityStoreItem.find({ category: { $in: utilityCategoryIds } }).distinct('_id');
+  const utilityTypeRx = new RegExp(`^\\s*(${UTILITY_BILL_TYPES.join('|')})\\s*$`, 'i');
+  return {
+    $or: [
+      { 'billLines.utilityType': utilityTypeRx },
+      { 'billLines.storeItem': { $in: utilityItemIds } },
+      { 'billLines.0': { $exists: false }, utilityType: utilityTypeRx }
+    ]
+  };
+};
+
 router.get('/', requireBillPermission('read'), async (req, res) => {
   try {
     const { 
@@ -535,6 +557,7 @@ router.get('/', requireBillPermission('read'), async (req, res) => {
       excludeCentralizedStore,
       centralizedStoreOnly,
       storeCategoryId,
+      billKind,
       page = 1, 
       limit = 10 
     } = req.query;
@@ -617,16 +640,54 @@ router.get('/', requireBillPermission('read'), async (req, res) => {
       }
     }
 
+    // Centralized store tabs: page within one kind, and report figures that span all pages
+    let listQuery = query;
+    let kindSummary = {};
+    if (centralizedStoreOnly === 'true' && ['bill', 'utility'].includes(billKind)) {
+      const utilityCondition = await buildCentralizedUtilityBillCondition();
+      const utilityQuery = { $and: [query, utilityCondition] };
+      const regularQuery = { $and: [query, { $nor: [utilityCondition] }] };
+      listQuery = billKind === 'utility' ? utilityQuery : regularQuery;
+
+      const [utilityCount, regularCount, periodSummary] = await Promise.all([
+        UtilityBill.countDocuments(utilityQuery),
+        UtilityBill.countDocuments(regularQuery),
+        UtilityBill.aggregate([
+          { $match: listQuery },
+          {
+            $group: {
+              _id: {
+                $dateToString: {
+                  format: '%Y-%m',
+                  date: { $ifNull: ['$billDate', '$dueDate'] },
+                  timezone: 'Asia/Karachi',
+                  onNull: '0000-00'
+                }
+              },
+              count: { $sum: 1 },
+              total: { $sum: { $ifNull: ['$amount', 0] } }
+            }
+          }
+        ])
+      ]);
+      kindSummary = {
+        kindCounts: { bill: regularCount, utility: utilityCount },
+        periodSummary: Object.fromEntries(
+          periodSummary.map(({ _id, count, total }) => [_id, { count, total }])
+        )
+      };
+    }
+
     // Calculate pagination
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     // Execute query with population
-    const bills = await populateUtilityBill(UtilityBill.find(query))
+    const bills = await populateUtilityBill(UtilityBill.find(listQuery))
       .sort({ billDate: -1, createdAt: -1 })
       .skip(skip)
       .limit(parseInt(limit));
 
-    const total = await UtilityBill.countDocuments(query);
+    const total = await UtilityBill.countDocuments(listQuery);
 
     const filteredBills = await repairStaleUtilityBillsFinanceStatus(bills, getActorId(req));
 
@@ -637,7 +698,8 @@ router.get('/', requireBillPermission('read'), async (req, res) => {
         current: parseInt(page),
         pages: Math.ceil(total / parseInt(limit)),
         total
-      }
+      },
+      ...kindSummary
     });
   } catch (error) {
     console.error('Error fetching utility bills:', error);

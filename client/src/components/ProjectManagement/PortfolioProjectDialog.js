@@ -13,7 +13,7 @@ import {
 import dayjs from 'dayjs';
 import { getProjectCostDetail, getProjectSummary, getProjectTree } from '../../services/projectManagementService';
 import {
-  CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, HEALTH_COLOR, INK, IPC_APPROVAL_COLOR, STATUS_DOT, fmt, plural, progressColor
+  CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, cancelledNote, HEALTH_COLOR, INK, IPC_APPROVAL_COLOR, STATUS_DOT, fmt, plural, progressColor
 } from './mainProjectUi';
 import { HEALTH_STYLE, ProgressRing } from './portfolioUi';
 import MainCostReport from './MainCostReport';
@@ -259,12 +259,20 @@ const ContractLevel = ({ contract: c, color, open }) => (
           <StatusChip label={c.status} colorMap={CONTRACT_STATUS_COLOR} />
         </Stack>
         <Typography variant="body2" sx={{ color: MUTED }}>{[c.contractor, c.title].filter(Boolean).join(' · ')}</Typography>
+        {c.cancellation && (
+          <Typography variant="body2" color="error.main">
+            {cancelledNote(c.cancellation.cancellationDate, c.cancellation.workDone, c.totalAmount)}
+            {c.cancellation.reason ? ` — ${c.cancellation.reason}` : ''}
+          </Typography>
+        )}
       </Box>
     </Stack>
     <Stats items={[
-      { label: 'Contract value', value: fmt(c.totalAmount) },
-      { label: 'Billed (work IPCs)', value: fmt(c.totals.billed), tone: '#b45309', note: `${pct(c.totals.billed, c.totalAmount)}% of contract` },
-      { label: 'Remaining', value: fmt(Math.max(0, c.totalAmount - c.totals.billed)) },
+      c.cancellation
+        ? { label: 'Work done (held)', value: fmt(c.cancellation.workDone), note: `of ${fmt(c.totalAmount)} contract` }
+        : { label: 'Contract value', value: fmt(c.totalAmount) },
+      { label: 'Billed (work IPCs)', value: fmt(c.totals.billed), tone: '#b45309', note: `${pct(c.totals.billed, c.cancellation ? c.cancellation.workDone : c.totalAmount)}% of ${c.cancellation ? 'work done' : 'contract'}` },
+      { label: 'Remaining', value: fmt(Math.max(0, (c.cancellation ? c.cancellation.workDone : c.totalAmount) - c.totals.billed)) },
       { label: 'CEO approved', value: fmt(c.totals.approved), tone: '#7e22ce' },
       { label: 'Paid', value: fmt(c.totals.paid), tone: '#15803d' },
       { label: 'Check requests', value: c.totals.checkRequests, note: plural(c.totals.ipcs, 'IPC') }

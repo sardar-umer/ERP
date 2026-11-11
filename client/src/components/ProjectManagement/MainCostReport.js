@@ -14,7 +14,7 @@ import {
 import { getProjectCostAnalysis, getProjectCostReport } from '../../services/projectManagementService';
 import SubCostLines from './SubCostLines';
 import {
-  ACCENT, BORDER, CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, Empty, INK, IPC_APPROVAL_COLOR,
+  ACCENT, BORDER, CONTRACT_STATUS_COLOR, CR_STATUS_COLOR, ContractTypeTag, Empty, INK, IPC_APPROVAL_COLOR, cancelledNote,
   Label, SOFT, fmt, plural, progressColor
 } from './mainProjectUi';
 
@@ -120,6 +120,11 @@ const ContractLabel = ({ r }) => (r.contract ? (
       <ContractTypeTag type={r.contract.type} />
     </Stack>
     <Chip size="small" variant="outlined" label={r.contract.status} color={CONTRACT_STATUS_COLOR[r.contract.status] || 'default'} sx={{ mt: 0.5, height: 20, fontSize: 11 }} />
+    {r.contract.status === 'Cancelled' && (
+      <Typography variant="caption" color="text.secondary" display="block">
+        {cancelledNote(r.contract.cancellationDate, r.contract.value, r.contract.originalValue)}
+      </Typography>
+    )}
   </>
 ) : <Chip size="small" label="No contract" />);
 

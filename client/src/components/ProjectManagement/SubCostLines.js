@@ -3,7 +3,7 @@ import {
   Box, Paper, Stack, Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tooltip, Typography
 } from '@mui/material';
 import { Warning as WarnIcon } from '@mui/icons-material';
-import { Empty, fmt } from './mainProjectUi';
+import { Empty, cancelledNote, fmt } from './mainProjectUi';
 
 /**
  * Sub Project cost report detail: BOQ lines (budget → contracted → verified → billed → approved)
@@ -76,7 +76,9 @@ export default function SubCostLines({ data, contractor = null, type = 'all', qu
               <Paper key={c.contractNumber} variant="outlined" sx={{ p: 1.5 }}>
                 <Stack direction="row" justifyContent="space-between" flexWrap="wrap" gap={1} sx={{ mb: 1 }}>
                   <Typography variant="body2" fontWeight={700}>{c.contractNumber} · {c.contractor}</Typography>
-                  <Typography variant="body2">Value {fmt(c.value)} · {c.status}</Typography>
+                  <Typography variant="body2" color={c.status === 'Cancelled' ? 'error.main' : undefined}>
+                    {c.status === 'Cancelled' ? cancelledNote(c.cancellationDate, c.value, c.originalValue) : `Value ${fmt(c.value)} · ${c.status}`}
+                  </Typography>
                 </Stack>
                 <Table size="small">
                   <TableHead>

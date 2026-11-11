@@ -196,8 +196,17 @@ export const activateSubletContract = (projectId, scId) =>
 export const completeSubletContract = (projectId, scId) =>
   api.post(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/complete`);
 
-export const cancelSubletContract = (projectId, scId) =>
-  api.delete(`${BASE}/projects/${projectId}/sublet-contracts/${scId}`);
+/** What cancelling would mean: work done, money position, properties released, anything still in progress */
+export const getSubletCancelPreview = (projectId, scId) =>
+  api.get(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/cancel-preview`);
+
+/** A cancelled contract's remaining work at its old rates (BOQ lines, or slab groups per villa) */
+export const getSubletRemaining = (projectId, scId) =>
+  api.get(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/remaining`);
+
+/** data: { reason, cancellationDate } — reason is required for an Active contract */
+export const cancelSubletContract = (projectId, scId, data = {}) =>
+  api.post(`${BASE}/projects/${projectId}/sublet-contracts/${scId}/cancel`, data);
 
 // ─── Check Requests (gate before IPC / payment) ───────────────────────────────
 export const getCheckRequests = (projectId, params = {}) =>
@@ -287,7 +296,7 @@ const projectManagementService = {
   getWbsActivities, createWbsActivity, updateWbsActivity, deleteWbsActivity,
   getSlabSchedules, createSlabSchedule, updateSlabSchedule, deleteSlabSchedule,
   getSubletContracts, getSubletContractById, createSubletContract, updateSubletContract,
-  activateSubletContract, completeSubletContract, cancelSubletContract,
+  activateSubletContract, completeSubletContract, cancelSubletContract, getSubletCancelPreview, getSubletRemaining,
   getCheckRequests, getCheckRequestById, createCheckRequest, updateCheckRequest,
   submitCheckRequest, rejectCheckRequest, cancelCheckRequest,
   getInspectionReports, createInspectionReport, decideInspectionReport, cancelInspectionReport,

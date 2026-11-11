@@ -32,6 +32,7 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon,
+  Autorenew as RecontractIcon,
   CheckCircle as ActivateIcon,
   Delete as DeleteIcon,
   DoneAll as CompleteIcon,
@@ -44,13 +45,13 @@ import dayjs from 'dayjs';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   activateSubletContract,
-  cancelSubletContract,
   completeSubletContract,
   createSubletContract,
   getBOQ,
   getProjectUnits,
   getSlabSchedules,
   getSubletContracts,
+  getSubletRemaining,
   getSuppliers,
   getWbsActivities,
   updateSubletContract
@@ -61,6 +62,8 @@ import { SubBudgetStrip } from '../../components/ProjectManagement/ProjectBudget
 import { unitWord } from './UnitsTab';
 import BarterPropertiesDialog from '../../components/ProjectManagement/BarterPropertiesDialog';
 import BarterBalancesPanel from '../../components/ProjectManagement/BarterBalancesPanel';
+import CancelSubletContractDialog, { SettlementFigures, WorkDoneTable } from '../../components/ProjectManagement/CancelSubletContractDialog';
+import SubletContractHistory from '../../components/ProjectManagement/SubletContractHistory';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -95,8 +98,13 @@ const emptyForm = {
   units: [], // ids of the Sub Project's villas / units this contract covers
   ratePerUnit: '', // slab-wise with units: contractor's price per villa
   clientRatePerUnit: '', // slab-wise with units: client's price per villa
-  propertyPercent: '' // Mixed payment mode: share of the value paid in property
+  propertyPercent: '', // Mixed payment mode: share of the value paid in property
+  replacesContract: '', // re-contracting: the cancelled contract whose remaining work this takes over
+  recontract: null // re-contracting: old contract number / contractor / rates, for the comparison
 };
+
+/** A replacement contract counts in the history unless it was cancelled while still a Draft */
+const startedReplacement = (r) => r && (r.status !== 'Cancelled' || Boolean(r.activatedAt));
 
 /** Contracts share work only if their units overlap — no units means the whole Sub Project */
 const unitIdsOf = (row) => (row?.units || []).map((u) => String(u.unit?._id || u.unit));
@@ -142,6 +150,9 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
   const [saving, setSaving] = useState(false);
   const [viewRow, setViewRow] = useState(null);
   const [barterRow, setBarterRow] = useState(null);
+  const [cancelRow, setCancelRow] = useState(null);
+  // Slab re-contract with villas at different stages: pick which group to contract first
+  const [groupChoice, setGroupChoice] = useState(null);
   const [projectUnits, setProjectUnits] = useState(project?.units || []);
   const hasUnits = projectUnits.length > 0;
   const word = unitWord(project?.projectType);
@@ -242,6 +253,67 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
     setDialogOpen(true);
   };
 
+  /** New contract pre-filled with a cancelled contract's remaining work at its old rates */
+  const openRecontractForm = (row, data, group = null) => {
+    const c = data.contract;
+    const recontract = {
+      contractNumber: c.contractNumber,
+      contractor: c.contractor?.name || row.contractor?.name || '',
+      cancelledOn: c.cancellation?.cancellationDate || null,
+      reason: c.cancellation?.reason || '',
+      oldRates: Object.fromEntries((data.lines || []).map((l) => [String(l.boqItem), l.oldRate])),
+      oldValue: group ? group.oldValue : data.remainingValue,
+      oldRatePerUnit: group?.oldRatePerUnit || 0
+    };
+    const base = {
+      ...emptyForm,
+      title: `${c.title || 'Sublet'} — re-contract`,
+      contractType: c.contractType,
+      startDate: dayjs().format('YYYY-MM-DD'),
+      propertyPercent: c.propertyPercent || '',
+      replacesContract: row._id,
+      recontract
+    };
+    if (c.contractType === 'Slab') {
+      Object.assign(base, {
+        units: (group?.units || []).map((u) => String(u.unit)),
+        slabs: (group?.slabs || []).map((sl) => ({
+          key: emptySlab().key, name: sl.name, percentage: sl.percentage, description: sl.notes || '', activities: sl.activities
+        })),
+        ratePerUnit: group?.oldRatePerUnit || '',
+        contractValue: group?.units?.length ? '' : (group?.oldValue || ''),
+        lines: buildLinesFromBoq()
+      });
+    } else {
+      base.lines = buildLinesFromBoq(new Map((data.lines || []).map((l) => [String(l.boqItem), { quantity: l.remainingQuantity, unitPrice: l.oldRate }])));
+    }
+    setEditing(null);
+    setDialogError('');
+    setForm(base);
+    setGroupChoice(null);
+    setDialogOpen(true);
+  };
+
+  const handleRecontract = async (row) => {
+    try {
+      setError('');
+      const res = await getSubletRemaining(projectId, row._id);
+      const data = res.data?.data;
+      if (!data?.hasRemaining) {
+        const taken = (row.replacedBy || []).filter(startedReplacement).map((r) => r.contractNumber);
+        setSuccess(`Nothing left to re-contract on ${row.contractNumber}${taken.length ? ` — its remaining work is with ${taken.join(', ')}` : ' — all its work was done'}`);
+        return;
+      }
+      if (data.contract.contractType === 'Slab' && data.groups.length > 1) {
+        setGroupChoice({ row, data });
+        return;
+      }
+      openRecontractForm(row, data, data.groups[0] || null);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Could not load the remaining work');
+    }
+  };
+
   const isSlabForm = form.contractType === 'Slab';
   const perUnit = isSlabForm && hasUnits;
   const slabValue = perUnit ? (Number(form.ratePerUnit) || 0) * form.units.length : Number(form.contractValue) || 0;
@@ -287,7 +359,8 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       startDate: form.startDate || undefined,
       endDate: form.endDate || undefined,
       contractType: form.contractType,
-      activate: activateAfter && !editing
+      activate: activateAfter && !editing,
+      replacesContract: !editing && form.replacesContract ? form.replacesContract : undefined
     };
     if (paymentMode === 'Mixed') {
       const pct = Number(form.propertyPercent);
@@ -378,16 +451,7 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
     }
   };
 
-  const handleCancel = async (row) => {
-    if (!window.confirm(`Cancel ${row.contractNumber}?`)) return;
-    try {
-      await cancelSubletContract(projectId, row._id);
-      setSuccess('Sublet contract cancelled');
-      await load();
-    } catch (err) {
-      setError(err.response?.data?.message || 'Cancel failed');
-    }
-  };
+  const handleCancel = (row) => setCancelRow(row);
 
   if (loading) {
     return (
@@ -535,6 +599,16 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                     <Typography variant="body2" fontWeight={600}>
                       {row.title}
                     </Typography>
+                    {row.replacesContract && (
+                      <Typography variant="caption" color="primary" display="block">
+                        Replaces {row.replacesContract.contractNumber || 'a cancelled contract'}
+                      </Typography>
+                    )}
+                    {(row.replacedBy || []).filter(startedReplacement).length > 0 && (
+                      <Typography variant="caption" color="primary" display="block">
+                        Re-contracted → {row.replacedBy.filter(startedReplacement).map((r) => r.contractNumber).join(', ')}
+                      </Typography>
+                    )}
                     {row.units?.length > 0 && (
                       <Tooltip title={row.units.map((u) => u.name).join(', ')}>
                         <Typography variant="caption" color="text.secondary">
@@ -561,6 +635,11 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                   </TableCell>
                   <TableCell align="right">
                     {fmt(row.totalAmount)}
+                    {row.status === 'Cancelled' && row.cancellation?.workDone?.amount > 0 && (
+                      <Typography variant="caption" color="text.secondary" display="block">
+                        Work done {fmt(row.cancellation.workDone?.amount)}
+                      </Typography>
+                    )}
                     {row.propertyPercent > 0 && (
                       <Typography variant="caption" color="text.secondary" display="block">
                         {row.propertyPercent >= 100 ? 'All in property' : `Cash ${fmt(row.cashAmount)} · Property ${fmt(row.propertyAmount)}`}
@@ -570,6 +649,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                   </TableCell>
                   <TableCell>
                     <Chip size="small" label={row.status} color={STATUS_COLOR[row.status] || 'default'} />
+                    {row.status === 'Cancelled' && row.cancellation?.cancellationDate && (
+                      <Tooltip title={row.cancellation.reason || ''}>
+                        <Typography variant="caption" color="text.secondary" display="block">
+                          {dayjs(row.cancellation.cancellationDate).format('DD MMM YY')}
+                        </Typography>
+                      </Tooltip>
+                    )}
                   </TableCell>
                   <TableCell>
                     {row.startDate ? dayjs(row.startDate).format('DD MMM YY') : '—'}
@@ -609,6 +695,13 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                         </IconButton>
                       </Tooltip>
                     )}
+                    {row.status === 'Cancelled' && row.activatedAt && (
+                      <Tooltip title="Re-contract remaining work">
+                        <IconButton size="small" color="primary" onClick={() => handleRecontract(row)}>
+                          <RecontractIcon fontSize="small" />
+                        </IconButton>
+                      </Tooltip>
+                    )}
                     {['Draft', 'Active'].includes(row.status) && (
                       <Tooltip title="Cancel">
                         <IconButton size="small" color="error" onClick={() => handleCancel(row)}>
@@ -625,13 +718,44 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
       </TableContainer>
 
       <Dialog open={dialogOpen} onClose={() => !saving && setDialogOpen(false)} maxWidth={isSlabForm ? 'lg' : 'md'} fullWidth>
-        <DialogTitle>{editing ? `Edit Sublet Contract ${editing.contractNumber || ''}` : 'New Sublet Contract'}</DialogTitle>
+        <DialogTitle>
+          {editing
+            ? `Edit Sublet Contract ${editing.contractNumber || ''}`
+            : form.recontract ? `Re-contract remaining work of ${form.recontract.contractNumber}` : 'New Sublet Contract'}
+        </DialogTitle>
         <DialogContent dividers>
           {dialogError && (
             <Alert severity="error" sx={{ mb: 2 }} onClose={() => setDialogError('')}>
               {dialogError}
             </Alert>
           )}
+          {form.recontract && (() => {
+            const oldValue = Number(form.recontract.oldValue) || 0;
+            const newValue = isSlabForm ? slabValue : totalAmount;
+            const diff = newValue - oldValue;
+            return (
+              <Alert severity="info" sx={{ mb: 2 }}>
+                Takes over the work left on <strong>{form.recontract.contractNumber}</strong>
+                {form.recontract.contractor ? ` (${form.recontract.contractor}` : ''}
+                {form.recontract.cancelledOn ? `, cancelled ${dayjs(form.recontract.cancelledOn).format('DD MMM YYYY')}` : ''}
+                {form.recontract.contractor ? ')' : ''}
+                {form.recontract.reason ? ` — ${form.recontract.reason}` : ''}. Pick the new subcontractor and enter the new rates.
+                <Box sx={{ mt: 0.5 }}>
+                  At the old rates: <strong>{fmt(oldValue)}</strong> · This contract: <strong>{fmt(newValue)}</strong>
+                  {oldValue > 0 && newValue > 0 && (
+                    <Typography component="span" variant="body2" fontWeight={700} color={diff > 0 ? 'error.main' : 'success.main'}>
+                      {' '}({diff >= 0 ? '+' : ''}{fmt(diff)}, {Math.round((diff / oldValue) * 100)}%)
+                    </Typography>
+                  )}
+                  {isSlabForm && form.recontract.oldRatePerUnit > 0 && (
+                    <Typography variant="caption" display="block">
+                      Old rate for the slabs left: {fmt(form.recontract.oldRatePerUnit)} per {word.toLowerCase()}
+                    </Typography>
+                  )}
+                </Box>
+              </Alert>
+            );
+          })()}
           <Grid container spacing={2} sx={{ mt: 0.5 }}>
             <Grid item xs={12}>
               <Typography variant="caption" color="text.secondary" fontWeight={700} display="block" mb={0.75}>
@@ -1050,6 +1174,9 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
                                 return { ...f, lines };
                               });
                             }}
+                            helperText={form.recontract?.oldRates?.[String(line.boqItemId)] != null
+                              ? `old ${fmt(form.recontract.oldRates[String(line.boqItemId)])}`
+                              : undefined}
                             inputProps={{ min: 0, step: 'any' }}
                             sx={{ width: 110 }}
                           />
@@ -1092,6 +1219,49 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
         onSaved={async (message) => {
           setSuccess(message || 'Properties saved');
           setBarterRow(null);
+          await load();
+        }}
+      />
+
+      <Dialog open={Boolean(groupChoice)} onClose={() => setGroupChoice(null)} maxWidth="sm" fullWidth>
+        <DialogTitle>Re-contract {groupChoice?.row?.contractNumber} — which {words.toLowerCase()}?</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            These {words.toLowerCase()} stopped at different stages, so their remaining work goes on separate contracts.
+            Pick one group now; the others stay available to re-contract.
+          </Typography>
+          <Stack spacing={1}>
+            {(groupChoice?.data?.groups || []).map((g, i) => (
+              <Paper key={i} variant="outlined" sx={{ p: 1.25 }}>
+                <Stack direction="row" justifyContent="space-between" alignItems="center" spacing={1}>
+                  <Box>
+                    <Typography variant="body2" fontWeight={700}>{g.units.map((u) => u.name).join(', ') || `All ${words.toLowerCase()}`}</Typography>
+                    <Typography variant="caption" color="text.secondary" display="block">
+                      Left: {g.slabs.map((sl) => `${sl.name} (${sl.oldPercentage}%)`).join(', ')} · old value {fmt(g.oldValue)}
+                    </Typography>
+                  </Box>
+                  <Button size="small" variant="contained" onClick={() => openRecontractForm(groupChoice.row, groupChoice.data, g)}>
+                    Re-contract
+                  </Button>
+                </Stack>
+              </Paper>
+            ))}
+          </Stack>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setGroupChoice(null)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      <CancelSubletContractDialog
+        open={Boolean(cancelRow)}
+        projectId={projectId}
+        contract={cancelRow}
+        unitsWord={words}
+        onClose={() => setCancelRow(null)}
+        onCancelled={async (message) => {
+          setSuccess(message);
+          setCancelRow(null);
           await load();
         }}
       />
@@ -1211,6 +1381,31 @@ const SubletContractsTab = ({ projectId, project, onGoToTab }) => {
               <Typography variant="subtitle2" fontWeight={700}>
                 Total: {fmt(viewRow.totalAmount)}
               </Typography>
+              <SubletContractHistory contract={viewRow} rows={rows} />
+              {viewRow.status === 'Cancelled' && viewRow.cancellation && (
+                <Paper variant="outlined" sx={{ p: 1.5, borderColor: 'error.light' }}>
+                  <Typography variant="subtitle2" fontWeight={700} color="error.main">
+                    Cancelled{viewRow.cancellation.cancellationDate ? ` on ${dayjs(viewRow.cancellation.cancellationDate).format('DD MMM YYYY')}` : ''}
+                    {viewRow.cancellation.cancelledByName ? ` by ${viewRow.cancellation.cancelledByName}` : ''}
+                  </Typography>
+                  {viewRow.cancellation.reason && (
+                    <Typography variant="body2" sx={{ mb: 1 }}><strong>Reason:</strong> {viewRow.cancellation.reason}</Typography>
+                  )}
+                  <Typography variant="body2" fontWeight={700} gutterBottom>Work done ({fmt(viewRow.cancellation.workDone?.amount)})</Typography>
+                  <WorkDoneTable workDone={viewRow.cancellation.workDone} unitsWord={words} />
+                  {viewRow.cancellation.settlement && (
+                    <Box sx={{ mt: 1.5 }}>
+                      <Typography variant="body2" fontWeight={700} gutterBottom>Settlement at cancellation</Typography>
+                      <SettlementFigures money={viewRow.cancellation.settlement} />
+                    </Box>
+                  )}
+                  {viewRow.cancellation.releasedProperties > 0 && (
+                    <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 1 }}>
+                      {viewRow.cancellation.releasedProperties} propert{viewRow.cancellation.releasedProperties === 1 ? 'y' : 'ies'} released on cancellation
+                    </Typography>
+                  )}
+                </Paper>
+              )}
             </Stack>
           )}
         </DialogContent>

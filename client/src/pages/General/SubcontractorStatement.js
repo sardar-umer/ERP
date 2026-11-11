@@ -16,6 +16,9 @@ const esc = (v) => String(v ?? '').replace(/&/g, '&amp;').replace(/</g, '&lt;').
 const kindLabel = (k) => (k === 'Advance' ? 'Advance' : k === 'Retention Release' ? 'Retention release' : 'Work IPC');
 const projectLabel = (p) => [p?.parentProject?.name || p?.mainProject, p?.name].filter(Boolean).join(' / ');
 
+/** A cancelled contract is held at the work done on it */
+const heldValue = (c) => (c.status === 'Cancelled' ? Number(c.cancellation?.workDone?.amount) || 0 : Number(c.totalAmount) || 0);
+
 const TOTALS = [
   ['contracted', 'Contracted'],
   ['certifiedWork', 'Certified work (CEO approved)'],
@@ -41,7 +44,7 @@ const printStatement = (d) => {
   <h2>Position by project</h2><table><tr><th>Project</th><th class="r">Retention held</th><th class="r">Advance paid</th><th class="r">Recovered</th><th class="r">Advance outstanding</th></tr>
   ${rows(d.byProject, [{ v: (r) => esc(projectLabel(r.project)) }, { r: 1, v: (r) => esc(fmt(r.retentionAvailable)) }, { r: 1, v: (r) => esc(fmt(r.advancePaid)) }, { r: 1, v: (r) => esc(fmt(r.advanceRecovered)) }, { r: 1, v: (r) => esc(fmt(r.advanceOutstanding)) }])}</table>
   <h2>Contracts</h2><table><tr><th>Contract</th><th>Project</th><th>Type</th><th>Status</th><th class="r">Value</th></tr>
-  ${rows(d.contracts, [{ v: (c) => esc(c.contractNumber) }, { v: (c) => esc(projectLabel(c.project)) }, { v: (c) => (c.contractType === 'Slab' ? 'Slab wise' : 'BOQ wise') }, { v: (c) => esc(c.status) }, { r: 1, v: (c) => esc(fmt(c.totalAmount)) }])}</table>
+  ${rows(d.contracts, [{ v: (c) => esc(c.contractNumber) }, { v: (c) => esc(projectLabel(c.project)) }, { v: (c) => (c.contractType === 'Slab' ? 'Slab wise' : 'BOQ wise') }, { v: (c) => esc(c.status === 'Cancelled' ? `Cancelled${c.cancellation?.cancellationDate ? ` ${dayjs(c.cancellation.cancellationDate).format('DD MMM YYYY')}` : ''}` : c.status) }, { r: 1, v: (c) => esc(fmt(heldValue(c))) + (c.status === 'Cancelled' ? ` <span class="muted">of ${esc(fmt(c.totalAmount))}</span>` : '') }])}</table>
   <h2>IPC ledger</h2><table><tr><th>Date</th><th>IPC</th><th>Kind</th><th>Project</th><th class="r">Gross</th><th class="r">Retention</th><th class="r">Adv. recovered</th><th class="r">WHT</th><th class="r">Net</th><th class="r">Paid</th><th>Stage</th></tr>
   ${rows(d.ipcs, [{ v: (i) => esc(dayjs(i.issueDate).format('DD MMM YYYY')) }, { v: (i) => `#${i.ipcNumber} ${esc(i.invoiceNumber)}` }, { v: (i) => kindLabel(i.ipcKind) }, { v: (i) => esc(projectLabel(i.project)) },
     { r: 1, v: (i) => esc(fmt(i.grossAmount)) }, { r: 1, v: (i) => esc(fmt(i.retentionAmount)) }, { r: 1, v: (i) => esc(fmt(i.advanceRecoveryAmount)) }, { r: 1, v: (i) => esc(fmt(i.whtAmount)) },
@@ -154,8 +157,24 @@ export default function SubcontractorStatement() {
                       <TableCell>{c.contractNumber}<Typography variant="caption" display="block" color="text.secondary">{c.title}</Typography></TableCell>
                       <TableCell>{projectLabel(c.project)}</TableCell>
                       <TableCell><Chip size="small" variant="outlined" label={c.contractType === 'Slab' ? 'Slab wise' : 'BOQ wise'} /></TableCell>
-                      <TableCell>{c.status}</TableCell>
-                      <TableCell align="right">{fmt(c.totalAmount)}</TableCell>
+                      <TableCell>
+                        <Chip size="small" label={c.status} color={c.status === 'Cancelled' ? 'error' : c.status === 'Active' ? 'success' : 'default'} variant="outlined" />
+                        {c.status === 'Cancelled' && (
+                          <Typography variant="caption" display="block" color="text.secondary">
+                            {c.cancellation?.cancellationDate ? dayjs(c.cancellation.cancellationDate).format('DD MMM YYYY') : ''}
+                            {c.cancellation?.reason ? ` — ${c.cancellation.reason}` : ''}
+                            {(c.replacedBy || []).filter((r) => r.status !== 'Cancelled' || r.activatedAt).length > 0
+                              ? ` · re-contracted → ${c.replacedBy.filter((r) => r.status !== 'Cancelled' || r.activatedAt).map((r) => r.contractNumber).join(', ')}`
+                              : ''}
+                          </Typography>
+                        )}
+                      </TableCell>
+                      <TableCell align="right">
+                        {fmt(heldValue(c))}
+                        {c.status === 'Cancelled' && (
+                          <Typography variant="caption" display="block" color="text.secondary">work done of {fmt(c.totalAmount)}</Typography>
+                        )}
+                      </TableCell>
                     </TableRow>
                   ))}
                 </TableBody>

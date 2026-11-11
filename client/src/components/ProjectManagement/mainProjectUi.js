@@ -34,7 +34,13 @@ export const PROJECT_STATUS_COLOR = {
 export const STATUS_DOT = {
   Draft: '#94a3b8', Planning: '#0288d1', Active: '#2e7d32', 'On Hold': '#ed6c02', Completed: '#1976d2'
 };
-export const CONTRACT_STATUS_COLOR = { Draft: 'default', Active: 'success', Completed: 'primary' };
+export const CONTRACT_STATUS_COLOR = { Draft: 'default', Active: 'success', Completed: 'primary', Cancelled: 'error' };
+
+/** "Cancelled 11 Nov 2026 · work done Rs 2,000 of Rs 5,000" for a cancelled sublet contract */
+export const cancelledNote = (date, workDone, original) => [
+  `Cancelled${date ? ` ${new Date(date).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })}` : ''}`,
+  `work done ${fmt(workDone)}${original != null ? ` of ${fmt(original)}` : ''}`
+].join(' · ');
 export const CR_STATUS_COLOR = { Draft: 'default', Submitted: 'info', Verified: 'success', Billed: 'primary', Rejected: 'error' };
 export const IPC_APPROVAL_COLOR = {
   Draft: 'default', 'Pending Audit': 'warning', 'Forwarded to Audit Director': 'warning',

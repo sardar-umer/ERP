@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useCallback } from 'react';
+import React, { useState, useEffect, useMemo, useCallback, useRef } from 'react';
 import {
   Box,
   Card,
@@ -8,6 +8,7 @@ import {
   Chip,
   Alert,
   Skeleton,
+  LinearProgress,
   Table,
   TableBody,
   TableCell,
@@ -50,23 +51,15 @@ import api from '../../../services/api';
 import utilityBillService from '../../../services/utilityBillService';
 import centralizedStoreService from '../../../services/centralizedStoreService';
 import NarrationTableCell from '../../../components/common/NarrationTableCell';
+import TablePaginationWrapper from '../../../components/TablePaginationWrapper';
+import { usePagination } from '../../../hooks/usePagination';
 import { getBillNarrationDisplay } from '../../../utils/documentNarrationDisplay';
 import { getCurrentHolder } from '../../../utils/documentTracker';
 import {
   canApproveUtilityBillRow,
   isUtilityBillDeptApproved
 } from '../../../utils/departmentApprovalListActions';
-import {
-  isCentralizedUtilityBill,
-  isUtilityCategoryName
-} from '../../../utils/centralizedStoreBillKind';
-
-const sortBillsByDate = (a, b) => {
-  const ta = a.billDate ? new Date(a.billDate).getTime() : 0;
-  const tb = b.billDate ? new Date(b.billDate).getTime() : 0;
-  if (ta !== tb) return ta - tb;
-  return String(a.billId || '').localeCompare(String(b.billId || ''));
-};
+import { isUtilityCategoryName } from '../../../utils/centralizedStoreBillKind';
 
 /** Unique store categories represented on a bill's line items */
 const getBillCategories = (bill) => {
@@ -114,6 +107,24 @@ const CentralizedStoreBills = () => {
   const [rejectReason, setRejectReason] = useState('');
   /** 'bill' = regular store bills, 'utility' = utility-type store bills */
   const [billKindTab, setBillKindTab] = useState('bill');
+  const [kindCounts, setKindCounts] = useState({ bill: 0, utility: 0 });
+  /** Whole-period bill count and amount by YYYY-MM, across all pages */
+  const [periodSummary, setPeriodSummary] = useState({});
+  const latestFetchRef = useRef(0);
+  const hasLoadedRef = useRef(false);
+  const {
+    page,
+    rowsPerPage,
+    total: totalBills,
+    setTotal: setTotalBills,
+    setPage,
+    handleChangePage,
+    handleChangeRowsPerPage,
+    getApiParams
+  } = usePagination({
+    defaultRowsPerPage: 25,
+    resetDependencies: [billKindTab, searchTerm, filterCategoryId, filterCompany]
+  });
 
   // Debounce search so typing doesn't fire a request every keystroke / race results
   useEffect(() => {
@@ -141,27 +152,43 @@ const CentralizedStoreBills = () => {
   }, []);
 
   const fetchBills = useCallback(async () => {
+    const requestId = ++latestFetchRef.current;
     try {
       setLoading(true);
       setError(null);
       const params = {
         centralizedStoreOnly: true,
-        limit: 500,
-        page: 1
+        billKind: billKindTab,
+        ...getApiParams()
       };
       if (searchTerm) params.search = searchTerm;
       if (filterCategoryId) params.storeCategoryId = filterCategoryId;
       if (filterCompany) params.company = filterCompany;
 
       const response = await utilityBillService.getUtilityBills(params);
+      if (requestId !== latestFetchRef.current) return;
+
+      const total = response.pagination?.total || 0;
+      const lastPage = Math.max(0, Math.ceil(total / rowsPerPage) - 1);
+      if (page > lastPage) {
+        setPage(lastPage);
+        return;
+      }
       setBills(response.data || []);
+      setTotalBills(total);
+      setKindCounts(response.kindCounts || { bill: 0, utility: 0 });
+      setPeriodSummary(response.periodSummary || {});
     } catch (err) {
+      if (requestId !== latestFetchRef.current) return;
       setError('Failed to fetch centralized store bills');
       console.error(err);
     } finally {
-      setLoading(false);
+      if (requestId === latestFetchRef.current) {
+        hasLoadedRef.current = true;
+        setLoading(false);
+      }
     }
-  }, [searchTerm, filterCategoryId, filterCompany]);
+  }, [billKindTab, searchTerm, filterCategoryId, filterCompany, page, rowsPerPage, getApiParams, setPage, setTotalBills]);
 
   useEffect(() => {
     loadCategories();
@@ -208,18 +235,6 @@ const CentralizedStoreBills = () => {
     return new Date(y, m - 1, 1).toLocaleString('en-PK', { month: 'long', year: 'numeric' });
   };
 
-  const billsByKind = useMemo(() => {
-    const utility = [];
-    const regular = [];
-    (bills || []).forEach((bill) => {
-      if (isCentralizedUtilityBill(bill)) utility.push(bill);
-      else regular.push(bill);
-    });
-    return { utility, regular };
-  }, [bills]);
-
-  const visibleBills = billKindTab === 'utility' ? billsByKind.utility : billsByKind.regular;
-
   const categoryOptionsForTab = useMemo(() => {
     return (categories || []).filter((cat) => {
       const isUtil = isUtilityCategoryName(cat.name);
@@ -229,18 +244,25 @@ const CentralizedStoreBills = () => {
 
   const billsByMonthYear = useMemo(() => {
     const map = new Map();
-    (visibleBills || []).forEach((bill) => {
+    (bills || []).forEach((bill) => {
       const key = billPeriodKey(bill);
       if (!map.has(key)) map.set(key, []);
       map.get(key).push(bill);
     });
     const keys = [...map.keys()].sort((a, b) => b.localeCompare(a));
     return keys.map((key) => {
-      const groupBills = [...map.get(key)].sort(sortBillsByDate);
-      const total = groupBills.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
-      return { key, label: formatPeriodLabel(key), bills: groupBills, total };
+      const groupBills = map.get(key);
+      const pageTotal = groupBills.reduce((sum, b) => sum + (Number(b.amount) || 0), 0);
+      const summary = periodSummary[key];
+      return {
+        key,
+        label: formatPeriodLabel(key),
+        bills: groupBills,
+        count: summary?.count ?? groupBills.length,
+        total: summary?.total ?? pageTotal
+      };
     });
-  }, [visibleBills]);
+  }, [bills, periodSummary]);
 
   const newBillPathForTab =
     `${newBillPath}?kind=${billKindTab === 'utility' ? 'utility' : 'bill'}`;
@@ -331,7 +353,7 @@ const CentralizedStoreBills = () => {
     );
   };
 
-  if (loading && bills.length === 0) {
+  if (loading && !hasLoadedRef.current) {
     return (
       <Box sx={{ p: 3, width: '100%', maxWidth: '100%', overflowX: 'hidden' }}>
         <Skeleton variant="text" width="40%" height={48} sx={{ mb: 2 }} />
@@ -379,11 +401,11 @@ const CentralizedStoreBills = () => {
       >
         <Tab
           value="bill"
-          label={`Bills (${billsByKind.regular.length})`}
+          label={`Bills (${kindCounts.bill})`}
         />
         <Tab
           value="utility"
-          label={`Utility Bills (${billsByKind.utility.length})`}
+          label={`Utility Bills (${kindCounts.utility})`}
         />
       </Tabs>
 
@@ -461,6 +483,8 @@ const CentralizedStoreBills = () => {
         {billKindTab === 'utility' ? 'Utility bills' : 'Bills'} by period
       </Typography>
 
+      {loading && <LinearProgress sx={{ mb: 1 }} />}
+
       {billsByMonthYear.length === 0 ? (
         <Card>
           <CardContent>
@@ -475,9 +499,9 @@ const CentralizedStoreBills = () => {
         </Card>
       ) : (
         <Stack spacing={1.5}>
-          {billsByMonthYear.map(({ key, label, bills: periodBills, total }, idx) => (
+          {billsByMonthYear.map(({ key, label, bills: periodBills, count, total }, idx) => (
             <Accordion
-              key={key}
+              key={`${billKindTab}-${page}-${rowsPerPage}-${key}`}
               defaultExpanded={idx === 0}
               disableGutters
               elevation={0}
@@ -495,7 +519,12 @@ const CentralizedStoreBills = () => {
                 <Box display="flex" alignItems="center" justifyContent="space-between" width="100%" pr={1} flexWrap="wrap" gap={1}>
                   <Typography fontWeight={600}>{label}</Typography>
                   <Box display="flex" alignItems="center" gap={1}>
-                    <Chip size="small" label={`${periodBills.length} bill${periodBills.length === 1 ? '' : 's'}`} />
+                    <Chip
+                      size="small"
+                      label={periodBills.length < count
+                        ? `${periodBills.length} of ${count} bills`
+                        : `${count} bill${count === 1 ? '' : 's'}`}
+                    />
                     <Chip size="small" color="primary" variant="outlined" label={`Total ${formatCurrency(total)}`} />
                   </Box>
                 </Box>
@@ -639,6 +668,18 @@ const CentralizedStoreBills = () => {
             </Accordion>
           ))}
         </Stack>
+      )}
+
+      {totalBills > 0 && (
+        <TablePaginationWrapper
+          page={page}
+          rowsPerPage={rowsPerPage}
+          total={totalBills}
+          onPageChange={handleChangePage}
+          onRowsPerPageChange={handleChangeRowsPerPage}
+          rowsPerPageOptions={[10, 25, 50, 100]}
+          labelRowsPerPage="Bills per page:"
+        />
       )}
 
       <Dialog
