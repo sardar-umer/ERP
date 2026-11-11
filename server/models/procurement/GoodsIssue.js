@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { chargeToSchema } = require('../../utils/projectChargeTo');
 const FinanceHelper = require('../../utils/financeHelper');
 
 const goodsIssueSchema = new mongoose.Schema({
@@ -43,6 +44,8 @@ const goodsIssueSchema = new mongoose.Schema({
     ref: 'Project',
     required: true
   },
+  /** Optional: Construction Project → Sub Project this stock is used on (tracks Consumed per sub-project; stock itself stays per `project`) */
+  chargeTo: { type: chargeToSchema, default: () => ({}) },
   /** 'project' = internal use; 'customer' = sold to a customer and billed later from AR Invoices */
   issueType: {
     type: String,
@@ -183,7 +186,9 @@ const goodsIssueSchema = new mongoose.Schema({
       type: String,
       required: true
     },
-    notes: String
+    notes: String,
+    /** Sub Project budget category this line is used for (set only when chargeTo is set) */
+    budgetCategory: { type: String, trim: true, default: '' }
   }],
   totalItems: {
     type: Number,

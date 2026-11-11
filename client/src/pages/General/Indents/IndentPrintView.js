@@ -260,6 +260,15 @@ const IndentPrintView = () => {
               )}
             </Box>
           )}
+          {indent.chargeTo?.project && (
+            <Box sx={{ mt: 1 }}>
+              <Typography component="span" fontWeight={600}>Charged to:</Typography>
+              <Typography component="span" sx={{ ml: 1 }}>
+                {indent.chargeTo.projectName}
+                {indent.chargeTo.subProjectName ? ` › ${indent.chargeTo.subProjectName}` : ''}
+              </Typography>
+            </Box>
+          )}
         </Box>
 
         {/* Items Table */}

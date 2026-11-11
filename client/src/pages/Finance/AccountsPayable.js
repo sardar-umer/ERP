@@ -107,6 +107,8 @@ import QuickbooksPayBillsModal from '../../components/Finance/QuickbooksPayBills
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
 const getBillPayeeEmployeeId = (bill) => {
   const pe = bill?.payeeEmployee;
@@ -3211,6 +3213,8 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                 {/* Tab 4: Purchase Order */}
                 {billViewTab === 4 && (
                     <Box sx={{ p: 2, overflowX: 'auto' }} className="print-content">
+                    <ChargedToPanel chargeTo={selectedBill?.poDetail?.po?.chargeTo} items={selectedBill?.poDetail?.po?.items} />
+                    <ProjectBudgetCheck poId={selectedBill?.poDetail?.po?._id} chargeTo={selectedBill?.poDetail?.po?.chargeTo} />
                     <PurchaseOrderAttachmentsPanel attachments={selectedBill?.poDetail?.po?.attachments} />
                     {!selectedBill?.poDetail?.po ? (
                       <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No Purchase Order linked to this Vendor Bill.</Typography>

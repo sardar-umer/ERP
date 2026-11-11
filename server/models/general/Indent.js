@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { chargeToSchema } = require('../../utils/projectChargeTo');
 
 const indentSchema = new mongoose.Schema({
   // Indent Number (Auto-generated)
@@ -37,6 +38,8 @@ const indentSchema = new mongoose.Schema({
     ref: 'Department',
     required: [true, 'Department is required']
   },
+  /** Optional: the Construction Project → Sub Project this indent is for (empty = department-only indent) */
+  chargeTo: { type: chargeToSchema, default: () => ({}) },
   requestedBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User',
@@ -98,7 +101,9 @@ const indentSchema = new mongoose.Schema({
     remarks: {
       type: String,
       trim: true
-    }
+    },
+    /** Sub Project budget category this line is charged to (set only when chargeTo is set) */
+    budgetCategory: { type: String, trim: true, default: '' }
   }],
 
   // Status

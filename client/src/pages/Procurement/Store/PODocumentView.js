@@ -5,6 +5,8 @@ import StoreVettingNotice from '../../../components/Procurement/StoreVettingNoti
 import { sanitizeApprovalAuthorities, formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAuthority';
 import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
 import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
 
 const formatDateForPrint = (date) => {
   if (!date) return '';
@@ -193,6 +195,8 @@ const PODocumentView = ({ data }) => {
         Purchase Order
       </Typography>
 
+      <ChargedToPanel chargeTo={data?.chargeTo} items={data?.items} />
+      <ProjectBudgetCheck poId={data?._id} chargeTo={data?.chargeTo} />
       <PurchaseOrderAttachmentsPanel attachments={data?.attachments} />
       <AuditActionAttachmentsPanel documentId={data?._id} title="Attachments from Audit" />
 

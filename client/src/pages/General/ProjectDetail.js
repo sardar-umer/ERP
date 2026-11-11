@@ -21,7 +21,8 @@ import {
   DeleteForever as DeleteForeverIcon,
   Place as PlaceIcon, Person as PersonIcon, Event as EventIcon, Notes as NotesIcon,
   AccountBalanceWallet as WalletIcon,
-  HomeWork as UnitsIcon
+  HomeWork as UnitsIcon,
+  LocalShipping as ProcurementIcon
 } from '@mui/icons-material';
 import { usePagination } from '../../hooks/usePagination';
 import TablePaginationWrapper from '../../components/TablePaginationWrapper';
@@ -45,6 +46,7 @@ import MainProjectPage from '../../components/ProjectManagement/MainProjectPage'
 import { ProjectStatusMenu } from '../../components/ProjectManagement/ProjectQuickMenus';
 import ProjectBudgetPanel from '../../components/ProjectManagement/ProjectBudgetPanel';
 import MainCostReport from '../../components/ProjectManagement/MainCostReport';
+import ProjectProcurementTab from '../../components/ProjectManagement/ProjectProcurementTab';
 import { ContractTypeTag } from '../../components/ProjectManagement/mainProjectUi';
 import { useAuth } from '../../contexts/AuthContext';
 
@@ -84,6 +86,7 @@ const ALL_TABS = [
   { id: 'sublet-contracts', label: 'Sublet Contracts', icon: <SubletIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'check-requests', label: 'Check Requests', icon: <CheckRequestIcon fontSize="small" />, onMain: false, onSub: true },
   { id: 'invoices', label: 'Invoices', icon: <InvoiceIcon fontSize="small" />, onMain: false, onSub: true },
+  { id: 'procurement', label: 'Procurement', icon: <ProcurementIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'cost', label: 'Cost Report', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: true },
   { id: 'budget', label: 'Budget', icon: <ChartIcon fontSize="small" />, onMain: true, onSub: false }
 ];
@@ -1836,6 +1839,7 @@ const ProjectDetail = () => {
           boqView={<BOQTab projectId={id} project={project} />}
           costView={<MainCostReport project={project} />}
           budgetView={<ProjectBudgetPanel project={project} onRefresh={loadProject} />}
+          procurementView={<ProjectProcurementTab project={project} />}
         />
         {deleteDialog}
       </Box>
@@ -2079,6 +2083,7 @@ const ProjectDetail = () => {
           {activeTab?.id === 'sublet-contracts' && <SubletContractsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'check-requests' && <CheckRequestsTab projectId={id} project={project} onGoToTab={goToTab} />}
           {activeTab?.id === 'invoices' && <ProjectInvoicesTab project={project} onGoToTab={goToTab} />}
+          {activeTab?.id === 'procurement' && <ProjectProcurementTab project={project} />}
           {activeTab?.id === 'cost' && <MainCostReport project={project} />}
         </Box>
       </Paper>

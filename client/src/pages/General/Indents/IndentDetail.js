@@ -52,6 +52,8 @@ import dayjs from 'dayjs';
 import WorkflowHistoryDialog from '../../../components/WorkflowHistoryDialog';
 import { resolveUploadFileHref } from '../../../utils/uploadPaths';
 import { DigitalSignatureImage } from '../../../components/common/DigitalSignatureImage';
+import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
 
 const approverDisplayName = (u) => {
   if (!u) return '';
@@ -864,6 +866,8 @@ const IndentDetail = ({
               <Typography variant="h6" fontWeight={600} sx={{ mb: 2 }}>
                 Items ({indent.items?.length || 0})
               </Typography>
+              <ChargedToPanel chargeTo={indent.chargeTo} items={indent.items} />
+              <ProjectBudgetCheck indentId={indent._id} chargeTo={indent.chargeTo} />
               {indent.items && indent.items.length > 0 ? (
                 <TableContainer sx={{ overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
                   <Table size="small">

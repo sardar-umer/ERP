@@ -80,6 +80,8 @@ import {
   PurchaseOrderAttachmentsPanel,
   uploadPurchaseOrderAttachments
 } from '../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
@@ -2139,6 +2141,8 @@ const PurchaseOrders = () => {
                   }
                 }}
               >
+                <ChargedToPanel chargeTo={viewDialog.data?.chargeTo} items={viewDialog.data?.items} />
+                <ProjectBudgetCheck poId={viewDialog.data?._id} chargeTo={viewDialog.data?.chargeTo} />
                 <PurchaseOrderAttachmentsPanel attachments={viewDialog.data?.attachments} />
 
                 {/* Title - Centered */}

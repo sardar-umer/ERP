@@ -24,7 +24,9 @@ import {
   Stack,
   IconButton,
   Divider,
-  Chip
+  Chip,
+  Switch,
+  FormControlLabel
 } from '@mui/material';
 import {
   Save as SaveIcon,
@@ -44,6 +46,7 @@ import api from '../../../services/api';
 import dayjs from 'dayjs';
 import { compressImage } from '../../../utils/compressImage';
 import { resolveUploadFileHref } from '../../../utils/uploadPaths';
+import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
 
 /** Catalog bucket for requests outside item master categories; requires categoryOtherDescription */
 const OTHERS_CATEGORY = 'Others';
@@ -55,7 +58,8 @@ const newEmptyIndentItem = () => ({
   quantity: 1,
   unit: 'Piece',
   purpose: '',
-  estimatedCost: 0
+  estimatedCost: 0,
+  budgetCategory: ''
 });
 
 // Custom filter that prioritizes items/categories starting with the typed query, then contains
@@ -117,6 +121,10 @@ const IndentForm = () => {
   const [newAttachmentFiles, setNewAttachmentFiles] = useState([]);
   const [uploadingFiles, setUploadingFiles] = useState(false);
   const [removedAttachmentIds, setRemovedAttachmentIds] = useState([]);
+  /** Construction Projects (with Sub Projects) and budget categories for "Charged to" */
+  const [projectOptions, setProjectOptions] = useState([]);
+  const [budgetCategoryOptions, setBudgetCategoryOptions] = useState([]);
+  const [projectOptionsLoading, setProjectOptionsLoading] = useState(false);
 
   const [formData, setFormData] = useState({
     title: '',
@@ -131,6 +139,9 @@ const IndentForm = () => {
     priority: 'Medium',
     category: '',
     categoryOtherDescription: '',
+    forProject: false,
+    chargeProject: '',
+    chargeSubProject: '',
     signatures: {
       requester: { name: '', date: '' },
       headOfDepartment: { name: '', date: '' },
@@ -272,12 +283,16 @@ const IndentForm = () => {
             items: indent.items?.map(item => ({
               ...item,
               brand: item.brand || '',
-              estimatedCost: item.estimatedCost ?? 0
+              estimatedCost: item.estimatedCost ?? 0,
+              budgetCategory: item.budgetCategory || ''
             })) || [],
             justification: indent.justification || '',
             priority: indent.priority || 'Medium',
             category: indent.category || '',
             categoryOtherDescription: indent.categoryOtherDescription || '',
+            forProject: Boolean(indent.chargeTo?.project),
+            chargeProject: indent.chargeTo?.project || '',
+            chargeSubProject: indent.chargeTo?.subProject || '',
             signatures: indent.signatures || {
               requester: { name: '', date: '' },
               headOfDepartment: { name: '', date: '' },
@@ -318,6 +333,51 @@ const IndentForm = () => {
 
     loadData();
   }, [id, isEdit, loadDepartmentsForIndent, loadCompaniesForIndent]);
+
+  useEffect(() => {
+    let cancelled = false;
+    setProjectOptionsLoading(true);
+    api.get('/indents/project-options')
+      .then((res) => {
+        if (cancelled) return;
+        setProjectOptions(Array.isArray(res.data?.data?.projects) ? res.data.data.projects : []);
+        setBudgetCategoryOptions(Array.isArray(res.data?.data?.budgetCategories) ? res.data.data.budgetCategories : []);
+      })
+      .catch((err) => console.error('Failed to load projects for indent:', err))
+      .finally(() => { if (!cancelled) setProjectOptionsLoading(false); });
+    return () => { cancelled = true; };
+  }, []);
+
+  // Live project budget check (warning only) — re-run shortly after the sub-project or lines change
+  const [budgetCheck, setBudgetCheck] = useState(null);
+  const [budgetCheckLoading, setBudgetCheckLoading] = useState(false);
+  const budgetCheckKey = formData.forProject && formData.chargeSubProject
+    ? JSON.stringify([
+      formData.chargeSubProject,
+      formData.items.map((i) => [i.budgetCategory || '', Number(i.quantity) || 0, Number(i.estimatedCost) || 0])
+    ])
+    : '';
+  useEffect(() => {
+    if (!budgetCheckKey) { setBudgetCheck(null); return undefined; }
+    const [subProject, lines] = JSON.parse(budgetCheckKey);
+    if (!lines.some(([cat]) => cat)) { setBudgetCheck(null); return undefined; }
+    let cancelled = false;
+    setBudgetCheckLoading(true);
+    const timer = setTimeout(() => {
+      api.post('/indents/budget-check', {
+        subProject,
+        indentId: isEdit ? id : undefined,
+        items: lines.map(([budgetCategory, quantity, estimatedCost]) => ({ budgetCategory, quantity, estimatedCost }))
+      })
+        .then((res) => { if (!cancelled) setBudgetCheck(res.data?.data || null); })
+        .catch(() => { if (!cancelled) setBudgetCheck(null); })
+        .finally(() => { if (!cancelled) setBudgetCheckLoading(false); });
+    }, 500);
+    return () => { cancelled = true; clearTimeout(timer); };
+  }, [budgetCheckKey, isEdit, id]);
+
+  const selectedChargeProject = projectOptions.find((p) => String(p._id) === String(formData.chargeProject)) || null;
+  const subProjectOptions = selectedChargeProject?.subProjects || [];
 
   useEffect(() => {
     if (Array.isArray(departments) && departments.length > 0) {
@@ -427,10 +487,14 @@ const IndentForm = () => {
   };
 
   const handleAddItem = () => {
-    setFormData(prev => ({
-      ...prev,
-      items: [...prev.items, newEmptyIndentItem()]
-    }));
+    setFormData(prev => {
+      // New line starts with the previous line's budget category
+      const lastCategory = prev.items.length ? prev.items[prev.items.length - 1].budgetCategory || '' : '';
+      return {
+        ...prev,
+        items: [...prev.items, { ...newEmptyIndentItem(), budgetCategory: lastCategory }]
+      };
+    });
   };
 
   const handleRemoveItem = (index) => {
@@ -568,8 +632,22 @@ const IndentForm = () => {
       );
       return false;
     }
+    if (formData.forProject) {
+      if (!formData.chargeProject) {
+        setError('Select the project this indent is for, or turn off "For a project".');
+        return false;
+      }
+      if (!formData.chargeSubProject) {
+        setError('Select the sub-project this indent is for.');
+        return false;
+      }
+    }
     for (let i = 0; i < formData.items.length; i++) {
       const item = formData.items[i];
+      if (formData.forProject && !item.budgetCategory) {
+        setError(`Item ${i + 1}: Budget category is required for a project indent`);
+        return false;
+      }
       if (!item.itemName?.trim()) {
         setError(`Item ${i + 1}: Item name is required`);
         return false;
@@ -693,8 +771,12 @@ const IndentForm = () => {
           purpose: item.purpose || '',
           estimatedCost: Number.isFinite(Number(item.estimatedCost)) && Number(item.estimatedCost) >= 0
             ? Number(item.estimatedCost)
-            : 0
+            : 0,
+          budgetCategory: formData.forProject ? (item.budgetCategory || '') : ''
         })),
+        chargeTo: formData.forProject
+          ? { project: formData.chargeProject, subProject: formData.chargeSubProject }
+          : { project: null, subProject: null },
         justification: formData.justification.trim(),
         signatures: formData.signatures,
         status: isEdit ? (indentMeta.status || 'Draft') : 'Draft',
@@ -1016,6 +1098,68 @@ const IndentForm = () => {
           )}
         </Grid>
 
+        {/* Charged to: optional Construction Project → Sub Project */}
+        <Box sx={{ mt: 2, p: 2, border: '1px solid', borderColor: formData.forProject ? 'primary.light' : 'divider', borderRadius: 1 }}>
+          <FormControlLabel
+            control={
+              <Switch
+                checked={formData.forProject}
+                onChange={(e) => {
+                  const on = e.target.checked;
+                  setFormData((prev) => ({
+                    ...prev,
+                    forProject: on,
+                    ...(on ? {} : { chargeProject: '', chargeSubProject: '' })
+                  }));
+                }}
+              />
+            }
+            label={<Typography fontWeight={600}>For a project</Typography>}
+          />
+          <Typography variant="body2" color="text.secondary" sx={{ mb: formData.forProject ? 2 : 0 }}>
+            Turn on when these items are for a construction project. The PO and GRN made from this indent will be charged to the same project and sub-project.
+          </Typography>
+          {formData.forProject && (
+            <Grid container spacing={2}>
+              <Grid item xs={12} sm={6}>
+                <Autocomplete
+                  size="small"
+                  options={projectOptions}
+                  loading={projectOptionsLoading}
+                  value={selectedChargeProject}
+                  getOptionLabel={(p) => (p?.projectNumber ? `${p.projectNumber} — ${p.name}` : p?.name || '')}
+                  isOptionEqualToValue={(a, b) => String(a._id) === String(b._id)}
+                  onChange={(_, p) => setFormData((prev) => ({
+                    ...prev,
+                    chargeProject: p?._id || '',
+                    chargeSubProject: ''
+                  }))}
+                  renderInput={(params) => <TextField {...params} required label="Project" placeholder="Search project" />}
+                />
+              </Grid>
+              <Grid item xs={12} sm={6}>
+                <FormControl fullWidth size="small" required disabled={!formData.chargeProject}>
+                  <InputLabel>Sub-Project</InputLabel>
+                  <Select
+                    value={subProjectOptions.some((sp) => String(sp._id) === String(formData.chargeSubProject)) ? formData.chargeSubProject : ''}
+                    label="Sub-Project"
+                    onChange={(e) => handleChange('chargeSubProject', e.target.value)}
+                  >
+                    {subProjectOptions.map((sp) => (
+                      <MenuItem key={sp._id} value={sp._id}>
+                        {sp.projectNumber ? `${sp.projectNumber} — ${sp.name}` : sp.name}
+                      </MenuItem>
+                    ))}
+                    {formData.chargeProject && subProjectOptions.length === 0 && (
+                      <MenuItem disabled value="">This project has no sub-projects yet</MenuItem>
+                    )}
+                  </Select>
+                </FormControl>
+              </Grid>
+            </Grid>
+          )}
+        </Box>
+
         <Divider sx={{ my: 3 }} />
 
         {/* Items Table */}
@@ -1055,6 +1199,9 @@ const IndentForm = () => {
                     <TableCell sx={{ fontWeight: 700, border: '1px solid #ddd' }}>Unit</TableCell>
                     <TableCell align="center" sx={{ fontWeight: 700, border: '1px solid #ddd' }}>Qty.</TableCell>
                     <TableCell sx={{ fontWeight: 700, border: '1px solid #ddd' }}>Purpose</TableCell>
+                    {formData.forProject && (
+                      <TableCell sx={{ fontWeight: 700, border: '1px solid #ddd' }}>Budget Category</TableCell>
+                    )}
                     <TableCell align="right" sx={{ fontWeight: 700, border: '1px solid #ddd' }}>Est. Cost</TableCell>
                     <TableCell align="center" sx={{ fontWeight: 700, border: '1px solid #ddd', width: 50 }}>Action</TableCell>
                   </TableRow>
@@ -1206,6 +1353,25 @@ const IndentForm = () => {
                           sx={{ '& .MuiInputBase-input': { py: 0.5 } }}
                         />
                       </TableCell>
+                      {formData.forProject && (
+                        <TableCell sx={{ border: '1px solid #ddd', p: 0.5, minWidth: 150 }}>
+                          <Select
+                            fullWidth
+                            size="small"
+                            variant="standard"
+                            disableUnderline
+                            displayEmpty
+                            value={item.budgetCategory || ''}
+                            onChange={(e) => handleItemChange(index, 'budgetCategory', e.target.value)}
+                            sx={{ fontSize: '0.875rem' }}
+                          >
+                            <MenuItem value="" disabled><em>Select</em></MenuItem>
+                            {budgetCategoryOptions.map((c) => (
+                              <MenuItem key={c} value={c}>{c}</MenuItem>
+                            ))}
+                          </Select>
+                        </TableCell>
+                      )}
                       <TableCell sx={{ border: '1px solid #ddd', p: 0.5 }}>
                         <TextField
                           size="small"
@@ -1244,6 +1410,10 @@ const IndentForm = () => {
             </TableContainer>
           )}
         </Box>
+
+        {formData.forProject && (budgetCheck || budgetCheckLoading) && (
+          <ProjectBudgetCheck result={budgetCheck} loading={budgetCheckLoading && !budgetCheck} docLabel="This indent" />
+        )}
 
         <Divider sx={{ my: 3 }} />
 

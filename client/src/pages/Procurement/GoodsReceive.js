@@ -24,6 +24,7 @@ import LocationSelector from '../../components/Procurement/Store/LocationSelecto
 import GrnReturnDialog from '../../components/Procurement/Store/GrnReturnDialog';
 import GrnDeveloperEditDialog from '../../components/Procurement/Store/GrnDeveloperEditDialog';
 import { resolveUploadFileHref } from '../../utils/uploadPaths';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 
 const makeEmptyItem = () => ({
   inventoryItem: '', productCode: '', itemCode: '', itemName: '', unit: '',
@@ -349,6 +350,10 @@ const GoodsReceive = () => {
     try {
       const res = await api.get(`/procurement/purchase-orders/${poId}`);
       const p = res.data?.data;
+      // Project PO: put the stock under the project's store business unit unless one is already picked
+      if (p?.stockProject?._id) {
+        setFormData((prev) => (prev.project ? prev : { ...prev, project: String(p.stockProject._id) }));
+      }
       const req = p?.grnRequiresDeliveryChallan === true;
       setGrnRequiresDeliveryChallan(req);
       setGrnDcStatusNote(
@@ -1372,6 +1377,7 @@ const GoodsReceive = () => {
                   <Typography variant="body2">{viewDialog.data.gatePassNo || '—'}</Typography>
                 </Grid>
               </Grid>
+              <ChargedToPanel chargeTo={viewDialog.data.chargeTo} items={viewDialog.data.items} />
               {/* Items table */}
               <TableContainer component={Paper} variant="outlined" sx={{ mb: 2 }}>
                 <Table size="small">

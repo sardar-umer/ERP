@@ -27,6 +27,7 @@ require('../models/hr/Designation');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 const { syncProjectMetrics } = require('../services/projectMetricsService');
+const { getProjectProcurementSummary } = require('../services/projectProcurementService');
 const { postIpcToFinance, postBarterHandover, resolveProjectCompanyId, findMainProject } = require('../utils/projectIpcFinance');
 const { postClientInvoiceToFinance, reverseClientInvoiceInFinance } = require('../utils/projectClientInvoiceFinance');
 const { hasAuditAccess, canPerformInitialPreAuditActions } = require('../utils/auditAccess');
@@ -1421,7 +1422,8 @@ router.get('/projects/:id', asyncHandler(async (req, res) => {
     .populate({ path: 'projectManagerEmployee', select: 'firstName lastName employeeId placementDesignation', populate: { path: 'placementDesignation', select: 'title' } })
     .populate('budgetApprovedBy', 'firstName lastName')
     .populate('createdBy', 'firstName lastName')
-    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget society sector')
+    .populate('parentProject', 'name projectNumber isMasterProject projectType status lumpSumBudget society sector storeProject')
+    .populate('storeProject', 'name code')
     .lean();
 
   if (!project) return notFound(res, 'Project');
@@ -1543,7 +1545,7 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     'startDate', 'expectedEndDate', 'actualEndDate', 'budgetCategories',
     'notes', 'tags', 'overallProgress', 'linkedProperty', 'isMasterProject',
     'parentProject', 'contractValue', 'companyId', 'contractBasis', 'paymentMode', 'projectManagerEmployee',
-    'sizeValue', 'sizeUnit', 'contractType'
+    'sizeValue', 'sizeUnit', 'contractType', 'storeProject'
   ];
 
   const updates = {};
@@ -1632,6 +1634,14 @@ router.put('/projects/:id', asyncHandler(async (req, res) => {
     return badRequest(res, 'Select the Finance Company for this Main Project — its Sub Projects, contracts and IPCs post to that company');
   }
   if (!willBeMain) delete updates.companyId; // Sub Projects inherit from their Main Project
+  // Store business unit lives on the Main Project only
+  if (!willBeMain) delete updates.storeProject;
+  else if (updates.storeProject !== undefined) {
+    if (!updates.storeProject) updates.storeProject = null;
+    else if (!isValidId(updates.storeProject) || !(await require('../models/hr/Project').exists({ _id: updates.storeProject }))) {
+      return badRequest(res, 'Select a valid store business unit');
+    }
+  }
   if (willBeMain && oldProject.companyId && nextCompany && String(oldProject.companyId) !== String(nextCompany)) {
     const familyIds = [oldProject._id];
     for (let frontier = [oldProject._id], depth = 0; frontier.length && depth < 10; depth += 1) {
@@ -3415,6 +3425,110 @@ router.post('/projects/:id/boq/create-po', asyncHandler(async (req, res) => {
 
 // GET /api/project-management/projects/:id/purchase-orders
 // Returns all POs linked to any BOQ item in this project
+// GET /api/project-management/projects/:id/procurement-documents
+// Indents, POs and GRNs charged to this project (Main = every Sub Project under it), newest first
+router.get('/projects/:id/procurement-documents', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const project = await ConstructionProject.findById(req.params.id).select('parentProject').lean();
+  if (!project) return res.status(404).json({ success: false, message: 'Project not found' });
+  const key = project.parentProject ? 'chargeTo.subProject' : 'chargeTo.project';
+  const match = { [key]: project._id };
+  const Indent = require('../models/general/Indent');
+  const GoodsReceive = require('../models/procurement/GoodsReceive');
+  const LIMIT = 300;
+  const { isCommitted, poLines } = require('../services/projectProcurementService');
+
+  const GoodsIssue = require('../models/procurement/GoodsIssue');
+  const [indents, pos, grns, issues] = await Promise.all([
+    Indent.find({ ...match, isActive: { $ne: false } })
+      .select('indentNumber title status requestedDate createdAt chargeTo items.quantity items.estimatedCost items.budgetCategory')
+      .sort({ createdAt: -1 }).limit(LIMIT).lean(),
+    PurchaseOrder.find(match)
+      .select('orderNumber status orderDate createdAt totalAmount financeApprovedAt chargeTo vendor indent items.quantity items.amount items.receivedQuantity items.budgetCategory')
+      .populate('vendor', 'name')
+      .populate('indent', 'indentNumber')
+      .sort({ createdAt: -1 }).limit(LIMIT).lean(),
+    GoodsReceive.find(match)
+      .select('receiveNumber receiveDate createdAt status total netAmount poNumber purchaseOrder supplierName chargeTo items.budgetCategory')
+      .sort({ createdAt: -1 }).limit(LIMIT).lean(),
+    GoodsIssue.find({ ...match, issueType: { $ne: 'customer' } })
+      .select('issueNumber sinNumber issueDate createdAt status chargeTo project requiredFor items.qtyIssued items.quantity items.qtyReturnedToStore items.budgetCategory')
+      .populate('project', 'name')
+      .sort({ createdAt: -1 }).limit(LIMIT).lean()
+  ]);
+
+  const categoriesOf = (items) => [...new Set((items || []).map((i) => i.budgetCategory).filter(Boolean))];
+  res.json({
+    success: true,
+    data: {
+      indents: indents.map((d) => ({
+        _id: d._id,
+        number: d.indentNumber,
+        title: d.title,
+        status: d.status,
+        date: d.requestedDate || d.createdAt,
+        subProjectId: d.chargeTo?.subProject || null,
+        subProjectName: d.chargeTo?.subProjectName || '',
+        categories: categoriesOf(d.items),
+        amount: (d.items || []).reduce((t, i) => t + (Number(i.estimatedCost) || 0) * (Number(i.quantity) || 0), 0)
+      })),
+      purchaseOrders: pos.map((d) => {
+        const ordered = (d.items || []).reduce((t, i) => t + (Number(i.quantity) || 0), 0);
+        const received = (d.items || []).reduce((t, i) => t + Math.min(Number(i.receivedQuantity) || 0, Number(i.quantity) || 0), 0);
+        return {
+          _id: d._id,
+          number: d.orderNumber,
+          status: d.status,
+          date: d.orderDate || d.createdAt,
+          vendorName: d.vendor?.name || '',
+          indentNumber: d.indent?.indentNumber || '',
+          subProjectId: d.chargeTo?.subProject || null,
+        subProjectName: d.chargeTo?.subProjectName || '',
+          categories: categoriesOf(d.items),
+          amount: poLines(d).reduce((t, l) => t + l.amount, 0),
+          committed: isCommitted(d),
+          receivedPercent: ordered > 0 ? Math.round((received / ordered) * 100) : 0
+        };
+      }),
+      grns: grns.map((d) => ({
+        _id: d._id,
+        number: d.receiveNumber,
+        status: d.status,
+        date: d.receiveDate || d.createdAt,
+        poNumber: d.poNumber || '',
+        supplierName: d.supplierName || '',
+        subProjectId: d.chargeTo?.subProject || null,
+        subProjectName: d.chargeTo?.subProjectName || '',
+        categories: categoriesOf(d.items),
+        amount: Number(d.total ?? d.netAmount) || 0
+      })),
+      issues: issues.map((d) => ({
+        _id: d._id,
+        number: d.sinNumber || d.issueNumber,
+        status: d.status,
+        date: d.issueDate || d.createdAt,
+        storeProjectName: d.project?.name || '',
+        requiredFor: d.requiredFor || '',
+        subProjectId: d.chargeTo?.subProject || null,
+        subProjectName: d.chargeTo?.subProjectName || '',
+        categories: categoriesOf(d.items),
+        quantity: (d.items || []).reduce((t, i) => t + Math.max(0, (Number(i.qtyIssued ?? i.quantity) || 0) - (Number(i.qtyReturnedToStore) || 0)), 0)
+      })),
+      limit: LIMIT
+    }
+  });
+}));
+
+// GET /api/project-management/projects/:id/procurement-summary
+// Budget / indented / committed / actual / available per Sub Project and budget category,
+// from the indents, POs and GRNs charged to this project (Main = all its Sub Projects)
+router.get('/projects/:id/procurement-summary', asyncHandler(async (req, res) => {
+  if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
+  const summary = await getProjectProcurementSummary(req.params.id);
+  if (!summary) return res.status(404).json({ success: false, message: 'Project not found' });
+  res.json({ success: true, data: summary });
+}));
+
 router.get('/projects/:id/purchase-orders', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 

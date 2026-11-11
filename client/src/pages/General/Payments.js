@@ -84,6 +84,8 @@ import { formatPurchaseOrderCostCenter } from '../../utils/purchaseOrderAuthorit
 import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4PrintStyles';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -1027,6 +1029,8 @@ const Payments = () => {
           }
         }}
       >
+        <ChargedToPanel chargeTo={poData?.chargeTo} items={poData?.items} />
+        <ProjectBudgetCheck poId={poData?._id} chargeTo={poData?.chargeTo} />
         <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
 
         {/* Title - Centered */}

@@ -883,22 +883,7 @@ function normalizeInventoryObjectIdFields(payload = {}) {
   return cleaned;
 }
 
-/** Match a GRN line to a PO line: description → product code → same row index (simple, predictable). */
-function matchPurchaseOrderLineIndex(poItems, grnLine, grnIndex) {
-  if (!poItems?.length) return -1;
-  const norm = (s) => (s == null ? '' : String(s).trim().toLowerCase().replace(/\s+/g, ' '));
-  const name = norm(grnLine.itemName);
-  const code = norm(grnLine.itemCode);
-  for (let j = 0; j < poItems.length; j++) {
-    if (name && norm(poItems[j].description) === name) return j;
-  }
-  for (let j = 0; j < poItems.length; j++) {
-    const pc = poItems[j].productCode;
-    if (pc && code && norm(pc) === code) return j;
-  }
-  if (grnIndex < poItems.length) return grnIndex;
-  return -1;
-}
+const { matchPurchaseOrderLineIndex } = require('../utils/poLineMatch');
 
 /** Open qty still committed on QA-pending / QA-passed DCs (not yet received on GRN). */
 async function getOpenDcQuantitiesByPoLine(poId) {
@@ -1347,6 +1332,26 @@ router.get('/purchase-orders/ceo-secretariat',
 // @route   GET /api/procurement/purchase-orders/:id
 // @desc    Get purchase order by ID
 // @access  Private (Procurement, Admin, HR, Higher Management, Pre-Audit / Audit roles, CEO secretariat)
+// @route   GET /api/procurement/purchase-orders/:id/budget-check
+// @desc    Project budget check for a PO charged to a Sub Project (null when the PO has no project).
+//          This PO is left out of Committed so the result shows budget left before and after it.
+router.get('/purchase-orders/:id/budget-check',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(String(req.params.id))) {
+      return res.status(400).json({ success: false, message: 'Invalid purchase order ID' });
+    }
+    const po = await PurchaseOrder.findById(req.params.id)
+      .select('chargeTo totalAmount items.quantity items.amount items.budgetCategory status')
+      .lean();
+    if (!po) return res.status(404).json({ success: false, message: 'Purchase order not found' });
+    if (!po.chargeTo?.subProject) return res.json({ success: true, data: null });
+    const { checkBudget, poLines } = require('../services/projectProcurementService');
+    const data = await checkBudget(po.chargeTo.subProject, poLines(po), { excludePoIds: [po._id] });
+    res.json({ success: true, data });
+  })
+);
+
 router.get('/purchase-orders/:id',
   authMiddleware,
   asyncHandler(async (req, res) => {
@@ -1456,6 +1461,16 @@ router.get('/purchase-orders/:id',
     ]);
     data.qaPassedDeliveryChallanCount = qaPassedDeliveryChallanCount;
     data.dcPendingQaCount = dcPendingQaCount;
+
+    // Project PO: the store business unit its GRN stock should go into (from the Main Project's link)
+    if (purchaseOrder.chargeTo?.subProject) {
+      try {
+        const { resolveStoreProject } = require('../utils/projectChargeTo');
+        data.stockProject = await resolveStoreProject(purchaseOrder.chargeTo.subProject);
+      } catch (_) {
+        data.stockProject = null;
+      }
+    }
 
     res.json({
       success: true,
@@ -6211,6 +6226,22 @@ router.post('/goods-issue',
       issuedBy: req.user.id,
       status: 'Issued'
     });
+
+    // Optional: which construction sub-project + budget category this stock is used on (one category for the SIN)
+    const { validateIndentChargeTo } = require('../utils/projectChargeTo');
+    const ct = req.body.chargeTo || {};
+    const ctProject = ct.project?._id || ct.project;
+    if (issueType === 'project' && ctProject) {
+      issue.chargeTo = { project: ctProject, subProject: ct.subProject?._id || ct.subProject || null };
+      const category = String(req.body.budgetCategory || '').trim();
+      issue.items.forEach((it) => { it.budgetCategory = category; });
+    } else {
+      issue.chargeTo = {};
+    }
+    const chargeToError = await validateIndentChargeTo(issue);
+    if (chargeToError) {
+      throw Object.assign(new Error(chargeToError.replace(/ for item \d+\./, '.').replace('this indent', 'this issue')), { statusCode: 400 });
+    }
 
     await issue.save();
     await issue.populate([

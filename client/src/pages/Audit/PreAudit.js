@@ -116,6 +116,8 @@ import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4Pri
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
 /** Comment from the most recent workflow step that moved the document to Pre-Audit (Send to Audit), e.g. resubmit notes. */
 function getLatestSendToAuditWorkflowComment(workflowHistory) {
@@ -1888,6 +1890,8 @@ const PreAudit = () => {
           }
         }}
       >
+        <ChargedToPanel chargeTo={poData?.chargeTo} items={poData?.items} />
+        <ProjectBudgetCheck poId={poData?._id} chargeTo={poData?.chargeTo} />
         <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
 
         {/* Title - Centered */}

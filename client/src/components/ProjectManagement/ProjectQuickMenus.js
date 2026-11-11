@@ -2,14 +2,16 @@
  * One-click changes from wherever a project is shown (list, project page headers), without opening Edit:
  * - ProjectStatusMenu: the status chip opens a menu of statuses; on a Main Project it can apply to its Sub Projects too.
  * - ProjectTypeMenu: on a Main Project, change the Project Type or BOQ-wise / Slab-wise; its Sub Projects follow.
+ * - StoreProjectMenu: on a Main Project, the store business unit whose stock its goods go into.
  */
 import React, { useState } from 'react';
 import {
   Alert, Box, Button, Checkbox, Chip, CircularProgress, Dialog, DialogActions, DialogContent, DialogTitle,
   Divider, FormControlLabel, ListItemIcon, ListItemText, ListSubheader, Menu, MenuItem, Tooltip, Typography
 } from '@mui/material';
-import { Check as CheckIcon, ExpandMore as MoreIcon } from '@mui/icons-material';
+import { Check as CheckIcon, ExpandMore as MoreIcon, Warehouse as StoreIcon } from '@mui/icons-material';
 import { updateProject } from '../../services/projectManagementService';
+import api from '../../services/api';
 import { ContractTypeTag, STATUS_DOT } from './mainProjectUi';
 
 // Cancelling stays on its own action (with its confirmation), so it is not offered here
@@ -225,6 +227,138 @@ export function ProjectTypeMenu({ project, onChanged, dark = false }) {
         onConfirm={save}
       >
         <Typography variant="body2">{pending?.text}</Typography>
+      </Confirm>
+    </>
+  );
+}
+
+
+/**
+ * Store business unit of a Main Project (the store's "Project", e.g. Boly.Pk). GRNs made from this
+ * project's POs put stock under it automatically; its Sub Projects use the same one.
+ */
+export function StoreProjectMenu({ project, onChanged, dark = false }) {
+  const [anchor, setAnchor] = useState(null);
+  const [options, setOptions] = useState(null);
+  const [pending, setPending] = useState(null);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState('');
+  if (!isMain(project)) return null;
+
+  const current = project.storeProject && typeof project.storeProject === 'object' ? project.storeProject : null;
+
+  const open = async (e) => {
+    e.stopPropagation();
+    setAnchor(e.currentTarget);
+    if (options) return;
+    try {
+      let res = await api.get('/finance/fixed-assets/projects');
+      let list = Array.isArray(res.data?.data) ? res.data.data : [];
+      if (!list.length) {
+        res = await api.get('/projects');
+        list = Array.isArray(res.data?.data) ? res.data.data : [];
+      }
+      setOptions(list);
+    } catch {
+      try {
+        const res = await api.get('/projects');
+        setOptions(Array.isArray(res.data?.data) ? res.data.data : []);
+      } catch {
+        setOptions([]);
+      }
+    }
+  };
+
+  const save = async () => {
+    setBusy(true);
+    setError('');
+    try {
+      await updateProject(project._id, { storeProject: pending?._id || null });
+      setPending(null);
+      onChanged?.();
+    } catch (e) {
+      setError(e.response?.data?.message || 'Could not save the change');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <>
+      <Tooltip title="Store business unit: GRNs for this project's purchases put stock here">
+        <Box
+          component="span"
+          role="button"
+          tabIndex={0}
+          onClick={open}
+          onKeyDown={(e) => e.key === 'Enter' && open(e)}
+          sx={{
+            display: 'inline-flex', alignItems: 'center', gap: 0.5, px: 0.75, py: 0.25, borderRadius: 2, cursor: 'pointer',
+            border: '1px dashed', borderColor: dark ? 'rgba(255,255,255,0.4)' : 'divider',
+            '&:hover': { borderColor: 'primary.main', bgcolor: dark ? 'rgba(255,255,255,0.08)' : 'action.hover' }
+          }}
+        >
+          <StoreIcon sx={{ fontSize: 16, color: dark ? '#fff' : 'text.secondary' }} />
+          {current ? (
+            <Typography variant="caption" fontWeight={700} sx={{ color: dark ? 'rgba(255,255,255,0.85)' : 'text.secondary', whiteSpace: 'nowrap' }}>
+              Store: {current.name}
+            </Typography>
+          ) : (
+            <Chip size="small" label="Link store unit" color="warning" variant="outlined" sx={{ fontWeight: 700 }} />
+          )}
+          <MoreIcon sx={{ fontSize: 16, color: dark ? '#fff' : 'text.secondary' }} />
+        </Box>
+      </Tooltip>
+      <Menu
+        anchorEl={anchor}
+        open={Boolean(anchor)}
+        onClose={() => setAnchor(null)}
+        onClick={(e) => e.stopPropagation()}
+        PaperProps={{ sx: { maxHeight: 420 } }}
+      >
+        <ListSubheader sx={{ lineHeight: '32px', fontWeight: 800 }}>Store business unit</ListSubheader>
+        {options === null && (
+          <MenuItem disabled><CircularProgress size={16} sx={{ mr: 1 }} /> Loading…</MenuItem>
+        )}
+        {current && (
+          <MenuItem onClick={() => { setAnchor(null); setError(''); setPending({ _id: null, name: '' }); }}>
+            <ListItemText primary="Remove link" primaryTypographyProps={{ color: 'error.main', fontSize: 14 }} />
+          </MenuItem>
+        )}
+        {(options || []).map((o) => {
+          const selected = current && String(current._id) === String(o._id);
+          return (
+            <MenuItem
+              key={o._id}
+              selected={selected}
+              onClick={() => {
+                setAnchor(null);
+                if (selected) return;
+                setError('');
+                setPending(o);
+              }}
+              sx={{ minWidth: 260 }}
+            >
+              <ListItemText primary={o.name} secondary={o.code || null} primaryTypographyProps={{ fontWeight: 600, fontSize: 14 }} />
+              {selected && <CheckIcon fontSize="small" color="primary" sx={{ ml: 1 }} />}
+            </MenuItem>
+          );
+        })}
+      </Menu>
+      <Confirm
+        open={Boolean(pending)}
+        title={pending?._id ? `Link ${project.name} to ${pending.name}?` : `Remove the store link from ${project.name}?`}
+        error={error}
+        busy={busy}
+        onCancel={() => { setPending(null); setError(''); }}
+        onConfirm={save}
+        confirmLabel={pending?._id ? 'Link' : 'Remove'}
+      >
+        <Typography variant="body2">
+          {pending?._id
+            ? `GRNs made from this project's POs (all its sub projects) will put stock under ${pending.name} automatically. Stock already received is not moved.`
+            : 'New GRNs for this project will no longer fill the store business unit automatically. Stock already received is not moved.'}
+        </Typography>
       </Confirm>
     </>
   );

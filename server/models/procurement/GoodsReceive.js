@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { chargeToSchema, inheritChargeTo } = require('../../utils/projectChargeTo');
 require('./StockQuant');
 require('./StockTransaction');
 require('./Store');
@@ -71,6 +72,8 @@ const goodsReceiveSchema = new mongoose.Schema({
     ref: 'Project',
     required: true
   },
+  /** Construction Project → Sub Project these goods are charged to — copied from the PO (separate from the stock `project` above) */
+  chargeTo: { type: chargeToSchema, default: () => ({}) },
   gatePassNo: {
     type: String,
     trim: true
@@ -172,7 +175,9 @@ const goodsReceiveSchema = new mongoose.Schema({
     },
     notes: String,
     // Quantity sent back to the vendor through posted Purchase Returns
-    returnedQuantity: { type: Number, default: 0, min: 0 }
+    returnedQuantity: { type: Number, default: 0, min: 0 },
+    /** Sub Project budget category — copied from the matching PO line */
+    budgetCategory: { type: String, trim: true, default: '' }
   }],
   totalItems: {
     type: Number,
@@ -278,6 +283,23 @@ async function allocateNextReceiveNumber(GoodsReceiveModel) {
 goodsReceiveSchema.statics.allocateNextReceiveNumber = function allocateNext() {
   return allocateNextReceiveNumber(this);
 };
+
+// Carry the PO's project / sub-project and line budget categories onto the GRN
+goodsReceiveSchema.pre('save', async function(next) {
+  try {
+    if (this.purchaseOrder && (this.isNew || this.isModified('purchaseOrder') || this.isModified('items'))) {
+      const po = await mongoose.model('PurchaseOrder').findById(this.purchaseOrder)
+        .select('chargeTo items.description items.productCode items.itemMaster items.budgetCategory').lean();
+      if (po) {
+        const { matchPurchaseOrderLineIndex } = require('../../utils/poLineMatch');
+        inheritChargeTo(this, po, { lineName: 'itemName', sourceName: 'description', lineCode: 'itemCode', sourceCode: 'productCode' }, matchPurchaseOrderLineIndex);
+      }
+    }
+  } catch (err) {
+    console.warn('[GRN] project link from PO skipped:', err.message);
+  }
+  next();
+});
 
 // Pre-save: Generate receive number if not provided (GR00000129 style)
 goodsReceiveSchema.pre('save', async function(next) {

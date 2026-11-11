@@ -69,6 +69,8 @@ import { formatPurchaseOrderCostCenter } from '../../../utils/purchaseOrderAutho
 import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActionAttachments';
 import { scopeComparativeToDocumentLot } from '../../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/PurchaseOrderAttachments';
+import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
+import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
 
 // Stat Card Component
 const StatCard = ({ title, value, subtitle, icon, color, onClick }) => (
@@ -525,6 +527,8 @@ const IndentsDashboard = () => {
           }
         }}
       >
+        <ChargedToPanel chargeTo={poData?.chargeTo} items={poData?.items} />
+        <ProjectBudgetCheck poId={poData?._id} chargeTo={poData?.chargeTo} />
         <PurchaseOrderAttachmentsPanel attachments={poData?.attachments} />
 
         {/* Title - Centered */}

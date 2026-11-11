@@ -7,7 +7,7 @@ import {
 import {
   AccountTree as TreeIcon, ArrowBack as BackIcon, BarChart as ChartIcon, Dashboard as SummaryIcon, AccountBalanceWallet as BudgetIcon,
   DeleteForever as DeleteForeverIcon, Event as DateIcon, Place as PlaceIcon, Refresh as RefreshIcon,
-  ShoppingCart as BoqIcon
+  ShoppingCart as BoqIcon, LocalShipping as ProcurementIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import { getProjectSummary, getProjectTree } from '../../services/projectManagementService';
@@ -17,7 +17,7 @@ import {
 import SubProjectPanel from './SubProjectPanel';
 import ProjectSummaryPanel from './ProjectSummaryPanel';
 import ProjectHeaderGraphics from './ProjectHeaderGraphics';
-import { ProjectStatusMenu, ProjectTypeMenu } from './ProjectQuickMenus';
+import { ProjectStatusMenu, ProjectTypeMenu, StoreProjectMenu } from './ProjectQuickMenus';
 
 const SUMMARY = 'summary';
 // Sidebar sits on the same frosted pastel surface as the header chart; the selected item is a white card
@@ -125,7 +125,7 @@ const Sidebar = ({ subs, moneyById, selected, onSelect }) => {
  * Sub Projects view = sidebar of sub projects + a panel showing the selected one's
  * contracts → check requests → IPCs → payments (or the project summary).
  */
-export default function MainProjectPage({ project, view, onViewChange, onBack, onRefresh, onDelete, boqView, costView, budgetView }) {
+export default function MainProjectPage({ project, view, onViewChange, onBack, onRefresh, onDelete, boqView, costView, budgetView, procurementView }) {
   const [searchParams, setSearchParams] = useSearchParams();
   const [summary, setSummary] = useState(null);
   const [tree, setTree] = useState(null);
@@ -165,7 +165,7 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
   const location = [project.society, project.sector].filter(Boolean).join(', ');
   // Slab-wise projects have no Bill of Quantities
   const hasBoq = project.contractBasis !== 'Slab';
-  const currentView = ['cost', 'budget', ...(hasBoq ? ['boq'] : [])].includes(view) ? view : 'overview';
+  const currentView = ['cost', 'budget', 'procurement', ...(hasBoq ? ['boq'] : [])].includes(view) ? view : 'overview';
 
   return (
     <Box>
@@ -200,6 +200,7 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
               <Chip label="Main Project" size="small" sx={{ bgcolor: 'rgba(15,118,110,0.1)', color: ACCENT, fontWeight: 700 }} />
               <ProjectStatusMenu project={project} onChanged={onRefresh} subCount={tree ? tree.subProjects.length : undefined} />
               <ProjectTypeMenu project={project} onChanged={onRefresh} />
+              <StoreProjectMenu project={project} onChanged={onRefresh} />
             </Stack>
             <Stack direction="row" gap={2} flexWrap="wrap" sx={{ mt: 0.25, color: 'text.secondary' }}>
               <Typography variant="body2" fontWeight={600}>{project.projectNumber}</Typography>
@@ -238,6 +239,7 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
               <Box component="span" sx={{ display: { xs: 'inline', sm: 'none' } }}>BOQ</Box>
             </ToggleButton>
           )}
+          <ToggleButton value="procurement"><ProcurementIcon fontSize="small" /> Procurement</ToggleButton>
           <ToggleButton value="cost"><ChartIcon fontSize="small" /> Cost Report</ToggleButton>
           <ToggleButton value="budget">
             <BudgetIcon fontSize="small" /> Budget
@@ -253,6 +255,9 @@ export default function MainProjectPage({ project, view, onViewChange, onBack, o
         <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2.5 }, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff' }}>{boqView}</Paper>
       )}
       {currentView === 'budget' && budgetView}
+      {currentView === 'procurement' && (
+        <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2.5 }, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff' }}>{procurementView}</Paper>
+      )}
       {currentView === 'cost' && (
         <Paper elevation={0} sx={{ p: { xs: 1.5, sm: 2.5 }, borderRadius: 3, border: `1px solid ${BORDER}`, bgcolor: '#fff' }}>{costView}</Paper>
       )}

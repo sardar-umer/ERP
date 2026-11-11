@@ -20,6 +20,8 @@ import BarcodeScanner from '../../components/Procurement/Store/BarcodeScanner';
 import LocationSelector from '../../components/Procurement/Store/LocationSelector';
 import { StoreReturnDialog, CancelSinDialog, StoreReturnsList } from '../../components/Procurement/Store/StoreReturns';
 import GatePassDialog from '../../components/Procurement/Store/GatePass';
+import { SubProjectChargePicker, emptySiteCharge } from '../../components/Procurement/SubProjectChargePicker';
+import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 
 const formatSINDate = (d) => {
   if (!d) return '';
@@ -98,6 +100,8 @@ const GoodsIssue = ({ initialTab = 0 }) => {
     issuedFromNewStock: true, issuedFromOldStock: false,
     subStore: '', location: { rack: '', shelf: '', bin: '' }, notes: ''
   });
+  /** Optional construction sub-project + budget category the issued stock is used on */
+  const [siteCharge, setSiteCharge] = useState(emptySiteCharge());
   const [formData, setFormData] = useState({
     issueDate: new Date().toISOString().split('T')[0],
     department: 'general',
@@ -537,6 +541,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
       referencePurchaseOrder: '',
       referenceGoodsReceive: ''
     });
+    setSiteCharge(emptySiteCharge());
     setFormDialog({ open: true });
   };
 
@@ -558,6 +563,11 @@ const GoodsIssue = ({ initialTab = 0 }) => {
       setError('Please select the store');
       return;
     }
+    const chargeSite = !isCustomerIssue && siteCharge.on;
+    if (chargeSite && (!siteCharge.project || !siteCharge.subProject || !siteCharge.budgetCategory)) {
+      setError('Select the construction project, sub-project and budget category, or turn off "Used on a construction sub-project"');
+      return;
+    }
     try {
       setLoading(true);
       const {
@@ -575,6 +585,8 @@ const GoodsIssue = ({ initialTab = 0 }) => {
         referencePurchaseOrder: referencePurchaseOrder || undefined,
         referenceGoodsReceive: referenceGoodsReceive || undefined,
         store: formData.store || undefined,
+        chargeTo: chargeSite ? { project: siteCharge.project, subProject: siteCharge.subProject } : undefined,
+        budgetCategory: chargeSite ? siteCharge.budgetCategory : undefined,
         items: formData.items.map((item) => ({
           ...item,
           quantity: Number(item.qtyIssued) || 0,
@@ -586,6 +598,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
       };
       await api.post('/procurement/goods-issue', payload);
       setSuccess('Store Issue Note created and inventory updated');
+      setSiteCharge(emptySiteCharge());
       setFormData({
         issueDate: new Date().toISOString().split('T')[0],
         department: 'general',
@@ -939,6 +952,13 @@ const GoodsIssue = ({ initialTab = 0 }) => {
               </TextField>
               <TextField fullWidth label="Required For" value={formData.requiredFor} onChange={(e) => setFormData({ ...formData, requiredFor: e.target.value })} placeholder="e.g. Plinth beam waterproofing" sx={{ mt: 1 }} />
               <TextField fullWidth label="Justification" value={formData.justification} onChange={(e) => setFormData({ ...formData, justification: e.target.value })} placeholder="e.g. MY Builders (Street #10)" sx={{ mt: 1 }} />
+              {formData.issueType !== 'customer' && (
+                <SubProjectChargePicker
+                  value={siteCharge}
+                  onChange={setSiteCharge}
+                  onStoreProject={(id) => setFormData((prev) => (prev.project ? prev : { ...prev, project: id }))}
+                />
+              )}
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField fullWidth select required label="Company *" value={formData.companyId || ''} onChange={(e) => setFormData({ ...formData, companyId: e.target.value })}
@@ -1102,6 +1122,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
                   <Typography variant="caption" display="block" color="textSecondary">Rev: 00 | Page: 1 of 1</Typography>
                 </Grid>
               </Grid>
+              <ChargedToPanel chargeTo={viewDialog.data.chargeTo} items={viewDialog.data.items} />
               {/* Two-column details: Left (SIN No., Issuing Location, Cost Center, Required For, Justification) | Right (Date, EPR No., Concerned Department) */}
               <Grid container spacing={3} sx={{ mb: 2 }}>
                 <Grid item xs={12} md={6}>

@@ -1,4 +1,5 @@
 const mongoose = require('mongoose');
+const { chargeToSchema, inheritChargeTo } = require('../../utils/projectChargeTo');
 
 const purchaseOrderSchema = new mongoose.Schema({
   orderNumber: {
@@ -50,6 +51,8 @@ const purchaseOrderSchema = new mongoose.Schema({
     ref: 'CostCenter',
     default: null
   },
+  /** Project → Sub Project this PO is charged to — copied from its indent (empty for department-only POs) */
+  chargeTo: { type: chargeToSchema, default: () => ({}) },
   // Re-issue chain: a rejected PO is closed and replaced by a new PO (revisedFrom → old, supersededBy → new)
   revisedFrom: {
     type: mongoose.Schema.Types.ObjectId,
@@ -193,7 +196,9 @@ const purchaseOrderSchema = new mongoose.Schema({
       type: Number,
       default: 0,
       min: 0
-    }
+    },
+    /** Sub Project budget category — copied from the matching indent line */
+    budgetCategory: { type: String, trim: true, default: '' }
   }],
   subtotal: {
     type: Number,
@@ -339,6 +344,20 @@ purchaseOrderSchema.pre('save', async function(next) {
     }
   } catch (err) {
     console.warn('[PO] item catalog link skipped:', err.message);
+  }
+  next();
+});
+
+// Carry the indent's project / sub-project and line budget categories onto the PO
+purchaseOrderSchema.pre('save', async function(next) {
+  try {
+    if (this.indent && (this.isNew || this.isModified('indent') || this.isModified('items'))) {
+      const indent = await mongoose.model('Indent').findById(this.indent)
+        .select('chargeTo items.itemName items.itemCode items.itemMaster items.budgetCategory').lean();
+      if (indent) inheritChargeTo(this, indent, { lineName: 'description', sourceName: 'itemName', lineCode: 'productCode', sourceCode: 'itemCode' });
+    }
+  } catch (err) {
+    console.warn('[PO] project link from indent skipped:', err.message);
   }
   next();
 });

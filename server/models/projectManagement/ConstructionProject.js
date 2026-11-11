@@ -160,6 +160,11 @@ const constructionProjectSchema = new mongoose.Schema({
 
   // Location — optionally linked to existing Taj property
   linkedProperty: { type: mongoose.Schema.Types.ObjectId, ref: 'TajProperty', default: null },
+  /**
+   * Store business unit (HR / store "Project", e.g. Boly.Pk) whose stock this project's goods go into.
+   * Set on the Main Project; Sub Projects use their Main Project's. GRNs from project POs default to it.
+   */
+  storeProject: { type: mongoose.Schema.Types.ObjectId, ref: 'Project', default: null },
   /** Finance company the project's costs post to (set on the Main Project; Sub Projects inherit) */
   companyId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlacementCompany', default: null },
   society: { type: String, trim: true },

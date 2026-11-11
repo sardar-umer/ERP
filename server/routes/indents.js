@@ -60,6 +60,8 @@ const handleIndentUpload = (req, res, next) => {
   });
 };
 
+const { normalizeChargeToBody, validateIndentChargeTo } = require('../utils/projectChargeTo');
+
 const parseIndentRequestBody = (req, res, next) => {
   if (req.body?.data) {
     try {
@@ -69,6 +71,7 @@ const parseIndentRequestBody = (req, res, next) => {
       return res.status(400).json({ success: false, message: 'Invalid indent data JSON format' });
     }
   }
+  normalizeChargeToBody(req.body);
   next();
 };
 
@@ -533,6 +536,79 @@ router.get('/departments',
 // @route   GET /api/indents/companies
 // @desc    Get active placement companies for indent form dropdown
 // @access  Private
+// @route   POST /api/indents/budget-check
+// @desc    Live budget check while an indent is being filled: { subProject, items, indentId? }
+// @access  Private
+router.post('/budget-check',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const { checkBudget, indentLines } = require('../services/projectProcurementService');
+    const { subProject, items, indentId } = req.body || {};
+    if (!subProject || !mongoose.Types.ObjectId.isValid(String(subProject))) {
+      return res.json({ success: true, data: null });
+    }
+    const exclude = indentId && mongoose.Types.ObjectId.isValid(String(indentId)) ? { excludeIndentIds: [indentId] } : {};
+    const data = await checkBudget(subProject, indentLines(Array.isArray(items) ? items : []), exclude);
+    res.json({ success: true, data });
+  })
+);
+
+// @route   GET /api/indents/:id/budget-check
+// @desc    Budget check of a saved project indent (null for department-only indents)
+// @access  Private
+router.get('/:id/budget-check',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(String(req.params.id))) {
+      return res.status(400).json({ success: false, message: 'Invalid indent ID' });
+    }
+    // Full document: the access check looks at requester, approvers, comparative signatories and history
+    const indent = await Indent.findById(req.params.id).lean();
+    if (!indent || indent.isActive === false) {
+      return res.status(404).json({ success: false, message: 'Indent not found' });
+    }
+    if (!userCanViewIndent(req.user, indent)) {
+      return res.status(403).json({ success: false, message: 'Access denied' });
+    }
+    if (!indent.chargeTo?.subProject) return res.json({ success: true, data: null });
+    const { checkBudget, indentLines } = require('../services/projectProcurementService');
+    const data = await checkBudget(indent.chargeTo.subProject, indentLines(indent.items), { excludeIndentIds: [indent._id] });
+    res.json({ success: true, data });
+  })
+);
+
+// @route   GET /api/indents/project-options
+// @desc    Construction Projects with their Sub Projects and budget categories, for "Charged to" on an indent
+// @access  Private
+router.get('/project-options',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const ConstructionProject = require('../models/projectManagement/ConstructionProject');
+    const { BUDGET_CATEGORIES } = ConstructionProject;
+    const rows = await ConstructionProject.find({ status: { $ne: 'Cancelled' } })
+      .select('name projectNumber parentProject status storeProject')
+      .sort({ name: 1 })
+      .lean();
+    const subsByParent = new Map();
+    rows.filter((p) => p.parentProject).forEach((p) => {
+      const key = String(p.parentProject);
+      if (!subsByParent.has(key)) subsByParent.set(key, []);
+      subsByParent.get(key).push({ _id: p._id, name: p.name, projectNumber: p.projectNumber || '', status: p.status });
+    });
+    const projects = rows
+      .filter((p) => !p.parentProject)
+      .map((p) => ({
+        _id: p._id,
+        name: p.name,
+        projectNumber: p.projectNumber || '',
+        status: p.status,
+        storeProject: p.storeProject || null,
+        subProjects: subsByParent.get(String(p._id)) || []
+      }));
+    res.json({ success: true, data: { projects, budgetCategories: BUDGET_CATEGORIES } });
+  })
+);
+
 router.get('/companies',
   authMiddleware,
   asyncHandler(async (req, res) => {
@@ -855,6 +931,10 @@ router.post('/',
     }
 
     const indent = new Indent(indentData);
+    const chargeToError = await validateIndentChargeTo(indent);
+    if (chargeToError) {
+      return res.status(400).json({ success: false, message: chargeToError });
+    }
     pushIndentWorkflowHistory(indent, {
       fromStatus: '',
       toStatus: indent.status || 'Draft',
@@ -1009,6 +1089,11 @@ router.put('/:id',
       indent.categoryOtherDescription = otherDesc;
     } else {
       indent.categoryOtherDescription = '';
+    }
+
+    const chargeToError = await validateIndentChargeTo(indent);
+    if (chargeToError) {
+      return res.status(400).json({ success: false, message: chargeToError });
     }
 
     indent.updatedBy = req.user.id;
