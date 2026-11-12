@@ -210,7 +210,26 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
 
         {dossier && tab === 'certificate' && <CertificateFrame dossier={dossier} />}
         {/* The Main Project budget this IPC is paid from, as approved by COO / AVP / CEO */}
-        {dossier && tab === 'budget' && dossier.budget && <BudgetDocumentFrame doc={{ ...dossier.budget, company: dossier.company }} />}
+        {dossier && tab === 'budget' && dossier.budget && (
+          <>
+            {dossier.subProject && (dossier.subProject.allocatedBudget > 0 || dossier.subProject.utilizedBudget > 0) && (
+              <Box sx={{ maxWidth: 820, mx: 'auto', mt: 2, px: 2.5, py: 1.5, bgcolor: '#fff', border: '1px solid #e4e4e7', borderRadius: 1 }}>
+                <Typography sx={{ fontSize: 11, fontWeight: 800, color: '#71717a', textTransform: 'uppercase', letterSpacing: 0.6 }}>
+                  This IPC&apos;s sub project · {dossier.subProject.name}
+                </Typography>
+                <Typography sx={{ fontSize: 14, fontWeight: 800, color: '#18181b' }}>
+                  Total budget {pkr(dossier.subProject.allocatedBudget + dossier.subProject.utilizedBudget)}
+                  {dossier.subProject.utilizedBudget > 0 && (
+                    <Box component="span" sx={{ fontWeight: 600, color: '#6d28d9' }}>
+                      {' '}= {pkr(dossier.subProject.utilizedBudget)} already utilized before the ERP + {pkr(dossier.subProject.allocatedBudget)} remaining for contracts
+                    </Box>
+                  )}
+                </Typography>
+              </Box>
+            )}
+            <BudgetDocumentFrame doc={{ ...dossier.budget, company: dossier.company }} />
+          </>
+        )}
 
         {dossier && tab === 'contract' && dossier.contract && (
           <Sheet kicker="Sublet contract" title={`${dossier.contract.contractNumber} · ${dossier.contract.title}`}>

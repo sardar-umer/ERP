@@ -32,7 +32,10 @@ const Row = ({ r, onOpen }) => (
         </Typography>
       </Box>
       <Stack alignItems={{ sm: 'flex-end' }} gap={0.5}>
-        <Typography sx={{ fontWeight: 900, fontSize: 20, color: INK }}>{fmt(r.amount)}</Typography>
+        <Typography sx={{ fontWeight: 900, fontSize: 20, color: INK }}>{fmt((Number(r.amount) || 0) + (Number(r.utilized) || 0))}</Typography>
+        {Number(r.utilized) > 0 && (
+          <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700 }}>{fmt(r.utilized)} already utilized + {fmt(r.amount)} remaining</Typography>
+        )}
         <Chip size="small" label={(STATUS_CHIP[r.status] || [r.status])[0]} color={(STATUS_CHIP[r.status] || [])[1] || 'default'} sx={{ fontWeight: 700 }} />
       </Stack>
     </Stack>
@@ -102,7 +105,7 @@ export default function BudgetApprovals() {
         <Stack direction="row" alignItems="center" gap={1.5} flexWrap="wrap" sx={{ px: 2.5, py: 1.5, borderBottom: `1px solid ${LINE}` }}>
           <Box sx={{ flex: 1, minWidth: 200 }}>
             <Typography fontWeight={800} noWrap>{view?.project?.name || 'Loading…'}</Typography>
-            {view && <Typography variant="caption" sx={{ color: MUTED }}>{view.documentNo} · {fmt(view.amount)}{view.currentApprover ? ` · waiting for ${view.currentApprover.name}` : ''}</Typography>}
+            {view && <Typography variant="caption" sx={{ color: MUTED }}>{view.documentNo} · {fmt((Number(view.amount) || 0) + (Number(view.utilizedAmount) || 0))}{view.currentApprover ? ` · waiting for ${view.currentApprover.name}` : ''}</Typography>}
           </Box>
           {view && (
             <BudgetApprovalActions

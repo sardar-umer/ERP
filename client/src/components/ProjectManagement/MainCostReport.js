@@ -277,6 +277,9 @@ const BySubProject = ({ groups, narrowed, onOpen }) => {
                   <TableCell>
                     <Typography variant="body2" fontWeight={800} sx={{ color: INK }}>{g.sub.name}</Typography>
                     <Typography variant="caption" color="text.secondary">{g.sub.projectNumber} · {g.sub.progress}% done</Typography>
+                    {g.sub.utilizedBudget > 0 && (
+                      <Typography variant="caption" display="block" sx={{ color: '#7c3aed', fontWeight: 700 }}>{fmt(g.sub.utilizedBudget)} already utilized before the ERP</Typography>
+                    )}
                   </TableCell>
                   <TableCell>
                     <Typography variant="body2" fontWeight={700}>{g.contractors.length}</Typography>
@@ -838,9 +841,9 @@ export default function MainCostReport({ project }) {
       downloadCsv(name, ['Kind', 'Item / Slab', 'Contractors', 'Scope / Share', 'Budget / Amount', 'Contracted', 'Verified', 'Billed', 'Approved', 'Variance'], [...lineRows, ...slabRows]);
     } else if (view === 'sub') {
       downloadCsv(name,
-        ['Sub Project', 'Code', 'Progress %', 'Contractors', 'Contracts', 'BOQ-wise', 'Slab-wise', 'Check Requests', 'IPCs', 'Budget', 'Contracted', 'Verified', 'Billed', 'Approved', 'Paid', 'Outstanding', 'Variance'],
+        ['Sub Project', 'Code', 'Progress %', 'Contractors', 'Contracts', 'BOQ-wise', 'Slab-wise', 'Check Requests', 'IPCs', 'Already utilized (before ERP)', 'Budget', 'Contracted', 'Verified', 'Billed', 'Approved', 'Paid', 'Outstanding', 'Variance'],
         subGroups.map((g) => [g.sub.name, g.sub.projectNumber, g.sub.progress, g.contractors.join('; '), g.contracts, g.boq, g.slab, g.checkRequests, g.ipcs,
-          g.money.budget ?? '', g.money.contracted, g.money.verified, g.money.billed, g.money.approved, g.money.paid, g.outstanding, g.money.variance ?? '']));
+          g.sub.utilizedBudget || 0, g.money.budget ?? '', g.money.contracted, g.money.verified, g.money.billed, g.money.approved, g.money.paid, g.outstanding, g.money.variance ?? '']));
     } else if (view === 'type' || view === 'sector') {
       const list = view === 'type' ? typeGroups : sectorGroups;
       downloadCsv(name,
@@ -881,8 +884,12 @@ export default function MainCostReport({ project }) {
         </Button>
       </Stack>
 
-      <Box sx={{ display: 'grid', gap: 1.25, mb: 1.5, gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', xl: 'repeat(7, 1fr)' } }}>
+      <Box sx={{ display: 'grid', gap: 1.25, mb: 1.5, gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(4, 1fr)', xl: `repeat(${t.utilizedBudget > 0 ? 8 : 7}, 1fr)` } }}>
         <Kpi label="Budget" value={t.budget} hint={t.lumpSumBudget ? `Lump sum ${fmt(t.lumpSumBudget)}` : isSub ? 'This sub project\'s BOQ' : 'Sum of sub project BOQs'} />
+        {t.utilizedBudget > 0 && (
+          <Kpi label="Already utilized" value={t.utilizedBudget} color="#7c3aed"
+            hint={`Spent before the ERP · total budget ${fmt(t.utilizedBudget + (t.remainingBudget || 0))}`} />
+        )}
         <Kpi label="Contracted" value={t.contracted} color={t.budget > 0 && t.contracted > t.budget ? 'error.main' : undefined} hint={t.budget > 0 ? `${pct(t.contracted, t.budget)}% of budget` : null} />
         <Kpi label="Verified work" value={t.verified} hint={`${pct(t.verified, t.contracted)}% of contracted`} />
         <Kpi label="Billed (IPCs)" value={t.billed} />

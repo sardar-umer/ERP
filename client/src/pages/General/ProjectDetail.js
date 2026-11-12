@@ -1548,6 +1548,8 @@ const SubProjectOverview = ({ project, onGoToTab }) => {
   const b = project.budgetAllocation;
   const mine = b?.subProjects?.find((s) => String(s._id) === String(project._id));
   const share = mine?.allocatedBudget || 0;
+  // Ongoing projects: spent before the ERP; total budget = utilized + share (share is what contracts can use)
+  const utilized = mine?.utilizedBudget || 0;
   const committed = mine?.committed || 0;
   const inForce = b ? (b.inForce ?? b.budgetStatus === 'Approved') : false;
   const used = share > 0 ? Math.round((committed / share) * 100) : 0;
@@ -1643,8 +1645,24 @@ const SubProjectOverview = ({ project, onGoToTab }) => {
               <Alert severity="warning" sx={{ fontSize: 14 }}>{project.name} is not in the approved budget yet. Ask for it to be added with a budget revision.</Alert>
             ) : (
               <Box>
-                <Typography sx={{ fontSize: 32, fontWeight: 900, lineHeight: 1.1, color: '#0f172a' }}>{fmt(share)}</Typography>
-                <Typography sx={{ fontSize: 13.5, color: '#64748b', mt: 0.5 }}>Its share of {main?.name || 'the Main Project'}&apos;s approved budget</Typography>
+                <Typography sx={{ fontSize: 32, fontWeight: 900, lineHeight: 1.1, color: '#0f172a' }}>{fmt(share + utilized)}</Typography>
+                <Typography sx={{ fontSize: 13.5, color: '#64748b', mt: 0.5 }}>
+                  {utilized > 0 ? 'Total budget — its' : 'Its'} share of {main?.name || 'the Main Project'}&apos;s approved budget
+                </Typography>
+                {utilized > 0 && (
+                  <Stack direction="row" justifyContent="space-between" sx={{ mt: 1.5, p: 1.25, borderRadius: 2, bgcolor: '#f5f3ff', border: '1px solid #ddd6fe' }}>
+                    <Box>
+                      <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#6d28d9' }}>Already utilized</Typography>
+                      <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#5b21b6' }}>{fmt(utilized)}</Typography>
+                      <Typography sx={{ fontSize: 11.5, color: '#7c3aed' }}>Spent before the ERP</Typography>
+                    </Box>
+                    <Box sx={{ textAlign: 'right' }}>
+                      <Typography sx={{ fontSize: 12.5, fontWeight: 600, color: '#64748b' }}>Remaining budget</Typography>
+                      <Typography sx={{ fontSize: 16, fontWeight: 800, color: '#0f172a' }}>{fmt(share)}</Typography>
+                      <Typography sx={{ fontSize: 11.5, color: '#64748b' }}>For contracts in the ERP</Typography>
+                    </Box>
+                  </Stack>
+                )}
                 <LinearProgress variant="determinate" value={Math.min(100, used)} color={used >= 90 ? 'error' : 'primary'} sx={{ mt: 2, height: 10, borderRadius: 5 }} />
                 <Stack direction="row" justifyContent="space-between" sx={{ mt: 1.25 }}>
                   <Box>
@@ -1997,8 +2015,10 @@ const ProjectDetail = () => {
               const mine = project.budgetAllocation?.subProjects?.find((x) => String(x._id) === String(project._id));
               const daysLeft = project.expectedEndDate ? dayjs(project.expectedEndDate).endOf('day').diff(dayjs(), 'day') : null;
               return [
-                ['Budget', mine?.allocatedBudget ? fmt(mine.allocatedBudget) : 'Not in budget yet',
-                  mine?.allocatedBudget ? `${fmt(mine.allocatedBudget - (mine.committed || 0))} left for contracts` : 'No contracts until it has a budget'],
+                ['Budget', mine?.allocatedBudget ? fmt(mine.allocatedBudget + (mine.utilizedBudget || 0)) : 'Not in budget yet',
+                  mine?.allocatedBudget
+                    ? `${mine.utilizedBudget ? `${fmt(mine.utilizedBudget)} already utilized before the ERP · ` : ''}${fmt(mine.allocatedBudget - (mine.committed || 0))} left for contracts`
+                    : 'No contracts until it has a budget'],
                 ['Spent (certified)', fmt(project.totalActualSpent || 0), 'Certified work on IPCs'],
                 ['Timeline',
                   `${project.startDate ? dayjs(project.startDate).format('DD MMM YYYY') : '—'} → ${project.expectedEndDate ? dayjs(project.expectedEndDate).format('DD MMM YYYY') : '—'}`,

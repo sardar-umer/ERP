@@ -149,6 +149,7 @@ export default function ProjectSummaryPanel({ project, summary, tree }) {
 
   const moneySteps = [
     { label: 'Lump Sum Budget', value: t.lumpSumBudget, note: 'Approved for the whole project' },
+    ...(t.utilizedBudget > 0 ? [{ label: 'Already utilized', value: t.utilizedBudget, note: `Spent before the ERP · total budget ${fmt((t.lumpSumBudget || 0) + t.utilizedBudget)}` }] : []),
     { label: 'Allocated to Subs', value: project.budgetAllocation?.totalAllocated, note: 'Shared out to sub projects' },
     { label: 'BOQ Budget', value: t.budget, note: 'Priced bill of quantities' },
     { label: 'Contracted', value: t.contracted, note: 'Sublet contracts signed' },

@@ -8,7 +8,7 @@ import { numberToWords } from '../../utils/numberToWords';
  *
  * Input shape (from the IPC dossier's `budget`, or `budgetDocFromView` for the budget request API):
  * { documentNo, status, amount, purpose, notes, revision, preparedByName, submittedAt, approvedAt,
- *   lines: [{ name, scope, amount }], approvers: [{ role, name, designation, status, remarks, signature, actedAt }],
+ *   lines: [{ name, scope, utilized, amount }],   (utilized = spent before the ERP; total = utilized + amount) approvers: [{ role, name, designation, status, remarks, signature, actedAt }],
  *   project: { name, projectNumber, projectType, contractBasis, society, sector, address, startDate, expectedEndDate, clientName } }
  */
 
@@ -33,7 +33,7 @@ export const budgetDocFromView = (view) => {
   // What the project team asked for, before approvers cut or added
   const requested = new Map((r.submittedLines || []).map((l) => [String(l.subProject), Number(l.amount) || 0]));
   const lines = (r.lines || [])
-    .filter((l) => Number(l.amount) > 0 || l.scope || before?.get(String(l.subProject)) || requested.get(String(l.subProject)))
+    .filter((l) => Number(l.amount) > 0 || Number(l.utilized) > 0 || l.scope || before?.get(String(l.subProject)) || requested.get(String(l.subProject)))
     .map((l) => ({
       ...l,
       ...(before ? { previous: before.get(String(l.subProject)) || 0 } : {}),
@@ -119,6 +119,10 @@ export const budgetDocumentHtml = (b, { print = false, company = null } = {}) =>
   const p = b.project || {};
   const contact = [co.contactInfo?.address, co.contactInfo?.phone, co.contactInfo?.email].filter(Boolean).join('  ·  ');
   const total = (b.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0) || b.amount;
+  // Ongoing projects: what was already utilized before the ERP, shown next to the remaining budget
+  const utilizedTotal = (b.lines || []).reduce((t, l) => t + (Number(l.utilized) || 0), 0);
+  const hasUtilized = utilizedTotal > 0;
+  const grandTotal = total + utilizedTotal;
   const firstWaiting = b.status === 'Submitted' ? (b.approvers || []).findIndex((a) => a.status === 'Pending') : -1;
   const stamp = b.status === 'Approved' ? '<div class="stamp ok">Approved</div>'
     : b.status === 'Submitted' ? '<div class="stamp wait">In approval</div>' : '<div class="stamp idle">Draft</div>';
@@ -133,26 +137,33 @@ export const budgetDocumentHtml = (b, { print = false, company = null } = {}) =>
   // Approvers cut or added: show what was asked for next to the amount now
   const adjusted = (b.lines || []).some((l) => l.requested != null && Math.abs((Number(l.requested) || 0) - (Number(l.amount) || 0)) >= 0.005);
   const requestedTotal = (b.lines || []).reduce((t, l) => t + (Number(l.requested ?? l.amount) || 0), 0);
-  const amountHead = b.status === 'Approved' ? 'Approved (PKR)' : adjusted ? 'After changes (PKR)' : isRevision ? 'Revised (PKR)' : 'Budget (PKR)';
+  const amountHead = hasUtilized
+    ? (b.status === 'Approved' ? 'Remaining approved (PKR)' : adjusted ? 'Remaining after changes (PKR)' : isRevision ? 'Revised remaining (PKR)' : 'Remaining budget (PKR)')
+    : (b.status === 'Approved' ? 'Approved (PKR)' : adjusted ? 'After changes (PKR)' : isRevision ? 'Revised (PKR)' : 'Budget (PKR)');
+  const showShare = !(isRevision || adjusted);
   const lines = (b.lines || []).length
     ? `<table><thead><tr><th style="width:28px">#</th><th>Sub project</th><th>Scope of work covered</th>
+        ${hasUtilized ? '<th class="r">Already utilized</th>' : ''}
         ${isRevision ? '<th class="r">Approved before</th>' : ''}
         ${adjusted ? '<th class="r">Requested</th>' : ''}
         ${isRevision ? '<th class="r">Change</th>' : ''}
-        <th class="r">${amountHead}</th>${isRevision || adjusted ? '' : '<th class="r">Share</th>'}</tr></thead><tbody>
+        <th class="r">${amountHead}</th>${hasUtilized ? '<th class="r">Total budget</th>' : ''}${showShare ? '<th class="r">Share</th>' : ''}</tr></thead><tbody>
       ${b.lines.map((l, i) => `<tr><td class="muted">${i + 1}</td>
         <td style="font-weight:600">${esc(l.name)}${isRevision && !l.previous ? ' <span class="chip wait">NEW</span>' : ''}</td>
         <td>${para(l.scope) || '<span class="muted">—</span>'}</td>
+        ${hasUtilized ? `<td class="r muted">${Number(l.utilized) ? money(l.utilized) : '—'}</td>` : ''}
         ${isRevision ? `<td class="r muted">${l.previous ? money(l.previous) : '—'}</td>` : ''}
         ${adjusted ? `<td class="r muted">${money(l.requested ?? l.amount)}</td>` : ''}
         ${isRevision ? `<td class="r">${change(l.amount, l.previous)}</td>` : ''}
         <td class="r"${adjusted && Math.abs((Number(l.requested ?? l.amount) || 0) - (Number(l.amount) || 0)) >= 0.005 ? ' style="font-weight:700"' : ''}>${money(l.amount)}</td>
-        ${isRevision || adjusted ? '' : `<td class="r muted">${total ? Math.round((Number(l.amount) / total) * 100) : 0}%</td>`}</tr>`).join('')}
+        ${hasUtilized ? `<td class="r" style="font-weight:600">${money((Number(l.utilized) || 0) + (Number(l.amount) || 0))}</td>` : ''}
+        ${showShare ? `<td class="r muted">${grandTotal ? Math.round((((Number(l.utilized) || 0) + (Number(l.amount) || 0)) / grandTotal) * 100) : 0}%</td>` : ''}</tr>`).join('')}
       <tr class="total"><td></td><td colspan="2">${isRevision || adjusted || b.status === 'Approved' ? 'Total' : 'Total budget requested'}</td>
+        ${hasUtilized ? `<td class="r">${money(utilizedTotal)}</td>` : ''}
         ${isRevision ? `<td class="r">${money(b.previousTotal)}</td>` : ''}
         ${adjusted ? `<td class="r muted">${money(requestedTotal)}</td>` : ''}
         ${isRevision ? `<td class="r">${change(total, b.previousTotal)}</td>` : ''}
-        <td class="r">${money(total)}</td>${isRevision || adjusted ? '' : '<td></td>'}</tr>
+        <td class="r">${money(total)}</td>${hasUtilized ? `<td class="r">${money(grandTotal)}</td>` : ''}${showShare ? '<td></td>' : ''}</tr>
       </tbody></table>`
     : '<p class="text muted">No sub project lines yet.</p>';
 
@@ -190,7 +201,8 @@ export const budgetDocumentHtml = (b, { print = false, company = null } = {}) =>
 
     <h2><span>2</span>Budget by sub project</h2>
     ${lines}
-    <div class="words">Total in words: <b>${esc(numberToWords(Math.round(total || 0)))}</b></div>
+    ${hasUtilized ? `<p class="text" style="margin-top:10px;font-size:12px"><b>Total budget ${money(grandTotal)}</b> = already utilized ${money(utilizedTotal)} (spent before this project came into the ERP) + remaining ${money(total)} (available for new contracts).</p>` : ''}
+    <div class="words">Total${hasUtilized ? ' budget' : ''} in words: <b>${esc(numberToWords(Math.round(grandTotal || 0)))}</b></div>
     <p class="text muted" style="margin-top:8px;font-size:11px">Approvers may cut or add amounts; the amounts after the final (CEO) approval are the budget. Each sub project receives its amount as its budget, and its sublet contracts cannot exceed it.</p>
 
     ${b.notes ? `<h2><span>3</span>Assumptions and remarks</h2><p class="text">${para(b.notes)}</p>` : ''}

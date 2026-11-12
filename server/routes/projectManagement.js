@@ -199,7 +199,7 @@ const buildBudgetAllocationSummary = async (mainProject) => {
     parentProject: mainProject._id,
     status: { $ne: 'Cancelled' }
   })
-    .select('name projectNumber sector projectType allocatedBudget totalEstimatedCost totalApprovedBudget budgetStatus status')
+    .select('name projectNumber sector projectType allocatedBudget utilizedBudget totalEstimatedCost totalApprovedBudget budgetStatus status')
     .sort({ name: 1 })
     .lean();
   const committed = await committedBySub(subs.map((s) => s._id));
@@ -219,6 +219,8 @@ const buildBudgetAllocationSummary = async (mainProject) => {
     // A revision can be in approval while the last approved budget stays in force
     inForce: approvedBudgetAmount(mainProject) > 0,
     approvedAmount: approvedBudgetAmount(mainProject),
+    // Ongoing projects: already utilized before the ERP (total budget = approvedAmount + approvedUtilized)
+    approvedUtilized: Number(mainProject.approvedBudget?.utilized) || 0,
     budgetSubmittedAt: mainProject.budgetSubmittedAt || null,
     budgetApprovedAt: mainProject.budgetApprovedAt || null,
     budgetApprovedBy: approver ? `${approver.firstName || ''} ${approver.lastName || ''}`.trim() : null,
@@ -233,6 +235,8 @@ const buildBudgetAllocationSummary = async (mainProject) => {
         sector: s.sector,
         projectType: s.projectType,
         allocatedBudget: allocated,
+        utilizedBudget: Number(s.utilizedBudget) || 0,
+        totalBudget: Math.round((allocated + (Number(s.utilizedBudget) || 0)) * 100) / 100,
         committed: c.amount,
         contracts: c.contracts,
         available: Math.round((allocated - c.amount) * 100) / 100,
@@ -441,7 +445,7 @@ const HEALTH_RANK = { 'On Track': 0, 'Needs Attention': 1, 'Behind Schedule': 2,
  */
 router.get('/portfolio', asyncHandler(async (req, res) => {
   const mains = await ConstructionProject.find({ parentProject: null, status: { $ne: 'Cancelled' } })
-    .select('name projectNumber projectType contractBasis status society sector address clientName startDate expectedEndDate actualEndDate lumpSumBudget budgetStatus budgetSubmittedAt approvedBudget.amount budgetRequest.revision budgetRequest.approvers.name budgetRequest.approvers.role budgetRequest.currentStep overallProgress projectManager createdAt')
+    .select('name projectNumber projectType contractBasis status society sector address clientName startDate expectedEndDate actualEndDate lumpSumBudget budgetStatus budgetSubmittedAt approvedBudget.amount approvedBudget.utilized budgetRequest.revision budgetRequest.approvers.name budgetRequest.approvers.role budgetRequest.currentStep overallProgress projectManager createdAt')
     .populate('projectManager', 'firstName lastName')
     .sort({ createdAt: -1 }).lean();
   const mainIds = mains.map((m) => m._id);
@@ -587,6 +591,8 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
       lumpSumBudget: Number(m.lumpSumBudget) || 0,
       budgetStatus,
       budget,
+      // Ongoing projects: spent before the ERP; total budget = utilizedBudget + budget
+      utilizedBudget: budget > 0 ? Number(m.approvedBudget?.utilized) || 0 : 0,
       revisionPending,
       boqEstimate,
       distributed,
@@ -624,6 +630,7 @@ router.get('/portfolio', asyncHandler(async (req, res) => {
     contractors: new Set(contracts.map((c) => String(c.contractor)).filter(Boolean)).size,
     lumpSumBudget: total('lumpSumBudget'),
     budget,
+    utilizedBudget: total('utilizedBudget'),
     boqEstimate: total('boqEstimate'),
     distributed: total('distributed'),
     budgetsPending: projects.filter((p) => !(p.budget > 0) && p.status !== 'Completed').length,
@@ -1021,7 +1028,7 @@ router.get('/projects/:id/cost-report', asyncHandler(async (req, res) => {
 router.get('/projects/:id/summary', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
   const project = await ConstructionProject.findById(req.params.id)
-    .select('name projectNumber status parentProject lumpSumBudget budgetStatus approvedBudget.amount allocatedBudget overallProgress').lean();
+    .select('name projectNumber status parentProject lumpSumBudget budgetStatus approvedBudget.amount approvedBudget.utilized allocatedBudget utilizedBudget overallProgress').lean();
   if (!project) return notFound(res, 'Project');
   const isMain = !project.parentProject;
 
@@ -1098,6 +1105,8 @@ router.get('/projects/:id/summary', asyncHandler(async (req, res) => {
       totals: {
         budget,
         lumpSumBudget: isMain ? Number(project.lumpSumBudget) || 0 : null,
+        // Ongoing projects: already utilized before the ERP (not part of spent / budget above)
+        utilizedBudget: isMain ? (mainApproved > 0 ? Number(project.approvedBudget?.utilized) || 0 : 0) : Number(project.utilizedBudget) || 0,
         contracted: sum('contracted'),
         verified: sum('verified'),
         spent,
@@ -1247,7 +1256,7 @@ router.get('/projects/:id/tree', asyncHandler(async (req, res) => {
 router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
   const project = await ConstructionProject.findById(req.params.id)
-    .select('name projectNumber parentProject lumpSumBudget sector projectType status overallProgress').lean();
+    .select('name projectNumber parentProject lumpSumBudget allocatedBudget utilizedBudget approvedBudget.amount approvedBudget.utilized sector projectType status overallProgress').lean();
   if (!project) return notFound(res, 'Project');
   const isSub = Boolean(project.parentProject);
 
@@ -1255,7 +1264,7 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
   const subs = isSub
     ? [project]
     : await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
-      .select('name projectNumber sector projectType status overallProgress').sort({ name: 1 }).lean();
+      .select('name projectNumber sector projectType status overallProgress allocatedBudget utilizedBudget').sort({ name: 1 }).lean();
   // Legacy type names (Villa, Infrastructure…) are reported under the three master types
   const typeOf = (sub) => normalizeProjectType(sub.projectType) || sub.projectType || 'Other';
   const subIds = subs.map((s) => s._id);
@@ -1349,11 +1358,16 @@ router.get('/projects/:id/cost-analysis', asyncHandler(async (req, res) => {
   const subProjects = subs.map((s, i) => ({
     _id: s._id, name: s.name, projectNumber: s.projectNumber, sector: s.sector || '', projectType: typeOf(s), status: s.status,
     progress: Number(s.overallProgress) || 0,
-    ...reports[i].summary
+    ...reports[i].summary,
+    // Ongoing projects: spent before the ERP (outside contracted / billed / paid); total budget = this + its remaining share
+    utilizedBudget: Number(s.utilizedBudget) || 0,
+    remainingBudget: Number(s.allocatedBudget) || 0
   }));
   const keys = ['budget', 'contracted', 'verified', 'billed', 'approved', 'paid', 'retentionHeld', 'advanceOutstanding', 'variance'];
   const totals = Object.fromEntries(keys.map((k) => [k, round2(subProjects.reduce((t, r) => t + (Number(r[k]) || 0), 0))]));
   totals.lumpSumBudget = isSub ? 0 : Number(project.lumpSumBudget) || 0;
+  totals.utilizedBudget = round2(subProjects.reduce((t, r) => t + (Number(r.utilizedBudget) || 0), 0));
+  totals.remainingBudget = isSub ? Number(project.allocatedBudget) || 0 : approvedBudgetAmount(project);
   totals.outstanding = round2(rows.reduce((t, r) => t + r.outstanding, 0));
 
   res.json({ success: true, data: { level: isSub ? 'sub' : 'main', project: { _id: project._id, name: project.name, projectNumber: project.projectNumber }, totals, subProjects, rows } });
@@ -1863,9 +1877,10 @@ const budgetDocNo = (p) => `BUD-${p.projectNumber || String(p._id).slice(-6).toU
 /** Budget request view: the request, the Sub Projects it can split into (with what each has in contracts) and who may act */
 const buildBudgetRequestView = async (project, user) => {
   const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } })
-    .select('name projectNumber sector street allocatedBudget status').sort({ name: 1 }).lean();
+    .select('name projectNumber sector street allocatedBudget utilizedBudget status').sort({ name: 1 }).lean();
   const committed = await committedBySub(subs.map((s) => s._id));
   const req = project.budgetRequest || null;
+  const sumOf = (lines, key) => round2((lines || []).reduce((t, l) => t + (Number(l[key]) || 0), 0));
   const current = req && project.budgetStatus === 'Submitted' ? req.approvers?.[req.currentStep] : null;
   // Letterhead for the budget document: the Main Project's Finance company
   const company = project.companyId
@@ -1880,18 +1895,22 @@ const buildBudgetRequestView = async (project, user) => {
     },
     status: project.budgetStatus || 'Draft',
     // Total of the request being prepared / in approval; `approved` is the budget in force
-    amount: req?.lines?.length ? round2(req.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0)) : Number(project.lumpSumBudget) || 0,
+    amount: req?.lines?.length ? sumOf(req.lines, 'amount') : Number(project.lumpSumBudget) || 0,
+    // Ongoing projects: already utilized before the ERP; total budget = utilized + remaining (amount)
+    utilizedAmount: req?.lines?.length ? sumOf(req.lines, 'utilized') : Number(project.approvedBudget?.utilized) || 0,
     approvedAt: project.budgetApprovedAt || null,
     documentNo: budgetDocNo(project),
     request: req,
     approved: project.approvedBudget?.amount > 0 ? project.approvedBudget : null,
     approvedAmount: approvedBudgetAmount(project),
+    approvedUtilized: Number(project.approvedBudget?.utilized) || 0,
     approvedDocumentNo: project.approvedBudget?.revision
       ? `BUD-${project.projectNumber || String(project._id).slice(-6).toUpperCase()}-R${project.approvedBudget.revision}` : null,
     suggestedApprovers: req?.approvers?.length ? null : await suggestBudgetApprovers(),
     subProjects: subs.map((s) => ({
       _id: s._id, name: s.name, projectNumber: s.projectNumber, sector: s.sector, status: s.status,
       allocatedBudget: Number(s.allocatedBudget) || 0,
+      utilizedBudget: Number(s.utilizedBudget) || 0,
       committed: committed.get(String(s._id))?.amount || 0,
       contracts: committed.get(String(s._id))?.contracts || 0
     })),
@@ -1943,7 +1962,10 @@ router.put('/projects/:id/budget-request', asyncHandler(async (req, res) => {
   const subById = new Map(subs.map((s) => [String(s._id), s]));
   const lines = (Array.isArray(req.body.lines) ? req.body.lines : [])
     .filter((l) => subById.has(String(l.subProject)))
-    .map((l) => ({ subProject: l.subProject, name: subById.get(String(l.subProject)).name, scope: String(l.scope || '').trim(), amount: Math.max(0, round2(l.amount)) }));
+    .map((l) => ({
+      subProject: l.subProject, name: subById.get(String(l.subProject)).name, scope: String(l.scope || '').trim(),
+      utilized: Math.max(0, round2(l.utilized)), amount: Math.max(0, round2(l.amount))
+    }));
   const approvers = [];
   for (const a of Array.isArray(req.body.approvers) ? req.body.approvers : []) {
     if (!a.user || !isValidId(a.user)) continue;
@@ -2008,7 +2030,7 @@ router.post('/projects/:id/budget-request/submit', asyncHandler(async (req, res)
   project.budgetStatus = 'Submitted';
   project.budgetSubmittedAt = new Date();
   br.approvers.forEach((a) => { a.status = 'Pending'; a.remarks = ''; a.signature = ''; a.actedAt = undefined; a.changes = []; });
-  br.submittedLines = br.lines.map((l) => ({ subProject: l.subProject, amount: Number(l.amount) || 0 }));
+  br.submittedLines = br.lines.map((l) => ({ subProject: l.subProject, amount: Number(l.amount) || 0, utilized: Number(l.utilized) || 0 }));
   br.currentStep = 0;
   br.revision = (br.revision || 0) + 1;
   br.submittedAt = new Date();
@@ -2017,8 +2039,9 @@ router.post('/projects/:id/budget-request/submit', asyncHandler(async (req, res)
   project.updatedBy = req.user?._id;
   await project.save();
 
+  const utilizedTotal = round2((br.lines || []).reduce((t, l) => t + (Number(l.utilized) || 0), 0));
   await notifyBudget([br.approvers[0].user], req.user?._id, `Budget for your approval: ${project.name}`,
-    `${fmtPkr(total)} budget for ${project.name} is waiting for your approval`, project);
+    `${fmtPkr(total + utilizedTotal)} budget for ${project.name}${utilizedTotal > 0 ? ` (${fmtPkr(utilizedTotal)} already utilized + ${fmtPkr(total)} remaining)` : ''} is waiting for your approval`, project);
   res.json({ success: true, message: `Sent to ${br.approvers[0].name} (${br.approvers[0].role})`, data: await buildBudgetRequestView(project.toObject(), req.user) });
 }));
 
@@ -2086,9 +2109,11 @@ router.post('/projects/:id/budget-request/approve', asyncHandler(async (req, res
   // Final approval: this version is now the budget in force and each line becomes that Sub Project's budget
   br.currentStep = -1;
   const total = round2(br.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0));
+  const utilizedTotal = round2(br.lines.reduce((t, l) => t + (Number(l.utilized) || 0), 0));
   project.lumpSumBudget = total;
   project.approvedBudget = {
     amount: total,
+    utilized: utilizedTotal,
     revision: br.revision,
     approvedAt: new Date(),
     submittedAt: br.submittedAt,
@@ -2096,7 +2121,7 @@ router.post('/projects/:id/budget-request/approve', asyncHandler(async (req, res
     notes: br.notes,
     preparedByName: br.preparedByName,
     lines: br.lines.map((l) => ({
-      subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount,
+      subProject: l.subProject, name: l.name, scope: l.scope, utilized: Number(l.utilized) || 0, amount: l.amount,
       requested: (br.submittedLines || []).find((x) => String(x.subProject) === String(l.subProject))?.amount ?? l.amount
     })),
     approvers: br.approvers.map((a) => ({
@@ -2111,16 +2136,19 @@ router.post('/projects/:id/budget-request/approve', asyncHandler(async (req, res
   project.updatedBy = req.user._id;
   await project.save();
   const amounts = new Map(br.lines.map((l) => [String(l.subProject), Number(l.amount) || 0]));
+  const utilizedBySub = new Map(br.lines.map((l) => [String(l.subProject), Number(l.utilized) || 0]));
   const subs = await ConstructionProject.find({ parentProject: project._id, status: { $ne: 'Cancelled' } });
   for (const sub of subs) {
     const amount = amounts.get(String(sub._id)) || 0;
-    if ((Number(sub.allocatedBudget) || 0) === amount) continue;
+    const utilized = utilizedBySub.get(String(sub._id)) || 0;
+    if ((Number(sub.allocatedBudget) || 0) === amount && (Number(sub.utilizedBudget) || 0) === utilized) continue;
     sub.allocatedBudget = amount;
+    sub.utilizedBudget = utilized;
     sub.updatedBy = req.user._id;
     await sub.save();
   }
   await notifyBudget([br.preparedBy, project.createdBy, project.projectManager], req.user._id, `Budget approved: ${project.name}`,
-    `${fmtPkr(project.lumpSumBudget)} approved by ${br.approvers.map((a) => a.role).join(', ')} — sub projects can now make contracts within their share`, project);
+    `${fmtPkr(project.lumpSumBudget + utilizedTotal)}${utilizedTotal > 0 ? ` (${fmtPkr(utilizedTotal)} already utilized + ${fmtPkr(project.lumpSumBudget)} remaining)` : ''} approved by ${br.approvers.map((a) => a.role).join(', ')} — sub projects can now make contracts within their share`, project);
   res.json({ success: true, message: 'Budget approved — each sub project now has its share', data: await buildBudgetRequestView(project.toObject(), req.user) });
 }));
 
@@ -2156,7 +2184,7 @@ router.post('/projects/:id/budget-request/discard', asyncHandler(async (req, res
   const br = project.budgetRequest;
   br.purpose = ab.purpose;
   br.notes = ab.notes;
-  br.lines = ab.lines.map((l) => ({ subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount }));
+  br.lines = ab.lines.map((l) => ({ subProject: l.subProject, name: l.name, scope: l.scope, utilized: Number(l.utilized) || 0, amount: l.amount }));
   br.approvers = ab.approvers.filter((a) => a.user).map((a) => ({ ...a }));
   br.revision = ab.revision;
   br.currentStep = -1;
@@ -2182,6 +2210,7 @@ router.get('/budget-approvals', asyncHandler(async (req, res) => {
       _id: p._id, name: p.name, projectNumber: p.projectNumber, projectType: p.projectType, contractBasis: p.contractBasis,
       location: [p.society, p.sector].filter(Boolean).join(', '),
       amount: (br.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0) || Number(p.lumpSumBudget) || 0,
+      utilized: (br.lines || []).reduce((t, l) => t + (Number(l.utilized) || 0), 0),
       status: p.budgetStatus, submittedAt: br.submittedAt || p.budgetSubmittedAt,
       revision: br.revision || 0, documentNo: budgetDocNo(p),
       waitingForMe: Boolean(current && String(current.user) === me),

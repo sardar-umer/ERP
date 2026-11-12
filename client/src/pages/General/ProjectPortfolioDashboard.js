@@ -253,7 +253,10 @@ const PortfolioHero = ({ totals: t, monthlySpend, projects, loadedAt, loading, o
             <>
               <HeroKpi
                 hint={DEFINITIONS.budget} label="Total budget" value={t.budget} tone="#64748b" icon={<BudgetIcon />} delay={0.1}
-                note={t.budgetsPending ? `${plural(t.budgetsPending, 'project')} without an approved budget` : `${fmtCompact(t.distributed)} distributed`}
+                note={[
+                  t.utilizedBudget > 0 ? `+ ${fmtCompact(t.utilizedBudget)} already utilized before the ERP` : null,
+                  t.budgetsPending ? `${plural(t.budgetsPending, 'project')} without an approved budget` : `${fmtCompact(t.distributed)} distributed`
+                ].filter(Boolean).join(' · ')}
               />
               <HeroKpi
                 hint={DEFINITIONS.contracted} label="Contracted" value={t.contracted} tone="#4f46e5" icon={<ContractIcon />} delay={0.2}
@@ -311,6 +314,15 @@ const MoneyFlow = ({ totals }) => {
       {FLOW.map((f, i) => (
         <Bar key={f.key} f={f} i={i} of={f.key !== 'budget' && totals.budget > 0 ? `${pct(totals[f.key], totals.budget)}%` : null} />
       ))}
+      {totals.utilizedBudget > 0 && (
+        <Tooltip title={`${fmt(totals.utilizedBudget)} was spent on ongoing projects before they came into the ERP. It is part of their total budget but not of the bars above, which show the remaining budget and the work done in the ERP.`}>
+          <Box sx={{ px: 1.25, py: 0.75, borderRadius: 2, bgcolor: '#f5f3ff', border: '1px solid #ddd6fe', cursor: 'help' }}>
+            <Typography variant="body2" sx={{ color: '#5b21b6', fontWeight: 700 }}>
+              + {fmtCompact(totals.utilizedBudget)} already utilized before the ERP · total budget {fmtCompact(totals.budget + totals.utilizedBudget)}
+            </Typography>
+          </Box>
+        </Tooltip>
+      )}
       {!totals.budget && totals.contracted > 0 && (
         <Typography variant="caption" sx={{ color: '#b45309' }}>No budget approved yet, so bars are compared to the largest figure.</Typography>
       )}
@@ -421,7 +433,7 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
   const figures = isSlab
     ? [['Contract value', p.contracted], ['Billed', p.spent], ['Paid', p.paid]]
     // The approved budget stays in force while a revision is prepared or in approval
-    : [['Budget', p.budget > 0 ? p.budget : (p.budgetStatus === 'Submitted' ? 'With CEO' : 'Not set')], ['Spent', p.spent], ['Paid', p.paid]];
+    : [['Budget', p.budget > 0 ? p.budget + (p.utilizedBudget || 0) : (p.budgetStatus === 'Submitted' ? 'With CEO' : 'Not set')], ['Spent', p.spent], ['Paid', p.paid]];
   const scope = isSlab
     ? (p.slabs?.total ? `${p.slabs.billed} of ${plural(p.slabs.total, 'slab')} billed · ${p.slabs.verified} verified` : 'No slabs contracted yet')
     : p.contractBasis === 'BOQ'
@@ -504,6 +516,13 @@ const ProjectCard = ({ p, color, index, onOpen }) => {
             </Box>
           ))}
         </Box>
+        {p.utilizedBudget > 0 && (
+          <Tooltip title={`Total budget ${fmt(p.budget + p.utilizedBudget)} = ${fmt(p.utilizedBudget)} already utilized before the ERP + ${fmt(p.budget)} remaining for contracts`}>
+            <Typography sx={{ mt: 0.75, fontSize: 11.5, fontWeight: 700, color: '#6d28d9' }} noWrap>
+              {fmtCompact(p.utilizedBudget)} already utilized · {fmtCompact(p.budget)} remaining
+            </Typography>
+          </Tooltip>
+        )}
 
         {p.plannedProgress !== null && (
           <Box sx={{ mt: 1.75 }}>
@@ -637,11 +656,11 @@ export default function ProjectPortfolioDashboard() {
   const exportCsv = () => {
     const d = (v) => (v ? dayjs(v).format('DD-MMM-YYYY') : '');
     const headers = ['Project', 'Number', 'Contract Basis', 'Status', 'Health', 'Why', 'Location', 'Manager', 'Start', 'End', 'Progress %', 'Planned %',
-      'Sub Projects', 'Contracts', 'Contractors', 'Budget Status', 'Approved Budget', 'Distributed', 'BOQ Estimate', 'Contracted', 'Verified', 'Certified (Spent)', 'CEO Approved', 'Paid',
+      'Sub Projects', 'Contracts', 'Contractors', 'Budget Status', 'Approved Budget (remaining)', 'Already Utilized (before ERP)', 'Total Budget', 'Distributed', 'BOQ Estimate', 'Contracted', 'Verified', 'Certified (Spent)', 'CEO Approved', 'Paid',
       'Retention Held', 'Advance Outstanding', 'IPCs Awaiting Approval', 'Awaiting Amount', 'Oldest Wait (days)', 'Billed to Client', 'Received from Client'];
     const rows = shown.map((p) => [p.name, p.projectNumber, p.contractBasis ? (p.contractBasis === 'Slab' ? 'Slab-wise' : 'BOQ-wise') : 'Not set', p.status, p.health, (p.healthReasons || []).join('; '), p.location, p.projectManager,
       d(p.startDate), d(p.expectedEndDate), p.progress, p.plannedProgress ?? '', p.subProjects, p.contracts, p.contractors,
-      p.budgetStatus, p.budget, p.distributed, p.boqEstimate, p.contracted, p.verified, p.spent, p.approved, p.paid, p.retentionHeld, p.advanceOutstanding,
+      p.budgetStatus, p.budget, p.utilizedBudget || 0, (p.budget || 0) + (p.utilizedBudget || 0), p.distributed, p.boqEstimate, p.contracted, p.verified, p.spent, p.approved, p.paid, p.retentionHeld, p.advanceOutstanding,
       p.pendingApprovals, p.pendingAmount, p.oldestPendingDays ?? '', p.clientBilled, p.clientReceived]);
     const cell = (v) => {
       const str = v === null || v === undefined ? '' : String(v);

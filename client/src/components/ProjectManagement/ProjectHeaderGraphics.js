@@ -124,9 +124,14 @@ export default function ProjectHeaderGraphics({ totals }) {
           </Stack>
           <Typography sx={{ mt: 0.75, fontSize: 15, color: MUTED }}>
             {hasBudget
-              ? `% shown against budget ${fmt(totals.budget)}`
+              ? `% shown against ${totals.utilizedBudget > 0 ? 'remaining ' : ''}budget ${fmt(totals.budget)}`
               : pctBase > 0 ? `No budget yet · % shown against contract value ${fmt(pctBase)}` : 'Nothing contracted yet'}
           </Typography>
+          {hasBudget && totals.utilizedBudget > 0 && (
+            <Typography sx={{ mt: 0.25, fontSize: 14, fontWeight: 700, color: INK }}>
+              Total budget {fmt(totals.budget + totals.utilizedBudget)} · {fmt(totals.utilizedBudget)} already utilized before the ERP
+            </Typography>
+          )}
         </Box>
         <Box
           sx={{

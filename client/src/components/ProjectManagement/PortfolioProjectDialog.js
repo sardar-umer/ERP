@@ -151,7 +151,12 @@ const MainLevel = ({ item, summary, tree, color, open }) => {
         <Stats items={[
           // The approved budget stays in force while a revision is prepared or in approval
           item.budget > 0
-            ? { label: 'Approved budget', value: fmt(item.budget), tone: '#0f766e', note: item.budgetStatus === 'Approved' ? `${fmt(item.distributed)} distributed to sub projects` : `${fmt(item.distributed)} distributed · a revision is ${item.budgetStatus === 'Submitted' ? 'in approval' : 'being prepared'}` }
+            ? {
+              label: 'Approved budget',
+              value: fmt(item.budget + (item.utilizedBudget || 0)),
+              tone: '#0f766e',
+              note: `${item.utilizedBudget ? `${fmt(item.utilizedBudget)} already utilized + ${fmt(item.budget)} remaining · ` : ''}${item.budgetStatus === 'Approved' ? `${fmt(item.distributed)} distributed to sub projects` : `${fmt(item.distributed)} distributed · a revision is ${item.budgetStatus === 'Submitted' ? 'in approval' : 'being prepared'}`}`
+            }
             : { label: 'Budget', value: item.budgetStatus === 'Submitted' ? 'With the CEO' : 'Not set', tone: '#b45309', note: item.budgetStatus === 'Submitted' ? `${fmt(item.lumpSumBudget)} awaiting approval` : 'No contracts until approved' },
           ...(item.contractBasis === 'Slab' ? [
             // Slab-wise: the slab contracts are the yardstick

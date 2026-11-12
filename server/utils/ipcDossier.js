@@ -23,6 +23,7 @@ const budgetSummary = (main) => {
     documentNo: `BUD-${main.projectNumber || String(main._id).slice(-6).toUpperCase()}-R${br.revision || 1}`,
     status: approved ? 'Approved' : main.budgetStatus || 'Draft',
     amount: approved ? approved.amount : (br.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0),
+    utilized: (br.lines || []).reduce((t, l) => t + (Number(l.utilized) || 0), 0),
     purpose: br.purpose,
     notes: br.notes,
     revision: br.revision || 0,
@@ -31,7 +32,7 @@ const budgetSummary = (main) => {
     approvedAt: approved ? approved.approvedAt : main.budgetApprovedAt,
     revisionInApproval: Boolean(approved && main.budgetStatus === 'Submitted'),
     lines: br.lines.map((l) => ({
-      subProject: l.subProject, name: l.name, scope: l.scope, amount: l.amount,
+      subProject: l.subProject, name: l.name, scope: l.scope, utilized: Number(l.utilized) || 0, amount: l.amount,
       requested: l.requested ?? (br.submittedLines || []).find((x) => String(x.subProject) === String(l.subProject))?.amount ?? l.amount
     })),
     approvers: (br.approvers || []).map((a) => ({ role: a.role, name: a.name, designation: a.designation, status: a.status, remarks: a.remarks, signature: a.signature, actedAt: a.actedAt, changes: a.changes || [] })),
@@ -56,6 +57,9 @@ const projectSummary = (p) => (p ? {
   startDate: p.startDate,
   expectedEndDate: p.expectedEndDate,
   contractValue: p.contractValue,
+  // Sub Project budget share: remaining (for contracts) + already utilized before the ERP = its total budget
+  allocatedBudget: Number(p.allocatedBudget) || 0,
+  utilizedBudget: Number(p.utilizedBudget) || 0,
   overallProgress: p.overallProgress,
   clientName: p.clientName,
   documents: (p.documents || []).map((d) => ({

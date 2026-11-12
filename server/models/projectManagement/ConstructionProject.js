@@ -75,11 +75,14 @@ const budgetRequestSchema = new mongoose.Schema({
     subProject: { type: mongoose.Schema.Types.ObjectId, ref: 'ConstructionProject', required: true },
     name: { type: String, trim: true, default: '' },
     scope: { type: String, trim: true, default: '' },
+    /** Ongoing projects: spent before the project came into the ERP (not available for new contracts) */
+    utilized: { type: Number, default: 0, min: 0 },
+    /** Remaining budget — what the Sub Project can still put into contracts */
     amount: { type: Number, default: 0, min: 0 }
   }],
   approvers: { type: [budgetApproverSchema], default: [] },
   /** Amounts as the project team sent them, before any approver changed them */
-  submittedLines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, amount: Number }],
+  submittedLines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, amount: Number, utilized: Number }],
   currentStep: { type: Number, default: -1 }, // index of the approver whose turn it is; -1 when not in approval
   revision: { type: Number, default: 0 },
   preparedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
@@ -205,6 +208,8 @@ const constructionProjectSchema = new mongoose.Schema({
 
   // Sub project: amount allocated from Main lump-sum pool
   allocatedBudget: { type: Number, default: 0, min: 0 },
+  /** Sub Project (ongoing): budget already utilized before the ERP — total budget = utilizedBudget + allocatedBudget */
+  utilizedBudget: { type: Number, default: 0, min: 0 },
 
   // Aggregated totals (auto-computed on save)
   totalEstimatedCost: { type: Number, default: 0, min: 0 },
@@ -225,14 +230,15 @@ const constructionProjectSchema = new mongoose.Schema({
    */
   approvedBudget: {
     type: new mongoose.Schema({
-      amount: { type: Number, default: 0 },
+      amount: { type: Number, default: 0 }, // remaining budget (what contracts can use)
+      utilized: { type: Number, default: 0 }, // already utilized before the ERP
       revision: { type: Number, default: 0 },
       approvedAt: { type: Date },
       submittedAt: { type: Date },
       purpose: { type: String, default: '' },
       notes: { type: String, default: '' },
       preparedByName: { type: String, default: '' },
-      lines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, scope: String, amount: Number, requested: Number }],
+      lines: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, scope: String, utilized: Number, amount: Number, requested: Number }],
       approvers: [{
         _id: false, role: String, user: mongoose.Schema.Types.ObjectId, name: String, designation: String, status: String, remarks: String, signature: String, actedAt: Date,
         changes: [{ _id: false, subProject: mongoose.Schema.Types.ObjectId, name: String, from: Number, to: Number }]

@@ -279,7 +279,7 @@ const approvalsPanel = async () => {
       .select('invoiceNumber ipcNumber approvalStatus netPayableAmount grossAmount project submittedAt updatedAt createdAt')
       .populate('project', 'name parentProject').lean(),
     ConstructionProject.find({ parentProject: null, status: { $ne: 'Cancelled' }, budgetStatus: 'Submitted' })
-      .select('name projectNumber lumpSumBudget budgetSubmittedAt budgetRequest.approvers budgetRequest.currentStep').lean(),
+      .select('name projectNumber lumpSumBudget budgetSubmittedAt budgetRequest.approvers budgetRequest.currentStep budgetRequest.lines').lean(),
     Indent.find({ status: { $in: INDENT_PENDING } }).select('indentNumber title status priority requestedDate createdAt').lean()
   ]);
 
@@ -315,12 +315,17 @@ const approvalsPanel = async () => {
 
   const budgetItems = budgets.map((b) => {
     const step = b.budgetRequest?.approvers?.[b.budgetRequest.currentStep];
+    const lines = b.budgetRequest?.lines || [];
+    // Requested remaining budget + what ongoing projects already utilized before the ERP = total budget
+    const remaining = lines.length ? lines.reduce((t, l) => t + (Number(l.amount) || 0), 0) : Number(b.lumpSumBudget) || 0;
+    const utilized = lines.reduce((t, l) => t + (Number(l.utilized) || 0), 0);
     return {
       id: b._id,
       number: b.projectNumber,
       title: b.name,
       withWhom: step ? `${step.name || ''}${step.role ? ` (${step.role})` : ''}`.trim() : '',
-      amount: r2(b.lumpSumBudget),
+      amount: r2(remaining + utilized),
+      utilized: r2(utilized),
       days: daysWaiting(b.budgetSubmittedAt, now)
     };
   }).sort((a, b) => (b.days ?? 0) - (a.days ?? 0));
@@ -333,6 +338,7 @@ const approvalsPanel = async () => {
       label: 'Project budgets',
       inApproval: budgets.length,
       inApprovalAmount: sumOf(budgetItems, 'amount'),
+      inApprovalUtilized: sumOf(budgetItems, 'utilized'),
       oldestDays: budgetItems.length ? budgetItems[0].days : null,
       items: budgetItems.slice(0, 6)
     },
@@ -351,7 +357,7 @@ const approvalsPanel = async () => {
 const projectsPanel = async () => {
   const now = new Date();
   const mains = await ConstructionProject.find({ parentProject: null, status: { $ne: 'Cancelled' } })
-    .select('name projectNumber status overallProgress startDate expectedEndDate approvedBudget.amount lumpSumBudget budgetStatus society sector')
+    .select('name projectNumber status overallProgress startDate expectedEndDate approvedBudget.amount approvedBudget.utilized lumpSumBudget budgetStatus society sector')
     .lean();
   const mainIds = mains.map((x) => x._id);
   const subs = await ConstructionProject.find({ parentProject: { $in: mainIds }, status: { $ne: 'Cancelled' } }).select('_id parentProject').lean();
@@ -415,6 +421,8 @@ const projectsPanel = async () => {
       daysOverdue: overdue ? Math.ceil((now - new Date(p.expectedEndDate)) / DAY_MS) : 0,
       expectedEndDate: p.expectedEndDate,
       budget: r2(budget),
+      // Ongoing projects: spent before the ERP; total budget = utilized + budget (certified / paid are ERP work only)
+      utilized: budget > 0 ? r2(p.approvedBudget?.utilized) : 0,
       certified,
       paid: r2(money.paid),
       clientBilled: r2(client.billed),
@@ -437,6 +445,7 @@ const projectsPanel = async () => {
     byStatus,
     totals: {
       budget: totalBudget,
+      utilized: sumOf(list, 'utilized'),
       certified: sumOf(list, 'certified'),
       paid: sumOf(list, 'paid'),
       clientBilled: sumOf(list, 'clientBilled'),

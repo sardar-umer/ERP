@@ -58,6 +58,8 @@ export function BudgetApprovalActions({ projectId, view, onDone, onError }) {
   const currentTotal = round(lines.reduce((t, l) => t + (Number(l.amount) || 0), 0));
   const newTotal = round(lines.reduce((t, l) => t + valueOf(l), 0));
   const tooLow = lines.filter((l) => valueOf(l) + 0.5 < committedOf(String(l.subProject)));
+  const utilizedTotal = round(lines.reduce((t, l) => t + (Number(l.utilized) || 0), 0));
+  const hasUtilized = utilizedTotal > 0;
   const needsReason = mode === 'return' || changed.length > 0;
 
   const open = (m) => {
@@ -95,7 +97,8 @@ export function BudgetApprovalActions({ projectId, view, onDone, onError }) {
           {mode === 'approve' ? (
             <>
               <Typography variant="body2" sx={{ mb: 1.5 }}>
-                You can cut or add to any sub project before approving. {isLast
+                {hasUtilized && <><b>Already utilized</b> is what was spent before this project came into the ERP; it is part of the total but cannot be used for new contracts. </>}
+                You can cut or add to any sub project&apos;s remaining budget before approving. {isLast
                   ? 'Yours is the final approval: these amounts become the budget and each sub project gets its share.'
                   : 'The next approver will see your amounts.'}
               </Typography>
@@ -103,7 +106,7 @@ export function BudgetApprovalActions({ projectId, view, onDone, onError }) {
                 <Box component="table" sx={{ width: '100%', minWidth: 560, borderCollapse: 'collapse', fontSize: 14, '& th, & td': { px: 1.5, py: 1, borderTop: `1px solid ${BORDER}`, textAlign: 'left', verticalAlign: 'top' } }}>
                   <thead>
                     <tr>
-                      {['Sub project', 'Requested', 'Now', 'Your amount'].map((h) => (
+                      {['Sub project', ...(hasUtilized ? ['Already utilized'] : []), 'Requested', 'Now', hasUtilized ? 'Your remaining budget' : 'Your amount', ...(hasUtilized ? ['Total budget'] : [])].map((h) => (
                         <Box component="th" key={h} sx={{ bgcolor: '#f8fafc', fontSize: 11, fontWeight: 800, color: MUTED, textTransform: 'uppercase', borderTop: '0 !important' }}>{h}</Box>
                       ))}
                     </tr>
@@ -120,6 +123,7 @@ export function BudgetApprovalActions({ projectId, view, onDone, onError }) {
                             <Typography variant="body2" fontWeight={800} sx={{ color: INK }}>{l.name}</Typography>
                             {l.scope && <Typography variant="caption" sx={{ color: MUTED }}>{l.scope}</Typography>}
                           </td>
+                          {hasUtilized && <td><Typography variant="body2" fontWeight={700} sx={{ color: MUTED }}>{fmt(l.utilized || 0)}</Typography></td>}
                           <td><Typography variant="body2" sx={{ color: MUTED }}>{req !== undefined ? fmt(req) : '—'}</Typography></td>
                           <td><Typography variant="body2" fontWeight={700}>{fmt(l.amount)}</Typography></td>
                           <td style={{ width: 200 }}>
@@ -130,15 +134,19 @@ export function BudgetApprovalActions({ projectId, view, onDone, onError }) {
                               InputProps={{ startAdornment: <InputAdornment position="start">Rs</InputAdornment>, inputProps: { min: 0 } }}
                             />
                           </td>
+                          {hasUtilized && <td><Typography variant="body2" fontWeight={900} sx={{ color: INK, pt: 1 }}>{fmt((Number(l.utilized) || 0) + valueOf(l))}</Typography></td>}
                         </tr>
                       );
                     })}
                   </tbody>
                   <tfoot>
                     <tr>
-                      <Box component="td" colSpan={2} sx={{ fontWeight: 900, bgcolor: '#f8fafc' }}>Total</Box>
+                      <Box component="td" sx={{ fontWeight: 900, bgcolor: '#f8fafc' }}>Total</Box>
+                      {hasUtilized && <Box component="td" sx={{ fontWeight: 800, bgcolor: '#f8fafc' }}>{fmt(utilizedTotal)}</Box>}
+                      <Box component="td" sx={{ bgcolor: '#f8fafc' }} />
                       <Box component="td" sx={{ fontWeight: 800, bgcolor: '#f8fafc' }}>{fmt(currentTotal)}</Box>
                       <Box component="td" sx={{ fontWeight: 900, bgcolor: '#f8fafc', color: newTotal !== currentTotal ? (newTotal > currentTotal ? '#b45309' : '#15803d') : INK }}>{fmt(newTotal)}</Box>
+                      {hasUtilized && <Box component="td" sx={{ fontWeight: 900, bgcolor: '#f8fafc' }}>{fmt(utilizedTotal + newTotal)}</Box>}
                     </tr>
                   </tfoot>
                 </Box>
@@ -198,6 +206,7 @@ const ApprovalSteps = ({ view }) => {
 /** The request form: purpose, amount per Sub Project, remarks and approvers */
 const RequestForm = ({ view, form, setForm }) => {
   const total = round(form.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0));
+  const utilizedTotal = round(form.lines.reduce((t, l) => t + (Number(l.utilized) || 0), 0));
   // Revising an approved budget: show what each sub project has now, and mark new ones
   const approvedLines = view.approved ? new Map(view.approved.lines.map((l) => [String(l.subProject), Number(l.amount) || 0])) : null;
   const approvedTotal = view.approved ? Number(view.approved.amount) || 0 : 0;
@@ -222,14 +231,17 @@ const RequestForm = ({ view, form, setForm }) => {
       </Panel>
 
       <Panel title="2. Budget by sub project">
+        <Typography variant="body2" sx={{ color: MUTED, mb: 1.5 }}>
+          For an ongoing project, enter what each sub project has <b>already utilized</b> (spent before it came into the ERP) and its <b>remaining budget</b>. Total budget = already utilized + remaining. New contracts can only use the remaining budget.
+        </Typography>
         {!view.subProjects.length ? (
           <Alert severity="info">Create the sub projects first — the budget is split among them.</Alert>
         ) : (
           <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflowX: 'auto' }}>
-            <Box component="table" sx={{ width: '100%', minWidth: 760, borderCollapse: 'collapse', fontSize: 14, '& th, & td': { px: 1.5, py: 1.1, borderTop: `1px solid ${BORDER}`, textAlign: 'left', verticalAlign: 'top' } }}>
+            <Box component="table" sx={{ width: '100%', minWidth: 1040, borderCollapse: 'collapse', fontSize: 14, '& th, & td': { px: 1.5, py: 1.1, borderTop: `1px solid ${BORDER}`, textAlign: 'left', verticalAlign: 'top' } }}>
               <thead>
                 <tr>
-                  {['Sub project', 'Scope of work covered', ...(approvedLines ? ['Approved now'] : []), approvedLines ? 'Revised budget' : 'Budget'].map((h) => (
+                  {['Sub project', 'Scope of work covered', 'Already utilized', ...(approvedLines ? ['Approved now'] : []), approvedLines ? 'Revised remaining budget' : 'Remaining budget', 'Total budget'].map((h) => (
                     <Box component="th" key={h} sx={{ bgcolor: '#f8fafc', fontSize: 11, fontWeight: 800, color: MUTED, textTransform: 'uppercase', borderTop: '0 !important' }}>{h}</Box>
                   ))}
                 </tr>
@@ -237,7 +249,7 @@ const RequestForm = ({ view, form, setForm }) => {
               <tbody>
                 {view.subProjects.map((s) => {
                   const id = String(s._id);
-                  const line = form.lines.find((l) => String(l.subProject) === id) || { amount: '', scope: '' };
+                  const line = form.lines.find((l) => String(l.subProject) === id) || { amount: '', utilized: '', scope: '' };
                   const tooLow = s.committed > 0 && (Number(line.amount) || 0) + 0.5 < s.committed;
                   return (
                     <tr key={id}>
@@ -253,6 +265,13 @@ const RequestForm = ({ view, form, setForm }) => {
                         <TextField fullWidth size="small" multiline maxRows={4} value={line.scope} onChange={(e) => setLine(id, 'scope', e.target.value)}
                           placeholder="e.g. Grey structure + finishes of 5 villas, boundary wall" />
                       </td>
+                      <td style={{ width: 190 }}>
+                        <TextField
+                          size="small" type="number" value={line.utilized ?? ''} onChange={(e) => setLine(id, 'utilized', e.target.value)}
+                          helperText="Spent before the ERP" FormHelperTextProps={{ sx: { mx: 0 } }}
+                          InputProps={{ startAdornment: <InputAdornment position="start">Rs</InputAdornment>, inputProps: { min: 0 } }}
+                        />
+                      </td>
                       {approvedLines && (
                         <td style={{ width: 130 }}>
                           <Typography variant="body2" fontWeight={700} sx={{ color: approvedLines.get(id) ? INK : MUTED, pt: 1 }}>{approvedLines.get(id) ? fmt(approvedLines.get(id)) : '—'}</Typography>
@@ -266,9 +285,12 @@ const RequestForm = ({ view, form, setForm }) => {
                       <td style={{ width: 210 }}>
                         <TextField
                           size="small" type="number" value={line.amount} onChange={(e) => setLine(id, 'amount', e.target.value)} error={tooLow}
-                          helperText={tooLow ? `At least ${fmt(s.committed)}` : ''}
+                          helperText={tooLow ? `At least ${fmt(s.committed)}` : 'For new contracts'} FormHelperTextProps={{ sx: { mx: 0 } }}
                           InputProps={{ startAdornment: <InputAdornment position="start">Rs</InputAdornment>, inputProps: { min: 0 } }}
                         />
+                      </td>
+                      <td style={{ width: 140 }}>
+                        <Typography variant="body2" fontWeight={900} sx={{ color: INK, pt: 1 }}>{fmt((Number(line.utilized) || 0) + (Number(line.amount) || 0))}</Typography>
                       </td>
                     </tr>
                   );
@@ -277,6 +299,7 @@ const RequestForm = ({ view, form, setForm }) => {
               <tfoot>
                 <tr>
                   <Box component="td" colSpan={2} sx={{ fontWeight: 900, bgcolor: '#f8fafc' }}>{approvedLines ? 'Total' : 'Total budget requested'}</Box>
+                  <Box component="td" sx={{ fontWeight: 800, bgcolor: '#f8fafc' }}>{fmt(utilizedTotal)}</Box>
                   {approvedLines && <Box component="td" sx={{ fontWeight: 800, bgcolor: '#f8fafc' }}>{fmt(approvedTotal)}</Box>}
                   <Box component="td" sx={{ fontWeight: 900, bgcolor: '#f8fafc', fontSize: 16 }}>
                     {fmt(total)}
@@ -286,6 +309,7 @@ const RequestForm = ({ view, form, setForm }) => {
                       </Typography>
                     )}
                   </Box>
+                  <Box component="td" sx={{ fontWeight: 900, bgcolor: '#f8fafc', fontSize: 16 }}>{fmt(utilizedTotal + total)}</Box>
                 </tr>
               </tfoot>
             </Box>
@@ -334,7 +358,12 @@ const formFromView = (view) => {
   const r = view.request;
   const lines = view.subProjects.map((s) => {
     const saved = (r?.lines || []).find((l) => String(l.subProject) === String(s._id));
-    return { subProject: String(s._id), scope: saved?.scope || '', amount: saved ? String(saved.amount || '') : (s.allocatedBudget ? String(s.allocatedBudget) : '') };
+    return {
+      subProject: String(s._id),
+      scope: saved?.scope || '',
+      utilized: saved ? String(saved.utilized || '') : (s.utilizedBudget ? String(s.utilizedBudget) : ''),
+      amount: saved ? String(saved.amount || '') : (s.allocatedBudget ? String(s.allocatedBudget) : '')
+    };
   });
   const approvers = r?.approvers?.length
     ? r.approvers.map((a) => ({ role: a.role, user: String(a.user || '') }))
@@ -370,7 +399,7 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
   const payload = () => ({
     purpose: form.purpose,
     notes: form.notes,
-    lines: form.lines.map((l) => ({ subProject: l.subProject, scope: l.scope, amount: Number(l.amount) || 0 })),
+    lines: form.lines.map((l) => ({ subProject: l.subProject, scope: l.scope, utilized: Number(l.utilized) || 0, amount: Number(l.amount) || 0 })),
     approvers: form.approvers.filter((a) => a.user)
   });
 
@@ -406,6 +435,9 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
   const draftDoc = budgetDocFromView({ ...view, request: { ...(view.request || {}), ...payload(), approvers: form.approvers.filter((a) => a.user).map((a) => ({ ...a, ...(view.candidates || []).find((c) => c._id === a.user), status: 'Pending' })) } });
   const savedDoc = budgetDocFromView(view);
   const formTotal = round(form.lines.reduce((t, l) => t + (Number(l.amount) || 0), 0));
+  const formUtilized = round(form.lines.reduce((t, l) => t + (Number(l.utilized) || 0), 0));
+  const headUtilized = editing ? formUtilized : Number(view.utilizedAmount) || 0;
+  const headRemaining = editing ? formTotal : Number(view.amount) || 0;
   const missing = [
     form.purpose.trim().length < 10 && 'purpose and scope',
     formTotal <= 0 && 'budget for at least one sub project',
@@ -424,10 +456,15 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
           <Box>
             {inForce && view.status !== 'Approved' && (
               <Typography variant="caption" sx={{ color: '#15803d', fontWeight: 800, display: 'block' }}>
-                In force: {fmt(view.approvedAmount)}{view.approvedDocumentNo ? ` (${view.approvedDocumentNo})` : ''} — contracts continue within it. Revision:
+                In force: {fmt((Number(view.approvedAmount) || 0) + (Number(view.approvedUtilized) || 0))}{view.approvedDocumentNo ? ` (${view.approvedDocumentNo})` : ''} — contracts continue within it. Revision:
               </Typography>
             )}
-            <Typography sx={{ fontSize: 30, fontWeight: 900, color: INK, lineHeight: 1.1 }}>{fmt(editing ? formTotal : view.amount)}</Typography>
+            <Typography sx={{ fontSize: 30, fontWeight: 900, color: INK, lineHeight: 1.1 }}>{fmt(headUtilized + headRemaining)}</Typography>
+            {headUtilized > 0 && (
+              <Typography variant="body2" sx={{ color: INK, fontWeight: 700, mt: 0.25 }}>
+                {fmt(headUtilized)} already utilized + {fmt(headRemaining)} remaining for contracts
+              </Typography>
+            )}
             <Typography variant="body2" sx={{ color: MUTED, mt: 0.5 }}>
               {view.documentNo}
               {view.status === 'Approved' && view.approvedAt && ` · approved ${dayjs(view.approvedAt).format('DD MMM YYYY')}`}
@@ -504,10 +541,10 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
         <>
           <Panel title={inForce ? 'Budget in force per sub project' : 'Requested per sub project'} action={<Typography variant="caption" sx={{ color: MUTED }}>{fmt(totalCommitted)} of {fmt(inForce ? view.approvedAmount : view.amount)} in contracts</Typography>}>
             <Box sx={{ border: `1px solid ${BORDER}`, borderRadius: 2, overflowX: 'auto' }}>
-              <Box component="table" sx={{ width: '100%', minWidth: 640, borderCollapse: 'collapse', fontSize: 14, '& th, & td': { px: 1.5, py: 1.1, borderTop: `1px solid ${BORDER}`, textAlign: 'left' } }}>
+              <Box component="table" sx={{ width: '100%', minWidth: 860, borderCollapse: 'collapse', fontSize: 14, '& th, & td': { px: 1.5, py: 1.1, borderTop: `1px solid ${BORDER}`, textAlign: 'left' } }}>
                 <thead>
                   <tr>
-                    {['Sub project', inForce ? 'Budget' : 'Requested', 'In contracts', 'Left for contracts', 'Used'].map((h) => (
+                    {['Sub project', 'Already utilized', inForce ? 'Remaining budget' : 'Requested', 'Total budget', 'In contracts', 'Left for contracts', 'Used'].map((h) => (
                       <Box component="th" key={h} sx={{ bgcolor: '#f8fafc', fontSize: 11, fontWeight: 800, color: MUTED, textTransform: 'uppercase', borderTop: '0 !important' }}>{h}</Box>
                     ))}
                   </tr>
@@ -516,6 +553,7 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
                   {subs.map((s) => {
                     const line = (view.request?.lines || []).find((l) => String(l.subProject) === String(s._id));
                     const share = inForce ? s.allocatedBudget : Number(line?.amount) || 0;
+                    const utilized = inForce ? Number(s.utilizedBudget) || 0 : Number(line?.utilized) || 0;
                     const left = round(share - s.committed);
                     return (
                       <tr key={s._id}>
@@ -523,7 +561,9 @@ export default function ProjectBudgetPanel({ project, onRefresh }) {
                           <Typography variant="body2" fontWeight={800} sx={{ color: INK }}>{s.name}</Typography>
                           {line?.scope && <Typography variant="caption" sx={{ color: MUTED }}>{line.scope}</Typography>}
                         </td>
+                        <td><Typography variant="body2" sx={{ color: utilized ? INK : MUTED }}>{utilized ? fmt(utilized) : '—'}</Typography></td>
                         <td><Typography variant="body2" fontWeight={800}>{fmt(share)}</Typography></td>
+                        <td><Typography variant="body2" fontWeight={900}>{fmt(utilized + share)}</Typography></td>
                         <td>{fmt(s.committed)}</td>
                         <td>
                           <Typography variant="body2" fontWeight={800} sx={{ color: !inForce ? MUTED : !share ? '#b45309' : left <= 0 ? '#dc2626' : '#15803d' }}>
@@ -568,6 +608,7 @@ export function SubBudgetStrip({ project }) {
   if (!b || !main) return null;
   const mine = b.subProjects.find((s) => String(s._id) === String(project._id));
   const share = mine?.allocatedBudget || 0;
+  const utilized = mine?.utilizedBudget || 0;
   const committed = mine?.committed || 0;
   const left = round(share - committed);
   const inForce = b.inForce ?? b.budgetStatus === 'Approved';
@@ -581,7 +622,10 @@ export function SubBudgetStrip({ project }) {
         </Typography>
       ) : (
         <Stack direction={{ xs: 'column', sm: 'row' }} gap={{ xs: 1, sm: 3 }} alignItems={{ sm: 'center' }}>
-          {[['Budget', share, INK], ['In contracts', committed, INK], ['Left for contracts', left, left > 0 ? '#15803d' : '#dc2626']].map(([label, v, c]) => (
+          {[
+            ...(utilized > 0 ? [['Total budget', utilized + share, INK], ['Already utilized', utilized, MUTED], ['Remaining budget', share, INK]] : [['Budget', share, INK]]),
+            ['In contracts', committed, INK], ['Left for contracts', left, left > 0 ? '#15803d' : '#dc2626']
+          ].map(([label, v, c]) => (
             <Box key={label}>
               <Typography variant="caption" sx={{ color: MUTED, fontWeight: 700, textTransform: 'uppercase' }}>{label}</Typography>
               <Typography sx={{ fontWeight: 900, color: c }}>{fmt(v)}</Typography>

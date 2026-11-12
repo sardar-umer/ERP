@@ -284,6 +284,9 @@ const DecisionsCard = ({ approvals: a }) => {
                     <Typography sx={{ fontSize: 12, color: MUTED }}>{k.key === 'projectBudgets' ? 'in approval' : 'at CEO'}</Typography>
                   </Stack>
                   <Typography sx={{ fontSize: 12.5, fontWeight: 700, color: INK, mt: 0.5 }} noWrap>{fmtCompact(amount)}</Typography>
+                  {k.key === 'projectBudgets' && row.inApprovalUtilized > 0 && (
+                    <Typography sx={{ fontSize: 11, color: '#6d28d9', fontWeight: 700 }} noWrap>incl. {fmtCompact(row.inApprovalUtilized)} already utilized</Typography>
+                  )}
                   <Typography sx={{ fontSize: 11.5, color: MUTED }} noWrap>
                     {k.key === 'projectBudgets'
                       ? (row.oldestDays != null ? `oldest ${row.oldestDays}d` : 'none waiting')
@@ -454,7 +457,7 @@ const BudgetApprovalsCard = ({ onChanged }) => {
   return (
     <Card
       title="Project budgets waiting for you" icon={<ProjectIcon />} tone="#a855f7" delay={0.12}
-      subtitle={rows ? (rows.length ? `${plural(rows.length, 'budget')} · ${fmtCompact(rows.reduce((t, r) => t + (Number(r.amount) || 0), 0))}` : 'Nothing waiting for your approval') : 'Loading…'}
+      subtitle={rows ? (rows.length ? `${plural(rows.length, 'budget')} · ${fmtCompact(rows.reduce((t, r) => t + (Number(r.amount) || 0) + (Number(r.utilized) || 0), 0))}` : 'Nothing waiting for your approval') : 'Loading…'}
       action={<OpenLink to="/budget-approvals" label="All budgets" />}
     >
       {error && <Alert severity="error" sx={{ mb: 1.5, borderRadius: 3 }} onClose={() => setError('')}>{error}</Alert>}
@@ -474,7 +477,12 @@ const BudgetApprovalsCard = ({ onChanged }) => {
                   {[r.documentNo || r.projectNumber, r.revision ? `Revision ${r.revision}` : null, r.location, r.submittedAt ? `sent ${dayjs(r.submittedAt).format('D MMM')}` : null].filter(Boolean).join(' · ')}
                 </Typography>
               </Box>
-              <Tooltip title={fmt(r.amount)}><Typography sx={{ fontSize: 15, fontWeight: 900, color: INK, whiteSpace: 'nowrap' }}>{fmtCompact(r.amount)}</Typography></Tooltip>
+              <Tooltip title={Number(r.utilized) > 0 ? `Total ${fmt((Number(r.amount) || 0) + Number(r.utilized))} = ${fmt(r.utilized)} already utilized before the ERP + ${fmt(r.amount)} remaining` : fmt(r.amount)}>
+                <Box sx={{ textAlign: { sm: 'right' } }}>
+                  <Typography sx={{ fontSize: 15, fontWeight: 900, color: INK, whiteSpace: 'nowrap' }}>{fmtCompact((Number(r.amount) || 0) + (Number(r.utilized) || 0))}</Typography>
+                  {Number(r.utilized) > 0 && <Typography sx={{ fontSize: 11, color: '#6d28d9', fontWeight: 700, whiteSpace: 'nowrap' }}>{fmtCompact(r.utilized)} already utilized</Typography>}
+                </Box>
+              </Tooltip>
               <Stack direction="row" gap={1}>
                 <Button size="small" variant="contained" color="success" onClick={() => { setRemarks(''); setDialog({ row: r, action: 'approve' }); }} sx={{ textTransform: 'none', fontWeight: 700 }}>Approve</Button>
                 <Button size="small" variant="outlined" color="error" onClick={() => { setRemarks(''); setDialog({ row: r, action: 'return' }); }} sx={{ textTransform: 'none', fontWeight: 700 }}>Return</Button>
@@ -670,6 +678,13 @@ const ProjectsCard = ({ projects: pr }) => {
                   </Box>
                 </Box>
               ))}
+              {pr.totals.utilized > 0 && (
+                <Tooltip title={`${fmt(pr.totals.utilized)} was spent on ongoing projects before they came into the ERP. It is part of their total budget, not of the bars above.`}>
+                  <Typography sx={{ fontSize: 12, fontWeight: 700, color: '#6d28d9', cursor: 'help' }}>
+                    + {fmtCompact(pr.totals.utilized)} already utilized before the ERP · total budget {fmtCompact(pr.totals.budget + pr.totals.utilized)}
+                  </Typography>
+                </Tooltip>
+              )}
             </Stack>
           </Stack>
 
@@ -690,6 +705,7 @@ const ProjectsCard = ({ projects: pr }) => {
                     <Typography sx={{ fontSize: 11.5, color: MUTED }} noWrap>
                       {p.overdue ? `${p.daysOverdue} days past end date` : p.plannedProgress !== null ? `${p.progress}% done · ${p.plannedProgress}% of time used` : `${p.progress}% done`}
                       {p.budget ? ` · ${fmtCompact(p.certified)} of ${fmtCompact(p.budget)}` : ''}
+                      {p.utilized > 0 ? ` · ${fmtCompact(p.utilized)} utilized before ERP` : ''}
                     </Typography>
                     <Box sx={{ mt: 0.75, height: 4, borderRadius: 2, bgcolor: '#f1f5f9', overflow: 'hidden' }}>
                       <Box sx={{ height: '100%', width: `${Math.min(100, p.progress)}%`, bgcolor: hs.dot }} />

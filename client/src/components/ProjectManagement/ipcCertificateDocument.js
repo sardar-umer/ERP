@@ -39,7 +39,7 @@ export const signatories = (ipc) => [
 
 /** Supporting documents that travel with the certificate */
 export const enclosures = (d) => [
-  d.budget && `Project Budget Approval ${d.budget.documentNo}, ${pkr(d.budget.amount)}${d.budget.status === 'Approved' ? `, approved ${day(d.budget.approvedAt)}` : ' (not yet approved)'}`,
+  d.budget && `Project Budget Approval ${d.budget.documentNo}, ${pkr((Number(d.budget.amount) || 0) + (Number(d.budget.utilized) || 0))}${Number(d.budget.utilized) > 0 ? ` (${pkr(d.budget.utilized)} already utilized before the ERP + ${pkr(d.budget.amount)} remaining)` : ''}${d.budget.status === 'Approved' ? `, approved ${day(d.budget.approvedAt)}` : ' (not yet approved)'}`,
   d.contract && `Sublet Contract ${d.contract.contractNumber}, ${d.contract.title} (${d.contract.contractType}-wise, ${pkr(d.contract.totalAmount)})`,
   d.checkRequest && `Check Request ${d.checkRequest.checkRequestNumber}, verified ${day(d.checkRequest.verifiedAt)}${d.checkRequest.verifiedBy ? ` by ${d.checkRequest.verifiedBy}` : ''}${d.checkRequest.attachments?.length ? `, with ${d.checkRequest.attachments.length} supporting document(s)` : ''}`,
   ...d.inspections.map((r) => {

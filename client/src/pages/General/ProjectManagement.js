@@ -170,6 +170,8 @@ const shortPkr = (v) => {
 const approvedAmountOf = (main) => (main?.approvedBudget?.amount > 0
   ? Number(main.approvedBudget.amount)
   : main?.budgetStatus === 'Approved' ? Number(main.lumpSumBudget) || 0 : 0);
+/** Already utilized before the ERP (ongoing projects); total budget = this + the approved remaining amount */
+const approvedUtilizedOf = (main) => (main?.approvedBudget?.amount > 0 ? Number(main.approvedBudget.utilized) || 0 : 0);
 
 /**
  * Where a project's budget stands, at a glance. Main: approved amount or where the request is (with whom);
@@ -184,14 +186,15 @@ const BudgetCell = ({ project, level, mains, subsOf, onOpen }) => {
     const approved = approvedAmountOf(project);
     const br = project.budgetRequest;
     const withWhom = project.budgetStatus === 'Submitted' ? br?.approvers?.[br.currentStep] : null;
-    const requested = (br?.lines || []).reduce((t, l) => t + (Number(l.amount) || 0), 0);
+    const requested = (br?.lines || []).reduce((t, l) => t + (Number(l.amount) || 0) + (Number(l.utilized) || 0), 0);
     const missing = approved > 0 ? subsOf(project._id).filter((s) => !(Number(s.allocatedBudget) > 0) && s.status !== 'Completed').length : 0;
     body = (
       <>
         {approved > 0 ? (
           <>
             <Chip size="small" label="Approved" color="success" sx={{ height: 20, fontSize: 11, fontWeight: 800, mb: 0.25 }} />
-            {line(shortPkr(approved), 'text.primary', 800)}
+            {line(shortPkr(approved + approvedUtilizedOf(project)), 'text.primary', 800)}
+            {approvedUtilizedOf(project) > 0 && line(`${shortPkr(approvedUtilizedOf(project))} already utilized`)}
             {project.budgetStatus === 'Submitted' && line(`Revision with ${withWhom?.role || 'approvers'}`, 'warning.dark')}
             {project.budgetStatus === 'Draft' && br?.history?.some((h) => h.action === 'Revision started') && line('Revision being prepared', 'info.main')}
           </>
@@ -220,8 +223,9 @@ const BudgetCell = ({ project, level, mains, subsOf, onOpen }) => {
   } else {
     const main = mains.find((m) => String(m._id) === String(project.parentProject?._id || project.parentProject));
     const share = Number(project.allocatedBudget) || 0;
+    const utilized = Number(project.utilizedBudget) || 0;
     body = share > 0 ? (
-      <>{line(shortPkr(share), 'text.primary', 800)}{line('Its share')}</>
+      <>{line(shortPkr(share + utilized), 'text.primary', 800)}{line(utilized > 0 ? `${shortPkr(utilized)} already utilized` : 'Its share')}</>
     ) : approvedAmountOf(main) > 0 ? (
       <>{line('Not in budget', 'warning.dark', 800)}{line(main?.budgetStatus === 'Submitted' ? 'Revision in approval' : 'Add it with a revision')}</>
     ) : (
