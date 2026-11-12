@@ -254,6 +254,18 @@ const utilityBillSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  /**
+   * Finance returned the linked AP bill to the initiator (e.g. wrong company). While `active`, the initiator can
+   * edit this bill and resubmit; the AP bill is rebuilt from it and goes straight back to Finance.
+   */
+  financeReturn: {
+    active: { type: Boolean, default: false, index: true },
+    reason: { type: String, trim: true, default: '' },
+    returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    returnedAt: { type: Date, default: null },
+    resubmittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    resubmittedAt: { type: Date, default: null }
+  },
   /** Linked Finance AP bill (created after Audit Director final approval) */
   financeApBillId: {
     type: mongoose.Schema.Types.ObjectId,

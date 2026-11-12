@@ -347,6 +347,7 @@ const UtilityBillForm = () => {
   const [approverLoading, setApproverLoading] = useState(false);
   const [workflowLocksEdit, setWorkflowLocksEdit] = useState(false);
   const [auditReturnedNotice, setAuditReturnedNotice] = useState(false);
+  const [financeReturnedNotice, setFinanceReturnedNotice] = useState(false);
   /** Full bill from API in edit mode — used to show audit observation thread (incl. admin replies). */
   const [loadedBillForAudit, setLoadedBillForAudit] = useState(null);
   /** Loaded bill approval state (edit mode only); null before fetch or on create */
@@ -862,7 +863,10 @@ const UtilityBillForm = () => {
 
       setWorkflowLocksEdit(
         bill.approvalStatus === 'Approved' && isWorkflowAuditBlockingEditStatus(bill.auditStatus)
+          // Returned by Finance for correction: editable until it is resubmitted
+          && !bill.financeReturn?.active
       );
+      setFinanceReturnedNotice(Boolean(bill.financeReturn?.active));
       setAuditReturnedNotice(bill.auditStatus === 'Returned from Audit');
       setLoadedBillForAudit(bill);
     } catch (err) {
@@ -1330,7 +1334,12 @@ const UtilityBillForm = () => {
         <Alert severity="info" sx={{ mb: 3 }}>
           Manager and Head of Department have already approved this bill. Use <strong>Update bill</strong> to save memo
           changes only — this does <strong>not</strong> send the bill back to approval authorities.{' '}
-          {auditReturnedNotice ? (
+          {financeReturnedNotice ? (
+            <>
+              Finance returned this bill for correction. When you are done, open the <strong>bill detail</strong> page and use{' '}
+              <strong>Resubmit to Finance</strong> — it goes straight back to Finance.
+            </>
+          ) : auditReturnedNotice ? (
             <>
               When you are done, open the <strong>bill detail</strong> page and use <strong>Resend to Pre-Audit</strong>{' '}
               to return it to the audit queue.

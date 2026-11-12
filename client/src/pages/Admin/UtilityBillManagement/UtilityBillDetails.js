@@ -408,9 +408,11 @@ const UtilityBillDetails = ({
   const canSubmitForApproval = ['Draft', 'Rejected'].includes(approvalStatus);
   const canApproveReject = approvalStatus === 'Submitted' && isPendingApprover;
   const computeAuditUi = useCallback((b) => ({
+    // Returned by Finance for correction: the initiator may edit, then resubmit to Finance
     auditBlocksEdit:
       b?.approvalStatus === 'Approved' &&
-      isWorkflowAuditBlockingEditStatus(b?.auditStatus),
+      isWorkflowAuditBlockingEditStatus(b?.auditStatus) &&
+      !b?.financeReturn?.active,
     canResendToPreAudit:
       b?.auditStatus === 'Returned from Audit' &&
       b?.approvalStatus === 'Approved'
@@ -454,6 +456,24 @@ const UtilityBillDetails = ({
   };
 
   const isAuditFinallyApproved = String(bill?.auditStatus || '').startsWith('Approved (from ');
+  const financeReturned = Boolean(bill?.financeReturn?.active);
+  const financeReturnNote = financeReturned
+    ? ((bill.observations || []).filter((o) => !o.resolved).map((o) => o.observation).filter(Boolean).slice(-1)[0]
+      || bill.financeReturn.reason || '')
+    : '';
+  const [financeResubmit, setFinanceResubmit] = useState({ open: false, answer: '', saving: false });
+  const handleResubmitToFinance = async () => {
+    try {
+      setFinanceResubmit((d) => ({ ...d, saving: true }));
+      const res = await utilityBillService.resubmitUtilityBillToFinance(bill._id, { answer: financeResubmit.answer.trim() });
+      if (res?.data) setBill(res.data);
+      setFinanceResubmit({ open: false, answer: '', saving: false });
+      setSnackbar({ open: true, message: res?.message || 'Resubmitted to Finance', severity: 'success' });
+    } catch (err) {
+      setFinanceResubmit((d) => ({ ...d, saving: false }));
+      setSnackbar({ open: true, message: err.response?.data?.message || 'Failed to resubmit to Finance', severity: 'error' });
+    }
+  };
   const needsFinancePost = isAuditFinallyApproved && !bill?.financeApBillId;
 
   const handlePostToFinance = async () => {
@@ -1022,6 +1042,14 @@ const UtilityBillDetails = ({
           sx={{ ml: hideBack || embedded ? 0 : { sm: 'auto' }, width: { xs: '100%', sm: 'auto' }, '& .MuiButton-root': { minHeight: 40 } }}
         >
           <Chip label={`Approval: ${approvalStatus}`} color={getApprovalColor(approvalStatus)} sx={{ alignSelf: 'center' }} />
+          {financeReturned && (
+            <Chip label="Returned from Finance" color="error" sx={{ alignSelf: 'center', fontWeight: 700 }} />
+          )}
+          {!hideModuleActions && financeReturned && (
+            <Button variant="contained" color="warning" startIcon={<SendIcon />} onClick={() => setFinanceResubmit({ open: true, answer: '', saving: false })}>
+              Resubmit to Finance
+            </Button>
+          )}
           {bill.auditStatus && bill.auditStatus !== 'Not Sent' && (
             <Chip
               label={`Audit: ${bill.auditStatus}`}
@@ -1081,6 +1109,40 @@ const UtilityBillDetails = ({
           {error}
         </Alert>
       )}
+
+      {financeReturned && (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          <strong>Returned by Finance for correction</strong>
+          {bill.financeReturn?.returnedAt ? ` on ${formatDateTime(bill.financeReturn.returnedAt)}` : ''}
+          {financeReturnNote ? <>: {financeReturnNote}</> : '.'}
+          <br />
+          Use <strong>Edit Bill</strong> to make the correction (for a wrong company, change the company / site on the bill), then
+          {' '}<strong>Resubmit to Finance</strong>. It goes straight back to Finance — no approval or audit again.
+        </Alert>
+      )}
+
+      <Dialog open={financeResubmit.open} onClose={() => !financeResubmit.saving && setFinanceResubmit({ open: false, answer: '', saving: false })} maxWidth="sm" fullWidth>
+        <DialogTitle>Resubmit to Finance</DialogTitle>
+        <DialogContent>
+          {financeReturnNote && (
+            <Alert severity="info" sx={{ mb: 2 }}>Finance asked: {financeReturnNote}</Alert>
+          )}
+          <Typography variant="body2" sx={{ mb: 1.5 }}>
+            The Finance bill is rebuilt from this utility bill as it is now (company, lines and amount) and sent back to Finance.
+          </Typography>
+          <TextField
+            fullWidth multiline minRows={2} label="What did you correct? (optional)"
+            value={financeResubmit.answer}
+            onChange={(e) => setFinanceResubmit((d) => ({ ...d, answer: e.target.value }))}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button disabled={financeResubmit.saving} onClick={() => setFinanceResubmit({ open: false, answer: '', saving: false })}>Cancel</Button>
+          <Button variant="contained" color="warning" disabled={financeResubmit.saving} onClick={handleResubmitToFinance}>
+            {financeResubmit.saving ? 'Resubmitting…' : 'Resubmit to Finance'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {needsFinancePost && (
         <Alert severity="warning" sx={{ mb: 2 }}>

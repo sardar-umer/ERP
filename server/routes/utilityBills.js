@@ -1142,6 +1142,9 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
     delete updateData.isConsolidated;
     delete updateData.consolidatedFrom;
     delete updateData.consolidatedIntoBillId;
+    delete updateData.financeReturn;
+    delete updateData.financeApBillId;
+    delete updateData.paidAmount;
     if (req.body.draftApproverIds !== undefined || req.body.draftApprovalSlots !== undefined || req.body.approvalSlots !== undefined) {
       const existingBill = await UtilityBill.findById(req.params.id).select('useCentralizedStore').lean();
       const useAllUsersApprovers =
@@ -1197,7 +1200,7 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
     }
 
     const existingBill = await UtilityBill.findById(req.params.id)
-      .select('approvalStatus auditStatus consolidatedIntoBillId useCentralizedStore');
+      .select('approvalStatus auditStatus consolidatedIntoBillId useCentralizedStore financeReturn');
     if (!existingBill) {
       return res.status(404).json({ success: false, message: 'Utility bill not found' });
     }
@@ -1234,7 +1237,9 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
     }
     if (
       existingBill.approvalStatus === 'Approved' &&
-      auditStatusesBlockingEdit.includes(existingBill.auditStatus)
+      auditStatusesBlockingEdit.includes(existingBill.auditStatus) &&
+      // Returned by Finance for correction: the initiator may edit, then resubmit to Finance
+      !existingBill.financeReturn?.active
     ) {
       return res.status(400).json({
         success: false,
@@ -1544,6 +1549,131 @@ router.post('/:id/resend-to-audit', requireBillPermission('update'), async (req,
   } catch (error) {
     console.error('Error resending utility bill to audit:', error);
     res.status(500).json({ success: false, message: error.message || 'Failed to resend to audit' });
+  }
+});
+
+// Resubmit after a Finance return: rebuild the linked AP bill from the corrected utility bill (company, lines,
+// amount, journal) and send it straight back to Finance — no department / audit re-approval.
+router.post('/:id/resubmit-to-finance', requireBillPermission('update'), async (req, res) => {
+  try {
+    const bill = await UtilityBill.findById(req.params.id);
+    if (!bill) return res.status(404).json({ success: false, message: 'Utility bill not found' });
+    if (!bill.financeReturn?.active) {
+      return res.status(400).json({ success: false, message: 'This bill has not been returned by Finance' });
+    }
+    const apId = getFinanceApBillRefId(bill.financeApBillId);
+    const ap = apId ? await AccountsPayable.findById(apId) : null;
+    if (!ap) return res.status(400).json({ success: false, message: 'The Finance bill linked to this utility bill was not found' });
+    if (ap.status !== 'Returned from Finance') {
+      return res.status(400).json({ success: false, message: `The Finance bill is "${ap.status}", not returned for correction` });
+    }
+
+    const actorId = getActorId(req);
+    const {
+      resolveUtilityBillCompanyId, buildUtilityBillLineItems, getUtilityBillPostAmount
+    } = require('../utils/utilityBillFinance');
+    const { findBillPostedJournal, buildBillJournalSync, applyBillJournalSync } = require('../utils/apBillJournalSync');
+    const PlacementCompany = require('../models/hr/Company');
+
+    // Rebuild the AP bill from the corrected utility bill
+    const amount = getUtilityBillPostAmount(bill);
+    const lineItems = buildUtilityBillLineItems(bill);
+    if (!(amount > 0) || !lineItems.length) {
+      return res.status(400).json({ success: false, message: 'The bill has no amount — check its lines before resubmitting' });
+    }
+    const companyId = await resolveUtilityBillCompanyId(bill);
+    const companyDoc = companyId ? await PlacementCompany.findById(companyId).select('name').lean() : null;
+    const fromCompany = String(ap.companyId || '');
+    ap.companyId = companyId || ap.companyId;
+    ap.company = [...new Set((bill.billLines || []).map((l) => l.site).filter(Boolean))].join(', ') || bill.site || ap.company;
+    ap.project = [...new Set((bill.billLines || []).map((l) => l.location).filter(Boolean))].join(', ') || bill.location || ap.project;
+    ap.lineItems = lineItems.map((li) => ({ ...li, amount: Math.round(li.quantity * li.unitPrice * 100) / 100 }));
+    ap.totalAmount = amount;
+    ap.subtotal = amount;
+    const duePay = Math.round((Number(bill.duePaymentAmount) || lineItems.reduce((s, li) => s + (Number(li.duePaymentAmount) || 0), 0)) * 100) / 100;
+    if (duePay > 0) ap.duePaymentAmount = duePay;
+    if (bill.billDate) ap.billDate = bill.billDate;
+    if (bill.dueDate) ap.dueDate = bill.dueDate;
+    if (bill.provider) ap.vendor = { ...(ap.vendor?.toObject ? ap.vendor.toObject() : ap.vendor || {}), name: bill.provider };
+
+    // Work out the journal in the (possibly new) company first, so a missing account stops the resubmit cleanly
+    const linkedJournal = await findBillPostedJournal(ap);
+    let journalPlan = null;
+    if (linkedJournal) {
+      try {
+        journalPlan = await buildBillJournalSync(ap, linkedJournal);
+      } catch (planErr) {
+        return res.status(400).json({ success: false, message: planErr.message });
+      }
+    }
+
+    const note = String(req.body?.comments || '').trim();
+    const companyMoved = fromCompany && String(ap.companyId || '') !== fromCompany;
+    const comment = [
+      'Resubmitted to Finance after corrections on the utility bill',
+      companyMoved && companyDoc ? `company changed to ${companyDoc.name}` : null,
+      note || null
+    ].filter(Boolean).join(' — ');
+    ap.workflowHistory = Array.isArray(ap.workflowHistory) ? ap.workflowHistory : [];
+    ap.workflowHistory.push({ fromStatus: 'Returned from Finance', toStatus: 'approved', changedBy: actorId, changedAt: new Date(), comments: comment, module: 'Finance' });
+    (ap.observations || []).forEach((o) => { if (o && !o.resolved) o.resolved = true; });
+    ap.status = 'approved';
+    ap.lastModifiedBy = actorId;
+    await ap.save();
+
+    if (linkedJournal && journalPlan) {
+      try {
+        await applyBillJournalSync(linkedJournal, journalPlan, ap);
+      } catch (syncErr) {
+        console.error('utility resubmit: journal sync failed:', syncErr.message);
+        return res.status(500).json({
+          success: false,
+          message: `Bill resubmitted, but its journal ${linkedJournal.entryNumber || ''} could not be updated: ${syncErr.message}. Please tell Finance.`
+        });
+      }
+    }
+
+    // Answers to the Finance observation(s), then close the return
+    const answer = String(req.body?.answer || note || '').trim();
+    (bill.observations || []).forEach((o) => {
+      if (o && !o.resolved) {
+        o.resolved = true;
+        if (answer) { o.answer = answer; o.answeredBy = actorId; o.answeredAt = new Date(); }
+      }
+    });
+    const returnedBy = bill.financeReturn.returnedBy;
+    bill.financeReturn.active = false;
+    bill.financeReturn.resubmittedBy = actorId;
+    bill.financeReturn.resubmittedAt = new Date();
+    bill.markModified('financeReturn');
+    addWorkflowHistory(bill, 'Returned from Finance', bill.auditStatus, actorId, comment);
+    bill.updatedBy = actorId;
+    await bill.save();
+
+    try {
+      if (returnedBy) {
+        await createAndEmitNotification({
+          recipientIds: [String(returnedBy)],
+          title: 'Returned bill resubmitted',
+          message: `Bill ${ap.billNumber} was corrected and resubmitted to Finance${companyMoved && companyDoc ? ` (company: ${companyDoc.name})` : ''}.`,
+          type: 'info', category: 'approval', priority: 'medium',
+          actionUrl: '/finance/accounts-payable', createdBy: actorId, excludeUserId: actorId,
+          metadata: { module: 'finance', entityId: ap._id, entityType: 'AccountsPayable' }
+        });
+      }
+    } catch (notifyErr) {
+      console.warn('utility resubmit notify warning:', notifyErr.message);
+    }
+
+    await populateUtilityBillDocument(bill);
+    res.json({
+      success: true,
+      message: `Resubmitted to Finance${companyMoved && companyDoc ? ` under ${companyDoc.name}` : ''}`,
+      data: bill
+    });
+  } catch (error) {
+    console.error('Error resubmitting utility bill to Finance:', error);
+    res.status(500).json({ success: false, message: error.message || 'Failed to resubmit to Finance' });
   }
 });
 

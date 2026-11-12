@@ -51,6 +51,11 @@ const utilityBillService = {
   },
 
   /** After audit return: optional observation replies + back to Pre-Audit queue */
+  /** After a Finance return: rebuild the Finance bill from this corrected utility bill and send it back to Finance */
+  resubmitUtilityBillToFinance: async (id, body = {}) => {
+    const response = await api.post(`/utility-bills/${id}/resubmit-to-finance`, body);
+    return response.data;
+  },
   resendUtilityBillToAudit: async (id, body = {}) => {
     const response = await api.post(`/utility-bills/${id}/resend-to-audit`, body);
     return response.data;

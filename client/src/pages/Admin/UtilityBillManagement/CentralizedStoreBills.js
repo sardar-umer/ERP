@@ -205,6 +205,7 @@ const CentralizedStoreBills = () => {
   const formatDate = (date) => (date ? new Date(date).toLocaleDateString('en-PK') : '—');
 
   const getWorkflowLabel = (bill) => {
+    if (bill.financeReturn?.active) return 'Returned from Finance';
     if (bill.auditStatus && bill.auditStatus !== 'Not Sent') return bill.auditStatus;
     return bill.approvalStatus || 'Draft';
   };
@@ -215,7 +216,7 @@ const CentralizedStoreBills = () => {
     if (label.includes('Partially Paid (from Finance)')) return 'info';
     if (label.includes('Approved')) return 'success';
     if (label === 'Send to Audit' || label === 'Forwarded to Audit Director' || label === 'Submitted') return 'warning';
-    if (label.includes('Rejected') || label === 'Returned from Audit') return 'error';
+    if (label.includes('Rejected') || label === 'Returned from Audit' || label === 'Returned from Finance') return 'error';
     return 'default';
   };
 

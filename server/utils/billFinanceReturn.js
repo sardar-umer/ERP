@@ -53,8 +53,20 @@ const returnBillToInitiator = async (bill, { userId, reason, historyComment }) =
   bill.lastModifiedBy = userId;
   await bill.save();
 
+  // A bill posted from a utility bill: its initiator works on the utility bill, so return that too.
+  // The AP bill's createdBy is whoever posted it to Finance (e.g. the Audit Director), not the initiator —
+  // the person who entered the utility bill is.
+  let initiatorId = bill.createdBy ? String(bill.createdBy._id || bill.createdBy) : null;
+  if (bill.referenceType === 'utility_bill') {
+    try {
+      const ub = await markUtilityBillReturned(bill, { userId, reason, now });
+      if (ub?.createdBy) initiatorId = String(ub.createdBy._id || ub.createdBy);
+    } catch (ubErr) {
+      console.warn('finance-return: could not mark source utility bill:', ubErr.message);
+    }
+  }
+
   try {
-    const initiatorId = bill.createdBy ? String(bill.createdBy._id || bill.createdBy) : null;
     if (initiatorId) {
       const { createAndEmitNotification } = require('../services/realtimeNotificationService');
       await createAndEmitNotification({
@@ -64,7 +76,10 @@ const returnBillToInitiator = async (bill, { userId, reason, historyComment }) =
         type: 'warning',
         category: 'approval',
         priority: 'high',
-        actionUrl: '/finance/accounts-payable',
+        // Utility-bill initiators correct the bill on the centralized store bill page
+        actionUrl: bill.referenceType === 'utility_bill' && bill.referenceId
+          ? `/general/centralized-store/bills/${bill.referenceId}`
+          : '/finance/accounts-payable',
         createdBy: userId,
         excludeUserId: userId,
         metadata: {
@@ -82,4 +97,28 @@ const returnBillToInitiator = async (bill, { userId, reason, historyComment }) =
   return bill;
 };
 
-module.exports = { getBillReturnBlocker, returnBillToInitiator, RETURNABLE_STATUSES };
+/** Show the Finance return on the source utility bill (status + observation) so its initiator can correct it */
+const markUtilityBillReturned = async (apBill, { userId, reason, now = new Date() }) => {
+  const UtilityBill = require('../models/hr/UtilityBill');
+  const ub = await UtilityBill.findOne({
+    $or: [{ financeApBillId: apBill._id }, ...(apBill.referenceId ? [{ _id: apBill.referenceId }] : [])]
+  });
+  if (!ub) return null;
+  ub.financeReturn = { active: true, reason, returnedBy: userId, returnedAt: now, resubmittedBy: null, resubmittedAt: null };
+  ub.observations = Array.isArray(ub.observations) ? ub.observations : [];
+  ub.observations.push({ observation: reason, severity: 'medium', addedBy: userId, addedAt: now, resolved: false });
+  ub.workflowHistory = Array.isArray(ub.workflowHistory) ? ub.workflowHistory : [];
+  ub.workflowHistory.push({
+    fromStatus: ub.auditStatus,
+    toStatus: 'Returned from Finance',
+    changedBy: userId,
+    changedAt: now,
+    comments: `Returned by Finance for correction: ${reason}`,
+    module: 'finance'
+  });
+  ub.updatedBy = userId;
+  await ub.save();
+  return ub;
+};
+
+module.exports = { getBillReturnBlocker, returnBillToInitiator, markUtilityBillReturned, RETURNABLE_STATUSES };
