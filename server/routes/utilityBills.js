@@ -28,6 +28,7 @@ const {
   getFinanceApBillRefId
 } = require('../utils/utilityBillFinance');
 const AccountsPayable = require('../models/finance/AccountsPayable');
+const { findPossibleDuplicateBills, readDuplicateConfirmation } = require('../utils/utilityBillDuplicates');
 const { applyBillLinesToPayload } = require('../utils/utilityBillLines');
 const {
   UTILITY_BILL_TYPES,
@@ -189,6 +190,7 @@ const populateUtilityBill = (query) => query
   .populate('consolidatedFrom.bill', 'billId utilityType provider amount billDate accountNumber forWhat lastMonthAmount')
   .populate('consolidatedIntoBillId', 'billId billDate')
   .populate('financeApBillId', 'billNumber totalAmount status amountPaid')
+  .populate('duplicateConfirmation.confirmedBy', 'firstName lastName')
   .populate('vendorId', 'name supplierId')
   .populate('payeeEmployee', 'firstName lastName employeeId email')
   .populate({
@@ -212,6 +214,7 @@ const populateUtilityBillDocument = async (bill) => {
     { path: 'consolidatedFrom.bill', select: 'billId utilityType provider amount billDate accountNumber forWhat lastMonthAmount' },
     { path: 'consolidatedIntoBillId', select: 'billId billDate' },
     { path: 'financeApBillId', select: 'billNumber totalAmount status amountPaid' },
+    { path: 'duplicateConfirmation.confirmedBy', select: 'firstName lastName' },
     { path: 'vendorId', select: 'name supplierId' },
     { path: 'payeeEmployee', select: 'firstName lastName employeeId email' },
     {
@@ -1093,9 +1096,27 @@ router.post('/', upload.any(), requireBillPermission('create'), async (req, res)
       }
     }
 
+    // Possible duplicate (same company + vendor + amount, or same meter this month): warn unless confirmed with a reason
+    const dupConfirm = readDuplicateConfirmation(req.body);
+    delete billData.confirmDuplicate;
+    delete billData.duplicateReason;
+    delete billData.duplicateConfirmation;
+    const duplicates = await findPossibleDuplicateBills(billData);
+    if (duplicates.length && !(dupConfirm.confirmed && dupConfirm.reason.length >= 5)) {
+      return res.status(409).json({
+        success: false,
+        code: 'POSSIBLE_DUPLICATE',
+        message: 'A similar bill already exists — check it before creating this one',
+        duplicates
+      });
+    }
+
     const bill = new UtilityBill(billData);
     if (Array.isArray(bill.billLines) && bill.billLines.length) {
       bill.markModified('billLines');
+    }
+    if (duplicates.length) {
+      recordDuplicateConfirmation(bill, duplicates, dupConfirm.reason, getActorId(req));
     }
     await bill.save();
 
@@ -1252,6 +1273,11 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
       return res.status(404).json({ success: false, message: 'Utility bill not found' });
     }
 
+    const dupConfirm = readDuplicateConfirmation(updateData);
+    delete updateData.confirmDuplicate;
+    delete updateData.duplicateReason;
+    delete updateData.duplicateConfirmation;
+
     const { billLines, ...scalarUpdate } = updateData;
     Object.keys(scalarUpdate).forEach((key) => {
       if (key.startsWith('existingLineAttachments_')) return;
@@ -1260,6 +1286,22 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
     if (billLines !== undefined) {
       bill.billLines = billLines;
       bill.markModified('billLines');
+    }
+
+    // Drafts / rejected bills being edited: same duplicate warning as on create
+    if (['Draft', 'Rejected'].includes(bill.approvalStatus || 'Draft')) {
+      const duplicates = await findPossibleDuplicateBills(bill.toObject(), { excludeId: bill._id });
+      const alreadyConfirmed = new Set((bill.duplicateConfirmation?.matches || []).map((m) => String(m.bill)));
+      const fresh = duplicates.filter((d) => !alreadyConfirmed.has(String(d._id)));
+      if (fresh.length && !(dupConfirm.confirmed && dupConfirm.reason.length >= 5)) {
+        return res.status(409).json({
+          success: false,
+          code: 'POSSIBLE_DUPLICATE',
+          message: 'A similar bill already exists — check it before saving this one',
+          duplicates: fresh
+        });
+      }
+      if (fresh.length) recordDuplicateConfirmation(bill, duplicates, dupConfirm.reason, getActorId(req));
     }
     await bill.save({ runValidators: true });
 
@@ -1551,6 +1593,24 @@ router.post('/:id/resend-to-audit', requireBillPermission('update'), async (req,
     res.status(500).json({ success: false, message: error.message || 'Failed to resend to audit' });
   }
 });
+
+/** Keep the user's "create anyway" reason and the bills it looked like (shown to approvers and Pre-Audit) */
+function recordDuplicateConfirmation(bill, duplicates, reason, actorId) {
+  bill.duplicateConfirmation = {
+    reason,
+    confirmedBy: actorId || null,
+    confirmedAt: new Date(),
+    matches: duplicates.map((d) => ({ bill: d._id, billId: d.billId, amount: d.amount, reasons: d.reasons }))
+  };
+  bill.markModified('duplicateConfirmation');
+  addWorkflowHistory(
+    bill,
+    bill.approvalStatus || 'Draft',
+    bill.approvalStatus || 'Draft',
+    actorId,
+    `Saved although it looks like ${duplicates.map((d) => d.billId).join(', ')} (${[...new Set(duplicates.flatMap((d) => d.reasons))].join('; ')}). Reason: ${reason}`
+  );
+}
 
 // Resubmit after a Finance return: rebuild the linked AP bill from the corrected utility bill (company, lines,
 // amount, journal) and send it straight back to Finance — no department / audit re-approval.

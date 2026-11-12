@@ -936,7 +936,10 @@ const UtilityBillForm = () => {
     loadedApprovalStatus === 'Rejected';
   const internalApprovalComplete = isEdit && loadedApprovalStatus === 'Approved';
 
-  const saveBill = async (mode = 'draft') => {
+  // Possible duplicate warning: the server lists similar bills; "Create anyway" resends with a reason
+  const [duplicateWarning, setDuplicateWarning] = useState({ open: false, mode: 'draft', duplicates: [], reason: '' });
+
+  const saveBill = async (mode = 'draft', duplicateOverride = null) => {
     if (isEdit && workflowLocksEdit) {
       setError('This bill cannot be edited while it is with audit. Wait until it is returned for correction.');
       return;
@@ -1135,6 +1138,11 @@ const UtilityBillForm = () => {
         submitData.append('billImage', selectedImage);
       }
 
+      if (duplicateOverride?.reason) {
+        submitData.append('confirmDuplicate', 'true');
+        submitData.append('duplicateReason', duplicateOverride.reason);
+      }
+
       let savedBill;
       if (isEdit) {
         const response = await utilityBillService.updateUtilityBill(id, submitData);
@@ -1173,12 +1181,20 @@ const UtilityBillForm = () => {
 
       navigate(backPath);
     } catch (err) {
+      if (err.response?.status === 409 && err.response?.data?.code === 'POSSIBLE_DUPLICATE') {
+        setDuplicateWarning({ open: true, mode, duplicates: err.response.data.duplicates || [], reason: '' });
+        return;
+      }
       setError(err.response?.data?.message || (isEdit ? 'Failed to update utility bill' : 'Failed to create utility bill'));
       console.error('Error saving bill:', err);
     } finally {
       setLoading(false);
     }
   };
+
+  const duplicateBillPath = (dupId) => (
+    isGeneralStoreBill ? `/general/centralized-store/bills/${dupId}` : `/admin/centralized-store/bills/${dupId}`
+  );
 
   const utilityTypes = [
     'Electricity',
@@ -2377,6 +2393,72 @@ const UtilityBillForm = () => {
         lockCategory
         title="Add item"
       />
+
+      <Dialog
+        open={duplicateWarning.open}
+        onClose={() => !loading && setDuplicateWarning((d) => ({ ...d, open: false }))}
+        maxWidth="md"
+        fullWidth
+      >
+        <DialogTitle sx={{ fontWeight: 800, color: 'warning.dark' }}>Possible duplicate bill</DialogTitle>
+        <DialogContent>
+          <Alert severity="warning" sx={{ mb: 2 }}>
+            {duplicateWarning.duplicates.length === 1 ? 'A bill' : `${duplicateWarning.duplicates.length} bills`} with the same company,
+            vendor and amount (or the same meter / account number this month) already {duplicateWarning.duplicates.length === 1 ? 'exists' : 'exist'}.
+            Please check before creating another one.
+          </Alert>
+          <Table size="small" sx={{ mb: 2 }}>
+            <TableHead>
+              <TableRow>
+                {['Bill', 'Vendor', 'Bill date', 'Amount', 'Status', 'Created by', 'Why'].map((h) => (
+                  <TableCell key={h} sx={{ fontWeight: 700 }}>{h}</TableCell>
+                ))}
+              </TableRow>
+            </TableHead>
+            <TableBody>
+              {duplicateWarning.duplicates.map((d) => (
+                <TableRow key={d._id}>
+                  <TableCell>
+                    <Link component={RouterLink} to={duplicateBillPath(d._id)} target="_blank" rel="noopener" sx={{ fontWeight: 700 }}>
+                      {d.billId}
+                    </Link>
+                  </TableCell>
+                  <TableCell>{d.provider}</TableCell>
+                  <TableCell>{d.billDate ? new Date(d.billDate).toLocaleDateString('en-GB') : '—'}</TableCell>
+                  <TableCell>Rs {Number(d.amount || 0).toLocaleString('en-PK')}</TableCell>
+                  <TableCell>{d.auditStatus && d.auditStatus !== 'Not Sent' ? d.auditStatus : d.approvalStatus || 'Draft'}</TableCell>
+                  <TableCell>{d.createdBy || '—'}</TableCell>
+                  <TableCell>{(d.reasons || []).join('; ')}</TableCell>
+                </TableRow>
+              ))}
+            </TableBody>
+          </Table>
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            label="If this is NOT a duplicate, say why (e.g. separate invoice for October)"
+            value={duplicateWarning.reason}
+            onChange={(e) => setDuplicateWarning((d) => ({ ...d, reason: e.target.value }))}
+            helperText="Saved on the bill's history so approvers and Audit can see it"
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setDuplicateWarning((d) => ({ ...d, open: false }))} disabled={loading}>Cancel</Button>
+          <Button
+            variant="contained"
+            color="warning"
+            disabled={loading || duplicateWarning.reason.trim().length < 5}
+            onClick={() => {
+              const { mode, reason } = duplicateWarning;
+              setDuplicateWarning((d) => ({ ...d, open: false }));
+              saveBill(mode, { reason: reason.trim() });
+            }}
+          >
+            {isEdit ? 'Save anyway' : 'Create anyway'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       <Dialog open={vendorDialogOpen} onClose={() => !vendorSaving && setVendorDialogOpen(false)} maxWidth="sm" fullWidth>
         <DialogTitle>Add new vendor</DialogTitle>

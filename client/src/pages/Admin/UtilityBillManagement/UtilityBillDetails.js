@@ -46,6 +46,7 @@ import {
 } from '../../../utils/utilityBillMemoUtils';
 import { DigitalSignatureImage } from '../../../components/common/DigitalSignatureImage';
 import LineAttachmentsView from '../../../components/UtilityBill/LineAttachmentsView';
+import DuplicateConfirmationNote from '../../../components/UtilityBill/DuplicateConfirmationNote';
 import ZoomPanImageToolbar from '../../../components/common/ZoomPanImageToolbar';
 import { useZoomPanImage } from '../../../hooks/useZoomPanImage';
 import {
@@ -1109,6 +1110,8 @@ const UtilityBillDetails = ({
           {error}
         </Alert>
       )}
+
+      <DuplicateConfirmationNote bill={bill} />
 
       {financeReturned && (
         <Alert severity="error" sx={{ mb: 2 }}>

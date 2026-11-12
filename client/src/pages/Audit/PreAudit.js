@@ -101,6 +101,7 @@ import {
   uploadAuditActionAttachments
 } from '../../components/Audit/AuditActionAttachments';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
+import DuplicateConfirmationNote from '../../components/UtilityBill/DuplicateConfirmationNote';
 import CentralizedStoreItemsAuditPanel from '../../components/Audit/CentralizedStoreItemsAuditPanel';
 import FinanceVendorsAuditPanel from '../../components/Audit/FinanceVendorsAuditPanel';
 import { collectUtilityBillWorkflowImages } from '../../utils/utilityBillAttachments';
@@ -3910,7 +3911,10 @@ const PreAudit = () => {
                   )}
                 </>
               ) : viewDialog.document.isWorkflowDocument && viewDialog.document.workflowSubmodule === 'utility_bills_management' && viewDialog.fullDocument ? (
-                renderUtilityBillMemoView(viewDialog.fullDocument)
+                <>
+                  <DuplicateConfirmationNote bill={viewDialog.fullDocument} sx={{ maxWidth: 1050, mx: 'auto', mt: 2 }} />
+                  {renderUtilityBillMemoView(viewDialog.fullDocument)}
+                </>
               ) : viewDialog.document.isWorkflowDocument && viewDialog.document.workflowSubmodule === 'payment_settlement' && viewDialog.fullDocument ? (
                 renderPaymentSettlementMemoView(viewDialog.fullDocument)
               ) : viewDialog.document.isWorkflowDocument && viewDialog.document.workflowSubmodule === 'rental_management' && viewDialog.fullDocument ? (

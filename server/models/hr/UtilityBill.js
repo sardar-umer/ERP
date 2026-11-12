@@ -254,6 +254,13 @@ const utilityBillSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'
   },
+  /** Saved although a possible duplicate (same company + vendor + amount, or same meter this month) existed */
+  duplicateConfirmation: {
+    reason: { type: String, trim: true, default: '' },
+    confirmedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    confirmedAt: { type: Date, default: null },
+    matches: [{ _id: false, bill: { type: mongoose.Schema.Types.ObjectId, ref: 'UtilityBill' }, billId: String, amount: Number, reasons: [String] }]
+  },
   /**
    * Finance returned the linked AP bill to the initiator (e.g. wrong company). While `active`, the initiator can
    * edit this bill and resubmit; the AP bill is rebuilt from it and goes straight back to Finance.
