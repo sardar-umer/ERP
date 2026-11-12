@@ -348,6 +348,41 @@ const recordAuthorityRejection = async (app, user, comments = '') => {
   });
   app.financeAuthorityApprovals = approvals;
   await rejectApplication(app, user, comments);
+
+  // Voucher stays cancelled (its number is kept for the record); the bill(s) it was paying go back
+  // to the initiator as "Returned from Finance". After edit + resubmit they return straight to Finance,
+  // where a fresh voucher is made. Bills already partly settled stay open at Finance as before.
+  const returnedBills = [];
+  const keptBills = [];
+  try {
+    const { getBillReturnBlocker, returnBillToInitiator } = require('./billFinanceReturn');
+    const je = app.journalEntryId ? await JournalEntry.findById(app.journalEntryId).select('entryNumber') : null;
+    const voucherNo = je?.entryNumber || '';
+    const reason = String(comments || '').trim() || 'Payment voucher rejected by finance authority';
+    const userId = user._id || user.id;
+    const billIds = (app.bills?.length > 0 ? app.bills.map((b) => b.billId) : [app.accountsPayableId])
+      .filter(Boolean)
+      .map(String);
+    for (const billId of [...new Set(billIds)]) {
+      const bill = await AccountsPayable.findById(billId);
+      if (!bill) continue;
+      if (getBillReturnBlocker(bill)) {
+        keptBills.push(bill.billNumber || String(bill._id));
+        continue;
+      }
+      await returnBillToInitiator(bill, {
+        userId,
+        reason,
+        historyComment: `Payment voucher${voucherNo ? ` ${voucherNo}` : ''} rejected by finance authority — returned to initiator: ${reason}`
+      });
+      returnedBills.push(bill.billNumber || String(bill._id));
+    }
+  } catch (err) {
+    console.warn('AP voucher reject: return bill to initiator failed:', err.message);
+  }
+  app.$locals = app.$locals || {};
+  app.$locals.returnedBills = returnedBills;
+  app.$locals.keptBills = keptBills;
   return app;
 };
 

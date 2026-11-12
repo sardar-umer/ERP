@@ -3081,6 +3081,100 @@ router.put('/accounts-receivable/:id/installments',
   })
 );
 
+/**
+ * Plan the new lines of a bill's posted journal after the bill was edited (amounts, accounts or company).
+ * Throws with a readable message when an account cannot be found in the bill's company.
+ */
+const buildBillJournalSync = async (bill, linkedJournal) => {
+  const companyId = co(bill) || linkedJournal.companyId;
+  const companyChanged = Boolean(companyId) && String(linkedJournal.companyId || '') !== String(companyId);
+  const A = acct(companyId);
+  const companyLabel = bill.company || 'the selected company';
+  const round = (v) => Math.round((Number(v) || 0) * 100) / 100;
+
+  if (Array.isArray(bill.lineItems) && bill.lineItems.length > 0) {
+    const apAccount = await A.resolve(FinanceHelper.ACCOUNTS.PAYABLE);
+    if (!apAccount) {
+      throw new Error(`Accounts Payable account not found in ${companyLabel}'s chart of accounts`);
+    }
+    const lines = [];
+    for (const li of bill.lineItems) {
+      let lineAcc = li.account ? await A.map(li.account) : null;
+      if (!lineAcc && li.expenseAccount) lineAcc = await A.map(li.expenseAccount);
+      if (!lineAcc && !li.account && !li.expenseAccount) {
+        lineAcc = await A.resolve(FinanceHelper.ACCOUNTS.UTILITIES || '6200');
+      }
+      if (!lineAcc) {
+        throw new Error(`Expense account for line "${(li.description || '').slice(0, 60)}" not found in ${companyLabel}'s chart of accounts`);
+      }
+      lines.push({
+        account: lineAcc._id,
+        description: (li.description || `Expense — ${bill.billNumber}`).slice(0, 200),
+        debit: round(Number(li.quantity || 1) * Number(li.unitPrice || 0)),
+        credit: 0,
+        department: bill.department || linkedJournal.department
+      });
+    }
+    const totalAmount = round(bill.totalAmount);
+    const debitSum = round(lines.reduce((sum, l) => sum + l.debit, 0));
+    if (Math.abs(debitSum - totalAmount) > 0.01) {
+      const last = lines[lines.length - 1];
+      last.debit = round(last.debit + (totalAmount - debitSum));
+    }
+    lines.push({
+      account: apAccount._id,
+      description: `Payable to ${bill.vendor?.name || 'Vendor'}`,
+      debit: 0,
+      credit: totalAmount,
+      department: bill.department || linkedJournal.department
+    });
+    return { companyId, lines, total: totalAmount };
+  }
+
+  // No line items on the bill: keep the journal's amounts, only move its accounts when the company changed
+  if (!companyChanged) return null;
+  const lines = [];
+  for (const line of linkedJournal.lines) {
+    const mapped = await A.map(line.account);
+    if (!mapped) {
+      const old = await Account.findById(line.account).select('accountNumber name').lean();
+      throw new Error(`Account ${old?.accountNumber || ''} ${old?.name || ''} not found in ${companyLabel}'s chart of accounts`.replace(/\s+/g, ' '));
+    }
+    const plain = line.toObject ? line.toObject() : { ...line };
+    delete plain._id;
+    lines.push({ ...plain, account: mapped._id });
+  }
+  return { companyId, lines, total: round(linkedJournal.totalDebits) };
+};
+
+/**
+ * Apply a planned journal update: take the old lines off the account balances, save the new lines,
+ * add them to the balances (re-saving a posted entry does not do that by itself) and repost the GL rows.
+ */
+const applyBillJournalSync = async (linkedJournal, plan, bill) => {
+  for (const line of linkedJournal.lines) {
+    await Account.findByIdAndUpdate(line.account, {
+      $inc: { balance: -((Number(line.debit) || 0) - (Number(line.credit) || 0)) }
+    });
+  }
+
+  if (plan.companyId) linkedJournal.companyId = plan.companyId;
+  if (bill.company) linkedJournal.customCompany = bill.company;
+  linkedJournal.lines = plan.lines;
+  linkedJournal.totalDebits = plan.total;
+  linkedJournal.totalCredits = plan.total;
+  await linkedJournal.save();
+
+  for (const line of linkedJournal.lines) {
+    await Account.findByIdAndUpdate(line.account, {
+      $inc: { balance: (Number(line.debit) || 0) - (Number(line.credit) || 0) }
+    });
+  }
+
+  await GeneralLedger.deleteMany({ journalEntry: linkedJournal._id });
+  await FinanceHelper.postToGeneralLedger(linkedJournal._id);
+};
+
 // @route   PUT /api/finance/accounts-payable/:id
 // @desc    Update bill
 // @access  Private (Finance and Admin)
@@ -3164,81 +3258,39 @@ router.put('/accounts-payable/:id',
     if (Object.prototype.hasOwnProperty.call(req.body || {}, 'company')) {
       bill.company = req.body.company || '';
     }
+
+    // The bill's posted journal (expense Dr / AP Cr) must follow the bill: work out its new lines in the
+    // bill's (possibly new) company BEFORE saving, so a missing account stops the edit instead of leaving
+    // the journal half-moved.
+    const linkedJournal = await JournalEntry.findOne({
+      $or: [
+        { referenceId: bill._id, referenceType: { $ne: 'payment' } },
+        { reference: bill.billNumber, referenceType: { $ne: 'payment' } }
+      ],
+      status: 'posted',
+      isReversed: { $ne: true }
+    }).sort({ createdAt: 1 });
+    let journalSync = null;
+    if (linkedJournal) {
+      try {
+        journalSync = await buildBillJournalSync(bill, linkedJournal);
+      } catch (planErr) {
+        return res.status(400).json({ success: false, message: planErr.message });
+      }
+    }
+
     await bill.save();
 
-    // If bill line items or total amount updated, sync linked posted journal entry & GL
-    try {
-      const linkedJournal = await JournalEntry.findOne({
-        $or: [
-          { referenceId: bill._id },
-          { reference: bill.billNumber }
-        ],
-        status: 'posted'
-      });
-
-      if (linkedJournal) {
-        const nextCompanyId = co(bill) || linkedJournal.companyId;
-        if (nextCompanyId && String(linkedJournal.companyId || '') !== String(nextCompanyId)) {
-          linkedJournal.companyId = nextCompanyId;
-          if (bill.company) linkedJournal.customCompany = bill.company;
-          await linkedJournal.save();
-        }
-      }
-
-      if (linkedJournal && Array.isArray(bill.lineItems) && bill.lineItems.length > 0) {
-        const companyId = co(bill) || linkedJournal.companyId;
-        const A = acct(companyId);
-        const apAccount = await A.resolve(FinanceHelper.ACCOUNTS.PAYABLE);
-
-        // Build new debit lines matching updated AP line items
-        const newLines = [];
-        for (const li of bill.lineItems) {
-          let lineAcc = li.account ? await A.map(li.account) : null;
-          if (!lineAcc && li.expenseAccount) lineAcc = await A.map(li.expenseAccount);
-          if (!lineAcc) lineAcc = await A.resolve(FinanceHelper.ACCOUNTS.UTILITIES || '6200');
-
-          newLines.push({
-            account: lineAcc._id,
-            description: (li.description || `Expense — ${bill.billNumber}`).slice(0, 200),
-            debit: Math.round((Number(li.quantity || 1) * Number(li.unitPrice || 0)) * 100) / 100,
-            department: bill.department || linkedJournal.department
-          });
-        }
-
-        // Add credit AP line
-        const totalAmount = Math.round(Number(bill.totalAmount || 0) * 100) / 100;
-        const debitSum = newLines.reduce((s, l) => s + l.debit, 0);
-        if (Math.abs(debitSum - totalAmount) > 0.01 && newLines.length > 0) {
-          newLines[newLines.length - 1].debit += (totalAmount - debitSum);
-          newLines[newLines.length - 1].debit = Math.round(newLines[newLines.length - 1].debit * 100) / 100;
-        }
-
-        newLines.push({
-          account: apAccount?._id || linkedJournal.lines.find(l => l.credit > 0)?.account,
-          description: `Payable to ${bill.vendor?.name || 'Vendor'}`,
-          credit: totalAmount,
-          department: bill.department || linkedJournal.department
+    if (linkedJournal && journalSync) {
+      try {
+        await applyBillJournalSync(linkedJournal, journalSync, bill);
+      } catch (syncErr) {
+        console.error('❌ Journal sync failed on AP update:', syncErr.message);
+        return res.status(500).json({
+          success: false,
+          message: `Bill saved, but its journal ${linkedJournal.entryNumber || ''} could not be updated: ${syncErr.message}. Please contact Finance before paying this bill.`
         });
-
-        // Revert old account balance increments
-        for (const line of linkedJournal.lines) {
-          await Account.findByIdAndUpdate(line.account, {
-            $inc: { balance: -(line.debit - line.credit) }
-          });
-        }
-
-        // Apply new lines & re-save to trigger new balance increments
-        linkedJournal.lines = newLines;
-        linkedJournal.totalDebits = totalAmount;
-        linkedJournal.totalCredits = totalAmount;
-        await linkedJournal.save();
-
-        // Refresh GL entries for this journal
-        await GeneralLedger.deleteMany({ journalEntry: linkedJournal._id });
-        await FinanceHelper.postToGeneralLedger(linkedJournal._id);
       }
-    } catch (syncErr) {
-      console.warn('⚠️ Journal sync warning on AP update:', syncErr.message);
     }
 
     res.json({
@@ -3880,10 +3932,17 @@ router.put('/ap-payment-applications/:id/finance-reject',
     const app = await ApPaymentApplication.findById(req.params.id);
     if (!app) return res.status(404).json({ success: false, message: 'AP settlement not found' });
     await ApPaymentHelper.recordAuthorityRejection(app, req.user, req.body?.comments || req.body?.rejectionComments || '');
+    const returnedBills = app.$locals?.returnedBills || [];
+    const keptBills = app.$locals?.keptBills || [];
+    const parts = ['Finance authority rejection recorded. Draft voucher cancelled.'];
+    if (returnedBills.length) parts.push(`Bill ${returnedBills.join(', ')} returned to the initiator for correction.`);
+    if (keptBills.length) parts.push(`Bill ${keptBills.join(', ')} already has settlement recorded, so it stays at Finance.`);
     const fresh = await populateApPaymentApplication({ _id: app._id });
     res.json({
       success: true,
-      message: 'Finance authority rejection recorded. Draft voucher cancelled and bill pending amount released.',
+      returnedBills,
+      keptBills,
+      message: parts.join(' '),
       data: fresh?.toObject ? fresh.toObject() : fresh
     });
   })
@@ -5605,24 +5664,10 @@ router.post('/accounts-payable/:id/finance-return',
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
 
-    const allowedFrom = ['approved', 'received', 'overdue'];
-    if (!allowedFrom.includes(bill.status)) {
-      return res.status(400).json({
-        success: false,
-        message: 'Only approved vendor bills (awaiting payment) can be returned to the initiator'
-      });
-    }
-
-    const paid = Number(bill.amountPaid ?? bill.paidAmount ?? 0) || 0;
-    const advanceApplied = Number(bill.advanceApplied || 0) || 0;
-    const settlementPending = Number(
-      bill.settlementPending ?? ((bill.advancePending || 0) + (bill.paymentPending || 0))
-    ) || 0;
-    if (paid + advanceApplied > 0 || settlementPending > 0) {
-      return res.status(400).json({
-        success: false,
-        message: 'Cannot return a bill that already has payment / advance settlement recorded or pending'
-      });
+    const { getBillReturnBlocker, returnBillToInitiator } = require('../utils/billFinanceReturn');
+    const blocker = getBillReturnBlocker(bill);
+    if (blocker) {
+      return res.status(400).json({ success: false, message: blocker });
     }
 
     const reason = String(req.body?.rejectionReason || req.body?.reason || req.body?.comments || '').trim();
@@ -5631,55 +5676,8 @@ router.post('/accounts-payable/:id/finance-return',
     }
 
     const userId = req.user.id || req.user._id;
-    const fromStatus = bill.status;
     // Do NOT touch approvalStatus or approvalChain — authorities remain intact
-    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
-    bill.workflowHistory.push({
-      fromStatus,
-      toStatus: 'Returned from Finance',
-      changedBy: userId,
-      changedAt: new Date(),
-      comments: `Returned to initiator: ${reason}`,
-      module: 'Finance'
-    });
-    bill.observations = Array.isArray(bill.observations) ? bill.observations : [];
-    bill.observations.push({
-      observation: reason,
-      severity: 'medium',
-      addedBy: userId,
-      addedAt: new Date(),
-      resolved: false
-    });
-    bill.status = 'Returned from Finance';
-    bill.lastModifiedBy = userId;
-    await bill.save();
-
-    // Notify initiator (createdBy)
-    try {
-      const initiatorId = bill.createdBy ? String(bill.createdBy) : null;
-      if (initiatorId) {
-        const { createAndEmitNotification } = require('../services/realtimeNotificationService');
-        await createAndEmitNotification({
-          recipientIds: [initiatorId],
-          title: 'Vendor bill returned by Finance',
-          message: `Bill ${bill.billNumber || bill._id} was returned for correction: ${reason}`,
-          type: 'warning',
-          category: 'approval',
-          priority: 'high',
-          actionUrl: '/finance/accounts-payable',
-          createdBy: userId,
-          excludeUserId: userId,
-          metadata: {
-            module: 'finance',
-            entityId: bill._id,
-            entityType: 'AccountsPayable',
-            queueStage: 'returned_from_finance'
-          }
-        });
-      }
-    } catch (notifyErr) {
-      console.warn('finance-return notify warning:', notifyErr.message);
-    }
+    await returnBillToInitiator(bill, { userId, reason });
 
     const populated = await AccountsPayable.findById(bill._id)
       .populate('createdBy', 'firstName lastName email')

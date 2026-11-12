@@ -386,10 +386,10 @@ const VoucherView = () => {
     try {
       setApprovalMsg('');
       if (apPaymentApp?._id) {
-        await api.put(`/finance/ap-payment-applications/${apPaymentApp._id}/finance-reject`, { comments });
+        const rejectRes = await api.put(`/finance/ap-payment-applications/${apPaymentApp._id}/finance-reject`, { comments });
         await refreshApPaymentApp();
         await reloadEntry();
-        setApprovalMsg('Settlement rejected. Draft voucher cancelled; bill remains unpaid.');
+        setApprovalMsg(rejectRes?.data?.message || 'Settlement rejected. Draft voucher cancelled.');
         return;
       }
       if (payrollPeriodPaymentApp?._id) {
