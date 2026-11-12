@@ -1,0 +1,35 @@
+[
+  {
+    "key": "education-teachers",
+    "label": "Teachers & Lecturers (TIGES, The Tenacious)",
+    "companies": ["The Integrity Global Education System", "The Tenacious"],
+    "titlePattern": "teach|lecturer|instructor",
+    "items": [
+      {
+        "kpi": "Academic Delivery",
+        "weight": 20,
+        "target": "100% syllabus completion as per HO-approved timeline for each term"
+      },
+      {
+        "kpi": "Student Performance",
+        "weight": 20,
+        "target": "85% of class to meet or exceed benchmarks in HO assessments each term"
+      },
+      {
+        "kpi": "Lesson Planning & Preparation",
+        "weight": 20,
+        "target": "100% on-time submission of weekly lesson plans and teaching aids aligned to HO guidelines"
+      },
+      {
+        "kpi": "Student Attendance & Progress Monitoring",
+        "weight": 20,
+        "target": ">90% student attendance in assigned class; documented student progress reports submitted monthly"
+      },
+      {
+        "kpi": "Professional Development",
+        "weight": 20,
+        "target": "Attend 100% of HO trainings / workshops; 2 new teaching strategies implemented in class per term"
+      }
+    ]
+  }
+]

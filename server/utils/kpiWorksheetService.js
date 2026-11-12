@@ -4,6 +4,7 @@ const {
   findCatalogEntryForTitle,
   worksheetRowsFromCatalogEntry
 } = require('./blueCollarKpiCatalog');
+const { findCompanyDesignationPack, worksheetRowsFromPack } = require('./companyDesignationKpiCatalog');
 
 function prevYearMonth(year, month) {
   if (month <= 1) return { year: year - 1, month: 12 };
@@ -84,14 +85,20 @@ async function propagateStructureForward(source, oldRows) {
  */
 async function rowsFromBlueCollarDesignation(employeeId) {
   const emp = await Employee.findById(employeeId)
-    .select('employeeCategory position placementDesignation')
+    .select('employeeCategory position placementDesignation placementCompany')
     .populate('placementDesignation', 'title')
+    .populate('placementCompany', 'name')
     .lean();
   if (!emp) return [];
 
   const category = String(emp.employeeCategory || '').toLowerCase();
   // Prefer explicit blue_collar; also allow designation match when category unset
   const desigTitle = emp.placementDesignation?.title || emp.position || '';
+
+  // Company-specific designation packs (e.g. TIGES / The Tenacious teachers) apply to any category
+  const pack = findCompanyDesignationPack(emp.placementCompany?.name, desigTitle);
+  if (pack) return worksheetRowsFromPack(pack);
+
   const entry = findCatalogEntryForTitle(desigTitle);
   if (!entry) return [];
 
