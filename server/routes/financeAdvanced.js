@@ -926,6 +926,7 @@ router.get('/journal-entries',
     // Ensure populate refs are registered (hr routes usually load these first)
     require('../models/hr/Project');
     require('../models/hr/Department');
+    require('../models/finance/CostCenter');
     
     const [entries, totalCount] = await Promise.all([
       JournalEntry.find(filters)
@@ -934,6 +935,9 @@ router.get('/journal-entries',
         .populate('createdBy', 'firstName lastName')
         .populate('approvedBy', 'firstName lastName')
         .populate('project', 'name code')
+        // Cost center name for the Vouchers list (header and line level)
+        .populate('costCenter', 'name code')
+        .populate('lines.costCenter', 'name code')
         .sort({ date: -1, entryNumber: -1 })
         .skip(skip)
         .limit(parseInt(limit)),
@@ -1119,7 +1123,8 @@ router.get('/journal-entries/:id',
       .populate('createdBy', 'firstName lastName')
       .populate('approvedBy', 'firstName lastName')
       .populate('project', 'name code')
-      .populate('costCenter', 'name code');
+      .populate('costCenter', 'name code')
+      .populate('lines.costCenter', 'name code');
 
     if (!entry) return res.status(404).json({ success: false, message: 'Journal entry not found' });
 
