@@ -103,9 +103,20 @@ export const buildGeneralCashApprovalApprovalRows = (ca) => {
     );
   };
 
+  // Moving a CA *into* Pending Audit is done by the requester / department (first send or a resubmission after
+  // an audit rejection). Only Pre-Audit's own action (Pending Audit → Pending Audit, module Pre-Audit) is a signature.
+  const isSentIntoAuditQueue = (entry) => {
+    const to = normalize(entry?.toStatus);
+    if (!to.startsWith('pending audit')) return false;
+    const from = normalize(entry?.fromStatus);
+    const module = normalize(entry?.module);
+    return from !== 'pending audit' && !module.includes('audit');
+  };
+
   const matchingAuditHistory = (keywords, { excludeModules = [] } = {}) =>
     history.filter((entry) => {
       if (isDepartmentSentToAuditQueue(entry)) return false;
+      if (isSentIntoAuditQueue(entry)) return false;
       const module = normalize(entry?.module);
       if (excludeModules.some((m) => module === normalize(m))) return false;
       const to = normalize(entry?.toStatus);

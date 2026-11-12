@@ -705,6 +705,9 @@ const PreAudit = () => {
     const findPreferredAuditEntry = (accepted = []) => {
       const entries = history.filter((entry) => {
         const toStatus = normalize(entry?.toStatus);
+        // Sending / resubmitting into Pending Audit is the requester's action, not a Pre-Audit signature
+        if (toStatus.startsWith('pending audit') && normalize(entry?.fromStatus) !== 'pending audit'
+          && !normalize(entry?.module).includes('audit')) return false;
         return accepted.some((status) => toStatus === status || toStatus.startsWith(status));
       });
       return entries.find((e) => e?.changedBy?.digitalSignature) || entries[0];
@@ -777,6 +780,9 @@ const PreAudit = () => {
     const findPreferredAuditEntry = (accepted = []) => {
       const entries = history.filter((entry) => {
         const toStatus = normalize(entry?.toStatus);
+        // Sending / resubmitting into Pending Audit is the requester's action, not a Pre-Audit signature
+        if (toStatus.startsWith('pending audit') && normalize(entry?.fromStatus) !== 'pending audit'
+          && !normalize(entry?.module).includes('audit')) return false;
         return accepted.some((status) => toStatus === status || toStatus.startsWith(status));
       });
       return entries.find((e) => e?.changedBy?.digitalSignature) || entries[0];
