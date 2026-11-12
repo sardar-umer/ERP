@@ -661,6 +661,27 @@ const employeeSchema = new mongoose.Schema({
       year: { type: Number, min: 2020, required: true }
     }]
   },
+  /**
+   * Allowance amounts for one payroll month only (set amounts replace the master for that month).
+   * The master allowances are untouched, so later months and the final settlement use the original.
+   */
+  monthlyAllowanceOverrides: [{
+    _id: false,
+    month: { type: Number, min: 1, max: 12, required: true },
+    year: { type: Number, min: 2020, required: true },
+    amounts: {
+      conveyance: { type: Number, min: 0 },
+      food: { type: Number, min: 0 },
+      mobile: { type: Number, min: 0 },
+      vehicle: { type: Number, min: 0 },
+      fuel: { type: Number, min: 0 },
+      medical: { type: Number, min: 0 },
+      houseRent: { type: Number, min: 0 },
+      special: { type: Number, min: 0 },
+      other: { type: Number, min: 0 }
+    },
+    note: { type: String, trim: true, maxlength: 300 }
+  }],
   // EOBI (Employees' Old-Age Benefits Institution) - Pakistan
   eobi: {
     isActive: {

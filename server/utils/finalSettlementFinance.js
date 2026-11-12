@@ -46,6 +46,33 @@ const notifyFinance = async (settlement, bill, createdBy) => {
  * Saves the settlement. Never throws: a failure is stored on `financePostError` so HR can retry.
  * @returns {{ posted: boolean, billNumber?: string, error?: string }}
  */
+const SETTLEMENT_UPLOAD_PREFIX = '/uploads/final-settlements/';
+
+/**
+ * Show the settlement's attachments on its Finance bill (so Finance opens them from Payables).
+ * Replaces only the bill attachments that came from the settlement; Finance's own uploads stay.
+ */
+const syncSettlementDocumentsToBill = async (settlement, billId = settlement?.financeApBillId) => {
+  if (!billId) return;
+  try {
+    const bill = await AccountsPayable.findById(billId).select('attachments').lean();
+    if (!bill) return;
+    const own = (bill.attachments || []).filter((a) => !String(a.path || '').startsWith(SETTLEMENT_UPLOAD_PREFIX));
+    const fromSettlement = (settlement.documents || []).map((d) => ({
+      filename: String(d.filePath || '').split('/').pop(),
+      originalName: d.name,
+      path: d.filePath,
+      mimeType: d.mimeType,
+      size: d.size,
+      uploadedAt: d.uploadedAt,
+      uploadedBy: d.uploadedBy?._id || d.uploadedBy
+    }));
+    await AccountsPayable.updateOne({ _id: billId }, { $set: { attachments: [...own, ...fromSettlement] } });
+  } catch (err) {
+    console.error('syncSettlementDocumentsToBill failed:', err.message);
+  }
+};
+
 const postFinalSettlementToFinance = async (settlement, user) => {
   const createdBy = actorId(user);
   try {
@@ -105,6 +132,8 @@ const postFinalSettlementToFinance = async (settlement, user) => {
       });
       await notifyFinance(settlement, bill, createdBy);
     }
+
+    await syncSettlementDocumentsToBill(settlement, bill._id);
 
     settlement.financeApBillId = bill._id;
     settlement.financeApBillNumber = bill.billNumber;
@@ -266,4 +295,4 @@ const syncFinalSettlementPayments = async (settlements = []) => {
   }));
 };
 
-module.exports = { postFinalSettlementToFinance, syncFinalSettlementPayments, settlementNumber };
+module.exports = { postFinalSettlementToFinance, syncFinalSettlementPayments, syncSettlementDocumentsToBill, settlementNumber };

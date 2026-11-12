@@ -27,6 +27,7 @@ import {
 import api from '../../services/api';
 import finalSettlementService from '../../services/finalSettlementService';
 import { formatPKR } from '../../utils/currency';
+import LoanAttachments from './LoanAttachments';
 
 /**
  * Final settlement approval workflow (same as Manual Salary):
@@ -251,6 +252,12 @@ export const SettlementProcessDialog = ({ settlement, onClose, onDone, onEdit })
             </Paper>
           ))}
         </Stack>
+        {(s.documents || []).length > 0 ? (
+          <Box sx={{ mt: 2 }}>
+            <Typography variant="subtitle2" gutterBottom>Attachments ({s.documents.length})</Typography>
+            <LoanAttachments documents={s.documents} dense />
+          </Box>
+        ) : null}
         {s.workflowStatus === 'Returned' && s.returnComments ? (
           <Paper variant="outlined" sx={{ p: 1.25, mt: 1.5, borderLeft: 4, borderLeftColor: 'error.main' }}>
             <Typography variant="body2" fontWeight={700} color="error.main">

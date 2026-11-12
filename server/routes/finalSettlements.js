@@ -1,4 +1,7 @@
 const express = require('express');
+const path = require('path');
+const fs = require('fs');
+const multer = require('multer');
 const router = express.Router();
 const FinalSettlement = require('../models/hr/FinalSettlement');
 const Employee = require('../models/hr/Employee');
@@ -7,7 +10,46 @@ const { authMiddleware } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
 const PlacementCompany = require('../models/hr/Company');
-const { postFinalSettlementToFinance, syncFinalSettlementPayments } = require('../utils/finalSettlementFinance');
+const { postFinalSettlementToFinance, syncFinalSettlementPayments, syncSettlementDocumentsToBill } = require('../utils/finalSettlementFinance');
+
+// ─── Attachments (PDF / image / Word / Excel, 10 MB each, up to 10 at a time) — same rules as loans ───
+const settlementUploadDir = path.join(__dirname, '../uploads/final-settlements');
+const ALLOWED_ATTACHMENT_TYPES = [
+  'application/pdf',
+  'application/msword',
+  'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  'application/vnd.ms-excel',
+  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'
+];
+const settlementUpload = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      if (!fs.existsSync(settlementUploadDir)) fs.mkdirSync(settlementUploadDir, { recursive: true });
+      cb(null, settlementUploadDir);
+    },
+    filename: (req, file, cb) => {
+      cb(null, `settlement-${Date.now()}-${Math.round(Math.random() * 1e9)}${path.extname(file.originalname).toLowerCase()}`);
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    if (file.mimetype.startsWith('image/') || ALLOWED_ATTACHMENT_TYPES.includes(file.mimetype)) cb(null, true);
+    else cb(new Error('Attachments must be PDF, image, Word or Excel files'), false);
+  }
+});
+const handleSettlementUpload = (req, res, next) => {
+  settlementUpload.array('attachments', 10)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ message: 'Each attachment must be 10 MB or less' });
+    if (err.code === 'LIMIT_FILE_COUNT') return res.status(400).json({ message: 'Maximum 10 attachments at a time' });
+    return res.status(400).json({ message: err.message || 'File upload error' });
+  });
+};
+const removeUploadedFiles = (files = []) => files.forEach((f) => fs.unlink(f.path, () => {}));
+const settlementDocuments = async (id) => {
+  const data = await FinalSettlement.findById(id).select('documents').populate('documents.uploadedBy', 'firstName lastName').lean();
+  return data?.documents || [];
+};
 
 /** Validate a company id from the form → { companyId, companyName } (throws 400 when missing / unknown) */
 const resolveSettlementCompany = async (companyId) => {
@@ -42,6 +84,16 @@ const {
   getSettlementShortfallDeduction,
   getSettlementActualSalary
 } = require('../utils/finalSettlementDays');
+
+/** "Salary for month" lines typed by HR: valid month/year with an amount above zero */
+const cleanMonthSalaries = (rows) => (Array.isArray(rows) ? rows : [])
+  .map((row) => ({
+    month: parseInt(row?.month, 10),
+    year: parseInt(row?.year, 10),
+    amount: Math.round((Number(row?.amount) || 0) * 100) / 100,
+    note: String(row?.note || '').trim().slice(0, 200)
+  }))
+  .filter((row) => row.month >= 1 && row.month <= 12 && row.year >= 2000 && row.amount > 0);
 
 // Get all final settlements with pagination and filters
 router.get('/', authMiddleware, async (req, res) => {
@@ -315,6 +367,69 @@ router.put('/:id/send-to-finance', authMiddleware, checkPermission('settlement_m
   }
 });
 
+// @route   POST /api/final-settlements/:id/documents — add attachments (multipart field "attachments")
+router.post('/:id/documents', authMiddleware, checkPermission('settlement_management'), handleSettlementUpload, async (req, res) => {
+  const files = req.files || [];
+  try {
+    const settlement = await FinalSettlement.findById(req.params.id);
+    if (!settlement) { removeUploadedFiles(files); return res.status(404).json({ message: 'Settlement not found' }); }
+    if (!files.length) return res.status(400).json({ message: 'Choose at least one file to attach' });
+    // While an approver has it, only admins can change its papers
+    if (IN_APPROVAL.includes(settlement.workflowStatus) && !isAdminUser(req.user)) {
+      removeUploadedFiles(files);
+      return res.status(400).json({ message: 'Attachments are locked while the settlement is out for approval. Ask the approver to return it.' });
+    }
+    const added = files.map((f) => ({
+      name: String(f.originalname || 'Attachment').trim().slice(0, 200) || 'Attachment',
+      filePath: `/uploads/final-settlements/${f.filename}`,
+      mimeType: f.mimetype,
+      size: f.size,
+      uploadedBy: req.user._id,
+      uploadedAt: new Date()
+    }));
+    // Targeted update: totals and workflow fields are not recalculated by adding a paper
+    await FinalSettlement.updateOne(
+      { _id: settlement._id },
+      { $push: { documents: { $each: added } }, $set: { updatedBy: req.user._id } }
+    );
+    const documents = await settlementDocuments(settlement._id);
+    await syncSettlementDocumentsToBill({ documents, financeApBillId: settlement.financeApBillId });
+    res.json({ message: `${files.length} attachment(s) added`, documents });
+  } catch (error) {
+    removeUploadedFiles(files);
+    console.error('Error adding settlement attachments:', error);
+    res.status(500).json({ message: 'Error adding attachments', error: error.message });
+  }
+});
+
+// @route   DELETE /api/final-settlements/:id/documents/:docId
+router.delete('/:id/documents/:docId', authMiddleware, checkPermission('settlement_management'), async (req, res) => {
+  try {
+    const settlement = await FinalSettlement.findById(req.params.id).select('documents status workflowStatus financeApBillId');
+    if (!settlement) return res.status(404).json({ message: 'Settlement not found' });
+    const doc = settlement.documents.id(req.params.docId);
+    if (!doc) return res.status(404).json({ message: 'Attachment not found' });
+    const locked = settlement.status !== 'pending' || IN_APPROVAL.includes(settlement.workflowStatus);
+    if (locked && !isAdminUser(req.user)) {
+      return res.status(400).json({ message: 'Attachments can only be removed while the settlement is with HR (not forwarded / approved)' });
+    }
+    const filePath = doc.filePath;
+    await FinalSettlement.updateOne(
+      { _id: settlement._id },
+      { $pull: { documents: { _id: doc._id } }, $set: { updatedBy: req.user._id } }
+    );
+    if (filePath && filePath.startsWith('/uploads/final-settlements/')) {
+      fs.unlink(path.join(settlementUploadDir, path.basename(filePath)), () => {});
+    }
+    const documents = await settlementDocuments(settlement._id);
+    await syncSettlementDocumentsToBill({ documents, financeApBillId: settlement.financeApBillId });
+    res.json({ message: 'Attachment removed', documents });
+  } catch (error) {
+    console.error('Error removing settlement attachment:', error);
+    res.status(500).json({ message: 'Error removing attachment', error: error.message });
+  }
+});
+
 router.get('/:id', authMiddleware, async (req, res) => {
   try {
     const settlement = await FinalSettlement.findById(req.params.id)
@@ -329,6 +444,7 @@ router.get('/:id', authMiddleware, async (req, res) => {
         ]
       })
       .populate('loans.loanId')
+      .populate('documents.uploadedBy', 'firstName lastName')
       .populate(approverPopulate)
       .populate('approvedBy', 'name')
       .populate('processedBy', 'name')
@@ -391,7 +507,8 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       netSettlementAmount: clientNetSettlement,
       leaveBalance: clientLeaveBalance,
       loans: clientLoans,
-      standardEarnings: clientStandardEarnings
+      standardEarnings: clientStandardEarnings,
+      monthSalaries: clientMonthSalaries
     } = req.body;
 
     let company;
@@ -526,6 +643,7 @@ router.post('/', authMiddleware, checkPermission('settlement_create'), async (re
       loans,
       leaveBalance: clientLeaveBalance,
       standardEarnings: clientStandardEarnings,
+      monthSalaries: cleanMonthSalaries(clientMonthSalaries),
       grossSettlementAmount,
       netSettlementAmount,
       paymentMethod,
@@ -576,8 +694,8 @@ router.put('/:id', authMiddleware, checkPermission('settlement_management'), asy
         message: `Cannot edit while the settlement is ${settlement.workflowStatus}. Ask the approver to return it.`
       });
     }
-    // Never take workflow fields from the edit form
-    ['workflowStatus', ...APPROVER_FIELDS, 'hodApprovedAt', 'avpApprovedAt', 'ceoApprovedAt', 'forwardedAt', 'returnedAt',
+    // Never take workflow fields from the edit form (attachments have their own routes)
+    ['documents', 'workflowStatus', ...APPROVER_FIELDS, 'hodApprovedAt', 'avpApprovedAt', 'ceoApprovedAt', 'forwardedAt', 'returnedAt',
       'financeApBillId', 'financeApBillNumber', 'financePostedAt', 'financePostedBy', 'financePostError', 'paidAt', 'companyName']
       .forEach((k) => { delete req.body[k]; });
     if (req.body.companyId !== undefined || !settlement.companyId) {
@@ -599,6 +717,10 @@ router.put('/:id', authMiddleware, checkPermission('settlement_management'), asy
     if (body.deductions && body.deductions.taxDeductions != null && !(Number(body.deductions.incomeTax) > 0)) {
       body.deductions.incomeTax = body.deductions.taxDeductions;
       delete body.deductions.taxDeductions;
+    }
+
+    if (body.monthSalaries !== undefined) {
+      body.monthSalaries = cleanMonthSalaries(body.monthSalaries);
     }
 
     Object.keys(body).forEach((key) => {

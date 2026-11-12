@@ -22,6 +22,7 @@ import {
   Chip,
   FormHelperText,
   InputAdornment,
+  IconButton,
   Link
 } from '@mui/material';
 import {
@@ -31,7 +32,9 @@ import {
   Person as PersonIcon,
   Payment as PaymentIcon,
   Description as DescriptionIcon,
-  CheckCircle as CheckIcon
+  CheckCircle as CheckIcon,
+  Add as AddIcon,
+  Delete as DeleteIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { useFormik } from 'formik';
@@ -48,6 +51,12 @@ import {
   prorateSettlementAmountExact
 } from '../../utils/finalSettlementDays';
 import { PageLoading, LoadingSpinner } from '../../components/LoadingSpinner';
+import LoanAttachments, { LOAN_ATTACHMENT_ACCEPT, splitLoanFiles } from '../../components/HR/LoanAttachments';
+
+const SETTLEMENT_MONTH_OPTIONS = [
+  'January', 'February', 'March', 'April', 'May', 'June',
+  'July', 'August', 'September', 'October', 'November', 'December'
+].map((label, index) => ({ value: index + 1, label }));
 
 const steps = [
   'Employee & Basic Info',
@@ -69,6 +78,10 @@ const FinalSettlementForm = () => {
   const [loansLoading, setLoansLoading] = useState(false);
   const [employeeSearch, setEmployeeSearch] = useState('');
   const [snackbar, setSnackbar] = useState({ open: false, message: '', severity: 'success' });
+  // Attachments: files chosen now are uploaded right after the settlement is saved
+  const [pendingFiles, setPendingFiles] = useState([]);
+  const [existingDocs, setExistingDocs] = useState([]);
+  const [existingWorkflow, setExistingWorkflow] = useState('Draft');
   const [companies, setCompanies] = useState([]);
 
   // Filter employees based on search term
@@ -127,7 +140,8 @@ const FinalSettlementForm = () => {
       parseAmount(e.gratuity) +
       parseAmount(e.leaveEncashment) +
       parseAmount(e.noticePay) +
-      parseAmount(e.otherEarnings);
+      parseAmount(e.otherEarnings) +
+      (values.monthSalaries || []).reduce((sum, row) => sum + parseAmount(row.amount), 0);
     const totalDeductions =
       parseAmount(d.noticePeriodDeduction) +
       parseAmount(d.loanDeductions) +
@@ -226,6 +240,15 @@ const FinalSettlementForm = () => {
       dailyRate: getSettlementDailyRateRounded(gross, rateDate),
       earnings,
       deductions,
+      // Salary of any month paid through the settlement — amounts exactly as typed
+      monthSalaries: (values.monthSalaries || [])
+        .map((row) => ({
+          month: Number(row.month),
+          year: Number(row.year),
+          amount: parseAmount(row.amount),
+          note: row.note || ''
+        }))
+        .filter((row) => row.month && row.year && row.amount > 0),
       standardEarnings: values.standardEarnings || undefined,
       grossSettlementAmount: totals.grossSettlementAmount,
       netSettlementAmount: totals.netSettlementAmount,
@@ -330,6 +353,7 @@ const FinalSettlementForm = () => {
         overtime: 0,
         otherEarnings: 0
       },
+      monthSalaries: [],
       deductions: {
         noticePeriodDeduction: 0,
         loanDeductions: 0,
@@ -370,6 +394,7 @@ const FinalSettlementForm = () => {
         const shortfallDays = Math.max(0, values.noticePeriod - values.noticePeriodServed);
         const settlementData = buildSettlementPayload(values, employeeLoans, shortfallDays);
 
+        let savedId = id;
         if (id) {
           // Update existing settlement
           await finalSettlementService.updateSettlement(id, settlementData);
@@ -380,7 +405,8 @@ const FinalSettlementForm = () => {
           });
         } else {
           // Create new settlement
-          await finalSettlementService.createSettlement(settlementData);
+          const created = await finalSettlementService.createSettlement(settlementData);
+          savedId = created?.data?._id;
           setSnackbar({
             open: true,
             message: 'Settlement created successfully',
@@ -388,9 +414,25 @@ const FinalSettlementForm = () => {
           });
         }
 
+        let uploadFailed = false;
+        if (pendingFiles.length && savedId) {
+          try {
+            await finalSettlementService.uploadDocuments(savedId, pendingFiles);
+            setPendingFiles([]);
+          } catch (uploadErr) {
+            // Settlement is saved; tell HR the files did not go so they can add them from its page
+            uploadFailed = true;
+            setSnackbar({
+              open: true,
+              message: `Settlement saved, but attachments were not uploaded: ${uploadErr?.message || 'upload failed'}. Add them from the settlement's page.`,
+              severity: 'warning'
+            });
+          }
+        }
+
         setTimeout(() => {
-          navigate('/hr/settlements');
-        }, 1500);
+          navigate(uploadFailed && savedId ? `/hr/settlements/${savedId}` : '/hr/settlements');
+        }, uploadFailed ? 3500 : 1500);
       } catch (error) {
         console.error('Error saving settlement:', error);
         setSnackbar({
@@ -603,6 +645,8 @@ const FinalSettlementForm = () => {
       const earnings = settlement.earnings || {};
       const deductions = settlement.deductions || {};
       const leaveBalance = settlement.leaveBalance || {};
+      setExistingDocs(settlement.documents || []);
+      setExistingWorkflow(settlement.workflowStatus || 'Draft');
 
       formik.setValues({
         employeeId: settlement.employeeId,
@@ -648,6 +692,12 @@ const FinalSettlementForm = () => {
           overtime: earnings.overtime || 0,
           otherEarnings: earnings.otherEarnings || 0
         },
+        monthSalaries: (settlement.monthSalaries || []).map((row) => ({
+          month: row.month,
+          year: row.year,
+          amount: row.amount ?? '',
+          note: row.note || ''
+        })),
         deductions: {
           noticePeriodDeduction: deductions.noticePeriodDeduction || 0,
           loanDeductions: deductions.loanDeductions || 0,
@@ -1468,6 +1518,99 @@ const FinalSettlementForm = () => {
 
                 <Grid item xs={12}>
                   <Divider sx={{ my: 1 }} />
+                  <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: 1 }}>
+                    <Box>
+                      <Typography variant="subtitle1">Salary for month</Typography>
+                      <Typography variant="body2" color="textSecondary">
+                        Pay the salary of any month through this settlement. The amount is paid exactly as you type it —
+                        it is not calculated and no tax is worked out on it (enter any tax yourself under Tax Deductions).
+                      </Typography>
+                    </Box>
+                    <Button
+                      variant="outlined"
+                      size="small"
+                      startIcon={<AddIcon />}
+                      onClick={() => {
+                        const base = new Date(formik.values.lastWorkingDate || Date.now());
+                        const valid = !Number.isNaN(base.getTime());
+                        formik.setFieldValue('monthSalaries', [
+                          ...(formik.values.monthSalaries || []),
+                          {
+                            month: (valid ? base : new Date()).getMonth() + 1,
+                            year: (valid ? base : new Date()).getFullYear(),
+                            amount: '',
+                            note: ''
+                          }
+                        ]);
+                      }}
+                    >
+                      Add month salary
+                    </Button>
+                  </Box>
+                </Grid>
+                {(formik.values.monthSalaries || []).map((row, index) => (
+                  <React.Fragment key={index}>
+                    <Grid item xs={6} md={3}>
+                      <FormControl fullWidth>
+                        <InputLabel>Month</InputLabel>
+                        <Select
+                          label="Month"
+                          value={row.month}
+                          onChange={(e) => formik.setFieldValue(`monthSalaries.${index}.month`, e.target.value)}
+                        >
+                          {SETTLEMENT_MONTH_OPTIONS.map((m) => (
+                            <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>
+                          ))}
+                        </Select>
+                      </FormControl>
+                    </Grid>
+                    <Grid item xs={6} md={2}>
+                      <TextField
+                        fullWidth
+                        type="number"
+                        label="Year"
+                        value={row.year}
+                        onChange={(e) => formik.setFieldValue(`monthSalaries.${index}.year`, e.target.value)}
+                        inputProps={{ min: 2000, max: 2100 }}
+                      />
+                    </Grid>
+                    <Grid item xs={12} md={3}>
+                      <TextField
+                        fullWidth
+                        type="number"
+                        label="Salary amount"
+                        value={row.amount}
+                        onChange={(e) => formik.setFieldValue(`monthSalaries.${index}.amount`, e.target.value)}
+                        InputProps={amountInputProps}
+                        inputProps={{ min: 0 }}
+                      />
+                    </Grid>
+                    <Grid item xs={10} md={3}>
+                      <TextField
+                        fullWidth
+                        label="Note (optional)"
+                        value={row.note || ''}
+                        onChange={(e) => formik.setFieldValue(`monthSalaries.${index}.note`, e.target.value)}
+                        inputProps={{ maxLength: 200 }}
+                      />
+                    </Grid>
+                    <Grid item xs={2} md={1} sx={{ display: 'flex', alignItems: 'center' }}>
+                      <IconButton
+                        color="error"
+                        aria-label="Remove month salary"
+                        onClick={() => formik.setFieldValue(
+                          'monthSalaries',
+                          (formik.values.monthSalaries || []).filter((_, i) => i !== index)
+                        )}
+                      >
+                        <DeleteIcon />
+                      </IconButton>
+                    </Grid>
+                  </React.Fragment>
+                ))}
+
+                <Grid item xs={12}>
+                  <Divider sx={{ my: 1 }} />
                   <Typography variant="subtitle1" gutterBottom>
                     Deductions
                   </Typography>
@@ -1716,6 +1859,56 @@ const FinalSettlementForm = () => {
                 onChange={formik.handleChange}
                 placeholder="Any additional notes or special instructions..."
               />
+            </Grid>
+
+            <Grid item xs={12}>
+              <Typography variant="subtitle1" gutterBottom>Attachments</Typography>
+              <Typography variant="body2" color="textSecondary" sx={{ mb: 1 }}>
+                Attach supporting documents (resignation, clearance form, etc.). Approvers and Finance see them with the settlement.
+              </Typography>
+              {id && (
+                <Box sx={{ mb: 1.5 }}>
+                  <LoanAttachments
+                    loanId={id}
+                    service={finalSettlementService}
+                    documents={existingDocs}
+                    canDelete={!['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'].includes(existingWorkflow)}
+                    onChange={setExistingDocs}
+                    onError={(message) => setSnackbar({ open: true, message, severity: 'error' })}
+                  />
+                </Box>
+              )}
+              <Button variant="outlined" component="label" startIcon={<DescriptionIcon />}>
+                Choose files
+                <input
+                  type="file"
+                  hidden
+                  multiple
+                  accept={LOAN_ATTACHMENT_ACCEPT}
+                  onChange={(e) => {
+                    const { ok, tooBig } = splitLoanFiles(e.target.files);
+                    if (tooBig.length) {
+                      setSnackbar({ open: true, message: `Over 10 MB, not added: ${tooBig.map((f) => f.name).join(', ')}`, severity: 'error' });
+                    }
+                    setPendingFiles((prev) => [...prev, ...ok].slice(0, 10));
+                    e.target.value = '';
+                  }}
+                />
+              </Button>
+              <Typography variant="caption" color="textSecondary" display="block" sx={{ mt: 0.5 }}>
+                PDF, image, Word or Excel — up to 10 MB each. Uploaded when you save the settlement.
+              </Typography>
+              {pendingFiles.length > 0 && (
+                <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 1, mt: 1 }}>
+                  {pendingFiles.map((f, i) => (
+                    <Chip
+                      key={`${f.name}-${i}`}
+                      label={f.name}
+                      onDelete={() => setPendingFiles((prev) => prev.filter((_, idx) => idx !== i))}
+                    />
+                  ))}
+                </Box>
+              )}
             </Grid>
           </Grid>
         );

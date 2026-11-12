@@ -30,7 +30,7 @@ class MonthlyTaxUpdateService {
 
       const payrolls = await Payroll.find({ month, year, status: { $in: statuses } }).populate(
         'employee',
-        'firstName lastName employeeId department salary allowances hireDate appointmentDate taxExemption manualTax isActive'
+        'firstName lastName employeeId department salary allowances monthlyAllowanceOverrides hireDate appointmentDate taxExemption manualTax isActive'
       );
 
       if (payrolls.length === 0) {

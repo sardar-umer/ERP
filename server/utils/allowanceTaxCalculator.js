@@ -2,7 +2,7 @@ const {
   calculateMonthlyTaxFYAwareWithOneTimeArrears,
   calculateMonthlyTaxPaidMonths
 } = require('./taxCalculator');
-const { activeAmount, additionalAllowancesTotal } = require('./allowanceHelpers');
+const { activeAmount, additionalAllowancesTotal, getMonthlyAllowanceOverride } = require('./allowanceHelpers');
 const PayrollTaxSettings = require('../models/hr/PayrollTaxSettings');
 const {
   ALLOWANCE_TAX_KEYS,
@@ -428,10 +428,11 @@ const taxYearContextFor = (contextByEmployee, employeeId) =>
  * joining proration), so the reduced month is not annualized. Otherwise {} (this month = normal).
  */
 const normalPayForTax = ({ proration, monthlyGross, employee }) => {
-  if (!proration || !(Number(proration.factor) < 1)) return {};
+  // A one-month allowance change is not the normal pay either — the rest of the FY stays on the master
+  if (!proration || !(Number(proration.factor) < 1 || proration.allowanceOverride)) return {};
   return {
     normalGrossSalary: Math.max(0, Number(monthlyGross) || 0),
-    normalAllowances: employee?.allowances || {}
+    normalAllowances: employee?.allowances?.toObject?.() || employee?.allowances || {}
   };
 };
 
@@ -460,8 +461,15 @@ const calculateTaxForExistingPayroll = async ({ payroll, employee, settings, tax
 
   // Prorated month: the stored gross is (normal × factor), so the normal gross is gross ÷ factor
   const factor = Number(payroll.proration?.factor);
-  const normalPay = factor > 0 && factor < 1
-    ? normalPayForTax({ proration: payroll.proration, monthlyGross: Math.round(grossSalary / factor), employee })
+  const prorated = factor > 0 && factor < 1;
+  // One-month allowance change for this payroll month: annualize on the master allowances
+  const allowanceOverride = getMonthlyAllowanceOverride(employee, payroll.month, payroll.year);
+  const normalPay = prorated || allowanceOverride
+    ? normalPayForTax({
+      proration: { ...(payroll.proration?.toObject?.() || payroll.proration || { factor: 1 }), allowanceOverride },
+      monthlyGross: prorated ? Math.round(grossSalary / factor) : grossSalary,
+      employee
+    })
     : {};
 
   return calculatePayrollTaxWithSettings({

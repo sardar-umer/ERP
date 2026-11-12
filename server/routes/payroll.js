@@ -67,7 +67,7 @@ const router = express.Router();
 
 /** Fields required for payroll proration (joining + partial monthly pay) and salary math. */
 const PAYROLL_EMPLOYEE_SELECT =
-  'firstName lastName employeeId salary allowances arrears eobi employeeSecurity manualTax hireDate appointmentDate partialSalaryPay placementDepartment placementProject placementDesignation department position providentFund cashSalary';
+  'firstName lastName employeeId salary allowances arrears eobi employeeSecurity manualTax hireDate appointmentDate partialSalaryPay monthlyAllowanceOverrides placementDepartment placementProject placementDesignation department position providentFund cashSalary';
 
 const isProvidentFundEnabledForEmployee = (employee) =>
   employee?.providentFund?.isActive === true;
@@ -2586,7 +2586,7 @@ router.put('/:id', [
     (payroll.medicalAllowance || 0);
   const taxSettings = await loadPayrollTaxSettings();
   const employeeForTax = await Employee.findById(payroll.employee)
-    .select('manualTax eobi hireDate appointmentDate allowances')
+    .select('manualTax eobi hireDate appointmentDate allowances monthlyAllowanceOverrides')
     .lean();
   // Same rules as generation: salary cut doesn't cut tax, prorated month isn't annualized, FY arrears kept
   const taxCalculation = await calculateTaxForExistingPayroll({

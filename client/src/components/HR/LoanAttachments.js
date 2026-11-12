@@ -34,8 +34,9 @@ export const splitLoanFiles = (fileList) => {
 /**
  * Loan attachments: list with open links; optional upload / remove.
  * `loanId` + `canUpload` / `canDelete` enable editing; `onChange(documents)` receives the new list.
+ * `service` ({ uploadDocuments, deleteDocument }) lets other records (e.g. final settlements) reuse it.
  */
-export default function LoanAttachments({ loanId, documents = [], canUpload = false, canDelete = false, onChange, onError, dense = false }) {
+export default function LoanAttachments({ loanId, documents = [], canUpload = false, canDelete = false, onChange, onError, dense = false, service = loanService }) {
   const inputRef = useRef(null);
   const [busy, setBusy] = useState('');
 
@@ -45,7 +46,7 @@ export default function LoanAttachments({ loanId, documents = [], canUpload = fa
     if (!ok.length) return;
     try {
       setBusy('upload');
-      const res = await loanService.uploadDocuments(loanId, ok);
+      const res = await service.uploadDocuments(loanId, ok);
       onChange?.(res.documents || []);
     } catch (e) {
       onError?.(e.message || 'Upload failed');
@@ -59,7 +60,7 @@ export default function LoanAttachments({ loanId, documents = [], canUpload = fa
     if (!window.confirm(`Remove attachment "${doc.name}"?`)) return;
     try {
       setBusy(doc._id);
-      const res = await loanService.deleteDocument(loanId, doc._id);
+      const res = await service.deleteDocument(loanId, doc._id);
       onChange?.(res.documents || []);
     } catch (e) {
       onError?.(e.message || 'Could not remove the attachment');

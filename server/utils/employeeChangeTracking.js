@@ -54,6 +54,7 @@ const TRACKED = {
   taxExemption: { label: 'Tax Exemption', kind: 'bool' },
   manualTax: { label: 'Manual Tax', kind: 'json' },
   partialSalaryPay: { label: 'Partial Salary Pay', kind: 'json' },
+  monthlyAllowanceOverrides: { label: 'One-Month Allowance Change', kind: 'json' },
   ...Object.fromEntries(ALLOWANCES.map(([key, label]) => [`allowances.${key}`, { label, kind: 'allowance' }]))
 };
 const TRACKED_PATHS = Object.keys(TRACKED);
@@ -107,6 +108,16 @@ const display = async (path, raw) => {
     const months = (p.periods || []).map((x) => `${String(x.month).padStart(2, '0')}/${x.year}`).join(', ');
     return `${p.payableDaysPerMonth} days/month${months ? ` (${months})` : ''}`;
   }
+  if (path === 'monthlyAllowanceOverrides' && raw) {
+    const list = JSON.parse(raw) || [];
+    if (!list.length) return 'None';
+    return list.map((o) => {
+      const parts = Object.entries(o.amounts || {})
+        .filter(([, v]) => v !== null && v !== undefined)
+        .map(([k, v]) => `${(ALLOWANCES.find(([key]) => key === k) || [k, k])[1]} ${money(v)}`);
+      return `${String(o.month).padStart(2, '0')}/${o.year}: ${parts.join(', ')}`;
+    }).join('; ');
+  }
   return raw;
 };
 
@@ -122,7 +133,12 @@ const diffSnapshots = async (before, after, paths = TRACKED_PATHS) => {
     const b = rawValue(after, path);
     if (a === b) continue;
     // Off ↔ unset is not a change
-    if (TRACKED[path].kind === 'json' && [a, b].every((x) => !x || !JSON.parse(x).isActive)) continue;
+    const isOff = (x) => {
+      if (!x) return true;
+      const parsed = JSON.parse(x);
+      return Array.isArray(parsed) ? parsed.length === 0 : !parsed.isActive;
+    };
+    if (TRACKED[path].kind === 'json' && [a, b].every(isOff)) continue;
     changes.push({ field: path, label: TRACKED[path].label, from: await display(path, a), to: await display(path, b) });
   }
   return changes;

@@ -72,6 +72,18 @@ const PAYROLL_MONTH_OPTIONS = [
   { value: 12, label: 'December' }
 ];
 
+const MONTHLY_OVERRIDE_ALLOWANCES = [
+  { key: 'conveyance', label: 'Conveyance' },
+  { key: 'food', label: 'Food' },
+  { key: 'mobile', label: 'Mobile' },
+  { key: 'vehicle', label: 'Vehicle' },
+  { key: 'fuel', label: 'Fuel' },
+  { key: 'medical', label: 'Medical' },
+  { key: 'houseRent', label: 'House Rent' },
+  { key: 'special', label: 'Special' },
+  { key: 'other', label: 'Other' }
+];
+
 const EmployeeForm = () => {
   const { id } = useParams();
   const navigate = useNavigate();
@@ -82,6 +94,10 @@ const EmployeeForm = () => {
   const savedPage = location.state?.page || 0;
   const [activeStep, setActiveStep] = useState(0);
   const [partialPeriodDraft, setPartialPeriodDraft] = useState({
+    month: new Date().getMonth() + 1,
+    year: new Date().getFullYear()
+  });
+  const [allowanceOverrideDraft, setAllowanceOverrideDraft] = useState({
     month: new Date().getMonth() + 1,
     year: new Date().getFullYear()
   });
@@ -865,6 +881,14 @@ const EmployeeForm = () => {
             year: p.year
           }))
         },
+        monthlyAllowanceOverrides: (employeeData.monthlyAllowanceOverrides || []).map((o) => ({
+          month: o.month,
+          year: o.year,
+          note: o.note || '',
+          amounts: Object.fromEntries(
+            MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, o.amounts?.[key] ?? ''])
+          )
+        })),
         cashSalary: employeeData.cashSalary || false
       };
       
@@ -1020,6 +1044,7 @@ const EmployeeForm = () => {
         payableDaysPerMonth: '',
         periods: []
       },
+      monthlyAllowanceOverrides: [],
       // Placement fields
       placementSector: '',
       placementProject: '',
@@ -1139,6 +1164,22 @@ const EmployeeForm = () => {
           }
         }
         
+        // One-month allowance changes: keep only the amounts HR filled in (blank = keep the original)
+        if (Array.isArray(cleanedValues.monthlyAllowanceOverrides)) {
+          cleanedValues.monthlyAllowanceOverrides = cleanedValues.monthlyAllowanceOverrides
+            .map((o) => ({
+              month: parseInt(o.month, 10),
+              year: parseInt(o.year, 10),
+              note: o.note || '',
+              amounts: Object.fromEntries(
+                Object.entries(o.amounts || {})
+                  .filter(([, v]) => v !== '' && v !== null && v !== undefined && Number(v) >= 0)
+                  .map(([k, v]) => [k, Number(v)])
+              )
+            }))
+            .filter((o) => Object.keys(o.amounts).length > 0);
+        }
+
         // Process academicBackground array - filter out empty objects and convert dates
         if (cleanedValues.academicBackground && Array.isArray(cleanedValues.academicBackground)) {
           cleanedValues.academicBackground = cleanedValues.academicBackground
@@ -4196,6 +4237,132 @@ const EmployeeForm = () => {
               </Grid>
             )}
             
+            {/* One-month allowance change */}
+            <Grid item xs={12}>
+              <Divider sx={{ my: 2 }} />
+              <Typography variant="h6" gutterBottom>
+                Change allowances for one month
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
+                Pick a payroll month and enter the amount to pay in that month only. Leave a field blank to keep the
+                original amount. The allowances above are not changed, so the next month goes back to the original
+                automatically. Final settlement always uses the original allowances. If that month's payroll is
+                already generated, regenerate it to apply the change.
+              </Typography>
+            </Grid>
+            <Grid item xs={6} md={3}>
+              <FormControl fullWidth>
+                <InputLabel>Month</InputLabel>
+                <Select
+                  label="Month"
+                  value={allowanceOverrideDraft.month}
+                  onChange={(e) => setAllowanceOverrideDraft((prev) => ({ ...prev, month: e.target.value }))}
+                >
+                  {PAYROLL_MONTH_OPTIONS.map((m) => (
+                    <MenuItem key={m.value} value={m.value}>{m.label}</MenuItem>
+                  ))}
+                </Select>
+              </FormControl>
+            </Grid>
+            <Grid item xs={6} md={3}>
+              <TextField
+                fullWidth
+                label="Year"
+                type="number"
+                value={allowanceOverrideDraft.year}
+                onChange={(e) => setAllowanceOverrideDraft((prev) => ({ ...prev, year: e.target.value }))}
+                inputProps={{ min: 2020, max: 2100 }}
+              />
+            </Grid>
+            <Grid item xs={12} md={3} sx={{ display: 'flex', alignItems: 'center' }}>
+              <Button
+                variant="outlined"
+                startIcon={<AddIcon />}
+                onClick={() => {
+                  const month = Number(allowanceOverrideDraft.month);
+                  const year = Number(allowanceOverrideDraft.year);
+                  if (!month || !year || year < 2020) return;
+                  const list = formik.values.monthlyAllowanceOverrides || [];
+                  if (list.some((o) => Number(o.month) === month && Number(o.year) === year)) return;
+                  formik.setFieldValue('monthlyAllowanceOverrides', [
+                    ...list,
+                    {
+                      month,
+                      year,
+                      note: '',
+                      amounts: Object.fromEntries(MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, '']))
+                    }
+                  ]);
+                }}
+              >
+                Add month
+              </Button>
+            </Grid>
+            {(formik.values.monthlyAllowanceOverrides || []).map((override, index) => {
+              const monthLabel = PAYROLL_MONTH_OPTIONS.find((m) => m.value === Number(override.month))?.label
+                || `Month ${override.month}`;
+              return (
+                <Grid item xs={12} key={`${override.year}-${override.month}`}>
+                  <Paper variant="outlined" sx={{ p: 2 }}>
+                    <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1.5 }}>
+                      <Typography variant="subtitle1" sx={{ fontWeight: 600 }}>
+                        {monthLabel} {override.year} only
+                      </Typography>
+                      <IconButton
+                        size="small"
+                        color="error"
+                        aria-label={`Remove ${monthLabel} ${override.year} allowance change`}
+                        onClick={() => formik.setFieldValue(
+                          'monthlyAllowanceOverrides',
+                          (formik.values.monthlyAllowanceOverrides || []).filter((_, i) => i !== index)
+                        )}
+                      >
+                        <DeleteIcon fontSize="small" />
+                      </IconButton>
+                    </Box>
+                    <Grid container spacing={2}>
+                      {MONTHLY_OVERRIDE_ALLOWANCES.map(({ key, label }) => {
+                        const master = formik.values.allowances?.[key];
+                        const original = master?.isActive ? Number(master.amount) || 0 : 0;
+                        return (
+                          <Grid item xs={12} sm={6} md={4} key={key}>
+                            <TextField
+                              fullWidth
+                              size="small"
+                              type="number"
+                              label={`${label} Allowance`}
+                              value={override.amounts?.[key] ?? ''}
+                              onChange={(e) => formik.setFieldValue(
+                                `monthlyAllowanceOverrides.${index}.amounts.${key}`,
+                                e.target.value
+                              )}
+                              inputProps={{ min: 0 }}
+                              InputLabelProps={{ shrink: true }}
+                              placeholder="No change"
+                              helperText={`Original: PKR ${original.toLocaleString()}`}
+                            />
+                          </Grid>
+                        );
+                      })}
+                      <Grid item xs={12}>
+                        <TextField
+                          fullWidth
+                          size="small"
+                          label="Reason (optional)"
+                          value={override.note || ''}
+                          onChange={(e) => formik.setFieldValue(
+                            `monthlyAllowanceOverrides.${index}.note`,
+                            e.target.value
+                          )}
+                          inputProps={{ maxLength: 300 }}
+                        />
+                      </Grid>
+                    </Grid>
+                  </Paper>
+                </Grid>
+              );
+            })}
+
             {/* EOBI and Provident Fund */}
             <Grid item xs={12}>
               <Divider sx={{ my: 3 }} />

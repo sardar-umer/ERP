@@ -128,6 +128,28 @@ const finalSettlementSchema = new mongoose.Schema({
     totalEarnings: { type: Number, default: 0 }
   },
 
+  /**
+   * Salary of any month paid through this settlement (e.g. an unpaid earlier month) — the amount is
+   * typed by HR as-is: not calculated, not prorated, no tax worked out on it. Added to total earnings.
+   */
+  monthSalaries: [{
+    _id: false,
+    month: { type: Number, min: 1, max: 12, required: true },
+    year: { type: Number, min: 2000, required: true },
+    amount: { type: Number, min: 0, default: 0 },
+    note: { type: String, trim: true, maxlength: 200 }
+  }],
+
+  /** Supporting papers (resignation, clearance form, etc.) — seen by approvers and Finance with the settlement */
+  documents: [{
+    name: { type: String, required: true, trim: true },
+    filePath: { type: String, required: true },
+    mimeType: { type: String, trim: true },
+    size: { type: Number },
+    uploadedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    uploadedAt: { type: Date, default: Date.now }
+  }],
+
   /** Monthly (standard) amounts the actual earnings were prorated from — the "Standard" column of Final Dues */
   standardEarnings: {
     basicSalary: { type: Number, default: 0 },
@@ -271,14 +293,6 @@ const finalSettlementSchema = new mongoose.Schema({
     ref: 'User'
   },
 
-  // Documents
-  documents: [{
-    name: String,
-    type: String,
-    url: String,
-    uploadedAt: { type: Date, default: Date.now }
-  }],
-
   // Comments and Notes
   comments: [{
     user: {
@@ -383,7 +397,8 @@ finalSettlementSchema.pre('save', function(next) {
     (e.leaveEncashment || 0) +
     (e.noticePay || 0) +
     (e.providentFund || 0) +
-    (e.eobi || 0);
+    (e.eobi || 0) +
+    (this.monthSalaries || []).reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
 
   // Calculate total deductions
   const d = this.deductions || {};

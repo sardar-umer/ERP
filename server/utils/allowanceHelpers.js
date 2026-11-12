@@ -80,6 +80,79 @@ const prorateEmployeeAllowances = (allowances, factor) => {
   return out;
 };
 
+/** Allowance types HR can change for one payroll month. */
+const MONTHLY_OVERRIDE_KEYS = ['conveyance', 'food', 'mobile', 'vehicle', 'fuel', 'medical', 'houseRent', 'special', 'other'];
+
+const plainObject = (value) => value?.toObject?.() || value || {};
+
+/** Override amounts that are actually set (blank / missing = not overridden). */
+const overrideAmounts = (amounts) => {
+  const src = plainObject(amounts);
+  const out = {};
+  MONTHLY_OVERRIDE_KEYS.forEach((key) => {
+    const raw = src[key];
+    if (raw === undefined || raw === null || raw === '') return;
+    const amount = Number(raw);
+    if (Number.isFinite(amount) && amount >= 0) out[key] = Math.round(amount);
+  });
+  return out;
+};
+
+/**
+ * One-month allowance change set on the employee for this payroll month, or null.
+ * @returns {{ month: number, year: number, amounts: object, note?: string }|null}
+ */
+const getMonthlyAllowanceOverride = (employee, month, year) => {
+  const list = employee?.monthlyAllowanceOverrides;
+  if (!Array.isArray(list) || !list.length) return null;
+  const entry = list.find((o) => Number(o.month) === Number(month) && Number(o.year) === Number(year));
+  if (!entry) return null;
+  const amounts = overrideAmounts(entry.amounts);
+  if (!Object.keys(amounts).length) return null;
+  return { month: Number(month), year: Number(year), amounts, note: entry.note || '' };
+};
+
+/**
+ * Employee allowances for one payroll month: the master allowances, with any one-month change for
+ * that month applied on top. The master is never modified, so the next month is back to normal.
+ * Final settlement does not use this — it reads the master allowances.
+ */
+const allowancesForPayrollMonth = (employee, month, year) => {
+  const master = plainObject(employee?.allowances);
+  const override = getMonthlyAllowanceOverride(employee, month, year);
+  if (!override) return { allowances: master, override: null };
+  const allowances = { ...master };
+  Object.entries(override.amounts).forEach(([key, amount]) => {
+    allowances[key] = { isActive: amount > 0, amount };
+  });
+  // Changing vehicle or fuel moves a legacy combined amount onto the split fields
+  if (override.amounts.vehicle !== undefined || override.amounts.fuel !== undefined) {
+    if (override.amounts.vehicle === undefined) {
+      allowances.vehicle = { isActive: vehicleAllowanceAmount(master) > 0, amount: vehicleAllowanceAmount(master) };
+    }
+    if (override.amounts.fuel === undefined) {
+      allowances.fuel = { isActive: fuelAllowanceAmount(master) > 0, amount: fuelAllowanceAmount(master) };
+    }
+    allowances.vehicleFuel = defaultEntry();
+  }
+  return { allowances, override };
+};
+
+/** Clean one-month allowance changes from the employee form (one entry per month, set amounts only). */
+const buildMonthlyAllowanceOverridesPayload = (list) => {
+  if (!Array.isArray(list)) return [];
+  const byPeriod = new Map();
+  list.forEach((entry) => {
+    const month = parseInt(entry?.month, 10);
+    const year = parseInt(entry?.year, 10);
+    if (!(month >= 1 && month <= 12) || !(year >= 2020)) return;
+    const amounts = overrideAmounts(entry.amounts);
+    if (!Object.keys(amounts).length) return;
+    byPeriod.set(`${year}-${month}`, { month, year, amounts, note: String(entry.note || '').trim().slice(0, 300) });
+  });
+  return [...byPeriod.values()].sort((a, b) => (a.year - b.year) || (a.month - b.month));
+};
+
 /**
  * Normalize allowances for API persistence (clears legacy vehicleFuel).
  * @param {object|null|undefined} src
@@ -192,7 +265,7 @@ const syncDraftPayrollsTaxFromSettings = async (settings) => {
   for (const payroll of payrolls) {
     const employeeId = payroll.employee;
     const emp = employeeId
-      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax').lean()
+      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax monthlyAllowanceOverrides').lean()
       : null;
 
     const periodKey = `${payroll.year}-${payroll.month}`;
@@ -313,6 +386,10 @@ module.exports = {
   fuelAllowanceAmount,
   additionalAllowancesTotal,
   prorateEmployeeAllowances,
+  MONTHLY_OVERRIDE_KEYS,
+  getMonthlyAllowanceOverride,
+  allowancesForPayrollMonth,
+  buildMonthlyAllowanceOverridesPayload,
   buildAllowancesPayload,
   payrollAllowancesFromEmployee,
   mergePayrollAllowances,

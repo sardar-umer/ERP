@@ -272,8 +272,31 @@ class FinalSettlementService {
     return ((currentIndex + 1) / statusOrder.length) * 100;
   }
 
+  // Attachments (supporting papers) — same shape as loan attachments
+  uploadDocuments = async (id, files = []) => {
+    try {
+      const form = new FormData();
+      files.forEach((f) => form.append('attachments', f));
+      const response = await api.post(`/final-settlements/${id}/documents`, form, {
+        headers: { 'Content-Type': 'multipart/form-data' }
+      });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  };
+
+  deleteDocument = async (id, docId) => {
+    try {
+      const response = await api.delete(`/final-settlements/${id}/documents/${docId}`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error;
+    }
+  };
+
   // Format earnings for display
-  formatEarnings(earnings) {
+  formatEarnings(earnings, monthSalaries = []) {
     if (!earnings) return {};
 
     const totalFromParts =
@@ -294,7 +317,8 @@ class FinalSettlementService {
       (Number(earnings.leaveEncashment) || 0) +
       (Number(earnings.noticePay) || 0) +
       (Number(earnings.providentFund) || 0) +
-      (Number(earnings.eobi) || 0);
+      (Number(earnings.eobi) || 0) +
+      (monthSalaries || []).reduce((sum, row) => sum + (Number(row.amount) || 0), 0);
     
     return {
       basicSalary: formatPKR(earnings.basicSalary || 0),

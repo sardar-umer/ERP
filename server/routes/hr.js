@@ -26,6 +26,7 @@ const EmployeeIncrement = require('../models/hr/EmployeeIncrement');
 const incrementService = require('../services/incrementService');
 const {
   buildAllowancesPayload,
+  buildMonthlyAllowanceOverridesPayload,
   syncDraftPayrollsAllowancesFromEmployee,
   syncDraftPayrollsManualTaxFromEmployee
 } = require('../utils/allowanceHelpers');
@@ -641,6 +642,9 @@ router.post('/employees', [
 
     if (employeeData.allowances) {
       employeeData.allowances = buildAllowancesPayload(employeeData.allowances);
+    }
+    if ('monthlyAllowanceOverrides' in employeeData) {
+      employeeData.monthlyAllowanceOverrides = buildMonthlyAllowanceOverridesPayload(employeeData.monthlyAllowanceOverrides);
     }
 
     // Check if another ACTIVE employee already exists with the same ID Card number
@@ -1390,6 +1394,9 @@ router.put('/employees/:id', [
 
     if (employeeData.allowances) {
       employeeData.allowances = buildAllowancesPayload(employeeData.allowances);
+    }
+    if ('monthlyAllowanceOverrides' in employeeData) {
+      employeeData.monthlyAllowanceOverrides = buildMonthlyAllowanceOverridesPayload(employeeData.monthlyAllowanceOverrides);
     }
 
     const existingEmployee = await Employee.findOne({ _id: req.params.id, isDeleted: false })

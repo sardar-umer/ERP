@@ -3,6 +3,7 @@ const {
   buildProrationRemarksSuffix: buildJoiningProrationRemarksSuffix,
   adjustAttendanceForJoiningProration
 } = require('./payrollJoiningProration');
+const { allowancesForPayrollMonth } = require('./allowanceHelpers');
 
 const MONTH_NAMES = [
   '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -55,12 +56,34 @@ const buildPartialSalaryRemarksSuffix = (proration) => {
   return ` (Partial pay ${proration.payableDays}/${proration.daysInMonth} days on salary only)`;
 };
 
+const ALLOWANCE_LABELS = {
+  conveyance: 'Conveyance',
+  food: 'Food',
+  mobile: 'Mobile',
+  vehicle: 'Vehicle',
+  fuel: 'Fuel',
+  medical: 'Medical',
+  houseRent: 'House Rent',
+  special: 'Special',
+  other: 'Other'
+};
+
+const buildAllowanceOverrideRemarksSuffix = (proration) => {
+  const amounts = proration?.allowanceOverride?.amounts;
+  if (!amounts || !Object.keys(amounts).length) return '';
+  const parts = Object.entries(amounts).map(
+    ([key, amount]) => `${ALLOWANCE_LABELS[key] || key} ${Number(amount).toLocaleString('en-PK')}`
+  );
+  return ` (Allowance changed for this month only: ${parts.join(', ')})`;
+};
+
 const buildPayrollProrationRemarksSuffix = (proration) => {
-  if (!proration?.isProrated) return '';
+  const overrideSuffix = buildAllowanceOverrideRemarksSuffix(proration);
+  if (!proration?.isProrated) return overrideSuffix;
   if (proration.type === 'partial_salary') {
-    return buildPartialSalaryRemarksSuffix(proration);
+    return buildPartialSalaryRemarksSuffix(proration) + overrideSuffix;
   }
-  return buildJoiningProrationRemarksSuffix(proration);
+  return buildJoiningProrationRemarksSuffix(proration) + overrideSuffix;
 };
 
 /**
@@ -68,21 +91,32 @@ const buildPayrollProrationRemarksSuffix = (proration) => {
  * Partial salary scales GROSS/SALARY only — allowances stay at full monthly amounts.
  */
 const applyPayrollProration = (employee, month, year, monthlyGross) => {
-  const joiningResult = applyJoiningProration(employee, month, year, monthlyGross);
+  // One-month allowance change (employee master untouched) — this month's payroll uses these amounts
+  const { allowances: monthAllowances, override } = allowancesForPayrollMonth(employee, month, year);
+  const monthEmployee = override
+    ? { hireDate: employee?.hireDate, appointmentDate: employee?.appointmentDate, allowances: monthAllowances }
+    : employee;
+  const withOverride = (result) => (
+    override && result.proration
+      ? { ...result, proration: { ...result.proration, allowanceOverride: override } }
+      : result
+  );
+
+  const joiningResult = applyJoiningProration(monthEmployee, month, year, monthlyGross);
   if (joiningResult.skipPayroll) return joiningResult;
 
   const partialProration = getPartialSalaryProration(employee, month, year);
-  if (!partialProration) return joiningResult;
+  if (!partialProration) return withOverride(joiningResult);
 
   const factor = partialProration.factor;
-  return {
+  return withOverride({
     skipPayroll: false,
     proration: partialProration,
     joiningDate: joiningResult.joiningDate,
     grossSalary: Math.round((Number(monthlyGross) || 0) * factor),
     // Partial pay must NOT scale allowances / other pay heads — only salary (gross).
-    allowances: employee?.allowances || {}
-  };
+    allowances: monthAllowances
+  });
 };
 
 module.exports = {

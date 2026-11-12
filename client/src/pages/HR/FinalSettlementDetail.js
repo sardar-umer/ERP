@@ -60,9 +60,12 @@ import {
 } from '../../components/HR/FinalSettlementWorkflow';
 import api from '../../services/api';
 import { formatPKR } from '../../utils/currency';
+import LoanAttachments from '../../components/HR/LoanAttachments';
 import {
   downloadFinalSettlementPdf,
-  printFinalSettlementPdf
+  printFinalSettlementPdf,
+  monthSalaryLabel,
+  monthSalaryRows
 } from '../../utils/finalSettlementDocumentUtils';
 
 const FinalSettlementDetail = () => {
@@ -187,9 +190,21 @@ const FinalSettlementDetail = () => {
     downloadFinalSettlementPdf(settlement, { ...company, name: settlement.companyName || company.name });
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!settlement) return;
-    printFinalSettlementPdf(settlement, { ...company, name: settlement.companyName || company.name });
+    try {
+      // Attachments are printed after the Final Dues page, each on its own page
+      const result = await printFinalSettlementPdf(settlement, { ...company, name: settlement.companyName || company.name });
+      if (result?.notPrinted?.length) {
+        setSnackbar({
+          open: true,
+          message: `Could not be printed (open and print separately): ${result.notPrinted.join(', ')}`,
+          severity: 'warning'
+        });
+      }
+    } catch (e) {
+      setSnackbar({ open: true, message: `Could not prepare the print: ${e?.message || 'unknown error'}`, severity: 'error' });
+    }
   };
 
   const handleAddComment = async () => {
@@ -240,7 +255,7 @@ const FinalSettlementDetail = () => {
   }
 
   const formattedSettlement = finalSettlementService.formatSettlementData(settlement);
-  const formattedEarnings = finalSettlementService.formatEarnings(settlement.earnings);
+  const formattedEarnings = finalSettlementService.formatEarnings(settlement.earnings, settlement.monthSalaries);
   const formattedDeductions = finalSettlementService.formatDeductions(settlement.deductions);
   const formattedLoans = finalSettlementService.formatLoanSettlements(settlement.loans);
 
@@ -552,6 +567,19 @@ const FinalSettlementDetail = () => {
                       <TableCell>Other Allowances</TableCell>
                       <TableCell align="right">{formattedEarnings.otherAllowances}</TableCell>
                     </TableRow>
+                    {monthSalaryRows(settlement).map((row) => (
+                      <TableRow key={`${row.year}-${row.month}`}>
+                        <TableCell>
+                          {monthSalaryLabel(row)}
+                          {row.note ? (
+                            <Typography variant="caption" color="textSecondary" display="block">
+                              {row.note}
+                            </Typography>
+                          ) : null}
+                        </TableCell>
+                        <TableCell align="right">{formatPKR(row.amount || 0)}</TableCell>
+                      </TableRow>
+                    ))}
                     <TableRow>
                       <TableCell>Other Earnings</TableCell>
                       <TableCell align="right">{formattedEarnings.otherEarnings}</TableCell>
@@ -697,6 +725,28 @@ const FinalSettlementDetail = () => {
             </Card>
           </Grid>
         )}
+
+        {/* Attachments */}
+        <Grid item xs={12}>
+          <Card>
+            <CardContent>
+              <Typography variant="h6" gutterBottom>Attachments</Typography>
+              <LoanAttachments
+                loanId={settlement._id}
+                service={finalSettlementService}
+                documents={settlement.documents || []}
+                canUpload={workflowMe.isAdmin || !IN_APPROVAL.includes(settlement.workflowStatus)}
+                canDelete={workflowMe.isAdmin
+                  || (settlement.status === 'pending' && !IN_APPROVAL.includes(settlement.workflowStatus))}
+                onChange={(documents) => {
+                  setSettlement((prev) => ({ ...prev, documents }));
+                  setSnackbar({ open: true, message: 'Attachments updated', severity: 'success' });
+                }}
+                onError={(message) => setSnackbar({ open: true, message, severity: 'error' })}
+              />
+            </CardContent>
+          </Card>
+        </Grid>
 
         {/* Comments */}
         <Grid item xs={12}>
