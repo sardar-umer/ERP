@@ -108,6 +108,7 @@ import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionA
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
+import WhtField, { computeWht, whtPayload } from '../../components/Finance/WhtField';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
@@ -1275,6 +1276,8 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
       reference: '',
       paymentDate: new Date().toISOString().split('T')[0],
       whtRate: 0,
+      whtAmount: '',
+      whtBy: 'rate',
       costCenter: '',
       bankAccountId: '',
       relatedPartyAccountId: ''
@@ -1558,9 +1561,16 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
     setVendorAdvanceUseAmount(adv.vendorAdvanceId, amount);
   };
 
+  // WHT on the bank payment: Finance gives either the rate or the rupee amount; the other is worked out
+  const paymentWht = computeWht(paymentData.amount, paymentData);
+
   const handleRecordPayment = async () => {
     // Advance first, then the bank pays only what is left (Total Payment Amount already excludes the advance)
     const bankAmount = roundPay2(paymentData.amount);
+    if (bankAmount > 0 && paymentWht.invalid) {
+      toast.error('WHT must be less than the payment amount');
+      return;
+    }
     if (bankAmount <= 0 && !vendorAdvanceApplyRows.length) {
       toast.error('Payment amount must be greater than zero');
       return;
@@ -1653,7 +1663,8 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
         reference: paymentData.reference || '',
         narration: paymentData.narration,
           paymentDate: paymentData.paymentDate,
-          whtRate: Number(paymentData.whtRate) || 0,
+          // A typed WHT amount is posted exactly as entered; otherwise the rate is sent
+          ...whtPayload(paymentData),
           bankAccountId: paymentData.bankAccountId || null,
           relatedPartyAccountId: paymentData.relatedPartyAccountId || null,
         costCenter: paymentData.costCenter || null,
@@ -4433,7 +4444,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                 {payeeType === 'employee' ? 'Bank payment (Step 2b)' : 'Payment details'}
               </Typography>
             </Grid>
-            <Grid item xs={6}>
+            <Grid item xs={12} sm={6} md={4}>
               <TextField fullWidth label="Total Payment Amount (PKR)" type="number"
                 value={paymentData.amount}
                 size="small"
@@ -4442,14 +4453,20 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                   ? `Bills ${formatPKR(roundPay2(paymentData.amount + vendorAdvanceApplyTotal))} − advance ${formatPKR(vendorAdvanceApplyTotal)} = ${formatPKR(paymentData.amount)} from bank${paymentData.amount <= 0 ? ' (advance covers it all)' : ''}`
                   : 'Sum of selected bills in the table below'} />
             </Grid>
-            <Grid item xs={6}>
-              <TextField fullWidth label="WHT Rate %" type="number" placeholder="e.g. 4.5"
-                value={paymentData.whtRate || ''}
-                onChange={(e) => setPaymentData({ ...paymentData, whtRate: e.target.value })}
-                size="small" inputProps={{ min: 0, max: 30, step: 0.01 }}
-                helperText={paymentData.whtRate > 0
-                  ? `WHT: PKR ${((paymentData.amount || 0) * (paymentData.whtRate / 100)).toFixed(2)} — Net to bank: PKR ${((paymentData.amount || 0) * (1 - paymentData.whtRate / 100)).toFixed(2)}`
-                  : 'Leave 0 if no WHT applies'} />
+            {/* WHT: one field — choose % or PKR; what is typed is what is posted */}
+            <Grid item xs={12} sm={6} md={4}>
+              <WhtField
+                gross={paymentData.amount}
+                form={paymentData}
+                onChange={(patch) => setPaymentData({ ...paymentData, ...patch })}
+              />
+            </Grid>
+            <Grid item xs={12} sm={12} md={4}>
+              <TextField fullWidth label="Net Payable (PKR)" type="number"
+                value={paymentWht.net}
+                size="small"
+                InputProps={{ readOnly: true }}
+                helperText={paymentWht.amount > 0 ? `${formatPKR(paymentData.amount || 0)} − WHT ${formatPKR(paymentWht.amount)}` : 'Paid from bank'} />
             </Grid>
             <Grid item xs={4}>
               <FormControl fullWidth size="small">

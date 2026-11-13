@@ -10,6 +10,7 @@ import {
   CheckCircle as PaidIcon, AccountBalance as BankIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import WhtField, { computeWht, whtPayload } from '../../components/Finance/WhtField';
 
 const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
@@ -32,7 +33,9 @@ export default function BatchPayment() {
     bankAccountId: '',
     reference: '',
     date: new Date().toISOString().split('T')[0],
-    whtRate: 0
+    whtRate: 0,
+    whtAmount: '',
+    whtBy: 'rate'
   });
 
   const load = useCallback(async () => {
@@ -89,11 +92,13 @@ export default function BatchPayment() {
 
   const selectedBills = bills.filter(b => selected.has(b._id));
   const totalSelected = selectedBills.reduce((s, b) => s + (b.outstandingAmount ?? ((b.totalAmount || 0) - (b.amountPaid || 0) - (b.advanceApplied || 0))), 0);
-  const whtAmount     = payment.whtRate > 0 ? Math.round(totalSelected * (payment.whtRate / 100) * 100) / 100 : 0;
-  const netAmount     = Math.round((totalSelected - whtAmount) * 100) / 100;
+  const wht           = computeWht(totalSelected, payment);
+  const whtAmount     = wht.invalid ? 0 : wht.amount;
+  const netAmount     = wht.net;
 
   const handlePay = async () => {
     if (selected.size === 0) { setError('Select at least one bill'); return; }
+    if (wht.invalid) { setError('WHT must be less than the payment amount'); return; }
     if (!window.confirm(`Pay ${selected.size} bill(s) totaling ${fmt(totalSelected)}?`)) return;
     setPaying(true); setError(''); setSuccess(''); setResult(null);
     try {
@@ -107,7 +112,9 @@ export default function BatchPayment() {
 
       const res = await api.post('/finance/accounts-payable/batch-payment', {
         bills: billsPayload,
-        ...payment
+        ...payment,
+        // A typed WHT amount is posted exactly as entered; otherwise the rate is sent
+        ...whtPayload(payment)
       });
       setResult(res.data.data);
       setSuccess(res.data.message);
@@ -251,9 +258,7 @@ export default function BatchPayment() {
               <TextField fullWidth size="small" label="Reference / Cheque No."
                 value={payment.reference} onChange={e => setPayment(p => ({ ...p, reference: e.target.value }))} />
 
-              <TextField fullWidth size="small" label="WHT Rate %" type="number"
-                value={payment.whtRate} onChange={e => setPayment(p => ({ ...p, whtRate: e.target.value }))}
-                inputProps={{ min: 0, max: 30, step: 0.5 }} />
+              <WhtField gross={totalSelected} form={payment} onChange={(patch) => setPayment(p => ({ ...p, ...patch }))} />
             </Stack>
 
             <Divider sx={{ my: 2 }} />
@@ -271,7 +276,7 @@ export default function BatchPayment() {
                 </Box>
                 {whtAmount > 0 && (
                   <Box display="flex" justifyContent="space-between">
-                    <Typography variant="body2" color="text.secondary">WHT @ {payment.whtRate}%</Typography>
+                    <Typography variant="body2" color="text.secondary">WHT @ {wht.rate}%</Typography>
                     <Typography variant="body2" color="warning.main">— {fmt(whtAmount)}</Typography>
                   </Box>
                 )}

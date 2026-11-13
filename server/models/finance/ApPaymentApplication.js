@@ -26,6 +26,8 @@ const apPaymentApplicationSchema = new mongoose.Schema({
     reference: { type: String, trim: true },
     batchId: { type: String, trim: true },
     whtRate: { type: Number, default: 0 },
+    /** WHT withheld, as posted (entered directly, or worked out from the rate) */
+    whtAmount: { type: Number, default: 0 },
     bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
     relatedPartyAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account' },
     payingCompanyId: { type: mongoose.Schema.Types.ObjectId, ref: 'PlacementCompany' },

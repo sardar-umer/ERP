@@ -18,6 +18,7 @@ import {
 } from '@mui/icons-material';
 import { toast } from 'react-hot-toast';
 import api from '../../services/api';
+import WhtField, { computeWht, whtPayload } from './WhtField';
 import FinanceApprovalAuthorityPicker from './FinanceApprovalAuthorityPicker';
 import {
   fetchFinanceAuthorityCandidates,
@@ -92,7 +93,9 @@ export default function QuickbooksPayBillsModal({
     relatedPartyAccountId: '',
     reference: '',
     narration: '',
-    whtRate: 0
+    whtRate: 0,
+    whtAmount: '',
+    whtBy: 'rate'
   });
 
   const [processing, setProcessing] = useState(false);
@@ -351,11 +354,8 @@ export default function QuickbooksPayBillsModal({
     return round2(selectedBills.reduce((s, r) => s + (Number(r.payAmount) || 0), 0));
   }, [selectedBills]);
 
-  const whtAmount = useMemo(() => {
-    const rate = Number(paymentForm.whtRate) || 0;
-    if (rate <= 0) return 0;
-    return round2(totalSelectedPayAmount * (rate / 100));
-  }, [totalSelectedPayAmount, paymentForm.whtRate]);
+  const wht = computeWht(totalSelectedPayAmount, paymentForm);
+  const whtAmount = wht.invalid ? 0 : wht.amount;
 
   const netDisbursementAmount = useMemo(() => {
     return round2(Math.max(0, totalSelectedPayAmount - whtAmount));
@@ -372,6 +372,10 @@ export default function QuickbooksPayBillsModal({
 
     if (totalSelectedPayAmount <= 0) {
       toast.error('Total payment amount must be greater than zero');
+      return;
+    }
+    if (wht.invalid) {
+      toast.error('WHT must be less than the payment amount');
       return;
     }
 
@@ -407,7 +411,8 @@ export default function QuickbooksPayBillsModal({
         reference: paymentForm.reference || '',
         narration: paymentForm.narration,
         paymentDate: paymentForm.paymentDate,
-        whtRate: Number(paymentForm.whtRate) || 0,
+        // A typed WHT amount is posted exactly as entered; otherwise the rate is sent
+        ...whtPayload(paymentForm),
         bankAccountId: paymentForm.bankAccountId || null,
         relatedPartyAccountId: paymentForm.relatedPartyAccountId || null,
         payingCompanyId: payingCompanyId || selectedCompanyId || null,
@@ -705,12 +710,16 @@ export default function QuickbooksPayBillsModal({
             </Grid>
 
             <Grid item xs={12} sm={6}>
-              <TextField
-                fullWidth size="small" type="number" label="WHT Rate % (Optional)"
-                value={paymentForm.whtRate || ''}
-                onChange={(e) => setPaymentForm({ ...paymentForm, whtRate: e.target.value })}
-                inputProps={{ min: 0, max: 30, step: 0.1 }}
-                helperText={whtAmount > 0 ? `WHT Deduction: ${formatPKR(whtAmount)} | Net Bank: ${formatPKR(netDisbursementAmount)}` : 'Leave 0 if exempt'}
+              <WhtField
+                label="WHT (Optional)"
+                gross={totalSelectedPayAmount}
+                form={paymentForm}
+                onChange={(patch) => setPaymentForm({ ...paymentForm, ...patch })}
+                helperText={wht.invalid
+                  ? 'Must be less than the payment amount'
+                  : whtAmount > 0
+                    ? `WHT Deduction: ${formatPKR(whtAmount)} (${wht.rate}%) | Net Bank: ${formatPKR(netDisbursementAmount)}`
+                    : 'Leave empty if exempt'}
               />
             </Grid>
           </Grid>

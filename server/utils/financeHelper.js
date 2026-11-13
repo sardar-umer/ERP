@@ -27,6 +27,26 @@ const { resolveDocumentCompanyId } = require('./financeCompanyContext');
  * Finance Helper Utility
  * Centralizes AR/AP creation and GL posting logic
  */
+/**
+ * WHT on a bill payment. Finance may give a rate, or the exact rupee amount to withhold; an amount wins
+ * and is posted as entered (a rate worked back from an amount would be a few paisa off).
+ * Returns the amount, the rate to record, and the label for the journal line.
+ */
+function resolvePaymentWht(grossAmount, whtRateInput, whtAmountInput) {
+  const gross = Math.round((Number(grossAmount) || 0) * 100) / 100;
+  const rateIn = Number(whtRateInput) || 0;
+  const amountIn = Math.round((Number(whtAmountInput) || 0) * 100) / 100;
+  if (rateIn < 0 || amountIn < 0) throw new Error('WHT cannot be negative');
+  if (amountIn > 0) {
+    if (amountIn >= gross) throw new Error('WHT amount must be less than the payment amount');
+    const rate = gross > 0 ? Math.round((amountIn / gross) * 100 * 10000) / 10000 : 0;
+    return { whtAmount: amountIn, whtRate: rate, whtLabel: `WHT ${amountIn.toLocaleString('en-PK', { minimumFractionDigits: 2 })} (${rate}%)` };
+  }
+  if (rateIn >= 100) throw new Error('WHT rate must be less than 100%');
+  const whtAmount = rateIn > 0 ? Math.round(gross * (rateIn / 100) * 100) / 100 : 0;
+  return { whtAmount, whtRate: rateIn, whtLabel: `WHT @ ${rateIn}%` };
+}
+
 const FinanceHelper = {
   // Account Mapping Constants (matching actual database accounts)
   ACCOUNTS: {
@@ -1556,7 +1576,8 @@ const FinanceHelper = {
         reference,
         date,
         createdBy,
-        whtRate = 0,
+        whtRate: whtRateInput = 0,
+        whtAmount: whtAmountInput = 0,
         bankAccountId,
         allocations,
         financeApprovalAuthorities,
@@ -1598,7 +1619,7 @@ const FinanceHelper = {
         }
       }
 
-      const whtAmount = whtRate > 0 ? Math.round(amount_ * (whtRate / 100) * 100) / 100 : 0;
+      const { whtAmount, whtRate, whtLabel } = resolvePaymentWht(amount_, whtRateInput, whtAmountInput);
       const netBankAmount = Math.round((amount_ - whtAmount) * 100) / 100;
 
       const normalizedAllocations = Array.isArray(allocations)
@@ -1671,7 +1692,7 @@ const FinanceHelper = {
       if (whtAmount > 0) {
         const whtAccount = await A.resolve('2004');
         if (whtAccount) {
-          lines.push({ account: whtAccount._id, description: `WHT @ ${whtRate}% on ${bill.vendor.name}`, credit: whtAmount, department: bill.department });
+          lines.push({ account: whtAccount._id, description: `${whtLabel} on ${bill.vendor.name}`, credit: whtAmount, department: bill.department });
         } else {
           lines[lines.length - 1].credit = amount_;
         }
@@ -1705,6 +1726,7 @@ const FinanceHelper = {
           reference: reference || '',
           batchId: batchId || null,
           whtRate,
+          whtAmount,
           bankAccountId: bankAccount ? bankAccount._id : null,
           allocations: normalizedAllocations
         }
@@ -1734,7 +1756,8 @@ const FinanceHelper = {
         reference,
         date,
         createdBy,
-        whtRate = 0,
+        whtRate: whtRateInput = 0,
+        whtAmount: whtAmountInput = 0,
         bankAccountId,
         relatedPartyAccountId = null,
         payingCompanyId: optsPayingCompanyId = null,
@@ -1805,7 +1828,7 @@ const FinanceHelper = {
         }
       }
 
-      const whtAmount = whtRate > 0 ? Math.round(totalAmount * (whtRate / 100) * 100) / 100 : 0;
+      const { whtAmount, whtRate, whtLabel } = resolvePaymentWht(totalAmount, whtRateInput, whtAmountInput);
       const netBankAmount = Math.round((totalAmount - whtAmount) * 100) / 100;
 
       if (companyId) {
@@ -1950,7 +1973,7 @@ const FinanceHelper = {
           if (whtAccount) {
             payingCompanyLines.push({
               account: whtAccount._id,
-              description: `WHT @ ${whtRate}% on ${vendorName}`,
+              description: `${whtLabel} on ${vendorName}`,
               credit: whtAmount,
               department: departmentId
             });
@@ -2005,6 +2028,7 @@ const FinanceHelper = {
             reference: reference || '',
             batchId: batchId || null,
             whtRate,
+            whtAmount,
             bankAccountId: bankAccount._id,
             relatedPartyAccountId: relatedPartyAccount._id,
             payingCompanyId
@@ -2078,7 +2102,7 @@ const FinanceHelper = {
       if (whtAmount > 0) {
         const whtAccount = await A_target.resolve('2004');
         if (whtAccount) {
-          lines.push({ account: whtAccount._id, description: `WHT @ ${whtRate}% on ${vendorName}`, credit: whtAmount, department: departmentId });
+          lines.push({ account: whtAccount._id, description: `${whtLabel} on ${vendorName}`, credit: whtAmount, department: departmentId });
         } else {
           lines[lines.length - 1].credit = totalAmount;
         }
@@ -2113,6 +2137,7 @@ const FinanceHelper = {
           reference: reference || '',
           batchId: batchId || null,
           whtRate,
+          whtAmount,
           bankAccountId: bankAccount ? bankAccount._id : null,
           relatedPartyAccountId: relatedPartyAccount ? relatedPartyAccount._id : null,
           payingCompanyId: payingCompanyId || null
