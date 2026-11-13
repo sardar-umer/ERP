@@ -72,6 +72,7 @@ import utilityBillService from '../../services/utilityBillService';
 import { formatPKR } from '../../utils/currency';
 import { getImageUrl } from '../../utils/imageService';
 import { formatDate, formatDateTime } from '../../utils/dateUtils';
+import BillSupportingDocuments from '../Finance/BillSupportingDocuments';
 import toast from 'react-hot-toast';
 import WorkflowHistoryDialog from '../WorkflowHistoryDialog';
 import { DigitalSignatureImage } from '../common/DigitalSignatureImage';
@@ -3021,6 +3022,15 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
                     }}
                     showChargesSummary
                   />
+                  {/* Files behind the bill — its own attachments plus its GRN, PO, indent and quotations */}
+                  {((viewDialog.settlement?.supportingDocuments || []).length > 0 || viewDialog.settlement?.poDetail) && (
+                    <Box sx={{ mt: 3, pt: 2, borderTop: 1, borderColor: 'divider' }}>
+                      <BillSupportingDocuments
+                        documents={viewDialog.settlement?.supportingDocuments || []}
+                        poDetail={viewDialog.settlement?.poDetail}
+                      />
+                    </Box>
+                  )}
                 </Box>
               ) : (
 

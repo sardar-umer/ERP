@@ -107,6 +107,7 @@ import QuickbooksPayBillsModal from '../../components/Finance/QuickbooksPayBills
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
+import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
@@ -2725,6 +2726,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                   {!isNonPOBill && <Tab value={3} label="Comparative Statement" />}
                   {!isNonPOBill && <Tab value={4} label={selectedBill?.poDetail?.po ? 'Purchase Order' : 'PO'} />}
                   {!isNonPOBill && <Tab value={5} label={(selectedBill?.poDetail?.grns?.length || 0) > 0 ? `GRN(s) (${selectedBill.poDetail.grns.length})` : 'GRN(s)'} />}
+                  {!isNonPOBill && <Tab value={8} label={`Supporting Documents (${selectedBill?.supportingDocuments?.length || 0})`} />}
                   <Tab value={6} label="Payment History" />
                   <Tab
                     value={7}
@@ -3519,6 +3521,13 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                       )}
                     </Box>
                   )}
+
+                {/* Tab 8: every file behind the bill — bill, GRN, PO, indent, quotations */}
+                {billViewTab === 8 && (
+                  <Box sx={{ p: 2 }}>
+                    <BillSupportingDocuments documents={selectedBill?.supportingDocuments || []} poDetail={selectedBill?.poDetail} />
+                  </Box>
+                )}
 
                 {/* Tab 6: Payment History */}
                 {billViewTab === 6 && (

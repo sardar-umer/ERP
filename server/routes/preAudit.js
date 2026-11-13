@@ -833,6 +833,9 @@ router.get('/finance-vendors/bills/:id',
         poDetail = { po, indent, quotations, grns };
       }
     }
+    const { buildBillSupportingDocuments, loadLinkedGrnsWithoutPo } = require('../utils/billSupportingDocuments');
+    if (!poDetail) poDetail = await loadLinkedGrnsWithoutPo(bill);
+    const supportingDocuments = buildBillSupportingDocuments(bill, poDetail);
 
     let cashApproval = null;
     const caId = bill.employeeAdvanceAllocations?.[0]?.cashApprovalId;
@@ -857,6 +860,7 @@ router.get('/finance-vendors/bills/:id',
         ...bill,
         vendorName: bill.vendor?.name || 'Unknown Vendor',
         poDetail,
+        supportingDocuments,
         cashApproval
       }
     });

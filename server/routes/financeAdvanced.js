@@ -4173,6 +4173,9 @@ router.get('/accounts-payable/:id',
         poDetail = { po, indent, quotations, grns };
       }
     }
+    const { buildBillSupportingDocuments, loadLinkedGrnsWithoutPo } = require('../utils/billSupportingDocuments');
+    if (!poDetail) poDetail = await loadLinkedGrnsWithoutPo(bill);
+    const supportingDocuments = buildBillSupportingDocuments(bill, poDetail);
 
     let cashApproval = null;
     const caId = bill.employeeAdvanceAllocations?.[0]?.cashApprovalId;
@@ -4215,6 +4218,7 @@ router.get('/accounts-payable/:id',
         vendorName: bill.vendor?.name || 'Unknown Vendor',
         vendorEmail: bill.vendor?.email || '',
         poDetail,
+        supportingDocuments,
         cashApproval,
         sourceUtilityBill,
         fullWorkflowHistory

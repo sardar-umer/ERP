@@ -117,6 +117,7 @@ import { PO_A4_ONE_PAGE_PRINT_CSS, printPoFitToOneA4 } from '../../utils/poA4Pri
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
+import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 
@@ -3631,7 +3632,18 @@ const PreAudit = () => {
                     <Tab label="Comparative Statement" />
                     <Tab label={`Quotations (${viewDialog.fullDocument?.poDetail?.quotations?.length || viewDialog.quotations?.length || 0})`} />
                     <Tab label={(viewDialog.fullDocument?.poDetail?.grns?.length || viewDialog.grns?.length) > 0 ? `GRN(s) (${viewDialog.fullDocument?.poDetail?.grns?.length || viewDialog.grns?.length})` : 'GRN(s)'} />
+                    <Tab label={`Supporting Documents (${viewDialog.fullDocument?.supportingDocuments?.length || 0})`} />
                   </Tabs>
+
+                  {/* Tab 6: every file behind the bill — bill, GRN, PO, indent, quotations */}
+                  {viewDialog.poAuditTab === 6 && (
+                    <Box sx={{ p: 3 }}>
+                      <BillSupportingDocuments
+                        documents={viewDialog.fullDocument?.supportingDocuments || []}
+                        poDetail={viewDialog.fullDocument?.poDetail}
+                      />
+                    </Box>
+                  )}
 
                   {/* Tab 0: Vendor Bill Details */}
                   {(viewDialog.poAuditTab ?? 0) === 0 && (
