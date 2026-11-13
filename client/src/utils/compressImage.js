@@ -97,3 +97,46 @@ export async function compressImages(files, opts = {}) {
 
   return results;
 }
+
+// Upload-time shrinking of photos (applied to every upload by the API client).
+// Larger and gentler than the defaults above, so photographed documents stay readable when printed.
+const UPLOAD_MAX_SIDE_PX = 2000;
+const UPLOAD_JPEG_QUALITY = 0.8;
+const UPLOAD_MIN_BYTES = 500 * 1024; // smaller photos are left alone
+
+// Only JPEG photos: PNG / WebP / GIF may carry transparency (signatures, stamps, logos) and must not be flattened
+const isShrinkablePhoto = (value) => (
+  typeof File !== 'undefined'
+  && value instanceof File
+  && value.size > UPLOAD_MIN_BYTES
+  && (value.type === 'image/jpeg' || /\.jpe?g$/i.test(value.name || ''))
+);
+
+/**
+ * Returns a copy of `formData` with large JPEG photos shrunk; every other field and file is passed
+ * through untouched, in the same order and under the same names. Returns the original object when
+ * there is nothing to shrink or anything goes wrong — an upload must never fail because of this.
+ * @param {FormData} formData
+ * @returns {Promise<FormData>}
+ */
+export async function shrinkFormDataImages(formData) {
+  try {
+    const entries = Array.from(formData.entries());
+    if (!entries.some(([, value]) => isShrinkablePhoto(value))) return formData;
+
+    const next = new FormData();
+    for (const [key, value] of entries) {
+      if (!isShrinkablePhoto(value)) {
+        if (typeof File !== 'undefined' && value instanceof File) next.append(key, value, value.name);
+        else next.append(key, value);
+        continue;
+      }
+      const small = await compressImage(value, { maxSidePx: UPLOAD_MAX_SIDE_PX, quality: UPLOAD_JPEG_QUALITY });
+      // Keep the name the user picked; only the contents change
+      next.append(key, small, value.name);
+    }
+    return next;
+  } catch (e) {
+    return formData;
+  }
+}

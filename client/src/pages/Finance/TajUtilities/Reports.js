@@ -87,6 +87,9 @@ const TajUtilitiesReports = () => {
   const [ledgerLoading, setLedgerLoading] = useState(false);
   const [ledgerError, setLedgerError] = useState('');
   const [ledger, setLedger] = useState(null);
+  // When several residents share the typed Resident ID: the choices, and the one the user picked
+  const [ledgerCandidates, setLedgerCandidates] = useState([]);
+  const [ledgerResidentKey, setLedgerResidentKey] = useState('');
 
   const getPropertyOptionLabel = (property) => {
     if (!property) return '';
@@ -125,12 +128,14 @@ const TajUtilitiesReports = () => {
     loadReport();
   }, [loadReport]);
 
-  const loadLedger = useCallback(async (propertyIdOverride) => {
-    const id = (ledgerResidentId || '').trim();
-    if (!id) {
+  const loadLedger = useCallback(async (propertyIdOverride, residentKeyOverride) => {
+    const typedId = (ledgerResidentId || '').trim();
+    if (!typedId) {
       setLedgerError('Please enter Resident ID');
       return;
     }
+    // A resident picked from a shared ID is loaded by its own record, not by the ID again
+    const id = residentKeyOverride || ledgerResidentKey || typedId;
     const propertyId = propertyIdOverride !== undefined ? propertyIdOverride : ledgerPropertyId;
     try {
       setLedgerLoading(true);
@@ -139,6 +144,12 @@ const TajUtilitiesReports = () => {
       const params = propertyId ? { propertyId } : {};
       const response = await fetchResidentLedger(id, params);
       const data = response.data?.data || {};
+      if (data.ambiguous) {
+        setLedgerCandidates(data.candidates || []);
+        setLedgerPropertyOptions([]);
+        return;
+      }
+      setLedgerCandidates([]);
       setLedger(data);
       const properties = data.resident?.properties || [];
       setLedgerPropertyOptions(properties);
@@ -151,7 +162,7 @@ const TajUtilitiesReports = () => {
     } finally {
       setLedgerLoading(false);
     }
-  }, [ledgerResidentId, ledgerPropertyId]);
+  }, [ledgerResidentId, ledgerPropertyId, ledgerResidentKey]);
 
   const exportMonthInvoicesToExcel = useCallback(async (monthKey) => {
     if (!monthKey) return;
@@ -516,6 +527,8 @@ const TajUtilitiesReports = () => {
               value={ledgerResidentId}
               onChange={(e) => {
                 setLedgerResidentId(e.target.value);
+                setLedgerResidentKey('');
+                setLedgerCandidates([]);
                 setLedgerPropertyId('');
                 setLedgerPropertyOptions([]);
                 setLedger(null);
@@ -570,6 +583,37 @@ const TajUtilitiesReports = () => {
           {ledgerError && (
             <Alert severity="error" sx={{ mb: 2 }} onClose={() => setLedgerError('')}>
               {ledgerError}
+            </Alert>
+          )}
+
+          {ledgerCandidates.length > 0 && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <Typography variant="body2" sx={{ mb: 1 }}>
+                Resident ID {ledgerResidentId.trim()} is used by {ledgerCandidates.length} residents — choose the one you want:
+              </Typography>
+              <Stack spacing={1}>
+                {ledgerCandidates.map((c) => (
+                  <Stack key={c._id} direction="row" spacing={1.5} alignItems="center" flexWrap="wrap" useFlexGap>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      onClick={() => {
+                        setLedgerResidentKey(String(c._id));
+                        setLedgerPropertyId('');
+                        loadLedger('', String(c._id));
+                      }}
+                    >
+                      View Ledger
+                    </Button>
+                    <Typography variant="body2">
+                      <strong>{c.name || '(no name)'}</strong>
+                      {c.cnic ? ` · CNIC ${c.cnic}` : ''}
+                      {c.properties?.length ? ` · ${c.properties.join(', ')}` : ' · no property'}
+                      {c.isActive === false ? ' · inactive' : ''}
+                    </Typography>
+                  </Stack>
+                ))}
+              </Stack>
             </Alert>
           )}
 

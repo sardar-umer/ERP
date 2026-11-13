@@ -5273,12 +5273,20 @@ router.get('/vendor-bills',
     const { vendorId, limit = 200 } = req.query;
     const query = { 'linkedGRNs.0': { $exists: true } };
     if (vendorId) query['vendor.vendorId'] = vendorId;
-    const bills = await AccountsPayable.find(query)
-      .populate('companyId', 'name code')
-      .populate('workflowHistory.changedBy', 'firstName lastName')
-      .sort({ createdAt: -1 })
-      .limit(Math.min(Number(limit) || 200, 500))
-      .lean();
+    const pageSize = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
+    const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+    const [bills, total, rejectedCount] = await Promise.all([
+      AccountsPayable.find(query)
+        .populate('companyId', 'name code')
+        .populate('workflowHistory.changedBy', 'firstName lastName')
+        .sort({ createdAt: -1 })
+        .skip((page - 1) * pageSize)
+        .limit(pageSize)
+        .lean(),
+      AccountsPayable.countDocuments(query),
+      // Counted over all pages, so the tab can say how many bills Audit sent back
+      AccountsPayable.countDocuments({ ...query, status: 'Returned from Audit' })
+    ]);
     const list = bills.map((b) => {
       const paid = Number(b.amountPaid ?? b.paidAmount ?? 0) || 0;
       return {
@@ -5304,7 +5312,7 @@ router.get('/vendor-bills',
         auditReturn: auditReturnInfo(b)
       };
     });
-    res.json({ success: true, data: { bills: list } });
+    res.json({ success: true, data: { bills: list, total, page, limit: pageSize, rejectedCount } });
   })
 );
 

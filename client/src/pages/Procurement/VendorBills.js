@@ -4,7 +4,7 @@ import {
   Box, Paper, Typography, Grid, TextField, MenuItem, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Checkbox,
   Tabs, Tab, Chip, CircularProgress, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
-  Stack, Badge, List, ListItemButton, ListItemText
+  Stack, Badge, List, ListItemButton, ListItemText, TablePagination
 } from '@mui/material';
 import {
   Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon,
@@ -15,6 +15,8 @@ import { getImageUrl } from '../../utils/imageService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 
+const ROWS_PER_PAGE_OPTIONS = [25, 50, 100, 200];
+const DEFAULT_ROWS_PER_PAGE = 100;
 const MAX_ATTACHMENTS = 10;
 const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
 const ATTACHMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.webp';
@@ -110,6 +112,12 @@ const VendorBills = () => {
   const [createdBills, setCreatedBills] = useState([]);
   const [companies, setCompanies] = useState([]);
   const [billsLoading, setBillsLoading] = useState(false);
+  const [billsTotal, setBillsTotal] = useState(0);
+  const [billsRejected, setBillsRejected] = useState(0);
+  const [billsPage, setBillsPage] = useState(0);
+  const [billsRowsPerPage, setBillsRowsPerPage] = useState(DEFAULT_ROWS_PER_PAGE);
+  const [grnPage, setGrnPage] = useState(0);
+  const [grnRowsPerPage, setGrnRowsPerPage] = useState(DEFAULT_ROWS_PER_PAGE);
   const [selected, setSelected] = useState({});
   const [allocations, setAllocations] = useState({});
   const [billDate, setBillDate] = useState(new Date().toISOString().split('T')[0]);
@@ -140,7 +148,7 @@ const VendorBills = () => {
       setSuccess(`✓ Bill ${billToDelete.billNumber} voided — its GRN amount is billable again`);
       setDeleteDialogOpen(false);
       setBillToDelete(null);
-      loadCreatedBills(vendorId);
+      loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
       loadGrns(vendorId);
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete bill');
@@ -155,6 +163,7 @@ const VendorBills = () => {
       if (vId) params.vendorId = vId;
       const res = await api.get('/procurement/vendor-bills/billable-grns', { params });
       setGrns(res.data?.data?.grns || []);
+      setGrnPage(0);
       setSelected({});
       setAllocations({});
     } catch (e) {
@@ -162,13 +171,21 @@ const VendorBills = () => {
     }
   }, []);
 
-  const loadCreatedBills = useCallback(async (vId) => {
+  // Bills are fetched one page at a time; `page` is zero-based here, one-based on the server
+  const loadCreatedBills = useCallback(async (vId, page = 0, rowsPerPage = DEFAULT_ROWS_PER_PAGE) => {
     try {
       setBillsLoading(true);
-      const params = { limit: 100 };
+      const params = { limit: rowsPerPage, page: page + 1 };
       if (vId) params.vendorId = vId;
       const res = await api.get('/procurement/vendor-bills', { params });
-      setCreatedBills(res.data?.data?.bills || []);
+      const data = res.data?.data || {};
+      setCreatedBills(data.bills || []);
+      setBillsTotal(data.total ?? (data.bills || []).length);
+      setBillsRejected(data.rejectedCount ?? (data.bills || []).filter((b) => b.status === 'Returned from Audit').length);
+      // The page emptied (e.g. its last bill was voided) — step back to the last page that has bills
+      if (page > 0 && (data.bills || []).length === 0) {
+        setBillsPage(Math.max(0, Math.ceil((data.total || 0) / rowsPerPage) - 1));
+      }
     } catch (e) {
       setError('Failed to load created vendor bills');
     } finally {
@@ -188,14 +205,21 @@ const VendorBills = () => {
     api.get('/indents/companies')
       .then((res) => setCompanies(res.data?.data || []))
       .catch(() => setCompanies([]));
-    loadGrns('');
-    loadCreatedBills('');
-  }, [loadGrns, loadCreatedBills]);
+  }, []);
 
   useEffect(() => {
     loadGrns(vendorId);
-    loadCreatedBills(vendorId);
-  }, [vendorId, loadGrns, loadCreatedBills]);
+  }, [vendorId, loadGrns]);
+
+  useEffect(() => {
+    loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
+  }, [vendorId, billsPage, billsRowsPerPage, loadCreatedBills]);
+
+  // A different vendor is a different list — start again from its first page
+  const changeVendor = (id) => {
+    setVendorId(id);
+    setBillsPage(0);
+  };
 
   // Bill list returns the company id only; name it from the companies list
   const billCompanyName = (b) => {
@@ -234,7 +258,9 @@ const VendorBills = () => {
       setNotes('');
       setBillFiles([]);
       // Refresh both unbilled GRNs and created bills list, and switch to Created Bills tab
-      await Promise.all([loadGrns(vendorId), loadCreatedBills(vendorId)]);
+      // The new bill is the newest, so it is on the first page
+      await Promise.all([loadGrns(vendorId), loadCreatedBills(vendorId, 0, billsRowsPerPage)]);
+      setBillsPage(0);
       setTabIndex(1);
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to create vendor bill');
@@ -243,7 +269,11 @@ const VendorBills = () => {
     }
   };
 
-  const rejectedCount = useMemo(() => createdBills.filter((b) => b.status === 'Returned from Audit').length, [createdBills]);
+  const rejectedCount = billsRejected;
+  const pagedGrns = useMemo(
+    () => grns.slice(grnPage * grnRowsPerPage, grnPage * grnRowsPerPage + grnRowsPerPage),
+    [grns, grnPage, grnRowsPerPage]
+  );
 
   const openEdit = (b) => {
     setEditForm({
@@ -268,7 +298,7 @@ const VendorBills = () => {
       });
       setSuccess(res.data?.message || 'Bill updated');
       setEditBill(null);
-      loadCreatedBills(vendorId);
+      loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
     } catch (e) {
       setError(e.response?.data?.message || e.response?.data?.errors?.[0]?.msg || 'Failed to update bill');
     } finally {
@@ -284,7 +314,7 @@ const VendorBills = () => {
       setSuccess(res.data?.message || 'Bill resubmitted to Pre-Audit');
       setResubmitBill(null);
       setResubmitComments('');
-      loadCreatedBills(vendorId);
+      loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to resubmit bill');
     } finally {
@@ -321,7 +351,7 @@ const VendorBills = () => {
         {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
         <Grid container spacing={2}>
           <Grid item xs={12} md={4}>
-            <TextField fullWidth select label="Supplier/Vendor" value={vendorId} onChange={(e) => setVendorId(e.target.value)}>
+            <TextField fullWidth select label="Supplier/Vendor" value={vendorId} onChange={(e) => changeVendor(e.target.value)}>
               <MenuItem value="">Select vendor (All)</MenuItem>
               {vendors.map((v) => <MenuItem key={v._id} value={v._id}>{v.name}</MenuItem>)}
             </TextField>
@@ -365,7 +395,7 @@ const VendorBills = () => {
       <Paper sx={{ p: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
           <Tab label={`Unbilled GRNs (${grns.length})`} />
-          <Tab label={`Created Vendor Bills (${createdBills.length})${rejectedCount ? ` · ${rejectedCount} rejected by Audit` : ''}`} />
+          <Tab label={`Created Vendor Bills (${billsTotal})${rejectedCount ? ` · ${rejectedCount} rejected by Audit` : ''}`} />
         </Tabs>
 
         {tabIndex === 0 && (
@@ -391,7 +421,7 @@ const VendorBills = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {grns.map((g) => (
+                  {pagedGrns.map((g) => (
                     <TableRow key={g._id}>
                       <TableCell padding="checkbox">
                         <Checkbox
@@ -399,7 +429,7 @@ const VendorBills = () => {
                           onChange={(e) => {
                             const checked = e.target.checked;
                             if (checked && !vendorId && g.vendorId) {
-                              setVendorId(String(g.vendorId));
+                              changeVendor(String(g.vendorId));
                             }
                             setSelected((p) => ({ ...p, [g._id]: checked }));
                             if (checked) {
@@ -437,6 +467,15 @@ const VendorBills = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            <TablePagination
+              component="div"
+              count={grns.length}
+              page={grnPage}
+              onPageChange={(e, p) => setGrnPage(p)}
+              rowsPerPage={grnRowsPerPage}
+              onRowsPerPageChange={(e) => { setGrnRowsPerPage(parseInt(e.target.value, 10)); setGrnPage(0); }}
+              rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+            />
           </Box>
         )}
 
@@ -554,6 +593,15 @@ const VendorBills = () => {
                 </TableBody>
               </Table>
             </TableContainer>
+            <TablePagination
+              component="div"
+              count={billsTotal}
+              page={billsPage}
+              onPageChange={(e, p) => setBillsPage(p)}
+              rowsPerPage={billsRowsPerPage}
+              onRowsPerPageChange={(e) => { setBillsRowsPerPage(parseInt(e.target.value, 10)); setBillsPage(0); }}
+              rowsPerPageOptions={ROWS_PER_PAGE_OPTIONS}
+            />
           </Box>
         )}
       </Paper>

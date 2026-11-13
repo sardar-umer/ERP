@@ -433,9 +433,40 @@ router.get('/ledger', authMiddleware, asyncHandler(async (req, res) => {
       .lean();
   }
   if (!resident) {
-    resident = await TajResident.findOne({ residentId: id })
+    // A Resident ID can be carried by more than one record (e.g. a deactivated one kept its ID).
+    // Deactivated records never win over an active one; if several active residents share the ID,
+    // the caller is asked which one is meant instead of the first being picked silently.
+    const matches = await TajResident.find({ residentId: id })
       .populate('properties', 'propertyName plotNumber sector block fullAddress ownerName srNo')
+      .sort({ _id: 1 })
       .lean();
+    const active = matches.filter((r) => r.isActive !== false);
+    const pool = active.length > 0 ? active : matches;
+    if (pool.length > 1) {
+      const linked = await TajProperty.find({ resident: { $in: pool.map((r) => r._id) } })
+        .select('propertyName plotNumber sector resident')
+        .lean();
+      const label = (p) => [p.propertyName || p.plotNumber, p.sector].filter(Boolean).join(' — ');
+      return res.json({
+        success: true,
+        data: {
+          ambiguous: true,
+          residentId: id,
+          candidates: pool.map((r) => ({
+            _id: r._id,
+            residentId: r.residentId,
+            name: r.name || '',
+            cnic: r.cnic || '',
+            isActive: r.isActive !== false,
+            properties: [...new Set([
+              ...(r.properties || []).filter((p) => p && typeof p === 'object').map(label),
+              ...linked.filter((p) => String(p.resident) === String(r._id)).map(label)
+            ].filter(Boolean))]
+          }))
+        }
+      });
+    }
+    resident = pool[0] || null;
   }
   if (!resident) {
     return res.status(404).json({ success: false, message: 'Resident not found' });

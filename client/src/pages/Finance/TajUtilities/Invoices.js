@@ -3,6 +3,7 @@ import { usePagination } from '../../../hooks/usePagination';
 import TablePaginationWrapper from '../../../components/TablePaginationWrapper';
 import {
   Box,
+  Button,
   Card,
   CardContent,
   Chip,
@@ -31,11 +32,13 @@ import {
   Refresh as RefreshIcon,
   Visibility as ViewIcon,
   Download as DownloadIcon,
+  FileDownload as FileDownloadIcon,
   ExpandMore as ExpandMoreIcon,
   ExpandLess as ExpandLessIcon
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import jsPDF from 'jspdf';
+import * as XLSX from 'xlsx';
 import { fetchAllInvoices, fetchInvoice, fetchMonthSummary } from '../../../services/propertyInvoiceService';
 import { fetchProperties, fetchPropertyById } from '../../../services/tajPropertiesService';
 import { fetchResidents } from '../../../services/tajResidentsService';
@@ -92,6 +95,7 @@ const Invoices = () => {
   const [monthYearFilter, setMonthYearFilter] = useState('');
   const [expandedMonths, setExpandedMonths] = useState([]);
   const [monthSummary, setMonthSummary] = useState({});
+  const [exporting, setExporting] = useState(false);
 
   // Pagination
   const pagination = usePagination({
@@ -141,6 +145,89 @@ const Invoices = () => {
       setError(err.response?.data?.message || 'Failed to load invoices');
     } finally {
       setLoading(false);
+    }
+  };
+
+  // The filters currently applied to the list (without paging) — the Excel export uses the same ones
+  const currentFilterParams = () => {
+    const params = {};
+    if (statusFilter !== 'all') params.status = statusFilter;
+    if (paymentStatusFilter !== 'all') params.paymentStatus = paymentStatusFilter;
+    if (propertyFilter) params.propertyId = propertyFilter;
+    if (chargeTypeFilter === 'OPEN_INVOICE') params.openInvoices = 'true';
+    else if (chargeTypeFilter !== 'all') params.chargeType = chargeTypeFilter;
+    if (residentFilter) params.residentId = residentFilter;
+    if (sectorFilter) params.sector = sectorFilter;
+    if (search) params.search = search;
+    if (monthYearFilter) params.monthYear = monthYearFilter;
+    return params;
+  };
+
+  /** Download every invoice that matches the current filters (all pages, not just the one on screen). */
+  const handleExportExcel = async () => {
+    const PAGE_SIZE = 1000;
+    try {
+      setExporting(true);
+      setError('');
+      const filters = currentFilterParams();
+      const all = [];
+      for (let page = 1; page <= 200; page += 1) {
+        const response = await fetchAllInvoices({ ...filters, page, limit: PAGE_SIZE, _t: Date.now() });
+        const rows = response.data?.data || [];
+        all.push(...rows);
+        const total = response.data?.pagination?.total;
+        if (rows.length < PAGE_SIZE || (total != null && all.length >= total)) break;
+      }
+      if (!all.length) {
+        setError('No invoices to export for the current filters');
+        return;
+      }
+
+      const date = (d) => (d ? dayjs(d).format('DD-MMM-YYYY') : '');
+      const money = (n) => Math.round((Number(n) || 0) * 100) / 100;
+      const rows = all.map((invoice) => {
+        const isOpenInvoice = !invoice.property;
+        const totalPaid = invoice.totalPaid || 0;
+        const balance = getAdjustedBalance(invoice);
+        const status = balance <= 0 ? 'paid' : totalPaid > 0 ? 'partial_paid' : 'unpaid';
+        return {
+          'Invoice #': invoice.invoiceNumber || '',
+          'Invoice Month': invoice.periodTo || invoice.periodFrom || invoice.invoiceDate
+            ? dayjs(invoice.periodTo || invoice.periodFrom || invoice.invoiceDate).format('MMM YYYY')
+            : '',
+          'Resident ID': isOpenInvoice ? '' : (invoice.property?.resident?.residentId || invoice.property?.residentId || ''),
+          Property: isOpenInvoice
+            ? (invoice.customerName || 'Open Invoice')
+            : (invoice.property?.propertyName || invoice.property?.plotNumber || ''),
+          Address: isOpenInvoice ? (invoice.customerAddress || '') : (invoice.property?.address || ''),
+          Sector: isOpenInvoice ? '' : (invoice.property?.sector?.name || invoice.property?.sector || ''),
+          Owner: isOpenInvoice ? (invoice.customerName || '') : (invoice.property?.ownerName || ''),
+          'Charge Types': (invoice.chargeTypes || []).length ? getChargeTypesLabel(invoice.chargeTypes) : '',
+          'Period From': date(invoice.periodFrom),
+          'Period To': date(invoice.periodTo),
+          'Due Date': date(invoice.dueDate),
+          'Grand Total': money(getAdjustedGrandTotal(invoice)),
+          Paid: money(totalPaid),
+          Balance: money(balance),
+          'Payment Status': getPaymentStatusConfig(status).label,
+          'Recorded By': invoice.createdBy
+            ? `${invoice.createdBy.firstName || ''} ${invoice.createdBy.lastName || ''}`.trim()
+            : ''
+        };
+      });
+
+      const ws = XLSX.utils.json_to_sheet(rows);
+      ws['!cols'] = Object.keys(rows[0]).map((key) => ({
+        wch: Math.min(45, Math.max(key.length, ...rows.slice(0, 500).map((r) => String(r[key] ?? '').length)) + 2)
+      }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, ws, 'Invoices');
+      XLSX.writeFile(wb, `Taj-Utilities-Invoices-${monthYearFilter || dayjs().format('YYYY-MM-DD')}.xlsx`);
+      setSuccess(`Exported ${rows.length} invoice${rows.length > 1 ? 's' : ''} to Excel`);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to export invoices');
+    } finally {
+      setExporting(false);
     }
   };
 
@@ -854,6 +941,16 @@ const Invoices = () => {
             InputLabelProps={{ shrink: true }}
             sx={{ minWidth: 180 }}
           />
+          <Button
+            variant="outlined"
+            color="success"
+            size="small"
+            startIcon={exporting ? <CircularProgress size={16} color="inherit" /> : <FileDownloadIcon />}
+            onClick={handleExportExcel}
+            disabled={exporting || loading}
+          >
+            {exporting ? 'Exporting…' : 'Export to Excel'}
+          </Button>
           <Tooltip title="Refresh">
             <IconButton onClick={() => loadInvoices(true)} disabled={loading}>
               <RefreshIcon />

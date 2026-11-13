@@ -1,4 +1,5 @@
 import axios from 'axios';
+import { shrinkFormDataImages } from '../utils/compressImage';
 
 // Determine API URL based on environment
 const getApiUrl = () => {
@@ -55,6 +56,15 @@ api.interceptors.request.use(
     return Promise.reject(error);
   }
 );
+
+// Shrink large photos before they are uploaded: quicker uploads, and attachments that open and print
+// quickly everywhere afterwards. Pass `skipImageShrink: true` in the request config to send originals.
+api.interceptors.request.use(async (config) => {
+  if (config.data instanceof FormData && !config.skipImageShrink) {
+    config.data = await shrinkFormDataImages(config.data);
+  }
+  return config;
+});
 
 // Endpoints that should not trigger auto-redirect on 401
 const SKIP_AUTO_REDIRECT_ENDPOINTS = [

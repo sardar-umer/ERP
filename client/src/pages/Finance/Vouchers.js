@@ -55,6 +55,7 @@ import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice'
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import VoucherSignaturesCell from '../../components/Finance/VoucherSignaturesCell';
+import BillAttachmentPages from '../../components/Finance/BillAttachmentPages';
 import {
   getDuePaymentAmountFromBill,
   getLineDuePaymentAmount
@@ -188,6 +189,9 @@ const Vouchers = () => {
     attachments: true
   });
   const [multiPrintMode, setMultiPrintMode] = useState(false); // true when printing all or selected
+  // Print waits for the attachments: images must have loaded and PDFs been drawn, or they print blank
+  const [attachmentsReady, setAttachmentsReady] = useState(false);
+  const [printWaiting, setPrintWaiting] = useState(false);
   const [printMenuAnchor, setPrintMenuAnchor] = useState(null);
   
   const [newVoucherDialog, setNewVoucherDialog] = useState(false);
@@ -563,8 +567,46 @@ const Vouchers = () => {
     }
   };
 
-  const handlePrintAllInOneGo = () => {
+  /** Print the whole package; if attachments are included, the print opens once they are ready. */
+  const startMultiPrint = (includeAttachments) => {
     setMultiPrintMode(true);
+    if (includeAttachments) {
+      setAttachmentsReady(false);
+      setPrintWaiting(true);
+      toast.loading('Preparing attachments for printing…', { id: 'voucher-print-prep' });
+    } else {
+      setTimeout(() => window.print(), 250);
+    }
+  };
+
+  useEffect(() => {
+    if (!printWaiting) return undefined;
+    // Dialog closed while preparing — drop the print instead of printing the list behind it
+    if (!viewDialog.open) {
+      toast.dismiss('voucher-print-prep');
+      setPrintWaiting(false);
+      return undefined;
+    }
+    const go = () => {
+      toast.dismiss('voucher-print-prep');
+      setPrintWaiting(false);
+      // Give the browser a moment to lay the pages out before the print window opens
+      setTimeout(() => window.print(), 300);
+    };
+    if (attachmentsReady) {
+      go();
+      return undefined;
+    }
+    // One file that never loads must not block the print for ever
+    const timer = setTimeout(() => {
+      toast('Some attachments are still loading — printing what is ready');
+      go();
+    }, 30000);
+    return () => clearTimeout(timer);
+  }, [printWaiting, attachmentsReady, viewDialog.open]);
+
+  const handlePrintAllInOneGo = () => {
+    const includeAttachments = Boolean(viewDialog.poLinkedDocs?.some((d) => d.url));
     setPrintSelection({
       voucher: true,
       indent: Boolean(viewDialog.po?.indent),
@@ -576,9 +618,7 @@ const Vouchers = () => {
       attachments: Boolean(viewDialog.poLinkedDocs?.length > 0)
     });
     setPrintMenuAnchor(null);
-    setTimeout(() => {
-      window.print();
-    }, 250);
+    startMultiPrint(includeAttachments);
   };
 
   const handleOpenPrintCustomizer = () => {
@@ -598,10 +638,7 @@ const Vouchers = () => {
 
   const handleExecuteCustomPrint = () => {
     setPrintSelectDialogOpen(false);
-    setMultiPrintMode(true);
-    setTimeout(() => {
-      window.print();
-    }, 250);
+    startMultiPrint(Boolean(printSelection.attachments && viewDialog.poLinkedDocs?.some((d) => d.url)));
   };
 
   const handlePrintCurrentTabOnly = () => {
@@ -2327,53 +2364,11 @@ const Vouchers = () => {
                         </Table>
                       </TableContainer>
 
-                      {/* Render full preview of attachments for viewing and printing */}
-                      {viewDialog.poLinkedDocs.map((doc, idx) => {
-                        if (!doc.url) return null;
-                        const cleanUrl = doc.url.toLowerCase();
-                        const isImg = cleanUrl.match(/\.(jpg|jpeg|png|webp|gif|svg)(\?.*)?$/i) || doc.mimeType?.startsWith('image/') || (!cleanUrl.match(/\.pdf(\?.*)?$/i) && !doc.mimeType?.includes('pdf'));
-                        
-                        return (
-                          <Box key={`img-attach-${doc.id || idx}`} sx={{ my: 3, pageBreakInside: 'avoid' }}>
-                            <Typography variant="subtitle2" fontWeight={600} sx={{ mb: 1, color: 'text.secondary' }}>
-                              Attachment #{idx + 1}: {doc.name || 'Document'} ({doc.source || 'Attachment'})
-                            </Typography>
-                            {isImg ? (
-                              <Box
-                                component="img"
-                                src={doc.url}
-                                alt={doc.name || 'Attached Document'}
-                                sx={{
-                                  maxWidth: '100%',
-                                  maxHeight: '900px',
-                                  objectFit: 'contain',
-                                  border: '1px solid #ddd',
-                                  borderRadius: 1,
-                                  display: 'block',
-                                  mx: 'auto'
-                                }}
-                              />
-                            ) : (
-                              <Paper variant="outlined" sx={{ p: 3, textAlign: 'center', bgcolor: 'grey.50' }}>
-                                <Typography variant="subtitle1" fontWeight={600} color="primary" sx={{ mb: 1 }}>
-                                  📄 {doc.name || 'PDF Document Attachment'}
-                                </Typography>
-                                <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-                                  Source: {doc.source || 'Attachment'}
-                                </Typography>
-          <Button
-            variant="outlined"
-                                  size="small"
-                                  className="no-print"
-                                  onClick={() => window.open(doc.url, '_blank', 'noopener,noreferrer')}
-                                >
-                                  Open / Download Attachment
-          </Button>
-                              </Paper>
-                            )}
-                          </Box>
-                        );
-                      })}
+                      {/* Full preview for viewing and printing: images as they are, PDFs page by page */}
+                      <BillAttachmentPages
+                        attachments={viewDialog.poLinkedDocs.filter((doc) => doc.url)}
+                        onReady={() => setAttachmentsReady(true)}
+                      />
                     </>
                   )}
                 </Box>

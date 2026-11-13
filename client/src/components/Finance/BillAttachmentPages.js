@@ -9,10 +9,12 @@ import { getImageUrl } from '../../utils/imageService';
  * print waits for the attachments.
  */
 
-const isImage = (a) => /^image\//i.test(a.mimeType || '') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(a.path || a.filename || '');
-const isPdf = (a) => /pdf/i.test(a.mimeType || '') || /\.pdf$/i.test(a.path || a.filename || '');
+// The file's address without any ?query, so the extension can be read from it
+const filePath = (a) => String(a.path || a.url || a.filename || '').split('?')[0];
+const isImage = (a) => /^image\//i.test(a.mimeType || '') || /\.(png|jpe?g|gif|webp|bmp)$/i.test(filePath(a));
+const isPdf = (a) => /pdf/i.test(a.mimeType || '') || /\.pdf$/i.test(filePath(a));
 const fileUrl = (a) => getImageUrl(a.path || a.url || (a.filename ? `/uploads/finance/${a.filename}` : ''));
-const fileName = (a) => a.originalName || a.filename || 'Attachment';
+const fileName = (a) => a.originalName || a.name || a.filename || 'Attachment';
 
 const loadPdfJs = async () => {
   const pdfjs = await import('pdfjs-dist/build/pdf');
@@ -21,8 +23,12 @@ const loadPdfJs = async () => {
   return pdfjs;
 };
 
-/** PDF → one PNG data URL per page */
+// PDFs already drawn in this session, by address — printing the same document again is then instant
+const pdfPageCache = new Map();
+
+/** PDF → one image (data URL) per page */
 const renderPdfPages = async (url) => {
+  if (pdfPageCache.has(url)) return pdfPageCache.get(url);
   const pdfjs = await loadPdfJs();
   const doc = await pdfjs.getDocument({ url, withCredentials: false }).promise;
   const pages = [];
@@ -33,8 +39,10 @@ const renderPdfPages = async (url) => {
     canvas.width = viewport.width;
     canvas.height = viewport.height;
     await page.render({ canvasContext: canvas.getContext('2d'), viewport }).promise;
-    pages.push(canvas.toDataURL('image/png'));
+    // JPEG is far smaller than PNG for scanned pages, so it is quicker to build and to print
+    pages.push(canvas.toDataURL('image/jpeg', 0.88));
   }
+  pdfPageCache.set(url, pages);
   return pages;
 };
 
@@ -70,6 +78,11 @@ export default function BillAttachmentPages({ attachments = [], onReady }) {
   const files = (attachments || []).filter((a) => a && (a.path || a.url || a.filename));
   // pdfPages[i]: undefined = loading, [] / array of data URLs, or { error }
   const [pdfPages, setPdfPages] = useState({});
+  // Images count as ready once they have loaded (or failed) — printing before that leaves them blank
+  // Kept by file address, so a changed list of files needs no reset
+  const [settledImages, setSettledImages] = useState({});
+  const markImage = (url) => setSettledImages((prev) => (prev[url] ? prev : { ...prev, [url]: true }));
+
 
   useEffect(() => {
     let cancelled = false;
@@ -89,7 +102,9 @@ export default function BillAttachmentPages({ attachments = [], onReady }) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [JSON.stringify(files.map((a) => a.path || a.url || a.filename))]);
 
-  const pending = files.some((a, i) => isPdf(a) && pdfPages[i] === undefined);
+  const pending = files.some((a, i) => (
+    isImage(a) ? !settledImages[fileUrl(a)] : (isPdf(a) && pdfPages[i] === undefined)
+  ));
   useEffect(() => {
     if (!pending && onReady) onReady();
   }, [pending, onReady]);
@@ -105,7 +120,7 @@ export default function BillAttachmentPages({ attachments = [], onReady }) {
           return (
             <Box key={i} sx={pageSx} className="bill-attachment-page">
               <Header index={i + 1} total={total} name={name} />
-              <Box component="img" src={fileUrl(a)} alt={name} sx={imgSx} />
+              <Box component="img" src={fileUrl(a)} alt={name} sx={imgSx} onLoad={() => markImage(fileUrl(a))} onError={() => markImage(fileUrl(a))} />
             </Box>
           );
         }
@@ -138,7 +153,7 @@ export default function BillAttachmentPages({ attachments = [], onReady }) {
           <Box key={i} sx={pageSx} className="bill-attachment-page">
             <Header index={i + 1} total={total} name={name} />
             <Typography variant="body2" color="text.secondary">
-              This file type can&apos;t be printed here — open it from the bill to print it separately.
+              This file type can&apos;t be printed here — open it separately to print it.
             </Typography>
           </Box>
         );
