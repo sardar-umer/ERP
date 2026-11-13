@@ -3,12 +3,95 @@ import { useNavigate, useSearchParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Grid, TextField, MenuItem, Button, Alert,
   Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Checkbox,
-  Tabs, Tab, Chip, CircularProgress, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions
+  Tabs, Tab, Chip, CircularProgress, IconButton, Tooltip, Dialog, DialogTitle, DialogContent, DialogActions,
+  Stack, Badge, List, ListItemButton, ListItemText
 } from '@mui/material';
-import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon } from '@mui/icons-material';
+import {
+  Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon,
+  AttachFile as AttachFileIcon
+} from '@mui/icons-material';
 import api from '../../services/api';
+import { getImageUrl } from '../../utils/imageService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
+
+const MAX_ATTACHMENTS = 10;
+const MAX_ATTACHMENT_SIZE = 10 * 1024 * 1024;
+const ATTACHMENT_ACCEPT = '.pdf,.doc,.docx,.xls,.xlsx,.jpg,.jpeg,.png,.gif,.webp';
+const attachmentName = (a) => a.originalName || a.name || a.filename || 'Attachment';
+const formatFileSize = (bytes) => {
+  const n = Number(bytes) || 0;
+  if (!n) return '';
+  return n >= 1024 * 1024 ? `${(n / (1024 * 1024)).toFixed(1)} MB` : `${Math.max(1, Math.round(n / 1024))} KB`;
+};
+
+/** Upload picked files; returns the saved-file details to store on the bill. */
+const uploadBillFiles = async (files) => {
+  if (!files.length) return [];
+  const formData = new FormData();
+  files.forEach((f) => formData.append('files', f));
+  const res = await api.post('/procurement/vendor-bills/attachments', formData, {
+    headers: { 'Content-Type': 'multipart/form-data' }
+  });
+  return res.data?.data || [];
+};
+
+/** Attach button + chips. `saved` are files already on the bill, `files` are newly picked ones. */
+const AttachmentPicker = ({ saved = [], files, onFiles, onRemoveSaved, onError, disabled }) => {
+  const count = saved.length + files.length;
+  const onPick = (e) => {
+    const picked = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (!picked.length) return;
+    const tooBig = picked.find((f) => f.size > MAX_ATTACHMENT_SIZE);
+    if (tooBig) {
+      onError(`${tooBig.name} is larger than 10 MB`);
+      return;
+    }
+    if (count + picked.length > MAX_ATTACHMENTS) {
+      onError(`Maximum ${MAX_ATTACHMENTS} attachments per bill`);
+      return;
+    }
+    onFiles([...files, ...picked]);
+  };
+  return (
+    <Stack direction="row" alignItems="center" flexWrap="wrap" gap={1}>
+      <Button variant="outlined" size="small" component="label" startIcon={<AttachFileIcon />} disabled={disabled}>
+        Add attachment
+        <input type="file" hidden multiple accept={ATTACHMENT_ACCEPT} onChange={onPick} />
+      </Button>
+      {count === 0 && (
+        <Typography variant="caption" color="text.secondary">
+          Vendor invoice, delivery challan etc. — PDF, image, Word or Excel, up to 10 MB each
+        </Typography>
+      )}
+      {saved.map((a) => (
+        <Chip
+          key={a.path}
+          size="small"
+          variant="outlined"
+          label={attachmentName(a)}
+          component="a"
+          href={getImageUrl(a.path)}
+          target="_blank"
+          rel="noopener noreferrer"
+          clickable
+          onDelete={disabled ? undefined : (e) => { e.preventDefault(); onRemoveSaved(a); }}
+        />
+      ))}
+      {files.map((f, i) => (
+        <Chip
+          key={`${f.name}-${i}`}
+          size="small"
+          color="primary"
+          variant="outlined"
+          label={`${f.name}${formatFileSize(f.size) ? ` (${formatFileSize(f.size)})` : ''}`}
+          onDelete={disabled ? undefined : () => onFiles(files.filter((_, idx) => idx !== i))}
+        />
+      ))}
+    </Stack>
+  );
+};
 
 const VendorBills = () => {
   const navigate = useNavigate();
@@ -33,6 +116,10 @@ const VendorBills = () => {
   const [paymentTerms, setPaymentTerms] = useState('net_30');
   const [vendorInvoiceNumber, setVendorInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
+  const [billFiles, setBillFiles] = useState([]);
+  const [editFiles, setEditFiles] = useState([]);
+  const [editSaved, setEditSaved] = useState([]);
+  const [attachmentsBill, setAttachmentsBill] = useState(null);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [loading, setLoading] = useState(false);
@@ -128,6 +215,7 @@ const VendorBills = () => {
     try {
       setLoading(true);
       setError('');
+      const attachments = await uploadBillFiles(billFiles);
       const res = await api.post('/procurement/vendor-bills', {
         vendorId,
         grnIds: selectedIds,
@@ -135,7 +223,8 @@ const VendorBills = () => {
         billDate,
         paymentTerms,
         vendorInvoiceNumber,
-        notes
+        notes,
+        attachments
       });
       const newBillNo = res.data?.data?.billNumber || 'success';
       setSuccess(`✓ Bill created successfully: ${newBillNo}`);
@@ -143,6 +232,7 @@ const VendorBills = () => {
       setAllocations({});
       setVendorInvoiceNumber('');
       setNotes('');
+      setBillFiles([]);
       // Refresh both unbilled GRNs and created bills list, and switch to Created Bills tab
       await Promise.all([loadGrns(vendorId), loadCreatedBills(vendorId)]);
       setTabIndex(1);
@@ -162,6 +252,8 @@ const VendorBills = () => {
       paymentTerms: b.paymentTerms || 'net_30',
       notes: b.notes || ''
     });
+    setEditSaved(b.attachments || []);
+    setEditFiles([]);
     setEditBill(b);
   };
 
@@ -169,7 +261,11 @@ const VendorBills = () => {
     if (!editBill) return;
     try {
       setActionBusy(true);
-      const res = await api.put(`/procurement/vendor-bills/${editBill._id}`, editForm);
+      const uploaded = await uploadBillFiles(editFiles);
+      const res = await api.put(`/procurement/vendor-bills/${editBill._id}`, {
+        ...editForm,
+        attachments: [...editSaved, ...uploaded]
+      });
       setSuccess(res.data?.message || 'Bill updated');
       setEditBill(null);
       loadCreatedBills(vendorId);
@@ -259,6 +355,9 @@ const VendorBills = () => {
           </Grid>
           <Grid item xs={12}>
             <TextField fullWidth label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
+          </Grid>
+          <Grid item xs={12}>
+            <AttachmentPicker files={billFiles} onFiles={setBillFiles} onError={setError} disabled={loading} />
           </Grid>
         </Grid>
       </Paper>
@@ -360,14 +459,15 @@ const VendorBills = () => {
                     <TableCell>Status</TableCell>
                     <TableCell align="right">Total Amount</TableCell>
                     <TableCell align="right">Balance Due</TableCell>
+                    <TableCell align="center">Files</TableCell>
                     <TableCell align="center">Actions</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
                   {billsLoading ? (
-                    <TableRow><TableCell colSpan={11} align="center"><CircularProgress size={24} /></TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} align="center"><CircularProgress size={24} /></TableCell></TableRow>
                   ) : createdBills.length === 0 ? (
-                    <TableRow><TableCell colSpan={11} align="center">No vendor bills created yet</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} align="center">No vendor bills created yet</TableCell></TableRow>
                   ) : (
                     createdBills.map((b) => {
                       const rejected = b.status === 'Returned from Audit';
@@ -403,6 +503,17 @@ const VendorBills = () => {
                             {formatPKR(b.balanceDue != null ? b.balanceDue : (b.totalAmount || 0))}
                           </Typography>
                         </TableCell>
+                        <TableCell align="center">
+                          {(b.attachments || []).length > 0 ? (
+                            <Tooltip title={`View ${b.attachments.length} attachment${b.attachments.length > 1 ? 's' : ''}`}>
+                              <IconButton size="small" onClick={() => setAttachmentsBill(b)}>
+                                <Badge badgeContent={b.attachments.length} color="primary">
+                                  <AttachFileIcon fontSize="small" />
+                                </Badge>
+                              </IconButton>
+                            </Tooltip>
+                          ) : '—'}
+                        </TableCell>
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
                           {rejected && (
                             <>
@@ -411,7 +522,7 @@ const VendorBills = () => {
                                   <InfoIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title="Edit bill (invoice #, date, terms, notes)">
+                              <Tooltip title="Edit bill (invoice #, date, terms, notes, attachments)">
                                 <IconButton size="small" color="primary" onClick={() => openEdit(b)}>
                                   <EditIcon fontSize="small" />
                                 </IconButton>
@@ -500,11 +611,43 @@ const VendorBills = () => {
             <Grid item xs={12}>
               <TextField fullWidth multiline minRows={2} label="Notes" value={editForm.notes} onChange={(e) => setEditForm((f) => ({ ...f, notes: e.target.value }))} />
             </Grid>
+            <Grid item xs={12}>
+              <AttachmentPicker
+                saved={editSaved}
+                files={editFiles}
+                onFiles={setEditFiles}
+                onRemoveSaved={(a) => setEditSaved((list) => list.filter((x) => x.path !== a.path))}
+                onError={setError}
+                disabled={actionBusy}
+              />
+            </Grid>
           </Grid>
         </DialogContent>
         <DialogActions>
           <Button onClick={() => setEditBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
           <Button variant="contained" onClick={saveEdit} disabled={actionBusy}>{actionBusy ? 'Saving...' : 'Save'}</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Bill attachments */}
+      <Dialog open={!!attachmentsBill} onClose={() => setAttachmentsBill(null)} maxWidth="xs" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Attachments — {attachmentsBill?.billNumber}</DialogTitle>
+        <DialogContent dividers sx={{ p: 0 }}>
+          <List dense disablePadding>
+            {(attachmentsBill?.attachments || []).map((a) => (
+              <ListItemButton key={a.path} component="a" href={getImageUrl(a.path)} target="_blank" rel="noopener noreferrer">
+                <AttachFileIcon fontSize="small" sx={{ mr: 1.5, color: 'text.secondary' }} />
+                <ListItemText
+                  primary={attachmentName(a)}
+                  secondary={[formatFileSize(a.size), a.uploadedAt ? formatDate(a.uploadedAt) : ''].filter(Boolean).join(' · ')}
+                  primaryTypographyProps={{ sx: { wordBreak: 'break-word' } }}
+                />
+              </ListItemButton>
+            ))}
+          </List>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setAttachmentsBill(null)}>Close</Button>
         </DialogActions>
       </Dialog>
 

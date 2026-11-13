@@ -643,7 +643,10 @@ accountsPayableSchema.pre('save', function(next) {
 
   // Update status based on balance and approval (a cancelled / voided bill stays cancelled)
   const settled = (this.amountPaid || 0) + (this.advanceApplied || 0);
-  if (this.status === 'cancelled') {
+  // A bill still with Audit, or sent back for correction, keeps that status until the review moves it on —
+  // a passed due date must not pull it out of the review queue.
+  const inReview = ['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'Returned from Finance'].includes(this.status);
+  if (this.status === 'cancelled' || (inReview && settled <= 0)) {
     // no status recalculation
   } else if (this.balanceDue <= 0 && settled > 0) {
     this.status = settled < this.totalAmount ? 'partial' : 'paid';

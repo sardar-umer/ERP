@@ -4991,6 +4991,75 @@ router.get('/vendor-bills/billable-grns',
   })
 );
 
+// Supporting files for GRN vendor bills. Stored with the other vendor-bill files (uploads/finance) so
+// Pre-Audit, Finance and the bill print show them the same way as any other bill attachment.
+const vendorBillAttachmentsDir = path.join(__dirname, '../uploads/finance');
+const uploadVendorBillAttachment = multer({
+  storage: multer.diskStorage({
+    destination: (req, file, cb) => {
+      if (!fs.existsSync(vendorBillAttachmentsDir)) fs.mkdirSync(vendorBillAttachmentsDir, { recursive: true });
+      cb(null, vendorBillAttachmentsDir);
+    },
+    filename: (req, file, cb) => {
+      const unique = Date.now() + '-' + Math.round(Math.random() * 1e9);
+      cb(null, 'grnbill-' + unique + path.extname(file.originalname).toLowerCase());
+    }
+  }),
+  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  fileFilter: (req, file, cb) => {
+    if (/\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif|webp)$/i.test(file.originalname)) cb(null, true);
+    else cb(new Error('Invalid file type. Use PDF, image, Word or Excel.'), false);
+  }
+});
+const handleVendorBillUpload = (req, res, next) => {
+  uploadVendorBillAttachment.array('files', 10)(req, res, (err) => {
+    if (!err) return next();
+    if (err.code === 'LIMIT_FILE_SIZE') return res.status(400).json({ success: false, message: 'Each attachment must be 10 MB or less' });
+    if (err.code === 'LIMIT_FILE_COUNT' || err.code === 'LIMIT_UNEXPECTED_FILE') return res.status(400).json({ success: false, message: 'Maximum 10 attachments allowed' });
+    return res.status(400).json({ success: false, message: err.message || 'File upload error' });
+  });
+};
+/** Keep only attachments that point at uploaded vendor-bill files (never a path the client made up). */
+const sanitizeGrnBillAttachments = (list, userId) => {
+  if (!Array.isArray(list)) return [];
+  return list
+    .filter((a) => a && typeof a.path === 'string' && /^\/uploads\/finance\/[^/\\]+$/.test(a.path))
+    .slice(0, 10)
+    .map((a) => ({
+      filename: String(a.filename || path.basename(a.path)),
+      originalName: String(a.originalName || a.filename || path.basename(a.path)),
+      path: a.path,
+      mimeType: a.mimeType ? String(a.mimeType) : undefined,
+      size: Number(a.size) || undefined,
+      uploadedAt: a.uploadedAt ? new Date(a.uploadedAt) : new Date(),
+      uploadedBy: a.uploadedBy || userId
+    }));
+};
+
+// @route   POST /api/procurement/vendor-bills/attachments
+// @desc    Upload supporting files for a GRN vendor bill (returns metadata to send with the bill)
+// @access  Private
+router.post('/vendor-bills/attachments',
+  authorize('super_admin', 'admin', 'procurement_manager', 'finance_manager'),
+  handleVendorBillUpload,
+  asyncHandler(async (req, res) => {
+    const files = Array.isArray(req.files) ? req.files : [];
+    if (!files.length) return res.status(400).json({ success: false, message: 'No files uploaded' });
+    res.status(201).json({
+      success: true,
+      data: files.map((f) => ({
+        filename: f.filename,
+        originalName: f.originalname,
+        path: `/uploads/finance/${f.filename}`,
+        mimeType: f.mimetype,
+        size: f.size,
+        uploadedAt: new Date(),
+        uploadedBy: req.user.id
+      }))
+    });
+  })
+);
+
 // @route   POST /api/procurement/vendor-bills
 // @desc    Create vendor bill from one or multiple GRNs (Procurement bill creation)
 // @access  Private
@@ -5006,7 +5075,8 @@ router.post('/vendor-bills',
     body('billDate').optional().isISO8601(),
     body('vendorInvoiceNumber').optional().isString(),
     body('paymentTerms').optional().isIn(['due_on_receipt', 'net_15', 'net_30', 'net_45', 'net_60', 'custom']),
-    body('notes').optional().isString()
+    body('notes').optional().isString(),
+    body('attachments').optional().isArray({ max: 10 })
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -5107,6 +5177,7 @@ router.post('/vendor-bills',
       referenceType: 'grn',
       lineItems: lines,
       linkedGRNs,
+      attachments: sanitizeGrnBillAttachments(req.body.attachments, req.user.id),
       notes: notes || `Procurement vendor bill from ${grns.length} GRN(s)`,
       createdBy: req.user.id
     });
@@ -5185,6 +5256,9 @@ router.get('/vendor-bills',
         amountPaid: paid,
         balanceDue: Math.round(((Number(b.totalAmount) || 0) - paid) * 100) / 100,
         linkedGRNs: (b.linkedGRNs || []).map((l) => ({ grnId: l.grnId, grnNumber: l.grnNumber, poNumber: l.poNumber, amount: l.amount })),
+        attachments: (b.attachments || []).map((a) => ({
+          filename: a.filename, originalName: a.originalName, path: a.path, mimeType: a.mimeType, size: a.size, uploadedAt: a.uploadedAt, uploadedBy: a.uploadedBy
+        })),
         auditReturn: auditReturnInfo(b)
       };
     });
@@ -5201,7 +5275,8 @@ router.put('/vendor-bills/:id',
     body('vendorInvoiceNumber').optional().isString(),
     body('billDate').optional().isISO8601(),
     body('paymentTerms').optional().isIn(['due_on_receipt', 'net_15', 'net_30', 'net_45', 'net_60', 'custom']),
-    body('notes').optional().isString()
+    body('notes').optional().isString(),
+    body('attachments').optional().isArray({ max: 10 })
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -5253,6 +5328,18 @@ router.put('/vendor-bills/:id',
     if (notes !== undefined && String(notes) !== String(bill.notes || '')) {
       changes.push('Notes updated');
       bill.notes = String(notes);
+    }
+    if (Array.isArray(req.body.attachments)) {
+      // The list sent is the full list to keep: files left out are removed, new uploads are added
+      const next = sanitizeGrnBillAttachments(req.body.attachments, req.user.id);
+      const before = (bill.attachments || []).map((a) => a.path);
+      const after = next.map((a) => a.path);
+      const added = after.filter((p) => !before.includes(p)).length;
+      const removed = before.filter((p) => !after.includes(p)).length;
+      if (added || removed) {
+        changes.push(`Attachments: ${[added && `${added} added`, removed && `${removed} removed`].filter(Boolean).join(', ')}`);
+        bill.attachments = next;
+      }
     }
 
     if (!changes.length) {
