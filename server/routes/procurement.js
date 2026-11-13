@@ -5036,6 +5036,25 @@ const sanitizeGrnBillAttachments = (list, userId) => {
     }));
 };
 
+/**
+ * Company a GRN's bill belongs to: the purchase order's company, else its indent's — the company shown
+ * on the GRN's & Bills page. A GRN with neither falls back to the company its own stock journal was
+ * posted to, so the bill clears GRNI in the same books.
+ */
+const resolveGrnBillCompanyId = async (grn) => {
+  const po = grn?.purchaseOrder && typeof grn.purchaseOrder === 'object' ? grn.purchaseOrder : null;
+  const fromDocs = po?.companyId?._id || po?.companyId || po?.indent?.companyId?._id || po?.indent?.companyId;
+  if (fromDocs) return String(fromDocs);
+  const JournalEntry = require('../models/finance/JournalEntry');
+  const je = await JournalEntry.findOne({ referenceId: grn._id, referenceType: 'grn', companyId: { $ne: null } })
+    .select('companyId')
+    .lean();
+  if (je?.companyId) return String(je.companyId);
+  const { resolveDocumentCompanyId } = require('../utils/financeCompanyContext');
+  const resolved = await resolveDocumentCompanyId({ grnId: grn._id, purchaseOrderId: po?._id || grn.purchaseOrder });
+  return resolved ? String(resolved) : null;
+};
+
 // @route   POST /api/procurement/vendor-bills/attachments
 // @desc    Upload supporting files for a GRN vendor bill (returns metadata to send with the bill)
 // @access  Private
@@ -5106,12 +5125,34 @@ router.post('/vendor-bills',
       supplier: vendorId,
       status: { $in: ['Received', 'Complete', 'Partial'] }
     })
-      .populate('purchaseOrder', 'orderNumber')
+      .populate({ path: 'purchaseOrder', select: 'orderNumber companyId indent', populate: { path: 'indent', select: 'companyId' } })
       .lean();
 
     if (grns.length !== uniqueGrnIds.length) {
       return res.status(400).json({ success: false, message: 'One or more selected GRNs are invalid for this vendor' });
     }
+
+    // The bill goes into the books of the company its GRN(s) belong to — without a company there is no
+    // chart of accounts to post Accounts Payable to. One bill can only sit in one company's books.
+    const grnCompanies = new Map();
+    for (const g of grns) {
+      const cid = await resolveGrnBillCompanyId(g);
+      if (!cid) {
+        return res.status(400).json({
+          success: false,
+          message: `GRN ${g.receiveNumber} is not linked to a company (its purchase order / indent has none) — set the company there, then create the bill`
+        });
+      }
+      if (!grnCompanies.has(cid)) grnCompanies.set(cid, []);
+      grnCompanies.get(cid).push(g.receiveNumber);
+    }
+    if (grnCompanies.size > 1) {
+      return res.status(400).json({
+        success: false,
+        message: `The selected GRNs belong to different companies (${[...grnCompanies.values()].map((list) => list.join(', ')).join(' / ')}) — create a separate bill for each company`
+      });
+    }
+    const billCompanyId = [...grnCompanies.keys()][0];
 
     const lines = [];
     const linkedGRNs = [];
@@ -5162,6 +5203,7 @@ router.post('/vendor-bills',
       : billNumber;
 
     const apBill = await FinanceHelper.createAPFromBill({
+      companyId: billCompanyId,
       vendorName: vendor.name || 'Unknown Vendor',
       vendorEmail: vendor.email || '',
       vendorId: vendor._id,
