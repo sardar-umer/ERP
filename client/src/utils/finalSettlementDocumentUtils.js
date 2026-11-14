@@ -100,8 +100,13 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
 
   const allowanceRows = [
     ...PRORATED.filter(([, k]) => Number(e[k]) > 0).map(([label, k]) => [label, standardOf(k), Number(e[k]) || 0]),
-    // Salary of another month paid here: the typed amount as-is (Standard = Actual)
-    ...monthSalaryRows(settlement).map((row) => [monthSalaryLabel(row), Number(row.amount), Number(row.amount)]),
+    // Salary of another month paid here: Standard = the full monthly gross (same as the Gross Salary line),
+    // Actual = the amount HR typed
+    ...monthSalaryRows(settlement).map((row) => [
+      monthSalaryLabel(row),
+      standardOf('basicSalary') || Number(row.amount),
+      Number(row.amount)
+    ]),
     ...ONE_OFF.filter(([, k]) => Number(e[k]) > 0).map(([label, k]) => [label, Number(e[k]), Number(e[k])])
   ];
   const deductionRows = DEDUCTIONS.filter(([, k]) => Number(d[k]) > 0).map(([label, k]) => [label, Number(d[k])]);
