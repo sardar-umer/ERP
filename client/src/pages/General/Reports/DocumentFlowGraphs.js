@@ -39,6 +39,7 @@ const KIND_COLORS = {
 };
 
 const round1 = (n) => Math.round(n * 10) / 10;
+const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : 0);
 
 const StuckTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
@@ -49,7 +50,7 @@ const StuckTooltip = ({ active, payload }) => {
         {g.label}
       </Typography>
       <Typography variant="body2">
-        {g.count} document{g.count === 1 ? '' : 's'} waiting · avg {g.avgDays} days · oldest {g.oldestDays} days
+        {g.count} document{g.count === 1 ? '' : 's'} waiting ({g.percent}% of all in progress) · avg {g.avgDays} days · oldest {g.oldestDays} days
       </Typography>
       {payload
         .filter((p) => p.value)
@@ -125,8 +126,15 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
           map.set(label, g);
         });
     });
+    const openTotal = [...map.values()].reduce((sum, g) => sum + g.count, 0);
     return [...map.values()]
-      .map((g) => ({ ...g, avgDays: round1(g.minutes / g.count / 1440), oldestDays: round1(g.oldest / 1440) }))
+      .map((g) => ({
+        ...g,
+        percent: pct(g.count, openTotal),
+        countLabel: `${g.count} (${pct(g.count, openTotal)}%)`,
+        avgDays: round1(g.minutes / g.count / 1440),
+        oldestDays: round1(g.oldest / 1440)
+      }))
       .sort((a, b) => b.count - a.count)
       .slice(0, 15);
   }, [sets]);
@@ -147,8 +155,13 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
         })
       );
     });
+    const totalMinutes = [...map.values()].reduce((sum, g) => sum + g.minutes, 0);
     return [...map.values()]
-      .map((g) => ({ ...g, avgDays: Math.round((g.minutes / g.visits / 1440) * 100) / 100 }))
+      .map((g) => {
+        const avgDays = Math.round((g.minutes / g.visits / 1440) * 100) / 100;
+        const percent = pct(g.minutes, totalMinutes);
+        return { ...g, avgDays, percent, daysLabel: `${avgDays} d (${percent}% of time)` };
+      })
       .filter((g) => g.avgDays > 0)
       .sort((a, b) => b.avgDays - a.avgDays)
       .slice(0, 12);
@@ -159,6 +172,10 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
     () =>
       sets
         .map((s) => ({ key: s.key, label: s.label, open: s.rows.filter((r) => r.isOpen).length, total: s.rows.length }))
+        .map((t, _i, all) => {
+          const share = pct(t.open, all.reduce((sum, x) => sum + x.open, 0));
+          return { ...t, share, ownPercent: pct(t.open, t.total), openLabel: `${t.open} (${share}%)` };
+        })
         .sort((a, b) => b.open - a.open),
     [sets]
   );
@@ -175,22 +192,22 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
 
     addSheet(
       'Stuck by stage',
-      ['Stage', 'Department / Pending With', ...sets.map((s) => s.label), 'Total Stuck', 'Average Days Waiting', 'Oldest Days Waiting'],
-      stuck.map((g) => [g.stage, g.owner, ...sets.map((s) => g[s.key] || 0), g.count, g.avgDays, g.oldestDays]),
+      ['Stage', 'Department / Pending With', ...sets.map((s) => s.label), 'Total Stuck', '% of In Progress', 'Average Days Waiting', 'Oldest Days Waiting'],
+      stuck.map((g) => [g.stage, g.owner, ...sets.map((s) => g[s.key] || 0), g.count, `${g.percent}%`, g.avgDays, g.oldestDays]),
       [34, 28]
     );
 
     addSheet(
       'Slowest stages',
-      ['Stage — Department', 'Times Passed', 'Average Days In Stage'],
-      slowest.map((g) => [g.label, g.visits, g.avgDays]),
+      ['Stage — Department', 'Times Passed', 'Average Days In Stage', '% of All Stage Time'],
+      slowest.map((g) => [g.label, g.visits, g.avgDays, `${g.percent}%`]),
       [48]
     );
 
     addSheet(
       'By document type',
-      ['Document Type', 'In Progress', 'Completed', 'Total'],
-      byType.map((t) => [t.label, t.open, t.total - t.open, t.total])
+      ['Document Type', 'In Progress', 'Completed', 'Total', '% In Progress (of its own)', '% of Everything In Progress'],
+      byType.map((t) => [t.label, t.open, t.total - t.open, t.total, `${t.ownPercent}%`, `${t.share}%`])
     );
 
     const waiting = sets
@@ -244,8 +261,8 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
           </FormControl>
           <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
             <Chip size="small" label={`${totals.documents} documents`} />
-            <Chip size="small" color="warning" variant="outlined" label={`${totals.open} in progress`} />
-            <Chip size="small" color="success" variant="outlined" label={`${totals.documents - totals.open} completed`} />
+            <Chip size="small" color="warning" variant="outlined" label={`${totals.open} in progress (${pct(totals.open, totals.documents)}%)`} />
+            <Chip size="small" color="success" variant="outlined" label={`${totals.documents - totals.open} completed (${pct(totals.documents - totals.open, totals.documents)}%)`} />
           </Stack>
           <Box sx={{ flex: 1 }} />
           <Button startIcon={<DownloadIcon />} variant="contained" color="success" onClick={exportExcel} disabled={loading || !totals.documents}>
@@ -274,11 +291,11 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
               {top ? (
                 <>
                   <Alert severity="warning" icon={false} sx={{ mb: 1.5, py: 0.5 }}>
-                    Most are stuck at <b>{top.label}</b> — {top.count} of {totals.open} in progress, waiting {top.avgDays} days on average (oldest{' '}
+                    Most are stuck at <b>{top.label}</b> — {top.count} of {totals.open} in progress (<b>{top.percent}%</b>), waiting {top.avgDays} days on average (oldest{' '}
                     {top.oldestDays} days).
                   </Alert>
                   <ResponsiveContainer width="100%" height={Math.max(180, stuck.length * 40 + 70)}>
-                    <BarChart data={stuck} layout="vertical" margin={{ top: 4, right: 48, left: 8, bottom: 4 }}>
+                    <BarChart data={stuck} layout="vertical" margin={{ top: 4, right: 84, left: 8, bottom: 4 }}>
                       <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                       <XAxis type="number" allowDecimals={false} />
                       <YAxis type="category" dataKey="label" width={300} tick={{ fontSize: 12 }} />
@@ -287,7 +304,7 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
                       {sets.map((s, i) => (
                         <Bar key={s.key} dataKey={s.key} name={s.label} stackId="stuck" fill={KIND_COLORS[s.key] || '#78909c'}>
                           {i === sets.length - 1 ? (
-                            <LabelList dataKey="count" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                            <LabelList dataKey="countLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
                           ) : null}
                         </Bar>
                       ))}
@@ -312,18 +329,18 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
               </Typography>
               {slowest.length ? (
                 <ResponsiveContainer width="100%" height={Math.max(180, slowest.length * 34 + 40)}>
-                  <BarChart data={slowest} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }}>
+                  <BarChart data={slowest} layout="vertical" margin={{ top: 4, right: 130, left: 8, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" unit=" d" />
                     <YAxis type="category" dataKey="label" width={300} tick={{ fontSize: 12 }} />
                     <ChartTooltip
                       formatter={(value, _name, item) => [
-                        `${value} days average over ${item.payload.visits} visit${item.payload.visits === 1 ? '' : 's'}`,
+                        `${value} days average over ${item.payload.visits} visit${item.payload.visits === 1 ? '' : 's'} · ${item.payload.percent}% of all stage time`,
                         'Time in stage'
                       ]}
                     />
                     <Bar dataKey="avgDays" fill="#5c6f8a" radius={[0, 4, 4, 0]}>
-                      <LabelList dataKey="avgDays" position="right" formatter={(v) => `${v} d`} style={{ fontSize: 12, fontWeight: 600 }} />
+                      <LabelList dataKey="daysLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -345,13 +362,13 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
                   Which kind of document has the most still open.
                 </Typography>
                 <ResponsiveContainer width="100%" height={Math.max(180, byType.length * 44 + 40)}>
-                  <BarChart data={byType} layout="vertical" margin={{ top: 4, right: 48, left: 8, bottom: 4 }}>
+                  <BarChart data={byType} layout="vertical" margin={{ top: 4, right: 84, left: 8, bottom: 4 }}>
                     <CartesianGrid strokeDasharray="3 3" horizontal={false} />
                     <XAxis type="number" allowDecimals={false} />
                     <YAxis type="category" dataKey="label" width={130} tick={{ fontSize: 12 }} />
-                    <ChartTooltip formatter={(value, _name, item) => [`${value} in progress of ${item.payload.total}`, item.payload.label]} />
+                    <ChartTooltip formatter={(value, _name, item) => [`${value} in progress of ${item.payload.total} (${item.payload.ownPercent}% of its own) · ${item.payload.share}% of everything in progress`, item.payload.label]} />
                     <Bar dataKey="open" fill="#e9a23b" radius={[0, 4, 4, 0]}>
-                      <LabelList dataKey="open" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                      <LabelList dataKey="openLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
