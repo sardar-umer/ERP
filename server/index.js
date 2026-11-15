@@ -741,6 +741,7 @@ app.use('/api/kpi/worksheets', authMiddleware, activityLogger, require('./routes
 app.use('/api/kpi', authMiddleware, activityLogger, require('./routes/kpi'));
 app.use('/api/items', authMiddleware, activityLogger, require('./routes/items'));
 app.use('/api/evaluation-level0-authorities', authMiddleware, activityLogger, evaluationLevel0AuthoritiesRoutes);
+app.use('/api/general-reports', authMiddleware, activityLogger, require('./routes/generalReports'));
 app.use('/api/tracking', authMiddleware, userTrackingRoutes); // Don't add activityLogger to tracking routes to avoid recursion
 app.use('/api/developer', authMiddleware, developerRoutes);
 // Public evaluation documents route (token-based access)

@@ -1,0 +1,367 @@
+import React, { useEffect, useMemo, useState } from 'react';
+import {
+  Alert,
+  Box,
+  Button,
+  Chip,
+  FormControl,
+  Grid,
+  InputLabel,
+  LinearProgress,
+  MenuItem,
+  Paper,
+  Select,
+  Stack,
+  Typography
+} from '@mui/material';
+import {
+  Bar,
+  BarChart,
+  CartesianGrid,
+  LabelList,
+  Legend,
+  ResponsiveContainer,
+  Tooltip as ChartTooltip,
+  XAxis,
+  YAxis
+} from 'recharts';
+import { Download as DownloadIcon } from '@mui/icons-material';
+import * as XLSX from 'xlsx';
+import dayjs from 'dayjs';
+import api from '../../../services/api';
+
+const KIND_COLORS = {
+  indent: '#3b6fb6',
+  purchase_order: '#2a9d8f',
+  cash_approval: '#e9a23b',
+  vendor_bill: '#8e6bbf',
+  utility_bill: '#d1603d'
+};
+
+const round1 = (n) => Math.round(n * 10) / 10;
+
+const StuckTooltip = ({ active, payload }) => {
+  if (!active || !payload?.length) return null;
+  const g = payload[0].payload;
+  return (
+    <Paper variant="outlined" sx={{ p: 1.25 }}>
+      <Typography variant="body2" sx={{ fontWeight: 700 }}>
+        {g.label}
+      </Typography>
+      <Typography variant="body2">
+        {g.count} document{g.count === 1 ? '' : 's'} waiting · avg {g.avgDays} days · oldest {g.oldestDays} days
+      </Typography>
+      {payload
+        .filter((p) => p.value)
+        .map((p) => (
+          <Typography key={p.dataKey} variant="caption" component="div" sx={{ color: p.fill }}>
+            {p.name}: {p.value}
+          </Typography>
+        ))}
+    </Paper>
+  );
+};
+
+/**
+ * Graphs tab of the Document Flow report: where in-progress documents are stuck, and which stages are slowest —
+ * for one document type or all of them together.
+ */
+const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
+  const [selected, setSelected] = useState('all');
+  const [sets, setSets] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState('');
+
+  useEffect(() => {
+    let cancelled = false;
+    const wanted = selected === 'all' ? kinds : kinds.filter((k) => k.key === selected);
+    setLoading(true);
+    setError('');
+    Promise.all(
+      wanted.map((k) =>
+        api
+          .get('/general-reports/flow-register', { params: { kind: k.key, from, to } })
+          .then((res) => ({ ...k, rows: res.data?.data?.rows || [], stageOwners: res.data?.data?.stageOwners || {} }))
+      )
+    )
+      .then((result) => {
+        if (!cancelled) setSets(result);
+      })
+      .catch((e) => {
+        if (!cancelled) {
+          setSets([]);
+          setError(e.response?.data?.message || 'Could not load the graphs');
+        }
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [selected, kinds, from, to, reloadKey]);
+
+  const totals = useMemo(() => {
+    const all = sets.flatMap((s) => s.rows);
+    return { documents: all.length, open: all.filter((r) => r.isOpen).length };
+  }, [sets]);
+
+  // In-progress documents by the stage (and department) they are waiting at
+  const stuck = useMemo(() => {
+    const map = new Map();
+    sets.forEach((set) => {
+      set.rows
+        .filter((r) => r.isOpen)
+        .forEach((r) => {
+          const stage = r.currentStage || r.status || 'Unknown';
+          const owner = r.pendingWith || set.stageOwners[stage] || '';
+          const label = owner && owner.toLowerCase() !== stage.toLowerCase() ? `${stage} — ${owner}` : stage;
+          const g = map.get(label) || { label, stage, owner, count: 0, minutes: 0, oldest: 0 };
+          const waited = r.visits[r.visits.length - 1]?.minutes || 0;
+          g.count += 1;
+          g.minutes += waited;
+          g.oldest = Math.max(g.oldest, waited);
+          g[set.key] = (g[set.key] || 0) + 1;
+          map.set(label, g);
+        });
+    });
+    return [...map.values()]
+      .map((g) => ({ ...g, avgDays: round1(g.minutes / g.count / 1440), oldestDays: round1(g.oldest / 1440) }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 15);
+  }, [sets]);
+
+  // Average time documents spend in each stage before moving on
+  const slowest = useMemo(() => {
+    const map = new Map();
+    sets.forEach((set) => {
+      set.rows.forEach((r) =>
+        r.visits.forEach((v) => {
+          if (v.minutes === null) return;
+          const owner = set.stageOwners[v.stage] || '';
+          const label = owner && owner.toLowerCase() !== v.stage.toLowerCase() ? `${v.stage} — ${owner}` : v.stage;
+          const g = map.get(label) || { label, visits: 0, minutes: 0 };
+          g.visits += 1;
+          g.minutes += v.minutes;
+          map.set(label, g);
+        })
+      );
+    });
+    return [...map.values()]
+      .map((g) => ({ ...g, avgDays: Math.round((g.minutes / g.visits / 1440) * 100) / 100 }))
+      .filter((g) => g.avgDays > 0)
+      .sort((a, b) => b.avgDays - a.avgDays)
+      .slice(0, 12);
+  }, [sets]);
+
+  // In-progress count per document type (only meaningful for "All types")
+  const byType = useMemo(
+    () =>
+      sets
+        .map((s) => ({ key: s.key, label: s.label, open: s.rows.filter((r) => r.isOpen).length, total: s.rows.length }))
+        .sort((a, b) => b.open - a.open),
+    [sets]
+  );
+
+  const top = stuck[0];
+
+  const exportExcel = () => {
+    const wb = XLSX.utils.book_new();
+    const addSheet = (name, head, body, widths) => {
+      const ws = XLSX.utils.aoa_to_sheet([head, ...body]);
+      ws['!cols'] = head.map((h, i) => ({ wch: widths?.[i] || Math.max(14, String(h).length + 2) }));
+      XLSX.utils.book_append_sheet(wb, ws, name);
+    };
+
+    addSheet(
+      'Stuck by stage',
+      ['Stage', 'Department / Pending With', ...sets.map((s) => s.label), 'Total Stuck', 'Average Days Waiting', 'Oldest Days Waiting'],
+      stuck.map((g) => [g.stage, g.owner, ...sets.map((s) => g[s.key] || 0), g.count, g.avgDays, g.oldestDays]),
+      [34, 28]
+    );
+
+    addSheet(
+      'Slowest stages',
+      ['Stage — Department', 'Times Passed', 'Average Days In Stage'],
+      slowest.map((g) => [g.label, g.visits, g.avgDays]),
+      [48]
+    );
+
+    addSheet(
+      'By document type',
+      ['Document Type', 'In Progress', 'Completed', 'Total'],
+      byType.map((t) => [t.label, t.open, t.total - t.open, t.total])
+    );
+
+    const waiting = sets
+      .flatMap((set) =>
+        set.rows
+          .filter((r) => r.isOpen)
+          .map((r) => {
+            const last = r.visits[r.visits.length - 1];
+            return [
+              set.label,
+              r.number,
+              r.party || r.title,
+              r.amount || '',
+              r.currentStage || r.status,
+              r.pendingWith,
+              last ? dayjs(last.at).format('DD MMM YYYY hh:mm A') : '',
+              last?.minutes !== null && last?.minutes !== undefined ? Math.round((last.minutes / 1440) * 100) / 100 : '',
+              r.initiatedBy,
+              dayjs(r.initiatedAt).format('DD MMM YYYY'),
+              r.returns,
+              r.lastRemark
+            ];
+          })
+      )
+      .sort((a, b) => (Number(b[7]) || 0) - (Number(a[7]) || 0));
+    addSheet(
+      'Stuck documents',
+      ['Type', 'Document No', 'Title / Vendor', 'Amount (PKR)', 'Stuck At', 'Pending With', 'Waiting Since', 'Days Waiting', 'Initiated By', 'Initiated On', 'Times Returned / Rejected', 'Last Remark'],
+      waiting,
+      [16, 20, 32, 14, 28, 26, 22, 14, 24, 14, 12, 50]
+    );
+
+    XLSX.writeFile(wb, `document-flow-graphs-${selected}-${dayjs().format('YYYY-MM-DD')}.xlsx`);
+  };
+  const scopeLabel = selected === 'all' ? 'documents' : (kinds.find((k) => k.key === selected)?.label || 'documents').toLowerCase();
+
+  return (
+    <Box>
+      <Paper variant="outlined" sx={{ p: 2, mb: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ md: 'center' }}>
+          <FormControl size="small" sx={{ minWidth: 240 }}>
+            <InputLabel>Document type</InputLabel>
+            <Select value={selected} label="Document type" onChange={(e) => setSelected(e.target.value)}>
+              <MenuItem value="all">All types</MenuItem>
+              {kinds.map((k) => (
+                <MenuItem key={k.key} value={k.key}>
+                  {k.label}
+                </MenuItem>
+              ))}
+            </Select>
+          </FormControl>
+          <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap>
+            <Chip size="small" label={`${totals.documents} documents`} />
+            <Chip size="small" color="warning" variant="outlined" label={`${totals.open} in progress`} />
+            <Chip size="small" color="success" variant="outlined" label={`${totals.documents - totals.open} completed`} />
+          </Stack>
+          <Box sx={{ flex: 1 }} />
+          <Button startIcon={<DownloadIcon />} variant="contained" color="success" onClick={exportExcel} disabled={loading || !totals.documents}>
+            Download Excel
+          </Button>
+        </Stack>
+        {loading ? <LinearProgress sx={{ mt: 2 }} /> : null}
+      </Paper>
+
+      {error ? (
+        <Alert severity="error" sx={{ mb: 2 }}>
+          {error}
+        </Alert>
+      ) : null}
+
+      {!error && sets.length ? (
+        <Grid container spacing={2}>
+          <Grid item xs={12}>
+            <Paper variant="outlined" sx={{ p: 2 }}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Where {scopeLabel} are stuck right now
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                In-progress documents by the stage and department they are waiting at.
+              </Typography>
+              {top ? (
+                <>
+                  <Alert severity="warning" icon={false} sx={{ mb: 1.5, py: 0.5 }}>
+                    Most are stuck at <b>{top.label}</b> — {top.count} of {totals.open} in progress, waiting {top.avgDays} days on average (oldest{' '}
+                    {top.oldestDays} days).
+                  </Alert>
+                  <ResponsiveContainer width="100%" height={Math.max(180, stuck.length * 40 + 70)}>
+                    <BarChart data={stuck} layout="vertical" margin={{ top: 4, right: 48, left: 8, bottom: 4 }}>
+                      <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                      <XAxis type="number" allowDecimals={false} />
+                      <YAxis type="category" dataKey="label" width={300} tick={{ fontSize: 12 }} />
+                      <ChartTooltip content={<StuckTooltip />} />
+                      {sets.length > 1 ? <Legend /> : null}
+                      {sets.map((s, i) => (
+                        <Bar key={s.key} dataKey={s.key} name={s.label} stackId="stuck" fill={KIND_COLORS[s.key] || '#78909c'}>
+                          {i === sets.length - 1 ? (
+                            <LabelList dataKey="count" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                          ) : null}
+                        </Bar>
+                      ))}
+                    </BarChart>
+                  </ResponsiveContainer>
+                </>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Nothing is in progress — every document in this period is completed.
+                </Typography>
+              )}
+            </Paper>
+          </Grid>
+
+          <Grid item xs={12} lg={selected === 'all' ? 7 : 12}>
+            <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+              <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                Slowest stages
+              </Typography>
+              <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                Average days a document stays in each stage before moving on.
+              </Typography>
+              {slowest.length ? (
+                <ResponsiveContainer width="100%" height={Math.max(180, slowest.length * 34 + 40)}>
+                  <BarChart data={slowest} layout="vertical" margin={{ top: 4, right: 56, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" unit=" d" />
+                    <YAxis type="category" dataKey="label" width={300} tick={{ fontSize: 12 }} />
+                    <ChartTooltip
+                      formatter={(value, _name, item) => [
+                        `${value} days average over ${item.payload.visits} visit${item.payload.visits === 1 ? '' : 's'}`,
+                        'Time in stage'
+                      ]}
+                    />
+                    <Bar dataKey="avgDays" fill="#5c6f8a" radius={[0, 4, 4, 0]}>
+                      <LabelList dataKey="avgDays" position="right" formatter={(v) => `${v} d`} style={{ fontSize: 12, fontWeight: 600 }} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              ) : (
+                <Typography variant="body2" color="text.secondary">
+                  Not enough stage movements to compare yet.
+                </Typography>
+              )}
+            </Paper>
+          </Grid>
+
+          {selected === 'all' ? (
+            <Grid item xs={12} lg={5}>
+              <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+                <Typography variant="h6" sx={{ fontWeight: 600 }}>
+                  In progress by document type
+                </Typography>
+                <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+                  Which kind of document has the most still open.
+                </Typography>
+                <ResponsiveContainer width="100%" height={Math.max(180, byType.length * 44 + 40)}>
+                  <BarChart data={byType} layout="vertical" margin={{ top: 4, right: 48, left: 8, bottom: 4 }}>
+                    <CartesianGrid strokeDasharray="3 3" horizontal={false} />
+                    <XAxis type="number" allowDecimals={false} />
+                    <YAxis type="category" dataKey="label" width={130} tick={{ fontSize: 12 }} />
+                    <ChartTooltip formatter={(value, _name, item) => [`${value} in progress of ${item.payload.total}`, item.payload.label]} />
+                    <Bar dataKey="open" fill="#e9a23b" radius={[0, 4, 4, 0]}>
+                      <LabelList dataKey="open" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                    </Bar>
+                  </BarChart>
+                </ResponsiveContainer>
+              </Paper>
+            </Grid>
+          ) : null}
+        </Grid>
+      ) : null}
+    </Box>
+  );
+};
+
+export default DocumentFlowGraphs;

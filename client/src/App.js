@@ -229,6 +229,8 @@ import DocumentsTracking from './pages/HR/DocumentsTracking';
 import DocumentsTrackingDashboard from './pages/DocumentsTracking/DocumentsTrackingDashboard';
 import EvaluationTracking from './pages/DocumentsTracking/EvaluationTracking';
 import UserTracking from './pages/General/UserTracking';
+import DocumentFlowReport from './pages/General/Reports/DocumentFlowReport';
+import DocumentFlowRegister from './pages/General/Reports/DocumentFlowRegister';
 import IndentsDashboard from './pages/General/Indents/IndentsDashboard';
 import IndentsList from './pages/General/Indents/IndentsList';
 import IndentForm from './pages/General/Indents/IndentForm';
@@ -888,6 +890,18 @@ function App() {
                     <Route
                       path="/general/payments"
                       element={<ProtectedRoute><Payments /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/reports"
+                      element={<Navigate to="/general/reports/document-flow" replace />}
+                    />
+                    <Route
+                      path="/general/reports/document-flow"
+                      element={<ProtectedRoute><DocumentFlowRegister /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/general/reports/document-trace"
+                      element={<ProtectedRoute><DocumentFlowReport /></ProtectedRoute>}
                     />
                     <Route
                       path="/general/user-tracking"

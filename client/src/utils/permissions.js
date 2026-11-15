@@ -377,6 +377,7 @@ export const SUBMODULES = {
     'general_cash_approvals',
     'centralized_store',
     'user_tracking',
+    'general_reports',
     'project_management',
     'ceo_secretariat',
     'president_secretariat'
@@ -1079,6 +1080,13 @@ export const MODULES = {
         path: '/general/user-tracking'
       },
       {
+        name: 'Reports',
+        path: '/general/reports',
+        subItems: [
+          { name: 'Document Flow', path: '/general/reports/document-flow' }
+        ]
+      },
+      {
         name: 'Project Management',
         path: '/general/project-management',
         subItems: [
@@ -1183,6 +1191,7 @@ const CATALOG_PATH_OVERRIDES = {
   '/settings': 'admin_settings',
   '/documents-tracking': 'document_tracking',
   '/general/cost-centers': 'indents',
+  '/general/reports': 'general_reports',
   '/hr/companies': 'employee_management',
   '/hr/departments': 'employee_management',
   '/hr/increments': 'employee_management',
@@ -1526,6 +1535,9 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/general/cash-approvals': 'general_cash_approvals',
       '/general/cash-approvals/create': 'general_cash_approvals',
       '/general/user-tracking': 'user_tracking',
+      '/general/reports': 'general_reports',
+      '/general/reports/document-flow': 'general_reports',
+      '/general/reports/document-trace': 'general_reports',
       '/general/project-management': 'project_management',
       '/general/project-management/overview': 'project_management',
       '/general/project-management/dashboard': 'project_management',
