@@ -4678,9 +4678,21 @@ router.delete('/inventory/:id',
 router.get('/delivery-challans',
   authorize('super_admin', 'admin', 'procurement_manager', 'store_qa', 'audit_manager', 'auditor', 'finance_manager'),
   asyncHandler(async (req, res) => {
-    const { purchaseOrder, status, page = 1, limit = 30 } = req.query;
+    const { purchaseOrder, poNumber, status, page = 1, limit = 30 } = req.query;
     const q = {};
-    if (purchaseOrder) q.purchaseOrder = purchaseOrder;
+    // `purchaseOrder` is the PO's id (deep links from Store Dashboard / GRN); `poNumber` is what
+    // people type. Anything in `purchaseOrder` that is not an id is treated as a PO number too.
+    const poIdParam = String(purchaseOrder || '').trim();
+    const poIdIsObjectId = /^[0-9a-fA-F]{24}$/.test(poIdParam);
+    const poNumberSearch = String(poNumber || '').trim() || (poIdIsObjectId ? '' : poIdParam);
+    if (poIdIsObjectId) {
+      q.purchaseOrder = poIdParam;
+    } else if (poNumberSearch) {
+      const matchingPos = await PurchaseOrder.find({
+        orderNumber: { $regex: new RegExp(escapeRegex(poNumberSearch), 'i') }
+      }).select('_id').lean();
+      q.purchaseOrder = { $in: matchingPos.map((p) => p._id) };
+    }
     if (status) q.status = status;
     const lim = Math.min(Math.max(parseInt(limit, 10) || 30, 1), 500);
     const pg = Math.max(parseInt(page, 10) || 1, 1);

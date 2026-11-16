@@ -23,7 +23,9 @@ const statusColor = (s) => {
 
 export default function DeliveryChallans() {
   const [searchParams, setSearchParams] = useSearchParams();
-  const initialPo = searchParams.get('purchaseOrder') || '';
+  // `poNumber` is the filter people type; `purchaseOrder` (the PO's id) only arrives via links from other pages.
+  const appliedPoNumber = (searchParams.get('poNumber') || '').trim();
+  const linkedPoId = (searchParams.get('purchaseOrder') || '').trim();
 
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
@@ -32,7 +34,7 @@ export default function DeliveryChallans() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
-  const [poFilter, setPoFilter] = useState(initialPo);
+  const [poFilter, setPoFilter] = useState(appliedPoNumber);
   const [statusFilter, setStatusFilter] = useState('');
 
   const [createOpen, setCreateOpen] = useState(false);
@@ -53,7 +55,8 @@ export default function DeliveryChallans() {
       const params = {
         page: page + 1,
         limit: rowsPerPage,
-        ...(poFilter.trim() ? { purchaseOrder: poFilter.trim() } : {}),
+        ...(appliedPoNumber ? { poNumber: appliedPoNumber } : {}),
+        ...(!appliedPoNumber && linkedPoId ? { purchaseOrder: linkedPoId } : {}),
         ...(statusFilter ? { status: statusFilter } : {})
       };
       const res = await api.get('/procurement/delivery-challans', { params });
@@ -66,7 +69,7 @@ export default function DeliveryChallans() {
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, poFilter, statusFilter]);
+  }, [page, rowsPerPage, appliedPoNumber, linkedPoId, statusFilter]);
 
   useEffect(() => {
     loadList();
@@ -74,16 +77,23 @@ export default function DeliveryChallans() {
 
   const applyFilter = () => {
     const next = new URLSearchParams(searchParams);
-    if (poFilter.trim()) next.set('purchaseOrder', poFilter.trim());
-    else next.delete('purchaseOrder');
+    if (poFilter.trim()) next.set('poNumber', poFilter.trim());
+    else next.delete('poNumber');
+    next.delete('purchaseOrder');
+    setSearchParams(next);
+    setPage(0);
+  };
+
+  const clearLinkedPo = () => {
+    const next = new URLSearchParams(searchParams);
+    next.delete('purchaseOrder');
     setSearchParams(next);
     setPage(0);
   };
 
   useEffect(() => {
-    const q = searchParams.get('purchaseOrder') || '';
-    setPoFilter(q);
-  }, [searchParams]);
+    setPoFilter(appliedPoNumber);
+  }, [appliedPoNumber]);
 
   const openCreate = () => {
     setError('');
@@ -264,10 +274,11 @@ export default function DeliveryChallans() {
             <TextField
               fullWidth
               size="small"
-              label="Filter by PO id"
+              label="Filter by PO number"
               value={poFilter}
               onChange={(e) => setPoFilter(e.target.value)}
-              placeholder="MongoDB id of purchase order"
+              onKeyDown={(e) => { if (e.key === 'Enter') applyFilter(); }}
+              placeholder="e.g. PO-202611-0001"
             />
           </Grid>
           <Grid item xs={12} md={3}>
@@ -287,7 +298,15 @@ export default function DeliveryChallans() {
             </TextField>
           </Grid>
           <Grid item xs={12} md={3}>
-            <Button variant="contained" onClick={applyFilter}>Apply</Button>
+            <Stack direction="row" spacing={1} alignItems="center">
+              <Button variant="contained" onClick={applyFilter}>Apply</Button>
+              {!appliedPoNumber && linkedPoId && (
+                <Chip
+                  label={`PO: ${rows[0]?.purchaseOrder?.orderNumber || 'selected PO'}`}
+                  onDelete={clearLinkedPo}
+                />
+              )}
+            </Stack>
           </Grid>
         </Grid>
       </Paper>
@@ -317,10 +336,7 @@ export default function DeliveryChallans() {
                   <TableCell><Typography fontWeight="bold">{r.dcNumber}</Typography></TableCell>
                   <TableCell>{getDocCompanyName(r)}</TableCell>
                   <TableCell><Typography variant="body2">{r.gatePassNo || '—'}</Typography></TableCell>
-                  <TableCell>
-                    {r.purchaseOrder?.orderNumber || '—'}
-                    <Typography variant="caption" display="block" color="text.secondary">{r.purchaseOrder?._id}</Typography>
-                  </TableCell>
+                  <TableCell>{r.purchaseOrder?.orderNumber || '—'}</TableCell>
                   <TableCell><Chip size="small" label={r.status} color={statusColor(r.status)} /></TableCell>
                   <TableCell><Chip size="small" variant="outlined" label={r.qaStatus || '—'} /></TableCell>
                   <TableCell>{formatDate(r.createdAt)}</TableCell>
