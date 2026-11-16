@@ -26,6 +26,9 @@ import GrnDeveloperEditDialog from '../../components/Procurement/Store/GrnDevelo
 import { resolveUploadFileHref } from '../../utils/uploadPaths';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 
+// Keep in step with GRN_ATTACHMENT_MAX_MB in server/routes/procurement.js.
+const GRN_ATTACHMENT_MAX_MB = 20;
+
 const makeEmptyItem = () => ({
   inventoryItem: '', productCode: '', itemCode: '', itemName: '', unit: '',
   quantity: 1, quantityOrdered: null, unitPrice: '', notes: '',
@@ -1252,7 +1255,7 @@ const GoodsReceive = () => {
                   Add files
                 </Button>
                 <Typography variant="caption" color="text.secondary">
-                  PDF, images, or Office docs · max 10 files · 10 MB each
+                  PDF, images, or Office docs · max 10 files · {GRN_ATTACHMENT_MAX_MB} MB each
                 </Typography>
                 <input
                   ref={attachmentInputRef}
@@ -1261,7 +1264,13 @@ const GoodsReceive = () => {
                   multiple
                   accept=".pdf,.doc,.docx,.xls,.xlsx,image/*"
                   onChange={(e) => {
-                    const picked = Array.from(e.target.files || []);
+                    const chosen = Array.from(e.target.files || []);
+                    const tooBig = chosen.filter((f) => f.size > GRN_ATTACHMENT_MAX_MB * 1024 * 1024);
+                    const picked = chosen.filter((f) => !tooBig.includes(f));
+                    if (tooBig.length) {
+                      setError(`Each attachment must be ${GRN_ATTACHMENT_MAX_MB} MB or less — skipped: ${tooBig.map((f) => f.name).join(', ')}`);
+                    }
+                    e.target.value = '';
                     if (!picked.length) return;
                     setAttachmentFiles((prev) => {
                       const next = [...prev, ...picked].slice(0, 10);

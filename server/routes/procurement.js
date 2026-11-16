@@ -964,9 +964,12 @@ const grnAttachmentStorage = multer.diskStorage({
     cb(null, 'grn-' + unique + path.extname(file.originalname));
   }
 });
+// Keep in step with GRN_ATTACHMENT_MAX_MB in client GoodsReceive.js and the goods-receive
+// location in deploy/nginx-sgc-erp.conf (10 files x 20 MB).
+const GRN_ATTACHMENT_MAX_MB = 20;
 const uploadGrnAttachment = multer({
   storage: grnAttachmentStorage,
-  limits: { fileSize: 10 * 1024 * 1024, files: 10 },
+  limits: { fileSize: GRN_ATTACHMENT_MAX_MB * 1024 * 1024, files: 10 },
   fileFilter: (req, file, cb) => {
     const allowed = /\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif|webp)$/i.test(file.originalname) ||
       file.mimetype.startsWith('image/') ||
@@ -983,7 +986,7 @@ const handleGrnUpload = (req, res, next) => {
   uploadGrnAttachment.array('attachments', 10)(req, res, (err) => {
     if (!err) return next();
     if (err.code === 'LIMIT_FILE_SIZE') {
-      return res.status(400).json({ success: false, message: 'Each attachment must be 10 MB or less' });
+      return res.status(400).json({ success: false, message: `Each attachment must be ${GRN_ATTACHMENT_MAX_MB} MB or less` });
     }
     if (err.code === 'LIMIT_FILE_COUNT') {
       return res.status(400).json({ success: false, message: 'Maximum 10 attachments allowed' });

@@ -29,6 +29,8 @@ export default function DeliveryChallanQA() {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(250);
   const [totalItems, setTotalItems] = useState(0);
+  const [poInput, setPoInput] = useState('');
+  const [poNumber, setPoNumber] = useState('');
 
   const [viewOpen, setViewOpen] = useState(false);
   const [viewDoc, setViewDoc] = useState(null);
@@ -46,7 +48,12 @@ export default function DeliveryChallanQA() {
       setLoading(true);
       setError('');
       const res = await api.get('/procurement/delivery-challans', {
-        params: { page: page + 1, limit: rowsPerPage, status: statusForApi }
+        params: {
+          page: page + 1,
+          limit: rowsPerPage,
+          status: statusForApi,
+          ...(poNumber ? { poNumber } : {})
+        }
       });
       if (res.data?.success) {
         setRows(res.data.data?.items || []);
@@ -57,7 +64,7 @@ export default function DeliveryChallanQA() {
     } finally {
       setLoading(false);
     }
-  }, [page, rowsPerPage, statusForApi]);
+  }, [page, rowsPerPage, statusForApi, poNumber]);
 
   useEffect(() => {
     loadList();
@@ -66,6 +73,17 @@ export default function DeliveryChallanQA() {
   useEffect(() => {
     setPage(0);
   }, [tab]);
+
+  const applyPoFilter = () => {
+    setPoNumber(poInput.trim());
+    setPage(0);
+  };
+
+  const clearPoFilter = () => {
+    setPoInput('');
+    setPoNumber('');
+    setPage(0);
+  };
 
   const submitQa = async () => {
     if (!qaRow?._id) return;
@@ -121,6 +139,22 @@ export default function DeliveryChallanQA() {
         </Tabs>
       </Paper>
 
+      <Paper sx={{ p: 2, mb: 2 }}>
+        <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ sm: 'center' }}>
+          <TextField
+            size="small"
+            label="Filter by PO number"
+            value={poInput}
+            onChange={(e) => setPoInput(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter') applyPoFilter(); }}
+            placeholder="e.g. PO-202611-0001"
+            sx={{ minWidth: { sm: 320 } }}
+          />
+          <Button variant="contained" onClick={applyPoFilter}>Apply</Button>
+          {(poNumber || poInput) && <Button onClick={clearPoFilter}>Clear</Button>}
+        </Stack>
+      </Paper>
+
       <TableContainer component={Paper}>
         <Table size="small">
           <TableHead>
@@ -146,7 +180,6 @@ export default function DeliveryChallanQA() {
                   <TableCell><Typography variant="body2">{r.gatePassNo || '—'}</Typography></TableCell>
                   <TableCell>
                     {r.purchaseOrder?.orderNumber || '—'}
-                    <Typography variant="caption" display="block" color="text.secondary">{r.purchaseOrder?._id}</Typography>
                   </TableCell>
                   <TableCell><Chip size="small" label={r.status} color={statusChipColor(r.status)} /></TableCell>
                   <TableCell><Chip size="small" variant="outlined" label={r.qaStatus || '—'} /></TableCell>
