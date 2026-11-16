@@ -5442,6 +5442,134 @@ router.get('/vendor-bills',
   })
 );
 
+// @route   GET /api/procurement/vendor-bills/:id
+// @desc    Full detail of one GRN vendor bill: header, GRN items, approval, payment and history
+// @access  Private
+router.get('/vendor-bills/:id',
+  authorize(...VENDOR_BILL_ROLES),
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
+    }
+    const b = await AccountsPayable.findById(req.params.id)
+      .populate('companyId', 'name code')
+      .populate('createdBy', 'firstName lastName email digitalSignature')
+      .populate('workflowHistory.changedBy', 'firstName lastName email digitalSignature')
+      .populate('approvalChain.approver', 'firstName lastName email digitalSignature')
+      .lean();
+    if (!b || !isProcurementGrnBill(b)) {
+      return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
+    }
+    const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+
+    // Signature block of the printed bill: who prepared it, the approval authority, then Audit.
+    // Audit signatures count only from the bill's latest trip to Pre-Audit (a returned bill starts again).
+    const fullHistory = b.workflowHistory || [];
+    let lastSentToAudit = -1;
+    fullHistory.forEach((h, i) => { if (h?.toStatus === 'Pending Audit') lastSentToAudit = i; });
+    const auditTrip = lastSentToAudit >= 0 && !['Returned from Audit', 'cancelled'].includes(b.status)
+      ? fullHistory.slice(lastSentToAudit + 1)
+      : [];
+    const latestAuditEntry = (statuses) => [...auditTrip].reverse()
+      .find((h) => h?.module === 'Pre-Audit' && statuses.includes(h.toStatus));
+    const auditSignatureRow = (authority, entry) => ({
+      authority,
+      name: userFullName(entry?.changedBy),
+      signature: entry ? (entry.digitalSignature || entry.changedBy?.digitalSignature || '') : '',
+      stamp: entry?.approvalStamp || '',
+      at: entry?.changedAt || null
+    });
+    const signatures = [
+      { authority: 'Prepared By', name: userFullName(b.createdBy), signature: b.createdBy?.digitalSignature || '', stamp: '', at: b.createdAt || null },
+      ...(b.approvalChain || []).map((s) => ({
+        authority: s.roleLabel || GRN_BILL_APPROVER_LABEL,
+        name: userFullName(s.approver),
+        signature: s.status === 'approved' ? (s.approver?.digitalSignature || '') : '',
+        stamp: '',
+        at: s.status === 'approved' ? (s.actedAt || null) : null,
+        state: s.status
+      })),
+      auditSignatureRow('Pre-Audit Authority', latestAuditEntry(['Initial Pre-Audit Approved', 'Forwarded to Audit Director'])),
+      auditSignatureRow('Audit Director', latestAuditEntry(['approved']))
+    ];
+    const links = b.linkedGRNs || [];
+    const grnDocs = await GoodsReceive.find({ _id: { $in: links.map((l) => l.grnId).filter(Boolean) } })
+      .select('receiveNumber receiveDate poNumber status netAmount total returnedAmount billedAmount items')
+      .lean();
+    const grnById = new Map(grnDocs.map((g) => [String(g._id), g]));
+    const paid = r2(b.amountPaid ?? b.paidAmount ?? 0);
+    const advanceApplied = r2(b.advanceApplied);
+    res.json({
+      success: true,
+      data: {
+        _id: b._id,
+        billNumber: b.billNumber,
+        vendorInvoiceNumber: b.vendorInvoiceNumber || '',
+        vendorName: b.vendor?.name || '',
+        vendorEmail: b.vendor?.email || '',
+        companyName: b.companyId?.name || b.company || '',
+        billDate: b.billDate,
+        dueDate: b.dueDate,
+        paymentTerms: b.paymentTerms || '',
+        notes: b.notes || '',
+        status: b.status,
+        createdAt: b.createdAt,
+        createdByName: userFullName(b.createdBy),
+        voidedAt: b.voidedAt || null,
+        voidReason: b.voidReason || '',
+        totalAmount: r2(b.totalAmount),
+        amountPaid: paid,
+        advanceApplied,
+        balanceDue: r2((Number(b.totalAmount) || 0) - paid - advanceApplied),
+        grns: links.map((l) => {
+          const g = grnById.get(String(l.grnId));
+          return {
+            grnId: l.grnId,
+            grnNumber: l.grnNumber || g?.receiveNumber || '',
+            poNumber: l.poNumber || g?.poNumber || '',
+            receiveDate: g?.receiveDate || null,
+            grnStatus: g?.status || '',
+            grnTotal: g ? r2((Number(g.netAmount || g.total) || 0) - (Number(g.returnedAmount) || 0)) : null,
+            billedOnThisBill: r2(l.amount),
+            items: (g?.items || []).map((it) => {
+              const qty = (Number(it.quantity) || 0) - (Number(it.returnedQuantity) || 0);
+              return {
+                itemCode: it.itemCode || '',
+                itemName: it.itemName || '',
+                unit: it.unit || '',
+                quantity: r2(qty),
+                unitPrice: r2(it.unitPrice),
+                amount: r2(qty * (Number(it.unitPrice) || 0))
+              };
+            })
+          };
+        }),
+        attachments: (b.attachments || []).map((a) => ({
+          filename: a.filename, originalName: a.originalName, path: a.path, mimeType: a.mimeType, size: a.size, uploadedAt: a.uploadedAt
+        })),
+        approval: grnBillApprovalInfo(b, req.user.id),
+        approvalSteps: (b.approvalChain || []).map((s) => ({
+          roleLabel: s.roleLabel || '',
+          approverName: userFullName(s.approver),
+          status: s.status,
+          actedAt: s.actedAt || null,
+          comment: s.comment || ''
+        })),
+        auditReturn: auditReturnInfo(b),
+        signatures,
+        history: (b.workflowHistory || []).map((h) => ({
+          fromStatus: h.fromStatus || '',
+          toStatus: h.toStatus || '',
+          byName: userFullName(h.changedBy),
+          at: h.changedAt || null,
+          comments: h.comments || '',
+          module: h.module || ''
+        }))
+      }
+    });
+  })
+);
+
 // @route   PUT /api/procurement/vendor-bills/:id
 // @desc    Correct a GRN bill that Audit returned or its approval authority rejected
 //          (header fields only — amounts stay tied to the GRN)

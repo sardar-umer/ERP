@@ -118,6 +118,7 @@ import DeliveryChallanQA from './pages/Procurement/Store/DeliveryChallanQA';
 import GoodsIssue from './pages/Procurement/GoodsIssue';
 import CostCenters from './pages/Procurement/CostCenters';
 import VendorBills from './pages/Procurement/VendorBills';
+import GrnVendorBillView from './pages/Procurement/GrnVendorBillView';
 import StoreDashboard from './pages/Procurement/Store/StoreDashboard';
 import StockTransfers from './pages/Procurement/Store/StockTransfers';
 import StockReports from './pages/Procurement/Store/StockReports';
@@ -1650,6 +1651,10 @@ function App() {
                     <Route
                       path="/procurement/vendor-bills"
                       element={<ProtectedRoute><VendorBills /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/vendor-bills/view/:id"
+                      element={<ProtectedRoute><GrnVendorBillView /></ProtectedRoute>}
                     />
                     <Route
                       path="/procurement/vendor-bills/new"

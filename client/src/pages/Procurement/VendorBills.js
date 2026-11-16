@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon,
-  AttachFile as AttachFileIcon, CheckCircle as ApproveIcon, Cancel as RejectIcon
+  AttachFile as AttachFileIcon, CheckCircle as ApproveIcon, Cancel as RejectIcon, Visibility as ViewIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { getImageUrl } from '../../utils/imageService';
@@ -623,6 +623,11 @@ const VendorBills = () => {
                           ) : '—'}
                         </TableCell>
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
+                          <Tooltip title="View bill">
+                            <IconButton size="small" color="primary" onClick={() => navigate(`/procurement/vendor-bills/view/${b._id}`)}>
+                              <ViewIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                           {b.approval?.canAct && (
                             <>
                               <Tooltip title="Approve — sends the bill to Audit">
