@@ -35,6 +35,29 @@ const AP_SOURCE = {
 const AP_AWAITING_APPROVAL = ['draft', 'Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'Returned from Finance'];
 const CA_FINANCE_STATUSES = ['Pending Finance', 'Finance Authority Approved', 'Advance Issued', 'Evidence Submitted', 'Payment Settled'];
 
+const lastHistoryAt = (history, matches) => {
+  const list = Array.isArray(history) ? history : [];
+  for (let i = list.length - 1; i >= 0; i -= 1) {
+    if (list[i] && matches(String(list[i].toStatus || ''), i)) return list[i].changedAt || null;
+  }
+  return null;
+};
+
+/**
+ * When a bill landed at Finance: the last audit approval after it was last sent to Pre-Audit.
+ * Bills that are raised already approved (subcontractor IPC after the CEO, utility / store bills,
+ * settlements) land the moment they are created.
+ */
+const billArrivedAtFinance = (b) => {
+  const history = Array.isArray(b.workflowHistory) ? b.workflowHistory : [];
+  let sentToAudit = -1;
+  history.forEach((h, i) => { if (h && h.toStatus === 'Pending Audit') sentToAudit = i; });
+  return lastHistoryAt(history, (to, i) => i > sentToAudit && /^approved/i.test(to)) || b.createdAt || b.billDate || null;
+};
+
+/** Cash approvals and POs land at Finance when the previous desk moves them to 'Pending Finance'. */
+const arrivedAtPendingFinance = (doc, fallback) => lastHistoryAt(doc.workflowHistory, (to) => to === 'Pending Finance') || fallback || null;
+
 const row = (r) => {
   const balance = round2(r.balance ?? (r.amount - (r.paid || 0)));
   const due = r.dueDate ? new Date(r.dueDate) : null;
@@ -62,7 +85,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       status: { $ne: 'cancelled' },
       $or: [{ status: { $ne: 'paid' } }, { updatedAt: { $gte: paidSince } }]
     }))
-      .select('billNumber vendor vendorInvoiceNumber billDate dueDate totalAmount duePaymentAmount amountPaid advanceApplied paymentPending advancePending status approvalStatus referenceType referenceId linkedGRNs companyId project notes updatedAt isAdvanceBill')
+      .select('billNumber vendor vendorInvoiceNumber billDate dueDate totalAmount duePaymentAmount amountPaid advanceApplied paymentPending advancePending status approvalStatus referenceType referenceId linkedGRNs companyId project notes updatedAt createdAt isAdvanceBill workflowHistory.toStatus workflowHistory.changedAt')
       .populate('companyId', 'name')
       .sort({ dueDate: 1 })
       .limit(2000)
@@ -72,17 +95,17 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       status: { $in: CA_FINANCE_STATUSES },
       $or: [{ status: { $in: ['Pending Finance', 'Finance Authority Approved'] } }, { updatedAt: { $gte: paidSince } }]
     }))
-      .select('caNumber status totalAmount advanceAmount vendor advanceToName purpose approvalDate updatedAt companyId requestingDepartment voucherEntryId advanceIssuedAt evidenceSubmittedAt')
+      .select('caNumber status totalAmount advanceAmount vendor advanceToName purpose approvalDate updatedAt companyId requestingDepartment voucherEntryId advanceIssuedAt evidenceSubmittedAt createdAt workflowHistory.toStatus workflowHistory.changedAt')
       .populate('vendor', 'name').populate('companyId', 'name')
       .limit(500)
       .lean(),
     PurchaseOrder.find(scoped({ status: 'Pending Finance' }))
-      .select('orderNumber vendor totalAmount orderDate expectedDeliveryDate companyId status paymentTerms')
+      .select('orderNumber vendor totalAmount orderDate expectedDeliveryDate companyId status paymentTerms updatedAt workflowHistory.toStatus workflowHistory.changedAt')
       .populate('vendor', 'name').populate('companyId', 'name')
       .limit(500)
       .lean(),
     GoodsReceive.find({ billingStatus: 'waiting_bills' })
-      .select('receiveNumber grnNumber totalAmount billedAmount receiveDate supplier vendor purchaseOrder')
+      .select('receiveNumber grnNumber totalAmount billedAmount receiveDate createdAt supplier vendor purchaseOrder')
       .populate('purchaseOrder', 'orderNumber vendor companyId')
       .limit(500)
       .lean()
@@ -144,6 +167,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       companyId: b.companyId?._id || b.companyId || null,
       project: b.project || '',
       date: b.billDate,
+      arrivedAt: billArrivedAtFinance(b),
       dueDate: b.dueDate,
       amount: payable,
       paid,
@@ -178,6 +202,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       company: ca.companyId?.name || '',
       companyId: ca.companyId?._id || ca.companyId || null,
       date: ca.approvalDate || ca.updatedAt,
+      arrivedAt: arrivedAtPendingFinance(ca, ca.approvalDate || ca.createdAt || ca.updatedAt),
       dueDate: null,
       amount,
       paid: issued || settling ? amount : 0,
@@ -217,6 +242,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
       company: po.companyId?.name || '',
       companyId: po.companyId?._id || po.companyId || null,
       date: po.orderDate,
+      arrivedAt: arrivedAtPendingFinance(po, po.updatedAt || po.orderDate),
       dueDate: po.expectedDeliveryDate || null,
       amount: st.total,
       paid: st.paid,
@@ -245,6 +271,7 @@ const buildPayablesHub = async ({ companyId = null, paidDays = 60 } = {}) => {
         party: g.supplier?.name || g.vendor?.name || g.purchaseOrder?.vendor?.name || '—',
         vendorId: g.purchaseOrder?.vendor ? String(g.purchaseOrder.vendor._id || g.purchaseOrder.vendor) : null,
         date: g.receiveDate,
+        arrivedAt: g.createdAt || g.receiveDate,
         dueDate: null,
         amount: open,
         paid: 0,

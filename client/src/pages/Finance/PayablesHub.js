@@ -141,7 +141,9 @@ export default function PayablesHub() {
       .filter((r) => !overdueOnly || r.overdue)
       .filter((r) => !q || [r.number, r.party, r.company, r.project, ...(r.trail || []).map((t) => t.number)]
         .filter(Boolean).some((v) => String(v).toLowerCase().includes(q)))
-      .sort((a, b) => (b.overdue - a.overdue) || new Date(a.dueDate || a.date || 0) - new Date(b.dueDate || b.date || 0));
+      // Latest arrival at Finance first: a document approved by the previous desk (Audit Director,
+      // CEO, …) a minute ago is at the top of the list
+      .sort((a, b) => new Date(b.arrivedAt || b.date || 0) - new Date(a.arrivedAt || a.date || 0));
   }, [vendorRows, stage, source, overdueOnly, search]);
 
   // Back to the first page whenever the filters change
@@ -410,7 +412,16 @@ export default function PayablesHub() {
                         )}
                       </TableCell>
                       <TableCell><Chip size="small" label={r.sourceLabel} variant="outlined" /></TableCell>
-                      <TableCell>{r.date ? dayjs(r.date).format('DD MMM YY') : '—'}</TableCell>
+                      <TableCell>
+                        {r.date ? dayjs(r.date).format('DD MMM YY') : '—'}
+                        {r.arrivedAt && (
+                          <Tooltip title={`Reached Finance on ${dayjs(r.arrivedAt).format('DD MMM YYYY, hh:mm A')} — the list is ordered by this, latest first`}>
+                            <Typography variant="caption" color="text.secondary" display="block" sx={{ whiteSpace: 'nowrap' }}>
+                              In {dayjs(r.arrivedAt).format('DD MMM, hh:mm A')}
+                            </Typography>
+                          </Tooltip>
+                        )}
+                      </TableCell>
                       <TableCell sx={{ color: r.overdue ? 'error.main' : undefined, fontWeight: r.overdue ? 700 : 400 }}>
                         {r.dueDate ? dayjs(r.dueDate).format('DD MMM YY') : '—'}
                         {r.overdue && <Typography variant="caption" display="block">overdue</Typography>}
