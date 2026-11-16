@@ -118,6 +118,7 @@ import DeliveryChallanQA from './pages/Procurement/Store/DeliveryChallanQA';
 import GoodsIssue from './pages/Procurement/GoodsIssue';
 import CostCenters from './pages/Procurement/CostCenters';
 import VendorBills from './pages/Procurement/VendorBills';
+import VendorLedger from './pages/Procurement/VendorLedger';
 import GrnVendorBillView from './pages/Procurement/GrnVendorBillView';
 import StoreDashboard from './pages/Procurement/Store/StoreDashboard';
 import StockTransfers from './pages/Procurement/Store/StockTransfers';
@@ -1647,6 +1648,10 @@ function App() {
                     <Route
                       path="/procurement/reports"
                       element={<ProtectedRoute><ProcurementReports /></ProtectedRoute>}
+                    />
+                    <Route
+                      path="/procurement/vendor-ledger"
+                      element={<ProtectedRoute><VendorLedger /></ProtectedRoute>}
                     />
                     <Route
                       path="/procurement/vendor-bills"

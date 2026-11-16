@@ -840,6 +840,7 @@ export const MODULES = {
       },
       { name: 'Subcontractors', path: '/procurement/subcontractors' },
       { name: "GRN's & Bills", path: '/procurement/vendor-bills' },
+      { name: 'Vendor Ledger', path: '/procurement/vendor-ledger' },
       { name: 'Reports', path: '/procurement/reports' },
       {
         name: 'Store',
@@ -1636,6 +1637,7 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/procurement/comparative-statements': 'comparative_statements',
       '/procurement/purchase-orders': 'purchase_orders',
       '/procurement/vendor-bills': 'purchase_orders',
+      '/procurement/vendor-ledger': 'purchase_orders',
       '/procurement/vendor-bills/new': 'purchase_orders',
       '/procurement/vendor-bills/bill': 'purchase_orders',
       '/procurement/cash-approvals': 'cash_approvals',

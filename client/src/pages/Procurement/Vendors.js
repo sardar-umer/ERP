@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Box,
   Typography,
@@ -46,7 +47,8 @@ import {
   Cancel as InactiveIcon,
   ExpandMore as ExpandMoreIcon,
   Category as CategoryIcon,
-  TableRows as TableRowsIcon
+  TableRows as TableRowsIcon,
+  ReceiptLong as LedgerIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 
@@ -521,6 +523,11 @@ const Vendors = () => {
                                   />
                                 </TableCell>
                                 <TableCell align="center">
+                                  <Tooltip title="Ledger">
+                                    <IconButton size="small" component={RouterLink} to={`/procurement/vendor-ledger?vendor=${vendor._id}`}>
+                                      <LedgerIcon fontSize="small" />
+                                    </IconButton>
+                                  </Tooltip>
                                   <Tooltip title="View">
                                     <IconButton size="small" onClick={() => handleView(vendor)}>
                                       <ViewIcon fontSize="small" />
@@ -588,6 +595,11 @@ const Vendors = () => {
                           />
                         </TableCell>
                         <TableCell align="center">
+                          <Tooltip title="Ledger">
+                            <IconButton size="small" component={RouterLink} to={`/procurement/vendor-ledger?vendor=${vendor._id}`}>
+                              <LedgerIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
                           <Tooltip title="View">
                             <IconButton size="small" onClick={() => handleView(vendor)}>
                               <ViewIcon fontSize="small" />

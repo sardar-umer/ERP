@@ -341,6 +341,7 @@ const Sidebar = () => {
       '/procurement/vendors': 'vendors',
       '/procurement/subcontractors': 'vendors',
       '/procurement/vendor-bills': 'purchase_orders',
+      '/procurement/vendor-ledger': 'purchase_orders',
       '/procurement/vendor-bills/new': 'purchase_orders',
       '/procurement/vendor-bills/bill': 'purchase_orders',
       '/procurement/store': 'store',

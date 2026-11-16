@@ -12,6 +12,7 @@ const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Supplier = require('../models/hr/Supplier');
 const FinanceHelper = require('../utils/financeHelper');
 const AccountsPayable = require('../models/finance/AccountsPayable');
+const VendorAdvance = require('../models/finance/VendorAdvance');
 const Inventory = require('../models/procurement/Inventory');
 const InventoryCategory = require('../models/procurement/InventoryCategory');
 const GoodsReceive = require('../models/procurement/GoodsReceive');
@@ -5377,6 +5378,224 @@ router.post('/vendor-bills',
 // ── Procurement vendor bills: list, correct after Audit rejection, resubmit ──
 const VENDOR_BILL_ROLES = ['super_admin', 'admin', 'procurement_manager', 'finance_manager'];
 const isProcurementGrnBill = (bill) => Array.isArray(bill?.linkedGRNs) && bill.linkedGRNs.length > 0;
+
+// ─── Vendor ledger (procurement only) ────────────────────────────────────────
+// Credit: bills raised from GRNs. Debit: payments of those bills, procurement advances paid to the
+// vendor, and cash-approval advances settled against a bill. A vendor advance adjusted against a bill
+// is not a new movement — the advance was already debited on the day it was paid.
+const ledgerR2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
+const LEDGER_BILL_MATCH = { 'linkedGRNs.0': { $exists: true }, status: { $ne: 'cancelled' } };
+const LEDGER_ADVANCE_MATCH = { module: 'procurement', voucherWorkflowStatus: { $in: ['immediate', 'fully_approved'] } };
+const PAY_METHOD_LABEL = { cash: 'Cash', check: 'Cheque', cheque: 'Cheque', credit_card: 'Card', bank_transfer: 'Bank transfer', bank: 'Bank', ach: 'Bank transfer', other: 'Other' };
+
+// @route   GET /api/procurement/vendor-ledger
+// @desc    Every vendor with procurement activity: billed, paid, advances and balance payable
+// @access  Private
+router.get('/vendor-ledger',
+  authorize(...VENDOR_BILL_ROLES),
+  asyncHandler(async (req, res) => {
+    const [billRows, advanceRows] = await Promise.all([
+      AccountsPayable.aggregate([
+        { $match: { ...LEDGER_BILL_MATCH, 'vendor.vendorId': { $ne: null } } },
+        {
+          $group: {
+            _id: '$vendor.vendorId',
+            name: { $first: '$vendor.name' },
+            bills: { $sum: 1 },
+            billed: { $sum: { $ifNull: ['$totalAmount', 0] } },
+            paid: { $sum: { $ifNull: ['$amountPaid', 0] } },
+            cashApprovalApplied: { $sum: { $sum: { $ifNull: ['$employeeAdvanceAllocations.amount', []] } } },
+            lastActivity: { $max: '$billDate' }
+          }
+        }
+      ]),
+      VendorAdvance.aggregate([
+        { $match: { ...LEDGER_ADVANCE_MATCH, 'vendor.vendorId': { $ne: null } } },
+        {
+          $group: {
+            _id: '$vendor.vendorId',
+            name: { $first: '$vendor.name' },
+            advances: { $sum: { $ifNull: ['$amount', 0] } },
+            advanceApplied: { $sum: { $ifNull: ['$appliedAmount', 0] } },
+            lastActivity: { $max: '$paymentDate' }
+          }
+        }
+      ])
+    ]);
+    const byVendor = new Map();
+    const slot = (r) => {
+      const key = String(r._id);
+      if (!byVendor.has(key)) {
+        byVendor.set(key, { vendorId: key, name: r.name || '', supplierId: '', bills: 0, billed: 0, paid: 0, advances: 0, unadjustedAdvance: 0, lastActivity: null });
+      }
+      const v = byVendor.get(key);
+      if (r.lastActivity && (!v.lastActivity || r.lastActivity > v.lastActivity)) v.lastActivity = r.lastActivity;
+      return v;
+    };
+    billRows.forEach((r) => {
+      const v = slot(r);
+      v.bills = r.bills;
+      v.billed = ledgerR2(r.billed);
+      v.paid = ledgerR2(r.paid + r.cashApprovalApplied);
+    });
+    advanceRows.forEach((r) => {
+      const v = slot(r);
+      v.advances = ledgerR2(r.advances);
+      v.unadjustedAdvance = ledgerR2(r.advances - r.advanceApplied);
+    });
+    const suppliers = await Supplier.find({ _id: { $in: [...byVendor.keys()] } }).select('name supplierId').lean();
+    suppliers.forEach((s) => {
+      const v = byVendor.get(String(s._id));
+      v.name = s.name || v.name;
+      v.supplierId = s.supplierId || '';
+    });
+    const vendors = [...byVendor.values()]
+      .map((v) => ({ ...v, balance: ledgerR2(v.billed - v.paid - v.advances) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    res.json({ success: true, data: { vendors } });
+  })
+);
+
+// @route   GET /api/procurement/vendor-ledger/:vendorId
+// @desc    One vendor's procurement ledger: GRN bills, payments and advances with a running balance
+// @access  Private
+router.get('/vendor-ledger/:vendorId',
+  authorize(...VENDOR_BILL_ROLES),
+  asyncHandler(async (req, res) => {
+    const { vendorId } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(vendorId)) {
+      return res.status(404).json({ success: false, message: 'Vendor not found' });
+    }
+    const vendor = await Supplier.findById(vendorId).select('name supplierId phone email address ntnCnic paymentTerms').lean();
+    if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+    const from = req.query.fromDate ? dayjs(req.query.fromDate).startOf('day') : null;
+    const to = req.query.toDate ? dayjs(req.query.toDate).endOf('day') : null;
+    if ((from && !from.isValid()) || (to && !to.isValid())) {
+      return res.status(400).json({ success: false, message: 'Invalid date range' });
+    }
+
+    const [bills, advances] = await Promise.all([
+      AccountsPayable.find({ ...LEDGER_BILL_MATCH, 'vendor.vendorId': vendorId })
+        .select('billNumber vendorInvoiceNumber billDate dueDate status totalAmount amountPaid advanceApplied payments employeeAdvanceAllocations linkedGRNs createdAt')
+        .lean(),
+      VendorAdvance.find({ ...LEDGER_ADVANCE_MATCH, 'vendor.vendorId': vendorId })
+        .select('amount appliedAmount paymentDate paymentMethod reference chequeNumber referenceType referenceId createdAt')
+        .lean()
+    ]);
+    const poIds = advances.filter((a) => a.referenceType === 'purchase_order' && a.referenceId).map((a) => a.referenceId);
+    const pos = poIds.length ? await PurchaseOrder.find({ _id: { $in: poIds } }).select('orderNumber').lean() : [];
+    const poNumberById = new Map(pos.map((p) => [String(p._id), p.orderNumber]));
+
+    const entries = [];
+    const uniq = (list) => [...new Set(list.filter(Boolean))].join(', ');
+    bills.forEach((b) => {
+      const grns = uniq((b.linkedGRNs || []).map((l) => l.grnNumber));
+      const poNumbers = uniq((b.linkedGRNs || []).map((l) => l.poNumber));
+      entries.push({
+        type: 'bill',
+        date: b.billDate || b.createdAt,
+        document: b.billNumber,
+        billId: b._id,
+        particulars: `Bill${b.vendorInvoiceNumber ? ` — vendor invoice ${b.vendorInvoiceNumber}` : ''}${grns ? ` · GRN ${grns}` : ''}`,
+        poNumbers,
+        status: b.status,
+        advanceAdjusted: ledgerR2(b.advanceApplied),
+        debit: 0,
+        credit: ledgerR2(b.totalAmount)
+      });
+      let paidRows = 0;
+      (b.payments || []).forEach((p) => {
+        const amount = ledgerR2(p.amount);
+        if (!(amount > 0)) return;
+        paidRows += amount;
+        entries.push({
+          type: 'payment',
+          date: p.paymentDate || b.billDate,
+          document: p.reference || '',
+          billId: b._id,
+          particulars: `Payment of ${b.billNumber} — ${PAY_METHOD_LABEL[p.paymentMethod] || 'Payment'}`,
+          poNumbers,
+          debit: amount,
+          credit: 0
+        });
+      });
+      // Paid amount with no payment line behind it (older data) still has to reach the balance
+      const unlisted = ledgerR2((Number(b.amountPaid) || 0) - paidRows);
+      if (unlisted > 0.01) {
+        entries.push({
+          type: 'payment', date: b.billDate || b.createdAt, document: '', billId: b._id,
+          particulars: `Payment of ${b.billNumber}`, poNumbers, debit: unlisted, credit: 0
+        });
+      }
+      (b.employeeAdvanceAllocations || []).forEach((a) => {
+        const amount = ledgerR2(a.amount);
+        if (!(amount > 0)) return;
+        entries.push({
+          type: 'payment',
+          date: a.appliedAt || b.billDate,
+          document: a.caNumber || '',
+          billId: b._id,
+          particulars: `Payment of ${b.billNumber} — cash approval`,
+          poNumbers,
+          debit: amount,
+          credit: 0
+        });
+      });
+    });
+    advances.forEach((a) => {
+      const amount = ledgerR2(a.amount);
+      if (!(amount > 0)) return;
+      const poNumber = a.referenceType === 'purchase_order' ? (poNumberById.get(String(a.referenceId)) || '') : '';
+      const remaining = ledgerR2(amount - (Number(a.appliedAmount) || 0));
+      entries.push({
+        type: 'advance',
+        date: a.paymentDate || a.createdAt,
+        document: a.chequeNumber || a.reference || '',
+        particulars: `Advance paid${poNumber ? ` against ${poNumber}` : ''} — ${PAY_METHOD_LABEL[a.paymentMethod] || 'Payment'}`,
+        poNumbers: poNumber,
+        unadjusted: remaining > 0.01 ? remaining : 0,
+        debit: amount,
+        credit: 0
+      });
+    });
+
+    // Same-day order: bill first, then what was paid against it
+    const typeOrder = { bill: 0, advance: 1, payment: 2 };
+    entries.sort((x, y) => (new Date(x.date) - new Date(y.date)) || (typeOrder[x.type] - typeOrder[y.type]));
+
+    let openingBalance = 0;
+    let balance = 0;
+    const rows = [];
+    const totals = { billed: 0, paid: 0, advances: 0 };
+    entries.forEach((e) => {
+      const d = dayjs(e.date);
+      if (to && d.isAfter(to)) return;
+      balance = ledgerR2(balance + e.credit - e.debit);
+      if (from && d.isBefore(from)) { openingBalance = balance; return; }
+      if (e.type === 'bill') totals.billed = ledgerR2(totals.billed + e.credit);
+      else if (e.type === 'advance') totals.advances = ledgerR2(totals.advances + e.debit);
+      else totals.paid = ledgerR2(totals.paid + e.debit);
+      rows.push({ ...e, balance });
+    });
+
+    res.json({
+      success: true,
+      data: {
+        vendor,
+        fromDate: from ? from.toDate() : null,
+        toDate: to ? to.toDate() : null,
+        openingBalance,
+        entries: rows,
+        totals: { ...totals, closingBalance: balance },
+        // Position today, whatever the date range
+        unadjustedAdvance: ledgerR2(advances.reduce((t, a) => t + (Number(a.amount) || 0) - (Number(a.appliedAmount) || 0), 0)),
+        billsOutstanding: ledgerR2(bills.reduce((t, b) => t + (Number(b.totalAmount) || 0) - (Number(b.amountPaid) || 0) - (Number(b.advanceApplied) || 0), 0)),
+        generatedAt: new Date()
+      }
+    });
+  })
+);
 
 // @route   GET /api/procurement/vendor-bills
 // @desc    Vendor bills created from GRNs, with Audit rejection details
