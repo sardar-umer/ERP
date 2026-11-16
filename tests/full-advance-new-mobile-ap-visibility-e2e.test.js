@@ -1,5 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
+const { pickGrnBillApprover, approveGrnBillAsAuthority } = require('./helpers/grnBillApproval');
 
 const BASE = process.env.E2E_API_URL || 'http://localhost:5001/api';
 const ACC = {
@@ -212,16 +213,22 @@ async function run() {
   const grnId = grn.data.data._id;
 
   // 9) Create vendor bill (this is what should appear in Accounts Payable)
+  const billApprover = await pickGrnBillApprover(api);
   const createBill = await api.post('/procurement/vendor-bills', {
     vendorId: vendor._id,
     grnIds: [grnId],
     billDate: today,
     paymentTerms: 'net_30',
-    vendorInvoiceNumber: `VINV-${stamp}`
+    vendorInvoiceNumber: `VINV-${stamp}`,
+    approvalAuthorityId: billApprover._id
   });
   if (createBill.status !== 201 || !createBill.data?.success) fail('Vendor bill create failed', createBill.data);
   const bill = createBill.data.data;
   ok('Vendor bill created', { billNumber: bill.billNumber, id: bill._id });
+
+  // Procurement approval authority approves → bill moves to 'Pending Audit' (as before this step existed)
+  await approveGrnBillAsAuthority(BASE, billApprover, bill._id);
+  ok('Bill approved by approval authority', billApprover.name);
 
   // 10) Verify bill is visible in Accounts Payable list
   const apList = await api.get('/finance/accounts-payable', {

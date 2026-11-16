@@ -5094,6 +5094,82 @@ router.post('/vendor-bills/attachments',
   })
 );
 
+// ── GRN bill approval authority: one Procurement department user approves before Pre-Audit ──
+// Uses the bill's approvalStatus / approvalChain (same fields as Chart of Accounts bills), so the
+// approver acts through /api/finance/accounts-payable/:id/department-approve | department-reject.
+const GRN_BILL_APPROVER_LABEL = 'Procurement Approval Authority';
+const procurementDepartmentUsersFilter = () => ({ isActive: true, department: { $regex: /procurement/i } });
+const userFullName = (u) => (u && typeof u === 'object'
+  ? (`${u.firstName || ''} ${u.lastName || ''}`.trim() || u.email || '')
+  : '');
+
+/** Where a GRN bill stands with its approval authority (null for older bills that never had one). */
+const grnBillApprovalInfo = (bill, userId) => {
+  const chain = Array.isArray(bill?.approvalChain) ? bill.approvalChain : [];
+  // A voided bill is out of the approval flow, whatever its chain says
+  if (!chain.length || bill.status === 'cancelled') return null;
+  const step = chain.find((s) => s.status === 'pending') || chain.find((s) => s.status === 'rejected') || chain[chain.length - 1];
+  const approverId = String(step.approver?._id || step.approver || '');
+  return {
+    status: bill.approvalStatus || 'Draft',
+    approverId,
+    approverName: userFullName(step.approver),
+    actedAt: step.actedAt || null,
+    rejectionReason: bill.approvalStatus === 'Rejected' ? (bill.rejectionReason || step.comment || '') : '',
+    canAct: bill.approvalStatus === 'Submitted'
+      && step.status === 'pending'
+      && approverId === String(userId || '')
+      && String(bill.createdBy || '') !== String(userId || '')
+  };
+};
+
+const notifyGrnBillApprover = async ({ bill, actor, title, message }) => {
+  try {
+    const recipientIds = (bill.approvalChain || [])
+      .filter((s) => s.status === 'pending')
+      .map((s) => String(s.approver?._id || s.approver));
+    if (!recipientIds.length) return;
+    const actorId = actor.id || actor._id;
+    await createAndEmitNotification({
+      recipientIds,
+      title,
+      message,
+      type: 'info',
+      category: 'approval',
+      priority: 'high',
+      actionUrl: `/procurement/vendor-bills?bill=${bill._id}`,
+      createdBy: actorId,
+      excludeUserId: actorId,
+      metadata: { module: 'procurement', entityId: bill._id, entityType: 'AccountsPayable', targetModule: 'procurement' }
+    });
+    notifyChatApprovers(recipientIds, {
+      docType: 'Vendor Bill',
+      docNumber: bill.billNumber || '',
+      url: `/procurement/vendor-bills?bill=${bill._id}`,
+      fromUser: actor
+    }).catch(() => {});
+  } catch (nErr) {
+    console.warn('GRN bill approver notification failed:', nErr.message);
+  }
+};
+
+// @route   GET /api/procurement/vendor-bills/approval-authorities
+// @desc    Procurement department users who can be chosen as a GRN bill's approval authority
+// @access  Private
+router.get('/vendor-bills/approval-authorities',
+  authorize('super_admin', 'admin', 'procurement_manager', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const users = await User.find({ ...procurementDepartmentUsersFilter(), _id: { $ne: req.user.id } })
+      .select('firstName lastName email department position')
+      .sort({ firstName: 1, lastName: 1 })
+      .lean();
+    res.json({
+      success: true,
+      data: users.map((u) => ({ _id: u._id, name: userFullName(u), email: u.email || '', position: u.position || '' }))
+    });
+  })
+);
+
 // @route   POST /api/procurement/vendor-bills
 // @desc    Create vendor bill from one or multiple GRNs (Procurement bill creation)
 // @access  Private
@@ -5101,6 +5177,7 @@ router.post('/vendor-bills',
   authorize('super_admin', 'admin', 'procurement_manager', 'finance_manager'),
   [
     body('vendorId').isMongoId().withMessage('Valid vendorId is required'),
+    body('approvalAuthorityId').isMongoId().withMessage('Select an approval authority'),
     body('grnIds').optional().isArray({ min: 1 }).withMessage('At least one GRN must be selected'),
     body('grnIds.*').optional().isMongoId(),
     body('grnAllocations').optional().isArray({ min: 1 }),
@@ -5128,6 +5205,18 @@ router.post('/vendor-bills',
 
     const vendor = await Supplier.findById(vendorId).lean();
     if (!vendor) return res.status(404).json({ success: false, message: 'Vendor not found' });
+
+    const approvalAuthorityId = String(req.body.approvalAuthorityId);
+    if (approvalAuthorityId === String(req.user.id)) {
+      return res.status(400).json({ success: false, message: 'You cannot be the approval authority of your own bill' });
+    }
+    const approvalAuthority = await User.findOne({ ...procurementDepartmentUsersFilter(), _id: approvalAuthorityId })
+      .select('firstName lastName email')
+      .lean();
+    if (!approvalAuthority) {
+      return res.status(400).json({ success: false, message: 'The approval authority must be an active Procurement department user' });
+    }
+    const approvalAuthorityName = userFullName(approvalAuthority);
 
     const hasAllocations = Array.isArray(grnAllocations) && grnAllocations.length > 0;
     const selectedSource = hasAllocations ? grnAllocations.map((x) => x.grnId) : (grnIds || []);
@@ -5236,21 +5325,31 @@ router.post('/vendor-bills',
       linkedGRNs,
       attachments: sanitizeGrnBillAttachments(req.body.attachments, req.user.id),
       notes: notes || `Procurement vendor bill from ${grns.length} GRN(s)`,
+      approvalStatus: 'Submitted',
+      approvalChain: [{ approver: approvalAuthority._id, roleLabel: GRN_BILL_APPROVER_LABEL, status: 'pending' }],
       createdBy: req.user.id
     });
 
-    // Workflow transition: newly created bill starts in 'Pending Audit' status for Pre-Audit review
-    apBill.status = 'Pending Audit';
+    // The bill waits for its Procurement approval authority; it moves to Pre-Audit ('Pending Audit')
+    // only when that person approves it.
+    apBill.status = 'draft';
     apBill.workflowHistory = Array.isArray(apBill.workflowHistory) ? apBill.workflowHistory : [];
     apBill.workflowHistory.push({
       fromStatus: 'Draft',
-      toStatus: 'Pending Audit',
+      toStatus: 'Submitted',
       changedBy: req.user.id,
       changedAt: new Date(),
-      comments: notes || `Vendor bill created from ${grns.length} GRN(s) and routed to Pre-Audit`,
+      comments: `Vendor bill created from ${grns.length} GRN(s) and sent to ${approvalAuthorityName || GRN_BILL_APPROVER_LABEL} for approval${notes ? ` — ${notes}` : ''}`,
       module: 'Procurement'
     });
     await apBill.save();
+
+    await notifyGrnBillApprover({
+      bill: apBill,
+      actor: req.user,
+      title: 'Vendor Bill waiting for your approval',
+      message: `Vendor Bill ${apBill.billNumber} (${vendor.name || 'vendor'}) needs your approval before it goes to Audit.`
+    });
 
     for (const u of grnUpdates) {
       const remaining = Math.round((u.total - u.nextBilledAmount) * 100) / 100;
@@ -5269,7 +5368,7 @@ router.post('/vendor-bills',
 
     res.status(201).json({
       success: true,
-      message: 'Vendor bill created from selected GRN(s)',
+      message: `Vendor bill created and sent to ${approvalAuthorityName || 'the approval authority'} for approval. It goes to Audit after approval.`,
       data: apBill
     });
   })
@@ -5290,17 +5389,28 @@ router.get('/vendor-bills',
     if (vendorId) query['vendor.vendorId'] = vendorId;
     const pageSize = Math.min(Math.max(parseInt(limit, 10) || 200, 1), 500);
     const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
-    const [bills, total, rejectedCount] = await Promise.all([
+    const [bills, total, rejectedCount, awaitingMyApprovalCount] = await Promise.all([
       AccountsPayable.find(query)
         .populate('companyId', 'name code')
         .populate('workflowHistory.changedBy', 'firstName lastName')
+        .populate('approvalChain.approver', 'firstName lastName email')
         .sort({ createdAt: -1 })
         .skip((page - 1) * pageSize)
         .limit(pageSize)
         .lean(),
       AccountsPayable.countDocuments(query),
       // Counted over all pages, so the tab can say how many bills Audit sent back
-      AccountsPayable.countDocuments({ ...query, status: 'Returned from Audit' })
+      AccountsPayable.countDocuments({
+        ...query,
+        $or: [{ status: 'Returned from Audit' }, { approvalStatus: 'Rejected', status: { $ne: 'cancelled' } }]
+      }),
+      AccountsPayable.countDocuments({
+        ...query,
+        approvalStatus: 'Submitted',
+        status: { $ne: 'cancelled' },
+        createdBy: { $ne: req.user.id },
+        approvalChain: { $elemMatch: { approver: req.user.id, status: 'pending' } }
+      })
     ]);
     const list = bills.map((b) => {
       const paid = Number(b.amountPaid ?? b.paidAmount ?? 0) || 0;
@@ -5324,15 +5434,17 @@ router.get('/vendor-bills',
         attachments: (b.attachments || []).map((a) => ({
           filename: a.filename, originalName: a.originalName, path: a.path, mimeType: a.mimeType, size: a.size, uploadedAt: a.uploadedAt, uploadedBy: a.uploadedBy
         })),
-        auditReturn: auditReturnInfo(b)
+        auditReturn: auditReturnInfo(b),
+        approval: grnBillApprovalInfo(b, req.user.id)
       };
     });
-    res.json({ success: true, data: { bills: list, total, page, limit: pageSize, rejectedCount } });
+    res.json({ success: true, data: { bills: list, total, page, limit: pageSize, rejectedCount, awaitingMyApprovalCount } });
   })
 );
 
 // @route   PUT /api/procurement/vendor-bills/:id
-// @desc    Correct a GRN bill that Audit returned (header fields only — amounts stay tied to the GRN)
+// @desc    Correct a GRN bill that Audit returned or its approval authority rejected
+//          (header fields only — amounts stay tied to the GRN)
 // @access  Private
 router.put('/vendor-bills/:id',
   authorize(...VENDOR_BILL_ROLES),
@@ -5350,8 +5462,9 @@ router.put('/vendor-bills/:id',
     if (!bill || !isProcurementGrnBill(bill)) {
       return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
     }
-    if (bill.status !== 'Returned from Audit') {
-      return res.status(400).json({ success: false, message: 'Only bills returned by Audit can be edited here' });
+    const rejectedByAuthority = bill.approvalStatus === 'Rejected' && bill.status !== 'cancelled';
+    if (bill.status !== 'Returned from Audit' && !rejectedByAuthority) {
+      return res.status(400).json({ success: false, message: 'Only bills returned by Audit or rejected by the approval authority can be edited here' });
     }
 
     const changes = [];
@@ -5412,11 +5525,11 @@ router.put('/vendor-bills/:id',
     }
     bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
     bill.workflowHistory.push({
-      fromStatus: 'Returned from Audit',
-      toStatus: 'Returned from Audit',
+      fromStatus: rejectedByAuthority ? 'Rejected' : 'Returned from Audit',
+      toStatus: rejectedByAuthority ? 'Rejected' : 'Returned from Audit',
       changedBy: req.user.id,
       changedAt: new Date(),
-      comments: `Corrected after Audit return: ${changes.join('; ')}`,
+      comments: `Corrected after ${rejectedByAuthority ? 'approval authority rejection' : 'Audit return'}: ${changes.join('; ')}`,
       module: 'Procurement'
     });
     bill.lastModifiedBy = req.user.id;
@@ -5426,7 +5539,8 @@ router.put('/vendor-bills/:id',
 );
 
 // @route   POST /api/procurement/vendor-bills/:id/resubmit
-// @desc    Resubmit a corrected GRN bill to Pre-Audit (approval restarts from the start)
+// @desc    Resubmit a corrected GRN bill: back to its approval authority if that person rejected it,
+//          or to Pre-Audit if Audit returned it
 // @access  Private
 router.post('/vendor-bills/:id/resubmit',
   authorize(...VENDOR_BILL_ROLES),
@@ -5435,12 +5549,43 @@ router.post('/vendor-bills/:id/resubmit',
     if (!bill || !isProcurementGrnBill(bill)) {
       return res.status(404).json({ success: false, message: 'GRN vendor bill not found' });
     }
-    if (bill.status !== 'Returned from Audit') {
-      return res.status(400).json({ success: false, message: 'Only bills returned by Audit can be resubmitted' });
+    const rejectedByAuthority = bill.approvalStatus === 'Rejected' && bill.status !== 'cancelled';
+    if (bill.status !== 'Returned from Audit' && !rejectedByAuthority) {
+      return res.status(400).json({ success: false, message: 'Only bills returned by Audit or rejected by the approval authority can be resubmitted' });
     }
     const comments = String(req.body?.comments || '').trim();
     if (!comments) {
       return res.status(400).json({ success: false, message: 'Say what was corrected before resubmitting' });
+    }
+
+    if (rejectedByAuthority) {
+      (bill.approvalChain || []).forEach((step) => {
+        step.status = 'pending';
+        step.actedAt = undefined;
+        step.comment = undefined;
+      });
+      bill.approvalStatus = 'Submitted';
+      bill.rejectedBy = undefined;
+      bill.rejectedAt = undefined;
+      bill.rejectionReason = '';
+      bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+      bill.workflowHistory.push({
+        fromStatus: 'Rejected',
+        toStatus: 'Submitted',
+        changedBy: req.user.id,
+        changedAt: new Date(),
+        comments: `Resubmitted to the approval authority: ${comments}`,
+        module: 'Procurement'
+      });
+      bill.lastModifiedBy = req.user.id;
+      await bill.save();
+      await notifyGrnBillApprover({
+        bill,
+        actor: req.user,
+        title: 'Vendor Bill resubmitted for your approval',
+        message: `Vendor Bill ${bill.billNumber} was corrected and resubmitted: ${comments}`
+      });
+      return res.json({ success: true, message: `Bill ${bill.billNumber} resubmitted to the approval authority`, data: summarizeBill(bill) });
     }
     bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
     bill.workflowHistory.push({

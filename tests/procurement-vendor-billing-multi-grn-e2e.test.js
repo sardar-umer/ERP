@@ -7,6 +7,7 @@
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
+const { pickGrnBillApprover, approveGrnBillAsAuthority } = require('./helpers/grnBillApproval');
 
 const BASE = process.env.E2E_API_URL || 'http://localhost:5001/api';
 const state = {};
@@ -151,13 +152,17 @@ async function main() {
   if (!row1 || !row2) die('Billable GRNs missing initial rows', grnRows1);
   ok('Billable GRNs found for vendor');
 
+  // Every GRN bill names a Procurement approval authority, who approves it before Pre-Audit
+  const billApprover = await pickGrnBillApprover(api);
+
   // Bill #1: partial amount for GRN1 only (3000 of 6000)
   const b1 = await api.post('/procurement/vendor-bills', {
     vendorId: vendor._id,
     grnAllocations: [{ grnId: grn1._id, amount: 3000 }],
     billDate: today,
     paymentTerms: 'net_30',
-    vendorInvoiceNumber: `INV-P1-${stamp}`
+    vendorInvoiceNumber: `INV-P1-${stamp}`,
+    approvalAuthorityId: billApprover._id
   });
   if (b1.status !== 201 || !b1.data?.success) die('Partial bill create failed', b1.data);
   ok('Partial bill created', b1.data?.data?.billNumber);
@@ -179,10 +184,19 @@ async function main() {
     ],
     billDate: today,
     paymentTerms: 'net_30',
-    vendorInvoiceNumber: `INV-MULTI-${stamp}`
+    vendorInvoiceNumber: `INV-MULTI-${stamp}`,
+    approvalAuthorityId: billApprover._id
   });
   const bill1Data = b1.data?.data;
   const bill2Data = b2.data?.data;
+  if (bill1Data?.approvalStatus !== 'Submitted' || bill1Data?.status === 'Pending Audit') {
+    die('New bill should wait for its approval authority, not go straight to Audit', { status: bill1Data?.status, approvalStatus: bill1Data?.approvalStatus });
+  }
+
+  // Approval authority approves both bills → each moves to 'Pending Audit'
+  await approveGrnBillAsAuthority(BASE, billApprover, bill1Data._id);
+  await approveGrnBillAsAuthority(BASE, billApprover, bill2Data._id);
+  ok('Both bills approved by approval authority and sent to Pre-Audit', billApprover.name);
 
   const allUsersRes = await api.get('/auth/users', { params: { limit: 100 } });
   const allUsers = allUsersRes.data?.data?.users || allUsersRes.data?.data || [];

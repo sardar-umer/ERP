@@ -717,6 +717,9 @@ const GoodsReceive = () => {
                         <Chip label={receive.status} size="small" color={receive.status === 'Complete' || receive.status === 'Received' ? 'success' : receive.status === 'Partial' ? 'warning' : 'default'} />
                         {(receive.bills || []).map((b) => {
                           const rejected = b.status === 'Returned from Audit';
+                          const billStage = b.approvalStatus === 'Submitted'
+                            ? 'Pending approval'
+                            : (b.approvalStatus === 'Rejected' ? 'Rejected by approval authority' : b.status);
                           if (b.status === 'cancelled') {
                             return (
                               <Tooltip key={b._id} title={`Bill ${b.billNumber} was voided${b.voidedAt ? ` on ${formatDate(b.voidedAt)}` : ''}${b.voidReason ? `: ${b.voidReason}` : ''}. Its journal was reversed; this GRN can be billed again from GRN's & Bills.`}>
@@ -726,11 +729,11 @@ const GoodsReceive = () => {
                           }
                           const tip = rejected
                             ? `Bill ${b.billNumber} rejected by Audit${b.auditReturn?.returnedBy ? ` (${b.auditReturn.returnedBy})` : ''}: ${b.auditReturn?.reason || ''}${(b.auditReturn?.observations || []).length ? ` — ${b.auditReturn.observations.map((o) => o.observation).join('; ')}` : ''}. Stock is not affected. Click to correct and resubmit in GRN's & Bills.`
-                            : `Bill ${b.billNumber}: ${b.status}`;
+                            : `Bill ${b.billNumber}: ${billStage}`;
                           return (
                             <Tooltip key={b._id} title={tip}>
                               <Chip
-                                label={rejected ? `Bill Rejected (${b.billNumber})` : `Bill: ${b.status}`}
+                                label={rejected ? `Bill Rejected (${b.billNumber})` : `Bill: ${billStage}`}
                                 size="small"
                                 color={rejected ? 'error' : (b.status === 'paid' ? 'success' : 'info')}
                                 variant={rejected ? 'filled' : 'outlined'}

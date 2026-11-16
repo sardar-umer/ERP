@@ -875,7 +875,7 @@ async function fetchVendorBillsForUser(user, ceoIds = []) {
     $or: or,
     status: { $nin: ['paid', 'cancelled', 'void', 'approved', 'partial'] }
   })
-    .select('billNumber billDate totalAmount status approvalStatus vendor vendorName company companyId notes approvalChain module referenceType')
+    .select('billNumber billDate totalAmount status approvalStatus vendor vendorName company companyId notes approvalChain module referenceType linkedGRNs')
     .populate('companyId', 'name companyCode')
     .sort({ updatedAt: -1 })
     .limit(50)
@@ -896,19 +896,21 @@ async function fetchVendorBillsForUser(user, ceoIds = []) {
       const chain = Array.isArray(b.approvalChain) ? b.approvalChain : [];
       const { include, canAct, ceoViewOnly } = resolveSequentialChainAction(chain, user, ceoIds);
       if (!include || (!canAct && !ceoViewOnly)) return null;
+      // GRN bills raised in Procurement wait on one Procurement approval authority
+      const isGrnBill = Array.isArray(b.linkedGRNs) && b.linkedGRNs.length > 0;
       return card({
         id: b._id,
         type: 'vendor_bill',
-        itemType: 'Chart of Accounts Bill',
+        itemType: isGrnBill ? 'GRN Vendor Bill' : 'Chart of Accounts Bill',
         number: b.billNumber,
         status: b.approvalStatus || b.status,
         date: b.billDate || b.updatedAt,
         amount: b.totalAmount,
         party: b.vendorName || b.vendor?.name,
         company: resolveCompanyLabel(b),
-        subtitle: b.notes || 'Pending department approval (Finance)',
-        department: 'Finance',
-        path: `/finance/accounts-payable`,
+        subtitle: b.notes || (isGrnBill ? 'Pending approval authority (Procurement)' : 'Pending department approval (Finance)'),
+        department: isGrnBill ? 'Procurement' : 'Finance',
+        path: isGrnBill ? `/procurement/vendor-bills?bill=${b._id}` : `/finance/accounts-payable`,
         ceoViewOnly,
         canAct,
         raw: b

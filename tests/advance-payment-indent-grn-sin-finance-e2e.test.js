@@ -1,5 +1,6 @@
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
+const { pickGrnBillApprover, approveGrnBillAsAuthority } = require('./helpers/grnBillApproval');
 
 const BASE = process.env.E2E_API_URL || 'http://localhost:5001/api';
 const GL = { INVENTORY: '1100', ADVANCE: '1110', AP: '2001', GRNI: '2100', COGS: '5000', CASH: '1001', BANK: '1002' };
@@ -227,16 +228,25 @@ async function run() {
   const grnId = grn.data.data._id;
 
   // Procurement vendor bill from GRN (AP is not auto-created on PO approval in current flow)
+  const billApprover = await pickGrnBillApprover(api);
   const billCreate = await api.post('/procurement/vendor-bills', {
     vendorId: ven._id,
     grnIds: [grnId],
     billDate: today,
     paymentTerms: 'net_30',
-    vendorInvoiceNumber: `VINV-ADV-${stamp}`
+    vendorInvoiceNumber: `VINV-ADV-${stamp}`,
+    approvalAuthorityId: billApprover._id
   });
   if (billCreate.status !== 201 || !billCreate.data?.success) fail('Vendor bill creation failed', billCreate.data);
   const bill = billCreate.data.data;
   if (!bill?._id) fail('Vendor bill response missing id', billCreate.data);
+  if (bill.approvalStatus !== 'Submitted' || bill.status === 'Pending Audit') {
+    fail('New bill should wait for its approval authority, not go straight to Audit', { status: bill.status, approvalStatus: bill.approvalStatus });
+  }
+
+  // Procurement approval authority approves → bill moves to 'Pending Audit'
+  await approveGrnBillAsAuthority(BASE, billApprover, bill._id);
+  ok('Bill approved by approval authority and sent to Pre-Audit', billApprover.name);
 
   // Pre-audit approve bill to move status from 'Pending Audit' to 'Approved'
   await api.put(`/pre-audit/${bill._id}/approve`, { approvalComments: 'Pre-audit approve' });

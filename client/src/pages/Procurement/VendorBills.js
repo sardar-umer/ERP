@@ -8,7 +8,7 @@ import {
 } from '@mui/material';
 import {
   Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon, Send as SendIcon, InfoOutlined as InfoIcon,
-  AttachFile as AttachFileIcon
+  AttachFile as AttachFileIcon, CheckCircle as ApproveIcon, Cancel as RejectIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { getImageUrl } from '../../utils/imageService';
@@ -124,6 +124,12 @@ const VendorBills = () => {
   const [paymentTerms, setPaymentTerms] = useState('net_30');
   const [vendorInvoiceNumber, setVendorInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
+  const [approvers, setApprovers] = useState([]);
+  const [approvalAuthorityId, setApprovalAuthorityId] = useState('');
+  const [billsAwaitingMe, setBillsAwaitingMe] = useState(0);
+  const [approveBill, setApproveBill] = useState(null);
+  const [rejectBill, setRejectBill] = useState(null);
+  const [decisionComments, setDecisionComments] = useState('');
   const [billFiles, setBillFiles] = useState([]);
   const [editFiles, setEditFiles] = useState([]);
   const [editSaved, setEditSaved] = useState([]);
@@ -182,6 +188,7 @@ const VendorBills = () => {
       setCreatedBills(data.bills || []);
       setBillsTotal(data.total ?? (data.bills || []).length);
       setBillsRejected(data.rejectedCount ?? (data.bills || []).filter((b) => b.status === 'Returned from Audit').length);
+      setBillsAwaitingMe(data.awaitingMyApprovalCount || 0);
       // The page emptied (e.g. its last bill was voided) — step back to the last page that has bills
       if (page > 0 && (data.bills || []).length === 0) {
         setBillsPage(Math.max(0, Math.ceil((data.total || 0) / rowsPerPage) - 1));
@@ -205,6 +212,9 @@ const VendorBills = () => {
     api.get('/indents/companies')
       .then((res) => setCompanies(res.data?.data || []))
       .catch(() => setCompanies([]));
+    api.get('/procurement/vendor-bills/approval-authorities')
+      .then((res) => setApprovers(res.data?.data || []))
+      .catch(() => setApprovers([]));
   }, []);
 
   useEffect(() => {
@@ -236,6 +246,10 @@ const VendorBills = () => {
       setError('Select vendor and at least one GRN');
       return;
     }
+    if (!approvalAuthorityId) {
+      setError('Select the approval authority (a Procurement department user) for this bill');
+      return;
+    }
     try {
       setLoading(true);
       setError('');
@@ -248,10 +262,11 @@ const VendorBills = () => {
         paymentTerms,
         vendorInvoiceNumber,
         notes,
+        approvalAuthorityId,
         attachments
       });
-      const newBillNo = res.data?.data?.billNumber || 'success';
-      setSuccess(`✓ Bill created successfully: ${newBillNo}`);
+      const newBillNo = res.data?.data?.billNumber || '';
+      setSuccess(`✓ Bill ${newBillNo} created — ${res.data?.message || 'sent to the approval authority'}`);
       setSelected({});
       setAllocations({});
       setVendorInvoiceNumber('');
@@ -311,12 +326,36 @@ const VendorBills = () => {
     try {
       setActionBusy(true);
       const res = await api.post(`/procurement/vendor-bills/${resubmitBill._id}/resubmit`, { comments: resubmitComments });
-      setSuccess(res.data?.message || 'Bill resubmitted to Pre-Audit');
+      setSuccess(res.data?.message || 'Bill resubmitted');
       setResubmitBill(null);
       setResubmitComments('');
       loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
     } catch (e) {
       setError(e.response?.data?.message || 'Failed to resubmit bill');
+    } finally {
+      setActionBusy(false);
+    }
+  };
+
+  // The approval authority approves (bill goes to Audit) or rejects (bill comes back to its creator)
+  const doDecision = async (kind) => {
+    const bill = kind === 'approve' ? approveBill : rejectBill;
+    if (!bill) return;
+    try {
+      setActionBusy(true);
+      const comments = decisionComments.trim();
+      const res = kind === 'approve'
+        ? await api.post(`/finance/accounts-payable/${bill._id}/department-approve`, comments ? { comments } : {})
+        : await api.post(`/finance/accounts-payable/${bill._id}/department-reject`, { rejectionReason: comments });
+      setSuccess(kind === 'approve'
+        ? `✓ Bill ${bill.billNumber} approved and sent to Audit`
+        : (res.data?.message || `Bill ${bill.billNumber} rejected`));
+      setApproveBill(null);
+      setRejectBill(null);
+      setDecisionComments('');
+      loadCreatedBills(vendorId, billsPage, billsRowsPerPage);
+    } catch (e) {
+      setError(e.response?.data?.message || `Failed to ${kind} bill`);
     } finally {
       setActionBusy(false);
     }
@@ -383,7 +422,22 @@ const VendorBills = () => {
               {loading ? <CircularProgress size={24} /> : 'Create Bill'}
             </Button>
           </Grid>
-          <Grid item xs={12}>
+          <Grid item xs={12} md={4}>
+            <TextField
+              fullWidth
+              select
+              required
+              label="Approval Authority"
+              value={approvalAuthorityId}
+              onChange={(e) => setApprovalAuthorityId(e.target.value)}
+              helperText={approvers.length ? 'Procurement user who approves this bill before it goes to Audit' : 'No other active Procurement department user found'}
+            >
+              {approvers.map((u) => (
+                <MenuItem key={u._id} value={u._id}>{u.name}{u.position ? ` — ${u.position}` : ''}</MenuItem>
+              ))}
+            </TextField>
+          </Grid>
+          <Grid item xs={12} md={8}>
             <TextField fullWidth label="Notes" value={notes} onChange={(e) => setNotes(e.target.value)} />
           </Grid>
           <Grid item xs={12}>
@@ -395,7 +449,7 @@ const VendorBills = () => {
       <Paper sx={{ p: 2 }}>
         <Tabs value={tabIndex} onChange={(e, v) => setTabIndex(v)} sx={{ borderBottom: 1, borderColor: 'divider', mb: 2 }}>
           <Tab label={`Unbilled GRNs (${grns.length})`} />
-          <Tab label={`Created Vendor Bills (${billsTotal})${rejectedCount ? ` · ${rejectedCount} rejected by Audit` : ''}`} />
+          <Tab label={`Created Vendor Bills (${billsTotal})${billsAwaitingMe ? ` · ${billsAwaitingMe} awaiting your approval` : ''}${rejectedCount ? ` · ${rejectedCount} rejected` : ''}`} />
         </Tabs>
 
         {tabIndex === 0 && (
@@ -510,12 +564,22 @@ const VendorBills = () => {
                   ) : (
                     createdBills.map((b) => {
                       const rejected = b.status === 'Returned from Audit';
+                      const pendingApproval = b.approval?.status === 'Submitted';
+                      const rejectedByAuthority = b.approval?.status === 'Rejected';
+                      const approverName = b.approval?.approverName || 'approval authority';
+                      const statusLabel = rejected
+                        ? 'Rejected by Audit'
+                        : pendingApproval
+                          ? `Pending approval — ${approverName}`
+                          : rejectedByAuthority
+                            ? `Rejected by ${approverName}`
+                            : (b.status || 'Draft');
                       return (
                       <TableRow
                         key={b._id}
                         hover
                         selected={String(b._id) === focusBillId}
-                        sx={rejected ? { bgcolor: 'rgba(211, 47, 47, 0.06)' } : undefined}
+                        sx={(rejected || rejectedByAuthority) ? { bgcolor: 'rgba(211, 47, 47, 0.06)' } : undefined}
                       >
                         <TableCell><Typography variant="body2" fontWeight="bold">{b.billNumber}</Typography></TableCell>
                         <TableCell>{(b.linkedGRNs || []).map((l) => l.grnNumber).filter(Boolean).join(', ') || '—'}</TableCell>
@@ -526,10 +590,15 @@ const VendorBills = () => {
                         <TableCell>{formatDate(b.dueDate)}</TableCell>
                         <TableCell>
                           <Chip
-                            label={rejected ? 'Rejected by Audit' : (b.status || 'Draft')}
+                            label={statusLabel}
                             size="small"
-                            color={getBillStatusColor(b.status)}
+                            color={pendingApproval ? 'warning' : (rejectedByAuthority ? 'error' : getBillStatusColor(b.status))}
                           />
+                          {rejectedByAuthority && b.approval?.rejectionReason && (
+                            <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5, maxWidth: 260 }}>
+                              {b.approval.rejectionReason}
+                            </Typography>
+                          )}
                           {rejected && b.auditReturn?.reason && (
                             <Typography variant="caption" color="error" sx={{ display: 'block', mt: 0.5, maxWidth: 260 }}>
                               {b.auditReturn.reason}
@@ -554,19 +623,35 @@ const VendorBills = () => {
                           ) : '—'}
                         </TableCell>
                         <TableCell align="center" sx={{ whiteSpace: 'nowrap' }}>
-                          {rejected && (
+                          {b.approval?.canAct && (
                             <>
-                              <Tooltip title="Why Audit rejected it">
-                                <IconButton size="small" color="error" onClick={() => setReasonBill(b)}>
-                                  <InfoIcon fontSize="small" />
+                              <Tooltip title="Approve — sends the bill to Audit">
+                                <IconButton size="small" color="success" onClick={() => { setDecisionComments(''); setApproveBill(b); }}>
+                                  <ApproveIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
+                              <Tooltip title="Reject — sends the bill back to its creator">
+                                <IconButton size="small" color="error" onClick={() => { setDecisionComments(''); setRejectBill(b); }}>
+                                  <RejectIcon fontSize="small" />
+                                </IconButton>
+                              </Tooltip>
+                            </>
+                          )}
+                          {rejected && (
+                            <Tooltip title="Why Audit rejected it">
+                              <IconButton size="small" color="error" onClick={() => setReasonBill(b)}>
+                                <InfoIcon fontSize="small" />
+                              </IconButton>
+                            </Tooltip>
+                          )}
+                          {(rejected || rejectedByAuthority) && (
+                            <>
                               <Tooltip title="Edit bill (invoice #, date, terms, notes, attachments)">
                                 <IconButton size="small" color="primary" onClick={() => openEdit(b)}>
                                   <EditIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title="Resubmit to Pre-Audit">
+                              <Tooltip title={rejectedByAuthority ? 'Resubmit to the approval authority' : 'Resubmit to Pre-Audit'}>
                                 <IconButton size="small" color="warning" onClick={() => { setResubmitComments(''); setResubmitBill(b); }}>
                                   <SendIcon fontSize="small" />
                                 </IconButton>
@@ -701,8 +786,13 @@ const VendorBills = () => {
 
       {/* Resubmit to Pre-Audit */}
       <Dialog open={!!resubmitBill} onClose={() => !actionBusy && setResubmitBill(null)} maxWidth="sm" fullWidth>
-        <DialogTitle sx={{ fontWeight: 700 }}>Resubmit {resubmitBill?.billNumber} to Pre-Audit</DialogTitle>
+        <DialogTitle sx={{ fontWeight: 700 }}>
+          Resubmit {resubmitBill?.billNumber} to {resubmitBill?.approval?.status === 'Rejected' ? (resubmitBill.approval.approverName || 'the approval authority') : 'Pre-Audit'}
+        </DialogTitle>
         <DialogContent dividers>
+          {resubmitBill?.approval?.status === 'Rejected' && resubmitBill.approval.rejectionReason && (
+            <Alert severity="error" sx={{ mb: 2 }}>{resubmitBill.approval.approverName || 'Approval authority'} said: {resubmitBill.approval.rejectionReason}</Alert>
+          )}
           {resubmitBill?.auditReturn?.reason && (
             <Alert severity="error" sx={{ mb: 2 }}>Audit said: {resubmitBill.auditReturn.reason}</Alert>
           )}
@@ -720,6 +810,41 @@ const VendorBills = () => {
           <Button onClick={() => setResubmitBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
           <Button variant="contained" color="warning" onClick={doResubmit} disabled={actionBusy || !resubmitComments.trim()}>
             {actionBusy ? 'Resubmitting...' : 'Resubmit'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Approval authority: approve */}
+      <Dialog open={!!approveBill} onClose={() => !actionBusy && setApproveBill(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Approve bill {approveBill?.billNumber}</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" gutterBottom>
+            {approveBill?.vendorName || 'Vendor'} · <strong>{formatPKR(approveBill?.totalAmount || 0)}</strong> · GRN {(approveBill?.linkedGRNs || []).map((l) => l.grnNumber).filter(Boolean).join(', ') || '—'}
+          </Typography>
+          <Alert severity="info" sx={{ mb: 2 }}>After your approval the bill goes to the Audit department.</Alert>
+          <TextField fullWidth multiline minRows={2} label="Comments (optional)" value={decisionComments} onChange={(e) => setDecisionComments(e.target.value)} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setApproveBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
+          <Button variant="contained" color="success" onClick={() => doDecision('approve')} disabled={actionBusy}>
+            {actionBusy ? 'Approving...' : 'Approve'}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Approval authority: reject */}
+      <Dialog open={!!rejectBill} onClose={() => !actionBusy && setRejectBill(null)} maxWidth="sm" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Reject bill {rejectBill?.billNumber}</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" gutterBottom>
+            {rejectBill?.vendorName || 'Vendor'} · <strong>{formatPKR(rejectBill?.totalAmount || 0)}</strong>
+          </Typography>
+          <TextField fullWidth multiline minRows={3} required label="Reason for rejection" value={decisionComments} onChange={(e) => setDecisionComments(e.target.value)} />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setRejectBill(null)} disabled={actionBusy} color="inherit">Cancel</Button>
+          <Button variant="contained" color="error" onClick={() => doDecision('reject')} disabled={actionBusy || !decisionComments.trim()}>
+            {actionBusy ? 'Rejecting...' : 'Reject'}
           </Button>
         </DialogActions>
       </Dialog>

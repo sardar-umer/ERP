@@ -12,6 +12,7 @@
  */
 require('dotenv').config({ path: require('path').join(__dirname, '..', '.env') });
 const axios = require('axios');
+const { pickGrnBillApprover, approveGrnBillAsAuthority } = require('./helpers/grnBillApproval');
 
 const BASE = process.env.E2E_API_URL || 'http://localhost:5001/api';
 
@@ -452,14 +453,19 @@ async function main() {
   log(grnPattern.ok, 'GRN journal lines match Inventory/GRNI accounts');
 
   // Procurement bill creation (new flow): create AP bill from selected GRN(s), not from PO approval.
+  const billApprover = await pickGrnBillApprover(api);
   const billCreate = await api.post('/procurement/vendor-bills', {
     vendorId: vendor._id,
     grnIds: [state.grn._id],
     billDate: today,
     paymentTerms: 'net_30',
-    vendorInvoiceNumber: `VINV-${Date.now()}`
+    vendorInvoiceNumber: `VINV-${Date.now()}`,
+    approvalAuthorityId: billApprover._id
   });
   if (billCreate.status !== 201 || !billCreate.data?.success) die('Procurement vendor bill creation failed', billCreate.data);
+  // Procurement approval authority approves → bill moves to 'Pending Audit' (as before this step existed)
+  await approveGrnBillAsAuthority(BASE, billApprover, billCreate.data.data._id);
+  log(true, `Vendor bill approved by approval authority (${billApprover.name})`);
 
   const sinRes = await api.post('/procurement/goods-issue', {
     issueDate: new Date().toISOString(),

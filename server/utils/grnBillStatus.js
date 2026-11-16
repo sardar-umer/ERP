@@ -49,6 +49,8 @@ function summarizeBill(bill) {
     billNumber: bill.billNumber,
     vendorInvoiceNumber: bill.vendorInvoiceNumber || '',
     status: bill.status,
+    // 'Submitted' = waiting for its Procurement approval authority, 'Rejected' = that person rejected it
+    approvalStatus: bill.approvalStatus || '',
     totalAmount: round2(bill.totalAmount),
     voidedAt: bill.voidedAt || null,
     voidReason: bill.voidReason || '',
@@ -67,7 +69,7 @@ async function billsByGrn(grnIds) {
       { referenceType: 'grn', referenceId: { $in: ids } }
     ]
   })
-    .select('billNumber vendorInvoiceNumber status totalAmount linkedGRNs referenceId referenceType workflowHistory observations voidedAt voidReason updatedAt createdAt')
+    .select('billNumber vendorInvoiceNumber status approvalStatus totalAmount linkedGRNs referenceId referenceType workflowHistory observations voidedAt voidReason updatedAt createdAt')
     .populate('workflowHistory.changedBy', 'firstName lastName')
     .sort({ createdAt: -1 })
     .lean();

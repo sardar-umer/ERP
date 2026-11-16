@@ -5164,7 +5164,7 @@ const notifyCoaBillAuditQueue = async ({ actorId, bill }) => {
   const { createAndEmitNotification } = require('../services/realtimeNotificationService');
   await createAndEmitNotification({
     recipientIds,
-    title: 'Chart of Accounts bill pending Pre Audit',
+    title: (bill.linkedGRNs || []).length ? 'Vendor Bill pending Pre Audit' : 'Chart of Accounts bill pending Pre Audit',
     message: `Vendor Bill ${bill.billNumber || bill._id} completed department approval and moved to Audit queue.`,
     type: 'info',
     category: 'approval',
@@ -5362,6 +5362,9 @@ router.post('/accounts-payable/:id/department-approve',
     if (!bill) {
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
+    if (bill.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: `Bill ${bill.billNumber} is voided` });
+    }
     if (bill.approvalStatus !== 'Submitted') {
       return res.status(400).json({ success: false, message: 'Only bills submitted for department approval can be approved' });
     }
@@ -5399,6 +5402,10 @@ router.post('/accounts-payable/:id/department-approve',
     const roleLabel = bill.approvalChain[pendingIndex].roleLabel || COA_DEPT_APPROVAL_ROLE_LABELS[pendingIndex] || 'Department Approver';
     const previousStatus = bill.approvalStatus;
     const allApproved = (bill.approvalChain || []).every((step) => step.status === 'approved');
+    // GRN bills (Procurement) share this chain: one Procurement approval authority, then Pre-Audit
+    const historyModule = (bill.linkedGRNs || []).length ? 'Procurement' : 'Finance';
+    const chainLabels = (bill.approvalChain || []).map((step) => step.roleLabel).filter(Boolean).join(' / ')
+      || COA_DEPT_APPROVAL_ROLE_LABELS.join(' / ');
 
     bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
     if (allApproved) {
@@ -5412,15 +5419,15 @@ router.post('/accounts-payable/:id/department-approve',
         changedBy: userId,
         changedAt: new Date(),
         comments: req.body?.comments || `${roleLabel} approved — department approval complete`,
-        module: 'Finance'
+        module: historyModule
       });
       bill.workflowHistory.push({
         fromStatus: 'Approved',
         toStatus: 'Pending Audit',
         changedBy: userId,
         changedAt: new Date(),
-        comments: 'Sent to Pre-Audit after department approval (Sr Manager Finance / GM Finance)',
-        module: 'Finance'
+        comments: `Sent to Pre-Audit after department approval (${chainLabels})`,
+        module: historyModule
       });
     } else {
       bill.workflowHistory.push({
@@ -5429,7 +5436,7 @@ router.post('/accounts-payable/:id/department-approve',
         changedBy: userId,
         changedAt: new Date(),
         comments: req.body?.comments || `${roleLabel} approved`,
-        module: 'Finance'
+        module: historyModule
       });
     }
 
@@ -5467,6 +5474,9 @@ router.post('/accounts-payable/:id/department-reject',
     if (!bill) {
       return res.status(404).json({ success: false, message: 'Bill not found' });
     }
+    if (bill.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: `Bill ${bill.billNumber} is voided` });
+    }
     if (bill.approvalStatus !== 'Submitted') {
       return res.status(400).json({ success: false, message: 'Only bills submitted for department approval can be rejected' });
     }
@@ -5503,9 +5513,30 @@ router.post('/accounts-payable/:id/department-reject',
       changedBy: userId,
       changedAt: new Date(),
       comments: reason,
-      module: 'Finance'
+      module: (bill.linkedGRNs || []).length ? 'Procurement' : 'Finance'
     });
     await bill.save();
+
+    // GRN bills: tell the person who raised it, so they can correct and resubmit from Procurement
+    if ((bill.linkedGRNs || []).length && bill.createdBy) {
+      try {
+        const { createAndEmitNotification } = require('../services/realtimeNotificationService');
+        await createAndEmitNotification({
+          recipientIds: [String(bill.createdBy)],
+          title: 'Vendor Bill rejected by the approval authority',
+          message: `Vendor Bill ${bill.billNumber} was rejected: ${reason}`,
+          type: 'warning',
+          category: 'approval',
+          priority: 'high',
+          actionUrl: `/procurement/vendor-bills?bill=${bill._id}`,
+          createdBy: userId,
+          excludeUserId: userId,
+          metadata: { module: 'procurement', entityId: bill._id, entityType: 'AccountsPayable', targetModule: 'procurement' }
+        });
+      } catch (nErr) {
+        console.warn('GRN bill rejection notification failed:', nErr.message);
+      }
+    }
 
     const populated = await AccountsPayable.findById(bill._id)
       .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature')
