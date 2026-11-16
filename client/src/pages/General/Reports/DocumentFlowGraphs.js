@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from 'react';
+import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
   Alert,
   Box,
@@ -25,7 +25,7 @@ import {
   XAxis,
   YAxis
 } from 'recharts';
-import { Download as DownloadIcon } from '@mui/icons-material';
+import { Download as DownloadIcon, PictureAsPdf as PdfIcon } from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 import api from '../../../services/api';
@@ -40,6 +40,17 @@ const KIND_COLORS = {
 
 const round1 = (n) => Math.round(n * 10) / 10;
 const pct = (part, whole) => (whole ? Math.round((part / whole) * 100) : 0);
+
+// Value label at the end of a bar, always on one line. (The stock label wraps its text to the
+// bar's own width, so labels on short bars broke into overlapping pieces.)
+const renderBarEndLabel = ({ x, y, width, height, value }) => {
+  if (value === undefined || value === null || value === '') return null;
+  return (
+    <text x={Number(x) + Number(width) + 6} y={Number(y) + Number(height) / 2} dominantBaseline="central" fontSize={12} fontWeight={600} fill="#333">
+      {value}
+    </text>
+  );
+};
 
 const StuckTooltip = ({ active, payload }) => {
   if (!active || !payload?.length) return null;
@@ -72,6 +83,8 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
   const [sets, setSets] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [exportingPdf, setExportingPdf] = useState(false);
+  const chartsRef = useRef(null);
 
   useEffect(() => {
     let cancelled = false;
@@ -242,6 +255,93 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
 
     XLSX.writeFile(wb, `document-flow-graphs-${selected}-${dayjs().format('YYYY-MM-DD')}.xlsx`);
   };
+  // PDF of the graphs exactly as they are drawn on this page: each graph card is captured as an
+  // image and laid out on A4 landscape pages under a heading with the scope, period and totals.
+  const exportPdf = async () => {
+    const cards = Array.from(chartsRef.current?.querySelectorAll('[data-pdf-card]') || []);
+    if (!cards.length) return;
+    try {
+      setExportingPdf(true);
+      // Bars stop animating while exporting (see isAnimationActive below); give them a moment to
+      // redraw with their value labels before the snapshot is taken
+      await new Promise((resolve) => setTimeout(resolve, 400));
+      const [{ default: html2canvas }, { default: JsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+      const pdf = new JsPDF({ orientation: 'landscape', unit: 'mm', format: 'a4' });
+      const pageW = pdf.internal.pageSize.getWidth();
+      const pageH = pdf.internal.pageSize.getHeight();
+      const margin = 10;
+      const usableW = pageW - margin * 2;
+      const typeLabel = selected === 'all' ? 'All types' : (kinds.find((k) => k.key === selected)?.label || selected);
+      const period = from || to ? `${from ? dayjs(from).format('DD MMM YYYY') : 'start'} to ${to ? dayjs(to).format('DD MMM YYYY') : 'today'}` : 'All dates';
+      const done = totals.documents - totals.open;
+
+      pdf.setFont('helvetica', 'bold');
+      pdf.setFontSize(15);
+      pdf.text('Document Flow Report — Graphs', margin, margin + 5);
+      pdf.setFont('helvetica', 'normal');
+      pdf.setFontSize(10);
+      pdf.text(`Document type: ${typeLabel}   |   Period: ${period}   |   Generated: ${dayjs().format('DD MMM YYYY, hh:mm A')}`, margin, margin + 11);
+      pdf.text(
+        `${totals.documents} documents   |   ${totals.open} in progress (${pct(totals.open, totals.documents)}%)   |   ${done} completed (${pct(done, totals.documents)}%)`,
+        margin,
+        margin + 16
+      );
+      let y = margin + 21;
+      const gridWidth = chartsRef.current.clientWidth || 1;
+
+      for (const card of cards) {
+        // The snapshot draws each chart's SVG on its own, where text no longer inherits the page's
+        // font — so copy the font each label really has onto the label itself first
+        const liveTexts = Array.from(card.querySelectorAll('svg text, svg tspan'));
+        const canvas = await html2canvas(card, {
+          scale: 2,
+          backgroundColor: '#ffffff',
+          useCORS: true,
+          logging: false,
+          onclone: (_doc, clonedCard) => {
+            clonedCard.querySelectorAll('svg text, svg tspan').forEach((node, i) => {
+              const live = liveTexts[i];
+              if (!live) return;
+              const cs = window.getComputedStyle(live);
+              node.style.fontFamily = cs.fontFamily;
+              node.style.fontSize = cs.fontSize;
+              node.style.fontWeight = cs.fontWeight;
+            });
+          }
+        });
+        // A card that takes part of the row on screen keeps that share of the page width,
+        // so a small graph is not blown up to the full width
+        let w = usableW * Math.min(1, card.offsetWidth / gridWidth);
+        let h = (canvas.height * w) / canvas.width;
+        if (y + h > pageH - margin && y > margin) {
+          pdf.addPage();
+          y = margin;
+        }
+        // A graph taller than a whole page is shrunk to fit one page rather than cut in two
+        const maxH = pageH - margin - y;
+        if (h > maxH) {
+          w = (w * maxH) / h;
+          h = maxH;
+        }
+        // JPEG keeps the file small (a few hundred KB instead of several MB as PNG)
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.92), 'JPEG', margin + (usableW - w) / 2, y, w, h);
+        y += h + 5;
+      }
+
+      const pages = pdf.getNumberOfPages();
+      pdf.setFontSize(8);
+      for (let i = 1; i <= pages; i += 1) {
+        pdf.setPage(i);
+        pdf.text(`Page ${i} of ${pages}`, pageW - margin, pageH - 4, { align: 'right' });
+      }
+      pdf.save(`document-flow-graphs-${selected}-${dayjs().format('YYYY-MM-DD')}.pdf`);
+    } catch (e) {
+      setError(`Could not create the PDF: ${e.message || 'unknown error'}`);
+    } finally {
+      setExportingPdf(false);
+    }
+  };
+
   const scopeLabel = selected === 'all' ? 'documents' : (kinds.find((k) => k.key === selected)?.label || 'documents').toLowerCase();
 
   return (
@@ -265,6 +365,9 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
             <Chip size="small" color="success" variant="outlined" label={`${totals.documents - totals.open} completed (${pct(totals.documents - totals.open, totals.documents)}%)`} />
           </Stack>
           <Box sx={{ flex: 1 }} />
+          <Button startIcon={<PdfIcon />} variant="contained" color="error" onClick={exportPdf} disabled={loading || exportingPdf || !totals.documents}>
+            {exportingPdf ? 'Creating PDF…' : 'Export PDF'}
+          </Button>
           <Button startIcon={<DownloadIcon />} variant="contained" color="success" onClick={exportExcel} disabled={loading || !totals.documents}>
             Download Excel
           </Button>
@@ -279,9 +382,9 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
       ) : null}
 
       {!error && sets.length ? (
-        <Grid container spacing={2}>
+        <Grid container spacing={2} ref={chartsRef}>
           <Grid item xs={12}>
-            <Paper variant="outlined" sx={{ p: 2 }}>
+            <Paper variant="outlined" sx={{ p: 2 }} data-pdf-card>
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 Where {scopeLabel} are stuck right now
               </Typography>
@@ -302,9 +405,9 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
                       <ChartTooltip content={<StuckTooltip />} />
                       {sets.length > 1 ? <Legend /> : null}
                       {sets.map((s, i) => (
-                        <Bar key={s.key} dataKey={s.key} name={s.label} stackId="stuck" fill={KIND_COLORS[s.key] || '#78909c'}>
+                        <Bar key={s.key} dataKey={s.key} name={s.label} stackId="stuck" fill={KIND_COLORS[s.key] || '#78909c'} isAnimationActive={!exportingPdf}>
                           {i === sets.length - 1 ? (
-                            <LabelList dataKey="countLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                            <LabelList dataKey="countLabel" content={renderBarEndLabel} />
                           ) : null}
                         </Bar>
                       ))}
@@ -320,7 +423,7 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
           </Grid>
 
           <Grid item xs={12} lg={selected === 'all' ? 7 : 12}>
-            <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+            <Paper variant="outlined" sx={{ p: 2, height: '100%' }} data-pdf-card>
               <Typography variant="h6" sx={{ fontWeight: 600 }}>
                 Slowest stages
               </Typography>
@@ -339,8 +442,8 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
                         'Time in stage'
                       ]}
                     />
-                    <Bar dataKey="avgDays" fill="#5c6f8a" radius={[0, 4, 4, 0]}>
-                      <LabelList dataKey="daysLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                    <Bar dataKey="avgDays" fill="#5c6f8a" radius={[0, 4, 4, 0]} isAnimationActive={!exportingPdf}>
+                      <LabelList dataKey="daysLabel" content={renderBarEndLabel} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
@@ -354,7 +457,7 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
 
           {selected === 'all' ? (
             <Grid item xs={12} lg={5}>
-              <Paper variant="outlined" sx={{ p: 2, height: '100%' }}>
+              <Paper variant="outlined" sx={{ p: 2, height: '100%' }} data-pdf-card>
                 <Typography variant="h6" sx={{ fontWeight: 600 }}>
                   In progress by document type
                 </Typography>
@@ -367,8 +470,8 @@ const DocumentFlowGraphs = ({ kinds, from, to, reloadKey }) => {
                     <XAxis type="number" allowDecimals={false} />
                     <YAxis type="category" dataKey="label" width={130} tick={{ fontSize: 12 }} />
                     <ChartTooltip formatter={(value, _name, item) => [`${value} in progress of ${item.payload.total} (${item.payload.ownPercent}% of its own) · ${item.payload.share}% of everything in progress`, item.payload.label]} />
-                    <Bar dataKey="open" fill="#e9a23b" radius={[0, 4, 4, 0]}>
-                      <LabelList dataKey="openLabel" position="right" style={{ fontSize: 12, fontWeight: 600 }} />
+                    <Bar dataKey="open" fill="#e9a23b" radius={[0, 4, 4, 0]} isAnimationActive={!exportingPdf}>
+                      <LabelList dataKey="openLabel" content={renderBarEndLabel} />
                     </Bar>
                   </BarChart>
                 </ResponsiveContainer>
