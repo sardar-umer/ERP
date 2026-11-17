@@ -79,6 +79,7 @@ import ComparativeStatementView from '../../components/Procurement/ComparativeSt
 import QuotationDetailView from '../../components/Procurement/QuotationDetailView';
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
+import BillCostCenterPanel from '../../components/CostCenter/BillCostCenterPanel';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import { getApprovalRoleLabel } from '../../utils/utilityBillApprovalSlots';
 import NarrationTableCell from '../../components/common/NarrationTableCell';
@@ -2783,6 +2784,16 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                         </Typography>
                       </Box>
                     )}
+                    <BillCostCenterPanel
+                      bill={selectedBill}
+                      onUpdated={(data, message) => {
+                        toast.success(message || 'Cost center updated');
+                        setSelectedBill((prev) => (prev && prev._id === data?._id
+                          ? { ...prev, costCenter: data.costCenter, workflowHistory: data.workflowHistory }
+                          : prev));
+                        fetchAccountsPayable();
+                      }}
+                    />
                     <CentralizedStoreBillInvoiceBody
                       bill={{
                         ...selectedBill,

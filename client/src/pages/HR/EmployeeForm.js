@@ -222,6 +222,8 @@ const EmployeeForm = () => {
     bankName: Yup.string().optional(),
     bankAccountNumber: Yup.string().optional(),
     foreignBankAccount: Yup.string().optional(),
+    branchCode: Yup.string().optional(),
+    guardianName: Yup.string().optional(),
     spouseName: Yup.string().optional(),
     appointmentDate: Yup.date().required('Appointment date is required'),
     probationPeriodMonths: Yup.number()
@@ -750,6 +752,8 @@ const EmployeeForm = () => {
         ...employeeData,
         bankName: employeeData.bankName?._id || employeeData.bankName || '',
         bankAccountNumber: employeeData.bankAccountNumber || employeeData.accountNumber || '',
+        branchCode: employeeData.branchCode || '',
+        guardianName: employeeData.guardianName || '',
         placementCompany: employeeData.placementCompany?._id || employeeData.placementCompany || '',
         placementSector: employeeData.placementSector?._id || employeeData.placementSector || '',
         placementProject: employeeData.placementProject?._id || employeeData.placementProject || '',
@@ -1033,6 +1037,8 @@ const EmployeeForm = () => {
       bankName: '',
       bankAccountNumber: '',
       foreignBankAccount: '',
+      branchCode: '',
+      guardianName: '',
       spouseName: '',
       appointmentDate: '',
       probationPeriodMonths: 3,
@@ -2466,6 +2472,16 @@ const EmployeeForm = () => {
                   <MenuItem value="Widowed">Widowed</MenuItem>
                 </Select>
               </FormControl>
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                name="guardianName"
+                label="Guardian Name (Father / Husband)"
+                value={formik.values.guardianName || ''}
+                onChange={formik.handleChange}
+                helperText="Shown on payroll reports"
+              />
             </Grid>
             {formik.values.maritalStatus === 'Married' && (
               <Grid item xs={12} md={6}>
@@ -4613,6 +4629,15 @@ const EmployeeForm = () => {
                 onChange={formik.handleChange}
                 error={formik.touched.bankAccountNumber && Boolean(formik.errors.bankAccountNumber)}
                 helperText={formik.touched.bankAccountNumber && formik.errors.bankAccountNumber}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
+              <TextField
+                fullWidth
+                name="branchCode"
+                label="Branch Code"
+                value={formik.values.branchCode || ''}
+                onChange={formik.handleChange}
               />
             </Grid>
             <Grid item xs={12} md={6}>

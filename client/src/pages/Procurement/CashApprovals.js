@@ -21,6 +21,8 @@ import toast from 'react-hot-toast';
 import api from '../../services/api';
 import { getDocCompanyName } from '../../utils/documentCompany';
 import procurementService from '../../services/procurementService';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
+import { DocumentCostCenterPanel } from '../../components/CostCenter/BillCostCenterPanel';
 import { formatDate } from '../../utils/dateUtils';
 import WorkflowHistoryDialog from '../../components/WorkflowHistoryDialog';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
@@ -150,7 +152,7 @@ const EMPTY_FORM = {
   companyId: '', vendor: '', approvalDate: new Date().toISOString().split('T')[0],
   expectedPurchaseDate: '', deliveryAddress: '', priority: 'Urgent',
   items: [emptyCashApprovalLine()],
-  shippingCost: 0, notes: ''
+  shippingCost: 0, notes: '', costCenter: '', costCenterLock: ''
 };
 
 // ─── Main Component ───────────────────────────────────────────────────────────
@@ -389,7 +391,9 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
             ...EMPTY_FORM,
             vendor: q.vendor?._id || q.vendor || '',
             items: items.length ? items : EMPTY_FORM.items,
-            notes: q.notes || ''
+            notes: q.notes || '',
+            costCenter: q.indent?.costCenter?._id || q.indent?.costCenter || '',
+            costCenterLock: q.indent?.costCenter ? `Copied from indent ${q.indent?.indentNumber || ''}`.trim() : ''
           });
           setApprovalAuthority({
             preparedBy: approverLabel(user) || '',
@@ -412,6 +416,11 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
     } else if (formDialog.open && ['edit', 'finance-edit'].includes(formDialog.mode) && formDialog.data) {
       const ca = formDialog.data;
       setFormData({
+        costCenter: ca.costCenter?._id || ca.costCenter || '',
+        // Finance changes it from the details view (with a reason); the form keeps an indent's cost center fixed
+        costCenterLock: formDialog.mode === 'finance-edit'
+          ? 'Finance: change it from the cash approval details'
+          : (ca.indent && ca.costCenter ? 'Copied from the indent' : ''),
         companyId: ca.companyId?._id || ca.companyId || '',
         vendor: ca.vendor?._id || ca.vendor || '',
         approvalDate: ca.approvalDate ? new Date(ca.approvalDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
@@ -768,6 +777,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
     fd.append('priority', formData.priority);
     fd.append('shippingCost', String(formData.shippingCost || 0));
     fd.append('notes', formData.notes || '');
+    if (formDialog.mode !== 'finance-edit') fd.append('costCenter', formData.costCenter || '');
     fd.append('approvalAuthorities', JSON.stringify({ ...approvalAuthority }));
     fd.append('items', JSON.stringify(serializeCashApprovalItemsForSubmit(formData.items)));
     appendCashApprovalLineAttachmentsToFormData(fd, formData.items);
@@ -783,6 +793,10 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
     if (!formData.vendor) return setError('Vendor is required');
     if (!formData.expectedPurchaseDate) return setError('Expected purchase date is required');
     if (!formData.items.length || !formData.items[0].description) return setError('At least one item is required');
+    if (formDialog.mode === 'create' && !formData.costCenterLock && !formData.costCenter) {
+      const policy = await loadCostCenterPolicy().catch(() => null);
+      if (isCostCenterRequiredNow(policy)) return setError('Cost center is required');
+    }
     setFormLoading(true);
     try {
       const payload = buildCashApprovalFormData();
@@ -1722,6 +1736,14 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
               </TextField>
             </Grid>
             <Grid item xs={12} md={6}>
+              <CostCenterSelect
+                value={formData.costCenter}
+                companyId={formData.companyId}
+                lockedReason={formData.costCenterLock}
+                onChange={(id) => setFormData((prev) => ({ ...prev, costCenter: id }))}
+              />
+            </Grid>
+            <Grid item xs={12} md={6}>
               <TextField fullWidth select label="Priority" value={formData.priority} onChange={(e) => setFormData({ ...formData, priority: e.target.value })}>
                 <MenuItem value="Low">Low</MenuItem>
                 <MenuItem value="Medium">Medium</MenuItem>
@@ -1963,6 +1985,26 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
                 </Stepper>
               </Box>
 
+              <Box className="app-print-hide" sx={{ px: 2 }}>
+                <DocumentCostCenterPanel
+                  costCenter={viewDialog.data.costCenter}
+                  documentLabel={viewDialog.data.caNumber}
+                  companyId={viewDialog.data.companyId?._id || viewDialog.data.companyId}
+                  canEdit={isFinanceModule && canFinanceEditCashApproval(viewDialog.data)}
+                  missingText={viewDialog.data.status === 'Pending Finance'
+                    ? 'Not set — required before Finance creates or signs the voucher'
+                    : 'Not set'}
+                  onSave={async (costCenter, reason) => {
+                    const res = await api.put(`/cash-approvals/${viewDialog.data._id}/cost-center`, { costCenter, reason });
+                    return { data: res.data.data, message: res.data.message };
+                  }}
+                  onUpdated={(data, message) => {
+                    setSuccess(message || 'Cost center updated');
+                    if (data) setViewDialog((prev) => ({ ...prev, data: { ...prev.data, costCenter: data.costCenter, workflowHistory: data.workflowHistory } }));
+                    refreshList();
+                  }}
+                />
+              </Box>
               {isGeneralModuleCashApproval(viewDialog.data) ? (
                 <CashApprovalGeneralDetailShell embedded hideBack ca={viewDialog.data} />
               ) : (

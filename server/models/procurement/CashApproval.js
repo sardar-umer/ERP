@@ -36,6 +36,12 @@ const cashApprovalSchema = new mongoose.Schema({
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Indent'
   },
+  /** Store cost center — from the indent when there is one, else picked on the form (utils/costCenterPolicy) */
+  costCenter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CostCenter',
+    default: null
+  },
   quotation: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'Quotation'
@@ -339,6 +345,27 @@ const cashApprovalSchema = new mongoose.Schema({
   }]
 }, {
   timestamps: true
+});
+
+// ─── Cost center: copied from the indent when it has one; required from the go-live date ─────────────────────
+cashApprovalSchema.pre('save', async function (next) {
+  try {
+    if (!(this.isNew || this.isModified('indent') || this.isModified('costCenter') || this.isModified('companyId'))) return next();
+    let chainStartDate = null;
+    if (this.indent) {
+      const indent = await mongoose.model('Indent').findById(this.indent).select('costCenter createdAt').lean();
+      if (indent) {
+        chainStartDate = indent.createdAt;
+        // Copied when the CA is raised from the indent; a later Finance correction is kept
+        if (indent.costCenter && (this.isNew || this.isModified('indent'))) this.costCenter = indent.costCenter;
+      }
+    }
+    const { checkDocumentCostCenter } = require('../../utils/costCenterPolicy');
+    await checkDocumentCostCenter(this, { chainStartDate, label: 'Cash approval' });
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // ─── Auto-generate CA number ──────────────────────────────────────────────────

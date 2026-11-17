@@ -159,8 +159,9 @@ const listFinancePayrollQueue = async () => {
       $group: {
         _id: { month: '$month', year: '$year' },
         employeeCount: { $sum: 1 },
-        totalNetSalary: { $sum: { $round: [{ $ifNull: ['$netSalary', 0] }, 0] } },
-        totalGrossSalary: { $sum: { $round: [{ $ifNull: ['$grossSalary', 0] }, 0] } },
+        // Half-up per employee like Math.round in the payroll export ($round would round .5 to even)
+        totalNetSalary: { $sum: { $floor: { $add: [{ $ifNull: ['$netSalary', 0] }, 0.5] } } },
+        totalGrossSalary: { $sum: { $floor: { $add: [{ $ifNull: ['$grossSalary', 0] }, 0.5] } } },
         pendingCount: {
           $sum: {
             $cond: [{ $in: ['$status', PAYROLL_FINAL_APPROVED_STATUSES] }, 1, 0]

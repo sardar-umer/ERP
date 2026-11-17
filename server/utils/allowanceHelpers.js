@@ -173,9 +173,10 @@ const buildMonthlyAllowanceOverridesPayload = (list) => {
  */
 const buildAllowancesPayload = (src) => {
   if (!src || typeof src !== 'object') return null;
+  // Whole rupees, so payroll totals add up the same everywhere (screen, export, Finance)
   const parse = (e) => ({
     isActive: !!e?.isActive,
-    amount: parseFloat(e?.amount) || 0
+    amount: Math.round(parseFloat(e?.amount) || 0)
   });
   return {
     conveyance: parse(src.conveyance),
@@ -197,19 +198,21 @@ const buildAllowancesPayload = (src) => {
  */
 const payrollAllowancesFromEmployee = (employeeAllowances = {}) => {
   const a = employeeAllowances;
+  // Payroll pays whole rupees: an allowance stored with paisa (e.g. fuel 30,878.26) is paid as 30,878, so
+  // every payroll amount is a whole number and the screen, the export and Finance all add up to the same total
   const pick = (key) => ({
     isActive: a[key]?.isActive || false,
-    amount: a[key]?.isActive ? Number(a[key].amount) || 0 : 0
+    amount: a[key]?.isActive ? Math.round(Number(a[key].amount) || 0) : 0
   });
-  const vehicleAmt = vehicleAllowanceAmount(a);
-  const fuelAmt = fuelAllowanceAmount(a);
+  const vehicleAmt = Math.round(vehicleAllowanceAmount(a));
+  const fuelAmt = Math.round(fuelAllowanceAmount(a));
   const legacyOnly = !usesSplitVehicleFuelFields(a) && a.vehicleFuel?.isActive;
   return {
     conveyance: pick('conveyance'),
     food: pick('food'),
     mobile: pick('mobile'),
     vehicle: legacyOnly
-      ? { isActive: true, amount: activeAmount(a.vehicleFuel) }
+      ? { isActive: true, amount: Math.round(activeAmount(a.vehicleFuel)) }
       : { isActive: !!a.vehicle?.isActive, amount: vehicleAmt },
     fuel: legacyOnly ? defaultEntry() : { isActive: !!a.fuel?.isActive, amount: fuelAmt },
     vehicleFuel: defaultEntry(),
@@ -234,7 +237,7 @@ const mergePayrollAllowances = (payrollDataAllowances, employeeAllowances = {}) 
         isActive: payrollDataAllowances[key]?.isActive ?? master[key]?.isActive ?? false,
         amount:
           payrollDataAllowances[key]?.amount !== undefined
-            ? parseFloat(payrollDataAllowances[key].amount) || 0
+            ? Math.round(parseFloat(payrollDataAllowances[key].amount) || 0)
             : master[key]?.amount || 0
       };
     }

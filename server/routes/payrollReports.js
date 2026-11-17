@@ -414,12 +414,14 @@ router.get('/monthly',
             'employeeData.idCard': 1,
             'employeeData.branchCode': 1,
             'employeeData.accountNumber': 1,
+            'employeeData.bankAccountNumber': 1,
             'employeeData.hireDate': 1,
             'employeeData.dateOfBirth': 1,
             'employeeData.address': 1,
             'employeeData.qualification': 1,
             'employeeData.phone': 1,
             'employeeData.probationPeriod': 1,
+            'employeeData.probationPeriodMonths': 1,
             'employeeData.joiningDate': 1,
             'employeeData.appointmentDate': 1,
             'employeeData.confirmationDate': 1,
@@ -497,7 +499,8 @@ router.get('/monthly',
           idCard: employee.employeeData?.idCard || 'N/A',
           bankName: employee.bankData?.name || 'N/A',
           branchCode: employee.employeeData?.branchCode || 'N/A',
-          accountNumber: employee.employeeData?.accountNumber || 'N/A',
+          // The employee form saves bankAccountNumber; accountNumber is the older Excel-import field
+          accountNumber: String(employee.employeeData?.bankAccountNumber || employee.employeeData?.accountNumber || '').trim() || 'N/A',
           hireDate: employee.employeeData?.hireDate || null,
           project: employee.project || 'N/A',
           company: employee.company || 'N/A',
@@ -509,7 +512,8 @@ router.get('/monthly',
           address: employee.employeeData?.address?.street || 'N/A',
           qualification: employee.employeeData?.qualification || 'N/A',
           phone: employee.employeeData?.phone || 'N/A',
-          probationPeriod: employee.employeeData?.probationPeriod || null,
+          // The employee form saves probationPeriodMonths; probationPeriod is the older Excel-import field
+          probationPeriod: employee.employeeData?.probationPeriodMonths || employee.employeeData?.probationPeriod || null,
           joiningDate: employee.employeeData?.joiningDate || null,
           appointmentDate: employee.employeeData?.appointmentDate || null,
           confirmationDate: employee.employeeData?.confirmationDate || null,
@@ -962,10 +966,10 @@ function convertToCSV(reportData, options = {}) {
       row.employeeId || 'N/A', // ID
       row.employeeName || 'N/A', // Name
       row.guardianName || 'N/A', // Guardian Name
-      row.idCard ? `'${row.idCard}` : 'N/A', // CNIC
+      row.idCard && row.idCard !== 'N/A' ? `'${row.idCard}` : 'N/A', // CNIC
       row.bankName || 'N/A', // Bank
       row.branchCode || 'N/A', // Branch Code
-      row.accountNumber ? `'${row.accountNumber}` : 'N/A', // Account No
+      row.accountNumber && row.accountNumber !== 'N/A' ? `'${row.accountNumber}` : 'N/A', // Account No
       row.hireDate ? new Date(row.hireDate).toLocaleDateString('en-GB') : 'N/A', // DOJ - DD/MM/YYYY format
       row.project || 'N/A', // Project
       row.company || 'N/A', // Company

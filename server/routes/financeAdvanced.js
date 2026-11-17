@@ -4088,6 +4088,7 @@ router.get('/accounts-payable/:id',
     const { q, companyId, company } = await financeScope(req);
     let bill = await AccountsPayable.findOne(q({ _id: req.params.id }))
       .populate('companyId', 'name companyCode contactInfo')
+      .populate('costCenter', 'code name path')
       .populate('createdBy', 'firstName lastName email digitalSignature')
       .populate('lastModifiedBy', 'firstName lastName email')
       .populate('payeeEmployee', 'firstName lastName employeeId')
@@ -4331,7 +4332,8 @@ router.post('/accounts-payable/advance-payment',
     body('amount').isFloat({ min: 0.01 }).withMessage('Advance amount must be greater than zero'),
     body('paymentMethod').optional().isIn(['cash', 'check', 'cheque', 'credit_card', 'bank_transfer', 'ach', 'other']).withMessage('Valid payment method is required'),
     body('bankAccountId').optional().isMongoId().withMessage('Valid bank account id is required when provided'),
-    body('costCenter').optional({ values: 'falsy' }).isMongoId().withMessage('Valid cost center is required when provided')
+    body('costCenter').optional({ values: 'falsy' }).isMongoId().withMessage('Valid cost center is required when provided'),
+    body('storeCostCenter').optional({ values: 'falsy' }).isMongoId().withMessage('Valid cost center is required when provided')
   ],
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
@@ -4450,6 +4452,34 @@ router.post('/accounts-payable/advance-payment',
       }
     }
 
+    // Store cost center: picked on the form, else the linked PO's; its Finance match goes on the voucher
+    let storeCostCenterId = req.body.storeCostCenter?._id || req.body.storeCostCenter || null;
+    if (!storeCostCenterId && referenceId && mongoose.Types.ObjectId.isValid(String(referenceId))) {
+      const linkedPo = await PurchaseOrder.findById(referenceId).select('costCenter').lean();
+      if (linkedPo?.costCenter) storeCostCenterId = linkedPo.costCenter;
+    }
+    if (storeCostCenterId) {
+      const { costCenterProblem } = require('../utils/costCenterPolicy');
+      // A PO's own cost center was checked when the PO was raised; only a picked one must match the company
+      const problem = await costCenterProblem(storeCostCenterId, req.body.storeCostCenter ? resolvedCompanyId : null);
+      if (problem) return res.status(400).json({ success: false, message: `Cost center: ${problem}` });
+      if (!costCenterId) {
+        const { resolveFinanceCostCenter } = require('../utils/costCenterLink');
+        costCenterId = await resolveFinanceCostCenter(storeCostCenterId, resolvedCompanyId);
+      }
+    } else {
+      // An advance against a PO follows that PO's chain: a PO / indent started before go-live stays exempt
+      const { isCostCenterMandatory, resolvePurchaseOrderChain } = require('../utils/costCenterPolicy');
+      let chainStart = new Date();
+      if (referenceId && mongoose.Types.ObjectId.isValid(String(referenceId))) {
+        const chain = await resolvePurchaseOrderChain(referenceId);
+        if (chain.chainStartDate) chainStart = chain.chainStartDate;
+      }
+      if (await isCostCenterMandatory(chainStart)) {
+        return res.status(400).json({ success: false, message: 'Cost center is required' });
+      }
+    }
+
     const advance = await FinanceHelper.recordVendorAdvance({
       vendorName: req.body.vendorName,
       vendorEmail: req.body.vendorEmail || '',
@@ -4469,7 +4499,8 @@ router.post('/accounts-payable/advance-payment',
       companyId: resolvedCompanyId,
       payingCompanyId: resolvedPayingId || resolvedCompanyId,
       categoryLines: req.body.categoryLines || [],
-      costCenter: costCenterId
+      costCenter: costCenterId,
+      storeCostCenter: storeCostCenterId
     });
 
     const message =
@@ -4952,6 +4983,7 @@ router.get('/accounts-payable',
     const [bills, totalCount, pendingUtilityBills, dueUtilityWarningBills] = await Promise.all([
       AccountsPayable.find(filters)
         .populate('payeeEmployee', 'firstName lastName employeeId')
+        .populate('costCenter', 'code name path')
         .sort({ billDate: -1 })
         .skip(skip)
         .limit(parseInt(limit))
@@ -5290,6 +5322,18 @@ router.post('/accounts-payable',
     }));
 
     const company = await resolveCompanyForFinanceRoute(req);
+    // Cost center: required from the go-live date (utils/costCenterPolicy), must be an active store cost center
+    const manualBillCostCenter = req.body.costCenter?._id || req.body.costCenter || null;
+    {
+      const { isCostCenterMandatory } = require('../utils/costCenterPolicy');
+      if (manualBillCostCenter) {
+        const { costCenterProblem } = require('../utils/costCenterPolicy');
+        const problem = await costCenterProblem(manualBillCostCenter, company?._id);
+        if (problem) return res.status(400).json({ success: false, message: `Cost center: ${problem}` });
+      } else if (await isCostCenterMandatory(new Date())) {
+        return res.status(400).json({ success: false, message: 'Cost center is required' });
+      }
+    }
     const isAdvanceBill = req.body.isAdvanceBill === true || req.body.isAdvanceBill === 'true';
     if (isAdvanceBill) {
       try {
@@ -5314,6 +5358,7 @@ router.post('/accounts-payable',
       paymentTerms: normalizeApPaymentTerms(req.body.paymentTerms),
       notes: req.body.notes || req.body.memo || lineItems.map(l => l.description).filter(Boolean).join('; ') || `Expense Bill — ${req.body.billNumber}`,
       department: req.body.department || 'finance',
+      costCenter: manualBillCostCenter,
       module: 'finance',
       referenceId: null,
       referenceType: 'manual',
@@ -5349,6 +5394,57 @@ router.post('/accounts-payable',
       success: true,
       message: 'Bill created and sent for department approval (Sr Manager Finance → GM Finance). After approval it goes to Audit, then Finance.',
       data: apEntry
+    });
+  })
+);
+
+// @route   PUT /api/finance/accounts-payable/:id/cost-center
+// @desc    Finance sets or corrects a bill's cost center (recorded in the bill's history)
+// @access  Private (Finance)
+router.put('/accounts-payable/:id/cost-center',
+  authorize('super_admin', 'admin', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const CostCenter = require('../models/procurement/CostCenter');
+    const bill = await AccountsPayable.findById(req.params.id);
+    if (!bill) return res.status(404).json({ success: false, message: 'Bill not found' });
+    if (bill.status === 'cancelled') {
+      return res.status(400).json({ success: false, message: `Bill ${bill.billNumber} is voided` });
+    }
+    const newId = req.body?.costCenter || null;
+    if (!newId) return res.status(400).json({ success: false, message: 'Pick a cost center' });
+    if (!mongoose.Types.ObjectId.isValid(String(newId))) {
+      return res.status(400).json({ success: false, message: 'Invalid cost center' });
+    }
+    const next = await CostCenter.findById(newId).select('code name isActive').lean();
+    if (!next) return res.status(404).json({ success: false, message: 'Cost center not found' });
+    const { costCenterProblem } = require('../utils/costCenterPolicy');
+    const problem = await costCenterProblem(newId, bill.companyId);
+    if (problem) return res.status(400).json({ success: false, message: `Cost center: ${problem}` });
+    if (String(bill.costCenter || '') === String(newId)) {
+      return res.status(400).json({ success: false, message: 'The bill already has this cost center' });
+    }
+    const prev = bill.costCenter ? await CostCenter.findById(bill.costCenter).select('code name').lean() : null;
+    const reason = String(req.body?.reason || '').trim();
+    if (prev && !reason) {
+      return res.status(400).json({ success: false, message: 'Give a reason for changing the cost center' });
+    }
+
+    bill.costCenter = newId;
+    bill.workflowHistory = Array.isArray(bill.workflowHistory) ? bill.workflowHistory : [];
+    bill.workflowHistory.push({
+      fromStatus: bill.status,
+      toStatus: bill.status,
+      changedBy: req.user._id || req.user.id,
+      changedAt: new Date(),
+      comments: `Cost center ${prev ? `changed from ${prev.code} — ${prev.name} to` : 'set to'} ${next.code} — ${next.name}${reason ? `. Reason: ${reason}` : ''}`,
+      module: 'Finance'
+    });
+    await bill.save();
+    await bill.populate('costCenter', 'code name path');
+    res.json({
+      success: true,
+      message: `Cost center ${prev ? 'changed' : 'set'} to ${next.code} — ${next.name}`,
+      data: { _id: bill._id, costCenter: bill.costCenter, workflowHistory: bill.workflowHistory }
     });
   })
 );

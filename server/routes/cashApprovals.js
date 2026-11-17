@@ -525,6 +525,56 @@ const notifyAfterGeneralResubmit = async (ca, actorId, target) => {
 
 const { resolveAuditStampMeta } = require('../utils/auditStampMeta');
 
+/** Multipart / JSON bodies may send '' or 'null' for "no cost center" — Mongoose cannot cast those */
+const normalizeBodyCostCenter = (body) => {
+  if (body && Object.prototype.hasOwnProperty.call(body, 'costCenter')) {
+    const v = body.costCenter;
+    body.costCenter = (!v || v === 'null' || v === 'undefined') ? null : (v._id || v);
+  }
+  return body;
+};
+
+/** Finance sets / corrects the cost center while the CA is with Finance — recorded in the history */
+const applyFinanceCostCenterChange = async (ca, body, userId) => {
+  if (!body || body.costCenter === undefined) return;
+  const next = body.costCenter || null;
+  if (String(next || '') === String(ca.costCenter?._id || ca.costCenter || '')) return;
+  if (!next) {
+    const err = new Error('Cost center cannot be removed');
+    err.statusCode = 400;
+    throw err;
+  }
+  const CostCenter = require('../models/procurement/CostCenter');
+  const [prev, cc] = await Promise.all([
+    ca.costCenter ? CostCenter.findById(ca.costCenter).select('code name').lean() : null,
+    CostCenter.findById(next).select('code name').lean()
+  ]);
+  if (!cc) {
+    const err = new Error('Cost center not found');
+    err.statusCode = 400;
+    throw err;
+  }
+  const reason = String(body.costCenterReason || '').trim();
+  ca.costCenter = next;
+  pushHistory(ca, ca.status, ca.status, userId,
+    `Cost center ${prev ? `changed from ${prev.code} — ${prev.name} to` : 'set to'} ${cc.code} — ${cc.name}${reason ? `. Reason: ${reason}` : ''}`,
+    'Finance');
+};
+
+/** Finance block: from the go-live date a CA needs its cost center before a voucher is made or signed */
+const cashApprovalCostCenterError = async (ca) => {
+  if (ca.costCenter) return null;
+  const { isCostCenterMandatory } = require('../utils/costCenterPolicy');
+  let started = ca.createdAt;
+  if (ca.indent) {
+    const indent = await Indent.findById(ca.indent?._id || ca.indent).select('createdAt').lean();
+    if (indent?.createdAt) started = indent.createdAt;
+  }
+  return (await isCostCenterMandatory(started))
+    ? 'Cost center is required — set it on the cash approval before Finance continues'
+    : null;
+};
+
 const pushHistory = (ca, from, to, userId, comments, module, extra = {}) => {
   ca.workflowHistory.push({
     fromStatus: from,
@@ -738,6 +788,7 @@ const indentWithComparativePopulate = {
 
 const fullPopulate = (q) => q
   .populate('companyId', 'name companyCode')
+  .populate('costCenter', 'code name path')
   .populate('vendor', 'name email phone')
   .populate(indentWithComparativePopulate)
   .populate('quotation', 'quotationNumber')
@@ -1135,6 +1186,7 @@ const applyAdvanceToName = async (doc, payeeId, explicitName) => {
 
 // POST /api/cash-approvals
 router.post('/', authMiddleware, maybeGeneralMultipart, asyncHandler(async (req, res) => {
+  normalizeBodyCostCenter(req.body);
   const { quotationId, submit, ...rawBody } = req.body;
   const body = { ...rawBody };
   if (body.items) body.items = parseJsonBodyField(body.items, []);
@@ -1256,6 +1308,7 @@ router.post('/', authMiddleware, maybeGeneralMultipart, asyncHandler(async (req,
 
 // PUT /api/cash-approvals/:id
 router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (req, res) => {
+  normalizeBodyCostCenter(req.body);
   const ca = await CashApproval.findById(req.params.id);
   if (!ca) return res.status(404).json({ success: false, message: 'Cash Approval not found' });
 
@@ -1268,6 +1321,7 @@ router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (re
       if (body.notes !== undefined) ca.notes = body.notes;
       if (body.purpose !== undefined) ca.purpose = body.purpose;
       try {
+        await applyFinanceCostCenterChange(ca, body, req.user.id);
         await applyFinanceEditExtras(ca, body, req.user.id);
       } catch (err) {
         return res.status(err.statusCode || 400).json({ success: false, message: err.message });
@@ -1338,6 +1392,7 @@ router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (re
     if (advanceRecipient) {
       Object.assign(ca, advanceRecipient);
     }
+    if (body.costCenter !== undefined) ca.costCenter = body.costCenter;
     if (body.draftApproverIds) {
       ca.draftApproverIds = uniqueApproverIds(parseJsonBodyField(body.draftApproverIds, []));
     }
@@ -1408,6 +1463,7 @@ router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (re
     internalNotes: _in,
     advanceTo: _at,
     advanceToName: _atn,
+    costCenter: bodyCostCenter,
     ...updates
   } = req.body;
 
@@ -1425,9 +1481,11 @@ router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (re
   }
 
   Object.assign(ca, updates);
+  if (bodyCostCenter !== undefined && !isFinanceEditable) ca.costCenter = bodyCostCenter;
 
   if (isFinanceEditable) {
     try {
+      await applyFinanceCostCenterChange(ca, req.body, req.user.id);
       await applyFinanceEditExtras(ca, req.body, req.user.id);
     } catch (err) {
       return res.status(err.statusCode || 400).json({ success: false, message: err.message });
@@ -1438,6 +1496,31 @@ router.put('/:id', authMiddleware, maybeGeneralMultipart, asyncHandler(async (re
   await ca.save();
   const updated = await fullPopulate(CashApproval.findById(ca._id));
   res.json({ success: true, message: 'Cash Approval updated', data: updated });
+}));
+
+// PUT /api/cash-approvals/:id/cost-center — Finance sets / corrects the cost center (Pending Finance only)
+router.put('/:id/cost-center', authMiddleware, asyncHandler(async (req, res) => {
+  const ca = await CashApproval.findById(req.params.id);
+  if (!ca) return res.status(404).json({ success: false, message: 'Cash Approval not found' });
+  if (!hasFinanceAccess(req.user)) {
+    return res.status(403).json({ success: false, message: 'Finance access required' });
+  }
+  if (!FINANCE_EDITABLE_STATUSES.includes(ca.status)) {
+    return res.status(400).json({ success: false, message: `Cost center can be changed by Finance only while the cash approval is ${FINANCE_EDITABLE_STATUSES.join(' / ')}` });
+  }
+  const body = normalizeBodyCostCenter({ costCenter: req.body?.costCenter, costCenterReason: req.body?.reason });
+  if (ca.costCenter && !String(body.costCenterReason || '').trim()) {
+    return res.status(400).json({ success: false, message: 'Give a reason for changing the cost center' });
+  }
+  try {
+    await applyFinanceCostCenterChange(ca, body, req.user.id);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
+  ca.updatedBy = req.user.id;
+  await ca.save();
+  const updated = await fullPopulate(CashApproval.findById(ca._id));
+  res.json({ success: true, message: 'Cost center updated', data: updated });
 }));
 
 // PUT /api/cash-approvals/:id/submit — General module draft → Manager / HOD queue
@@ -2400,6 +2483,15 @@ router.put('/:id/create-voucher', authMiddleware, asyncHandler(async (req, res) 
   if (!hasFinanceAccess(req.user) && !['super_admin', 'admin'].includes(req.user.role)) {
     return res.status(403).json({ success: false, message: 'Finance access required' });
   }
+  // Finance may set / correct the cost center while creating the voucher; it is required from go-live
+  normalizeBodyCostCenter(req.body || {});
+  try {
+    await applyFinanceCostCenterChange(ca, req.body, req.user.id);
+  } catch (err) {
+    return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+  }
+  const ccErrorOnVoucher = await cashApprovalCostCenterError(ca);
+  if (ccErrorOnVoucher) return res.status(400).json({ success: false, message: ccErrorOnVoucher });
   if (ca.voucherEntryId) {
     const existingJe = await JournalEntry.findById(ca.voucherEntryId).select('status entryNumber');
     if (existingJe?.status === 'posted') {
@@ -2509,6 +2601,8 @@ router.put('/:id/finance-approve', authMiddleware, asyncHandler(async (req, res)
   if (ca.status !== 'Pending Finance') {
     return res.status(400).json({ success: false, message: 'Finance authority approval is only allowed in Pending Finance status' });
   }
+  const ccErrorOnApprove = await cashApprovalCostCenterError(ca);
+  if (ccErrorOnApprove) return res.status(400).json({ success: false, message: ccErrorOnApprove });
   const slots = getRequiredFinanceAuthoritySlots(ca);
   if (!slots.length) {
     return res.status(400).json({ success: false, message: 'Finance approval authorities are not configured yet' });

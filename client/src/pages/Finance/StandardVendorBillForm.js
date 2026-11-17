@@ -57,6 +57,7 @@ import api from '../../services/api';
 import toast from 'react-hot-toast';
 import { formatPKR } from '../../utils/currency';
 import { useAuth } from '../../contexts/AuthContext';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import {
   fetchFinanceAuthorityCandidates,
@@ -139,6 +140,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
   // Advance / deposit bill: posts to Vendor Advance; paying it creates an advance applied to the real bill later
   const [isAdvanceBill, setIsAdvanceBill] = useState(false);
   const [vendorInvoiceNumber, setVendorInvoiceNumber] = useState('');
+  const [billCostCenter, setBillCostCenter] = useState('');
 
   // Lines
   const [categoryLines, setCategoryLines] = useState([emptyCategoryLine(), emptyCategoryLine()]);
@@ -550,6 +552,13 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
       setError('Sr Manager Finance and GM Finance must be two different users.');
       return;
     }
+    if (!billCostCenter) {
+      const policy = await loadCostCenterPolicy().catch(() => null);
+      if (isCostCenterRequiredNow(policy)) {
+        setError('Cost center is required');
+        return;
+      }
+    }
 
     try {
       setSubmitting(true);
@@ -590,6 +599,7 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
         vendor: vendorPayload,
         billNumber: billNumber.trim(),
         vendorInvoiceNumber: vendorInvoiceNumber.trim() || undefined,
+        costCenter: billCostCenter || null,
         billDate,
         dueDate,
         paymentTerms,
@@ -788,6 +798,15 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
                     onChange={(e) => setBillNumber(e.target.value)}
                     placeholder="e.g. BILL-2026-001"
                     required
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={6}>
+                  <CostCenterSelect
+                    size="small"
+                    value={billCostCenter}
+                    companyId={selectedCompany?._id}
+                    onChange={(id) => setBillCostCenter(id)}
                   />
                 </Grid>
 

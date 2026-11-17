@@ -246,6 +246,15 @@ const accountsPayableSchema = new mongoose.Schema({
     trim: true,
     default: 'procurement'
   },
+  /**
+   * Store cost center (utils/costCenterPolicy). GRN / PO bills copy it from their GRN or PO; other bills get it from
+   * their form or from Finance. Required before payment for bills whose chain started on/after the go-live date.
+   */
+  costCenter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CostCenter',
+    default: null
+  },
   module: {
     type: String,
     trim: true,
@@ -630,6 +639,21 @@ accountsPayableSchema.virtual('formattedBalanceDue').get(function() {
     style: 'currency',
     currency: 'USD'
   }).format(this.balanceDue);
+});
+
+// GRN / PO bills: take the cost center of their GRN / PO when they have none
+accountsPayableSchema.pre('save', async function(next) {
+  try {
+    if (!this.costCenter && (this.isNew || this.isModified('linkedGRNs') || this.isModified('referenceId'))
+      && (['grn', 'purchase_order'].includes(this.referenceType) || (this.linkedGRNs || []).length)) {
+      const { resolveBillChain } = require('../../utils/costCenterPolicy');
+      const { costCenter } = await resolveBillChain(this);
+      if (costCenter) this.costCenter = costCenter;
+    }
+  } catch (err) {
+    console.warn('[AP] cost center from GRN/PO skipped:', err.message);
+  }
+  next();
 });
 
 // Pre-save middleware

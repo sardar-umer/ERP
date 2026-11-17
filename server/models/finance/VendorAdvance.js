@@ -34,6 +34,8 @@ const vendorAdvanceSchema = new mongoose.Schema({
   },
   /** Finance cost center the advance is charged to (copied onto its voucher(s), like bill payments) */
   costCenter: { type: mongoose.Schema.Types.ObjectId, ref: 'FinanceCostCenter', default: null },
+  /** Store cost center picked on the form (or from the PO / advance bill); `costCenter` above is its Finance match */
+  storeCostCenter: { type: mongoose.Schema.Types.ObjectId, ref: 'CostCenter', default: null },
   /** Chart-of-accounts bank or cash account credited on the vendor advance voucher */
   bankAccountId: { type: mongoose.Schema.Types.ObjectId, ref: 'Account', default: null },
   reference: { type: String, trim: true },

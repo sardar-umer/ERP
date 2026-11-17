@@ -536,6 +536,14 @@ const IndentDetail = ({
                 </Grid>
                 <Grid item xs={12} md={6}>
                   <Typography variant="body2" color="text.secondary">
+                    Cost Center
+                  </Typography>
+                  <Typography variant="body1">
+                    {indent.costCenter ? `${indent.costCenter.code} — ${indent.costCenter.path || indent.costCenter.name}` : '—'}
+                  </Typography>
+                </Grid>
+                <Grid item xs={12} md={6}>
+                  <Typography variant="body2" color="text.secondary">
                     Category
                   </Typography>
                   <Typography variant="body1">

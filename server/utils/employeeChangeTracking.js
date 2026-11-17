@@ -50,6 +50,8 @@ const TRACKED = {
   'salary.basic': { label: 'Basic Salary', kind: 'money' },
   bankName: { label: 'Bank' },
   bankAccountNumber: { label: 'Bank Account' },
+  branchCode: { label: 'Branch Code' },
+  guardianName: { label: 'Guardian Name' },
   cashSalary: { label: 'Cash Salary', kind: 'bool' },
   taxExemption: { label: 'Tax Exemption', kind: 'bool' },
   manualTax: { label: 'Manual Tax', kind: 'json' },

@@ -4,7 +4,7 @@ import {
   TableHead, TableRow, TablePagination, IconButton, Dialog, DialogTitle,
   DialogContent, DialogActions, TextField, MenuItem, Alert, CircularProgress,
   Avatar, useTheme, alpha, Chip, Grid, Stack, Tooltip,
-  ToggleButton, ToggleButtonGroup, Divider
+  ToggleButton, ToggleButtonGroup, Divider, FormControlLabel, Checkbox
 } from '@mui/material';
 import {
   AccountTree as CostCenterIcon,
@@ -19,10 +19,39 @@ import {
   KeyboardArrowDown as ExpandIcon,
   KeyboardArrowRight as CollapseIcon,
   Business as CompanyIcon,
-  LocationCity as ProjectIcon
+  LocationCity as ProjectIcon,
+  Rule as RuleIcon,
+  Star as DefaultIcon
 } from '@mui/icons-material';
 import api from '../../../services/api';
 import { formatPKR } from '../../../utils/currency';
+
+const COVERAGE_STATUS = {
+  default: { label: 'Default set', color: 'success' },
+  single: { label: 'Only one — used automatically', color: 'info' },
+  choose: { label: 'Several — choose default', color: 'warning' },
+  missing: { label: 'No default', color: 'default' }
+};
+
+const toDateInput = (value) => {
+  if (!value) return '';
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return '';
+  const pad = (n) => String(n).padStart(2, '0');
+  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+};
+
+/** Company ids / names of a cost center (several allowed; older records only have `company`) */
+const ccCompanyList = (cc) => {
+  const list = (cc?.companies && cc.companies.length) ? cc.companies : (cc?.company ? [cc.company] : []);
+  return list.filter(Boolean);
+};
+const ccCompanyIds = (cc) => ccCompanyList(cc).map((c) => String(c?._id || c));
+const ccCompanyNames = (cc) => ccCompanyList(cc).map((c) => c?.name || c?.companyCode).filter(Boolean);
+
+const formatDate = (value) => (value
+  ? new Date(value).toLocaleDateString('en-GB', { day: '2-digit', month: 'short', year: 'numeric' })
+  : '');
 
 export default function GeneralCostCenters() {
   const theme = useTheme();
@@ -54,12 +83,20 @@ export default function GeneralCostCenters() {
   const [formDialog, setFormDialog] = useState({ open: false, mode: 'create', data: null, parentId: null });
   const [deleteDialog, setDeleteDialog] = useState({ open: false, data: null });
 
+  // Mandatory cost center: go-live date + department → default cost center coverage
+  const [policy, setPolicy] = useState({ mandatoryFrom: null, canEdit: false });
+  const [goLiveInput, setGoLiveInput] = useState('');
+  const [savingPolicy, setSavingPolicy] = useState(false);
+  const [coverage, setCoverage] = useState({ rows: [], summary: null });
+  const [coverageOpen, setCoverageOpen] = useState(false);
+  const [coverageBusy, setCoverageBusy] = useState('');
+
   // Form State
   const [formData, setFormData] = useState({
     code: '',
     name: '',
     parent: '',
-    company: '',
+    companies: [],
     project: '',
     department: '',
     departmentName: '',
@@ -69,9 +106,61 @@ export default function GeneralCostCenters() {
     budget: 0,
     budgetPeriod: 'Annual',
     isActive: true,
+    isDepartmentDefault: false,
     description: '',
     notes: ''
   });
+
+  const loadPolicy = useCallback(async () => {
+    try {
+      const res = await api.get('/procurement/cost-centers/policy');
+      if (res.data?.success) {
+        setPolicy(res.data.data);
+        setGoLiveInput(toDateInput(res.data.data.mandatoryFrom));
+      }
+    } catch (err) {
+      console.error('Error loading cost center policy:', err);
+    }
+  }, []);
+
+  const loadCoverage = useCallback(async () => {
+    try {
+      const res = await api.get('/procurement/cost-centers/department-coverage');
+      if (res.data?.success) setCoverage(res.data.data);
+    } catch (err) {
+      console.error('Error loading department coverage:', err);
+    }
+  }, []);
+
+  const handleSavePolicy = async (clear = false) => {
+    try {
+      setSavingPolicy(true);
+      setError('');
+      const res = await api.put('/procurement/cost-centers/policy', { mandatoryFrom: clear ? null : (goLiveInput || null) });
+      setPolicy(res.data.data);
+      setGoLiveInput(toDateInput(res.data.data.mandatoryFrom));
+      setSuccess(res.data.message);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to save go-live date');
+    } finally {
+      setSavingPolicy(false);
+    }
+  };
+
+  const handleMakeDefault = async (costCenterId) => {
+    if (!costCenterId) return;
+    try {
+      setCoverageBusy(costCenterId);
+      setError('');
+      const res = await api.put(`/procurement/cost-centers/${costCenterId}/make-department-default`);
+      setSuccess(res.data.message);
+      await Promise.all([loadCoverage(), loadCostCenters()]);
+    } catch (err) {
+      setError(err.response?.data?.message || 'Failed to set department default');
+    } finally {
+      setCoverageBusy('');
+    }
+  };
 
   // Load Reference Data (Companies, Projects, Departments)
   const loadReferences = useCallback(async () => {
@@ -132,7 +221,9 @@ export default function GeneralCostCenters() {
 
   useEffect(() => {
     loadReferences();
-  }, [loadReferences]);
+    loadPolicy();
+    loadCoverage();
+  }, [loadReferences, loadPolicy, loadCoverage]);
 
   useEffect(() => {
     loadCostCenters();
@@ -197,7 +288,7 @@ export default function GeneralCostCenters() {
       code: nextCode || '',
       name: '',
       parent: parentId,
-      company: parentCostCenter?.company?._id || parentCostCenter?.company || '',
+      companies: parentCostCenter ? ccCompanyIds(parentCostCenter) : [],
       project: parentCostCenter?.project?._id || parentCostCenter?.project || '',
       department: parentCostCenter?.department?._id || parentCostCenter?.department || '',
       departmentName: parentCostCenter?.departmentName || '',
@@ -207,6 +298,7 @@ export default function GeneralCostCenters() {
       budget: 0,
       budgetPeriod: 'Annual',
       isActive: true,
+      isDepartmentDefault: false,
       description: '',
       notes: ''
     });
@@ -231,7 +323,7 @@ export default function GeneralCostCenters() {
       ...prev,
       parent: selectedParentId,
       code: nextCode || prev.code,
-      company: parentCC?.company?._id || parentCC?.company || prev.company,
+      companies: parentCC ? ccCompanyIds(parentCC) : prev.companies,
       project: parentCC?.project?._id || parentCC?.project || prev.project,
       department: parentCC?.department?._id || parentCC?.department || prev.department,
       departmentName: parentCC?.departmentName || prev.departmentName,
@@ -245,7 +337,7 @@ export default function GeneralCostCenters() {
       code: cc.code,
       name: cc.name,
       parent: cc.parent?._id || cc.parent || '',
-      company: cc.company?._id || cc.company || '',
+      companies: ccCompanyIds(cc),
       project: cc.project?._id || cc.project || '',
       department: cc.department?._id || cc.department || '',
       departmentName: cc.department?.name || cc.departmentName || '',
@@ -255,6 +347,7 @@ export default function GeneralCostCenters() {
       budget: cc.budget || 0,
       budgetPeriod: cc.budgetPeriod || 'Annual',
       isActive: cc.isActive !== undefined ? cc.isActive : true,
+      isDepartmentDefault: !!cc.isDepartmentDefault,
       description: cc.description || '',
       notes: cc.notes || ''
     });
@@ -275,6 +368,7 @@ export default function GeneralCostCenters() {
       }
       setFormDialog({ open: false, mode: 'create', data: null, parentId: null });
       loadCostCenters();
+      loadCoverage();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to save cost center');
     } finally {
@@ -292,6 +386,7 @@ export default function GeneralCostCenters() {
       setSuccess('Cost center deleted successfully');
       setDeleteDialog({ open: false, data: null });
       loadCostCenters();
+      loadCoverage();
     } catch (err) {
       setError(err.response?.data?.message || 'Failed to delete cost center');
     } finally {
@@ -335,6 +430,9 @@ export default function GeneralCostCenters() {
               <Box>
                 <Typography variant="body2" sx={{ fontWeight: depth === 0 ? 700 : 500, color: 'text.primary' }}>
                   {node.name}
+                  {node.isDepartmentDefault && (
+                    <Chip icon={<DefaultIcon sx={{ fontSize: 12 }} />} label="Dept default" size="small" color="primary" variant="outlined" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
+                  )}
                 </Typography>
                 {node.path && depth > 0 && (
                   <Typography variant="caption" color="text.secondary" sx={{ display: 'block', fontSize: '0.72rem' }}>
@@ -347,10 +445,10 @@ export default function GeneralCostCenters() {
             {/* Company / Project */}
             <TableCell sx={{ width: '18%' }}>
               <Stack spacing={0.3}>
-                {node.company && (
+                {ccCompanyNames(node).length > 0 && (
                   <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, fontSize: '0.78rem', color: 'text.secondary' }}>
                     <CompanyIcon sx={{ fontSize: 13, color: 'info.main' }} />
-                    <span>{node.company.name || node.company.companyCode}</span>
+                    <span>{ccCompanyNames(node).join(', ')}</span>
                   </Box>
                 )}
                 {node.project && (
@@ -359,8 +457,8 @@ export default function GeneralCostCenters() {
                     <span>{node.project.name}</span>
                   </Box>
                 )}
-                {!node.company && !node.project && (
-                  <Typography variant="caption" color="text.disabled">—</Typography>
+                {!ccCompanyNames(node).length && !node.project && (
+                  <Typography variant="caption" color="text.disabled">All companies</Typography>
                 )}
               </Stack>
             </TableCell>
@@ -477,6 +575,67 @@ export default function GeneralCostCenters() {
       {/* Alerts */}
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {success && <Alert severity="success" sx={{ mb: 2 }} onClose={() => setSuccess('')}>{success}</Alert>}
+
+      {/* Mandatory cost center rules */}
+      <Paper variant="outlined" sx={{ p: 2, mb: 2.5, borderRadius: 2 }}>
+        <Stack direction={{ xs: 'column', md: 'row' }} spacing={2} alignItems={{ xs: 'stretch', md: 'center' }} justifyContent="space-between">
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1.5 }}>
+            <RuleIcon color="primary" />
+            <Box>
+              <Typography variant="subtitle2" fontWeight={700}>Mandatory cost center</Typography>
+              <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
+                {policy.mandatoryFrom
+                  ? `Required on payable documents started on or after ${formatDate(policy.mandatoryFrom)}. Older documents are exempt.`
+                  : 'Not live yet — nothing is required until a go-live date is saved.'}
+              </Typography>
+            </Box>
+          </Box>
+
+          <Stack direction={{ xs: 'column', sm: 'row' }} spacing={1} alignItems={{ xs: 'stretch', sm: 'center' }}>
+            {coverage.summary && (
+              <Button
+                size="small"
+                variant="outlined"
+                color="inherit"
+                onClick={() => { loadCoverage(); setCoverageOpen(true); }}
+              >
+                Department defaults (optional): {coverage.summary.ready}/{coverage.summary.total}
+              </Button>
+            )}
+            <TextField
+              size="small"
+              type="date"
+              label="Go-live date"
+              value={goLiveInput}
+              onChange={(e) => setGoLiveInput(e.target.value)}
+              disabled={!policy.canEdit || savingPolicy}
+              InputLabelProps={{ shrink: true }}
+              sx={{ minWidth: 170 }}
+            />
+            {policy.canEdit && (
+              <>
+                <Button
+                  size="small"
+                  variant="contained"
+                  onClick={() => handleSavePolicy(false)}
+                  disabled={savingPolicy || !goLiveInput || goLiveInput === toDateInput(policy.mandatoryFrom)}
+                >
+                  Save
+                </Button>
+                {policy.mandatoryFrom && (
+                  <Button size="small" color="inherit" onClick={() => handleSavePolicy(true)} disabled={savingPolicy}>
+                    Clear
+                  </Button>
+                )}
+              </>
+            )}
+          </Stack>
+        </Stack>
+        <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+          Anyone raising a document can pick any active cost center of the document's company (or a shared one with no company).
+          A department default only pre-fills the field.
+        </Typography>
+      </Paper>
 
       {/* Filter Toolbar */}
       <Paper variant="outlined" sx={{ p: 2, mb: 2.5, borderRadius: 2, bgcolor: '#ffffff' }}>
@@ -597,14 +756,19 @@ export default function GeneralCostCenters() {
                 <TableRow key={cc._id} hover>
                   <TableCell sx={{ fontFamily: 'monospace', fontWeight: 700 }}>{cc.code}</TableCell>
                   <TableCell>
-                    <Typography variant="body2" fontWeight={600}>{cc.name}</Typography>
+                    <Typography variant="body2" fontWeight={600}>
+                      {cc.name}
+                      {cc.isDepartmentDefault && (
+                        <Chip icon={<DefaultIcon sx={{ fontSize: 12 }} />} label="Dept default" size="small" color="primary" variant="outlined" sx={{ ml: 1, height: 18, fontSize: '0.65rem' }} />
+                      )}
+                    </Typography>
                     {cc.path && <Typography variant="caption" color="text.secondary">{cc.path}</Typography>}
                   </TableCell>
                   <TableCell>
                     <Stack spacing={0.2}>
-                      {cc.company && <Typography variant="caption" color="text.secondary">{cc.company.name}</Typography>}
+                      {ccCompanyNames(cc).length > 0 && <Typography variant="caption" color="text.secondary">{ccCompanyNames(cc).join(', ')}</Typography>}
                       {cc.project && <Typography variant="caption" color="text.secondary">{cc.project.name}</Typography>}
-                      {!cc.company && !cc.project && '—'}
+                      {!ccCompanyNames(cc).length && !cc.project && 'All companies'}
                     </Stack>
                   </TableCell>
                   <TableCell>{cc.department?.name || cc.departmentName || '—'}</TableCell>
@@ -716,13 +880,25 @@ export default function GeneralCostCenters() {
                 fullWidth
                 select
                 size="small"
-                label="Company"
-                value={formData.company}
-                onChange={(e) => setFormData({ ...formData, company: e.target.value })}
+                label="Companies"
+                value={formData.companies || []}
+                onChange={(e) => {
+                  const v = e.target.value;
+                  setFormData({ ...formData, companies: typeof v === 'string' ? v.split(',') : v });
+                }}
+                SelectProps={{
+                  multiple: true,
+                  displayEmpty: true,
+                  renderValue: (selected) => (selected.length
+                    ? companies.filter((c) => selected.includes(c._id)).map((c) => c.name).join(', ')
+                    : <em>All companies (shared)</em>)
+                }}
+                InputLabelProps={{ shrink: true }}
+                helperText="Pick one or more; leave empty to share with every company"
               >
-                <MenuItem value="">None</MenuItem>
                 {companies.map((comp) => (
                   <MenuItem key={comp._id} value={comp._id}>
+                    <Checkbox size="small" checked={(formData.companies || []).includes(comp._id)} sx={{ p: 0.5, mr: 1 }} />
                     {comp.name} {comp.code ? `(${comp.code})` : ''}
                   </MenuItem>
                 ))}
@@ -757,7 +933,12 @@ export default function GeneralCostCenters() {
                 value={formData.department}
                 onChange={(e) => {
                   const dept = departments.find((d) => (d._id || d.id) === e.target.value);
-                  setFormData({ ...formData, department: e.target.value, departmentName: dept?.name || '' });
+                  setFormData({
+                    ...formData,
+                    department: e.target.value,
+                    departmentName: dept?.name || '',
+                    isDepartmentDefault: e.target.value ? formData.isDepartmentDefault : false
+                  });
                 }}
               >
                 <MenuItem value="">None</MenuItem>
@@ -777,6 +958,27 @@ export default function GeneralCostCenters() {
                 value={formData.location}
                 onChange={(e) => setFormData({ ...formData, location: e.target.value })}
                 placeholder="e.g. Sector A, Floor 2"
+              />
+            </Grid>
+
+            <Grid item xs={12}>
+              <FormControlLabel
+                control={(
+                  <Checkbox
+                    size="small"
+                    checked={!!formData.isDepartmentDefault}
+                    disabled={!formData.department || formData.isActive === false}
+                    onChange={(e) => setFormData({ ...formData, isDepartmentDefault: e.target.checked })}
+                  />
+                )}
+                label={(
+                  <Box>
+                    <Typography variant="body2" fontWeight={600}>Default cost center for this department</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Indents, POs, cash approvals and bills raised by this department will pre-fill with it. Only one per department.
+                    </Typography>
+                  </Box>
+                )}
               />
             </Grid>
 
@@ -856,6 +1058,89 @@ export default function GeneralCostCenters() {
         </DialogActions>
       </Dialog>
 
+      {/* DEPARTMENT COVERAGE DIALOG */}
+      <Dialog open={coverageOpen} onClose={() => setCoverageOpen(false)} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ fontWeight: 700 }}>Department defaults (optional)</DialogTitle>
+        <DialogContent dividers>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+            Optional: a department's default pre-fills the cost center on documents it raises. People can still pick any
+            other cost center of the document's company.
+          </Typography>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ bgcolor: 'grey.100' }}>
+                  <TableCell sx={{ fontWeight: 700 }}>Department</TableCell>
+                  <TableCell sx={{ fontWeight: 700 }}>Status</TableCell>
+                  <TableCell sx={{ fontWeight: 700, width: '45%' }}>Default cost center</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {coverage.rows.length === 0 ? (
+                  <TableRow>
+                    <TableCell colSpan={3} align="center" sx={{ py: 4, color: 'text.secondary' }}>No active departments</TableCell>
+                  </TableRow>
+                ) : [...coverage.rows]
+                  .sort((a, b) => ['missing', 'choose', 'single', 'default'].indexOf(a.status) - ['missing', 'choose', 'single', 'default'].indexOf(b.status))
+                  .map((row) => {
+                    const meta = COVERAGE_STATUS[row.status];
+                    return (
+                      <TableRow key={row.department._id} hover>
+                        <TableCell>{row.department.name}</TableCell>
+                        <TableCell>
+                          <Chip label={meta.label} color={meta.color} size="small" variant={row.status === 'default' ? 'filled' : 'outlined'} />
+                        </TableCell>
+                        <TableCell>
+                          {row.costCenters.length === 0 ? (
+                            <Button
+                              size="small"
+                              startIcon={<AddIcon />}
+                              onClick={async () => {
+                                setCoverageOpen(false);
+                                await handleOpenCreate(null);
+                                setFormData((prev) => ({
+                                  ...prev,
+                                  name: row.department.name,
+                                  department: row.department._id,
+                                  departmentName: row.department.name,
+                                  isDepartmentDefault: true
+                                }));
+                              }}
+                            >
+                              Create cost center
+                            </Button>
+                          ) : (
+                            <TextField
+                              select
+                              fullWidth
+                              size="small"
+                              value={row.costCenters.find((c) => c.isDepartmentDefault)?._id || ''}
+                              onChange={(e) => handleMakeDefault(e.target.value)}
+                              disabled={!!coverageBusy}
+                              SelectProps={{ displayEmpty: true }}
+                              helperText={row.status === 'single' ? `Used automatically: ${row.defaultCostCenter?.code} — ${row.defaultCostCenter?.name}` : undefined}
+                            >
+                              <MenuItem value="" disabled>
+                                <em>{row.status === 'single' ? 'Mark as default (optional)' : 'Choose default…'}</em>
+                              </MenuItem>
+                              {row.costCenters.map((c) => (
+                                <MenuItem key={c._id} value={c._id}>{c.code} — {c.path || c.name}</MenuItem>
+                              ))}
+                            </TextField>
+                          )}
+                        </TableCell>
+                      </TableRow>
+                    );
+                  })}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setCoverageOpen(false)}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
       {/* VIEW DIALOG */}
       <Dialog open={viewDialog.open} onClose={() => setViewDialog({ open: false, data: null })} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 700 }}>Cost Center Details</DialogTitle>
@@ -876,8 +1161,8 @@ export default function GeneralCostCenters() {
               </Box>
               <Divider />
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
-                <Typography variant="body2" color="text.secondary">Company:</Typography>
-                <Typography variant="body2">{viewDialog.data.company?.name || '—'}</Typography>
+                <Typography variant="body2" color="text.secondary">Companies:</Typography>
+                <Typography variant="body2">{ccCompanyNames(viewDialog.data).join(', ') || 'All companies (shared)'}</Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body2" color="text.secondary">Project:</Typography>
@@ -885,7 +1170,10 @@ export default function GeneralCostCenters() {
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body2" color="text.secondary">Department:</Typography>
-                <Typography variant="body2">{viewDialog.data.department?.name || viewDialog.data.departmentName || '—'}</Typography>
+                <Typography variant="body2">
+                  {viewDialog.data.department?.name || viewDialog.data.departmentName || '—'}
+                  {viewDialog.data.isDepartmentDefault ? ' (department default)' : ''}
+                </Typography>
               </Box>
               <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
                 <Typography variant="body2" color="text.secondary">Location:</Typography>

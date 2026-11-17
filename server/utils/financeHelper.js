@@ -508,6 +508,7 @@ const FinanceHelper = {
       voucherWorkflowStatus: 'fully_approved',
       status: 'open',
       createdBy: createdBy || bill.createdBy,
+      storeCostCenter: bill.costCenter?._id || bill.costCenter || null,
       companyId: co(bill),
       payingCompanyId: meta.payingCompanyId || null
     });
@@ -962,6 +963,7 @@ const FinanceHelper = {
         duePaymentAmount: Math.round((Number(duePaymentAmount) || lineItems.reduce((s, li) => s + (Number(li.duePaymentAmount) || 0), 0)) * 100) / 100,
         status: statusOverride || 'approved',
         department,
+        costCenter: options.costCenter || null,
         module,
         referenceId,
         referenceType: referenceType,
@@ -2170,7 +2172,8 @@ const FinanceHelper = {
     companyId: optsCompanyId = null,
     payingCompanyId: optsPayingCompanyId = null,
     categoryLines = [],
-    costCenter = null
+    costCenter = null,
+    storeCostCenter = null
   }) => {
     const amount_ = Math.round((Number(amount) || 0) * 100) / 100;
     if (amount_ <= 0) throw new Error('Advance amount must be greater than zero');
@@ -2262,6 +2265,7 @@ const FinanceHelper = {
       department,
       module,
       costCenter: costCenter || null,
+      storeCostCenter: storeCostCenter || null,
       referenceType,
       referenceId,
       categoryLines: Array.isArray(categoryLines) ? categoryLines : [],

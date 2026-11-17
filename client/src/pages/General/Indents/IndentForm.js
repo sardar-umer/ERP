@@ -47,6 +47,7 @@ import dayjs from 'dayjs';
 import { compressImage } from '../../../utils/compressImage';
 import { resolveUploadFileHref } from '../../../utils/uploadPaths';
 import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
+import CostCenterSelect, { loadCostCenterPolicy } from '../../../components/CostCenter/CostCenterSelect';
 
 /** Catalog bucket for requests outside item master categories; requires categoryOtherDescription */
 const OTHERS_CATEGORY = 'Others';
@@ -114,6 +115,10 @@ const IndentForm = () => {
   const approverSearchDebounceRef = useRef(null);
 
   const [indentMeta, setIndentMeta] = useState({ status: null, approvalChain: [] });
+  const [costCenterPolicy, setCostCenterPolicy] = useState(null);
+  useEffect(() => {
+    loadCostCenterPolicy().then(setCostCenterPolicy).catch(() => setCostCenterPolicy(null));
+  }, []);
   const [approverSlots, setApproverSlots] = useState([null]);
   const [approverSearchOptions, setApproverSearchOptions] = useState([]);
   const [approverSearchLoading, setApproverSearchLoading] = useState(false);
@@ -132,6 +137,7 @@ const IndentForm = () => {
     requiredDate: '',
     indentNumber: '',
     department: '',
+    costCenter: '',
     companyId: '',
     originator: user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}` : '',
     items: [],
@@ -276,6 +282,7 @@ const IndentForm = () => {
             requiredDate: indent.requiredDate ? dayjs(indent.requiredDate).format('YYYY-MM-DD') : '',
             indentNumber: indent.indentNumber || '',
             department: indent.department?._id || '',
+            costCenter: indent.costCenter?._id || indent.costCenter || '',
             companyId: indent.companyId?._id || indent.companyId || '',
             originator: indent.requestedBy?.firstName && indent.requestedBy?.lastName 
               ? `${indent.requestedBy.firstName} ${indent.requestedBy.lastName}` 
@@ -600,6 +607,14 @@ const IndentForm = () => {
       setError('Department is required');
       return false;
     }
+    if (!formData.costCenter && costCenterPolicy?.mandatoryFrom) {
+      // Exempt only an indent that was created before the go-live date
+      const startedAt = isEdit && indentMeta.rawIndent?.createdAt ? new Date(indentMeta.rawIndent.createdAt) : new Date();
+      if (startedAt >= new Date(costCenterPolicy.mandatoryFrom)) {
+        setError('Cost center is required');
+        return false;
+      }
+    }
     if (!formData.requiredDate) {
       setError('Required date is required');
       return false;
@@ -755,6 +770,7 @@ const IndentForm = () => {
         requestedDate: formData.date,
         requiredDate: formData.requiredDate,
         department: formData.department,
+        costCenter: formData.costCenter || null,
         companyId: formData.companyId || undefined,
         priority: formData.priority,
         category: formData.category,
@@ -1023,6 +1039,17 @@ const IndentForm = () => {
                 ))}
               </Select>
             </FormControl>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <CostCenterSelect
+              size="small"
+              value={formData.costCenter}
+              companyId={formData.companyId}
+              departmentId={formData.department}
+              departments={departmentOptions}
+              onChange={(id) => handleChange('costCenter', id)}
+              helperText={formData.department ? undefined : 'Pick the department to pre-fill its cost center'}
+            />
           </Grid>
           <Grid item xs={12} sm={6} md={3}>
             <TextField

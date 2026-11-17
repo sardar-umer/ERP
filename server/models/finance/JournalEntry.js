@@ -311,6 +311,32 @@ journalEntrySchema.virtual('formattedTotalCredits').get(function() {
 });
 
 // Pre-save middleware to calculate totals and validate
+// Cost center tagging: a new voucher from a bill / cash approval / advance / GRN / PO / bill payment carries the
+// company's Finance cost center matching that document's store cost center (utils/costCenterLink). Never blocks.
+journalEntrySchema.pre('save', async function(next) {
+  try {
+    const linesMissing = (this.lines || []).some((l) => !l.costCenter);
+    // Receivables, payroll and depreciation never come from a payable document — skip their lookups
+    const untaggedTypes = ['invoice', 'receipt', 'payroll', 'depreciation'];
+    if (this.isNew && this.referenceId && this.companyId && (!this.costCenter || linesMissing)
+      && !untaggedTypes.includes(this.referenceType)) {
+      const { findSourceStoreCostCenter } = require('../../utils/costCenterPolicy');
+      const storeCostCenter = await findSourceStoreCostCenter(this.referenceId);
+      if (storeCostCenter) {
+        const { resolveFinanceCostCenter } = require('../../utils/costCenterLink');
+        const financeCostCenter = await resolveFinanceCostCenter(storeCostCenter, this.companyId);
+        if (financeCostCenter) {
+          if (!this.costCenter) this.costCenter = financeCostCenter;
+          (this.lines || []).forEach((l) => { if (!l.costCenter) l.costCenter = this.costCenter; });
+        }
+      }
+    }
+  } catch (err) {
+    console.warn('[JournalEntry] cost center tagging skipped:', err.message);
+  }
+  next();
+});
+
 journalEntrySchema.pre('save', async function(next) {
   try {
     // Account balances move only when an entry BECOMES posted — re-saving a posted entry (clearance,

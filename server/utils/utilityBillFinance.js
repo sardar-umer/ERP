@@ -428,6 +428,7 @@ const postUtilityBillToFinance = async (bill, createdByUserId) => {
       amount,
       duePaymentAmount: Math.round((Number(bill.duePaymentAmount) || lineItems.reduce((s, li) => s + (Number(li.duePaymentAmount) || 0), 0)) * 100) / 100,
       department: (bill.department ? String(bill.department).trim().toLowerCase() : 'admin'),
+      costCenter: bill.costCenter?._id || bill.costCenter || null,
       module: (bill.department ? String(bill.department).trim().toLowerCase() : 'admin'),
       referenceId: bill._id,
       referenceType: 'utility_bill',

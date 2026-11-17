@@ -62,6 +62,7 @@ import { fetchFinanceAuthorityCandidates } from '../../services/financeApprovalA
 
 import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice';
 import toast from 'react-hot-toast';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 // Default finance voucher signatories (same as Bill Payment / vendor bill form)
@@ -167,7 +168,6 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     paymentDate: new Date().toISOString().split('T')[0],
     costCenter: ''
   });
-  const [costCenters, setCostCenters] = useState([]);
   const [finAuth, setFinAuth] = useState({
     accountsManagerUser: null,
     financeControllerUser: null
@@ -407,14 +407,6 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     }
   }, []);
 
-  // Same cost center list as bill payments
-  useEffect(() => {
-    let cancelled = false;
-    api.get('/finance/cost-centers')
-      .then((res) => { if (!cancelled && res.data?.success) setCostCenters(res.data.data || []); })
-      .catch(() => {});
-    return () => { cancelled = true; };
-  }, []);
 
   useEffect(() => {
     loadVendors();
@@ -854,8 +846,16 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
         companyId: originalCompanyId,
         payingCompanyId: effectivePayingCompanyId,
         categoryLines: validCategoryLines,
-        costCenter: form.costCenter || null
+        // Store cost center; the server matches it to this company's Finance cost center for the voucher
+        storeCostCenter: (selectedPo?.costCenter?._id || selectedPo?.costCenter) || form.costCenter || null
       };
+      if (!body.storeCostCenter) {
+        const policy = await loadCostCenterPolicy().catch(() => null);
+        if (isCostCenterRequiredNow(policy)) {
+          toast.error('Cost center is required');
+          return;
+        }
+      }
       const res = await api.post('/finance/accounts-payable/advance-payment', body);
       if (res.data?.success) {
         toast.success(res.data.message || 'Vendor advance recorded');
@@ -1403,22 +1403,13 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
                   placeholder="Narration / notes or leave blank to auto-generate"
                 />
                 <Box sx={{ mt: 2 }}>
-                  <FormControl fullWidth size="small">
-                  <InputLabel id="vendor-advance-cost-center-label">Cost Center (Optional)</InputLabel>
-                  <Select
-                    labelId="vendor-advance-cost-center-label"
-                    value={form.costCenter}
-                    label="Cost Center (Optional)"
-                    onChange={(e) => setForm((f) => ({ ...f, costCenter: e.target.value }))}
-                  >
-                    <MenuItem value="">None</MenuItem>
-                    {costCenters.filter((cc) => cc.isActive).map((cc) => (
-                      <MenuItem key={cc._id} value={cc._id}>
-                        {cc.code ? `${cc.code} — ${cc.name}` : cc.name}
-                      </MenuItem>
-                    ))}
-                  </Select>
-                </FormControl>
+                  <CostCenterSelect
+                    size="small"
+                    value={selectedPo?.costCenter ? selectedPo.costCenter : form.costCenter}
+                    companyId={originalCompanyId}
+                    lockedReason={selectedPo?.costCenter ? `Copied from PO ${selectedPo.orderNumber || ''}`.trim() : ''}
+                    onChange={(id) => setForm((f) => ({ ...f, costCenter: id }))}
+                  />
                 </Box>
               </Grid>
               <Grid item xs={12} md={6}>

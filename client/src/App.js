@@ -40,7 +40,6 @@ import AttendanceReport from './pages/HR/AttendanceReport';
 import BiometricIntegration from './pages/HR/BiometricIntegration';
 import FinanceDashboard from './pages/Finance/FinanceDashboard';
 import ChartOfAccounts from './pages/Finance/ChartOfAccounts';
-import FinanceCostCenters from './pages/Finance/Setup/CostCenters';
 import BankingSetup from './pages/Finance/BankingSetup';
 import GeneralLedger from './pages/Finance/GeneralLedger';
 import AccountsReceivable from './pages/Finance/AccountsReceivable';
@@ -253,7 +252,6 @@ import WbsActivities from './pages/General/WbsActivities';
 import SlabSchedules from './pages/General/SlabSchedules';
 import ProjectApprovals from './pages/General/ProjectApprovals';
 import SubcontractorStatement from './pages/General/SubcontractorStatement';
-import GeneralCostCenters from './pages/General/CostCenters/GeneralCostCenters';
 import PresidentSecretariatDashboard from './pages/General/PresidentSecretariat/Dashboard';
 import PresidentDashboard from './pages/General/PresidentDashboard';
 import { PresidentOnly } from './pages/Dashboard/HomeDashboard';
@@ -956,7 +954,7 @@ function App() {
                     />
                     <Route
                       path="/general/cost-centers"
-                      element={<ProtectedRoute><GeneralCostCenters /></ProtectedRoute>}
+                      element={<Navigate to="/procurement/store/cost-center" replace />}
                     />
 
                     {/* Developer Module Routes */}
@@ -1225,7 +1223,7 @@ function App() {
                     />
                     <Route
                       path="/finance/cost-centers"
-                      element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><FinanceCostCenters /></ProtectedRoute>}
+                      element={<Navigate to="/procurement/store/cost-center" replace />}
                     />
                     <Route
                       path="/finance/banking-setup"

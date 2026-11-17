@@ -1373,6 +1373,12 @@ const GoodsReceive = () => {
                   <Typography variant="body2">{viewDialog.data.currency || 'Rupees'}</Typography>
                   <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>P.O No.</Typography>
                   <Typography variant="body2">{viewDialog.data.poNumber || viewDialog.data.purchaseOrder?.orderNumber || '—'}</Typography>
+                  <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Cost Center</Typography>
+                  <Typography variant="body2">
+                    {viewDialog.data.costCenter && typeof viewDialog.data.costCenter === 'object'
+                      ? `${viewDialog.data.costCenter.code} — ${viewDialog.data.costCenter.path || viewDialog.data.costCenter.name}`
+                      : '—'}
+                  </Typography>
                   {viewDialog.data.deliveryChallan && (
                     <>
                       <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Delivery challan</Typography>

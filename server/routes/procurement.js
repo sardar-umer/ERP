@@ -22,6 +22,8 @@ const GoodsIssue = require('../models/procurement/GoodsIssue');
 const StockTransaction = require('../models/procurement/StockTransaction');
 const StockQuant = require('../models/procurement/StockQuant');
 const CostCenter = require('../models/procurement/CostCenter');
+const costCenterPolicy = require('../utils/costCenterPolicy');
+const { syncFinanceCopies, deactivateFinanceCopies } = require('../utils/costCenterLink');
 const Quotation = require('../models/procurement/Quotation');
 const QuotationInvitation = require('../models/procurement/QuotationInvitation');
 const Indent = require('../models/general/Indent');
@@ -750,9 +752,10 @@ const canViewQuotationsByIndentRead = (user, indent) => {
 const purchaseOrderIndentPopulate = {
   path: 'indent',
   select:
-    'indentNumber title erpRef requestedDate requiredDate department requestedBy items notes companyId comparativeStatementApprovals comparativeApproval comparativeApprovals splitPOAssignments approvalChain justification signatures attachments storeRoutingStatus movedToProcurementReason movedToProcurementAt movedToProcurementBy',
+    'indentNumber title erpRef requestedDate requiredDate department costCenter requestedBy items notes companyId comparativeStatementApprovals comparativeApproval comparativeApprovals splitPOAssignments approvalChain justification signatures attachments storeRoutingStatus movedToProcurementReason movedToProcurementAt movedToProcurementBy',
   populate: [
     { path: 'department', select: 'name code' },
+    { path: 'costCenter', select: 'code name path' },
     { path: 'companyId', select: 'name code symbol' },
     { path: 'requestedBy', select: 'firstName lastName email digitalSignature' },
     { path: 'movedToProcurementBy', select: 'firstName lastName email' },
@@ -4942,6 +4945,7 @@ router.get('/goods-receive/:id',
   asyncHandler(async (req, res) => {
     const receive = await GoodsReceive.findById(req.params.id)
       .populate('supplier', 'name contactPerson email phone supplierId address')
+      .populate('costCenter', 'code name path')
       .populate({ path: 'purchaseOrder', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('deliveryChallan', 'dcNumber gatePassNo status qaStatus')
       .populate('items.inventoryItem')
@@ -7247,6 +7251,95 @@ router.get('/cost-centers/next-code',
   })
 );
 
+// ==================== COST CENTER POLICY (mandatory cost center, Nov 2026) ====================
+const COST_CENTER_MANAGER_ROLES = ['super_admin', 'admin', 'procurement_manager', 'hr_manager', 'finance_manager'];
+
+/** Companies picked for a cost center: array (or JSON / comma list), falling back to the older single `company` */
+const parseCostCenterCompanies = (raw, single = null) => {
+  let list = raw;
+  if (typeof list === 'string') {
+    try { list = JSON.parse(list); } catch { list = list.split(','); }
+  }
+  if (!Array.isArray(list)) list = single ? [single] : [];
+  return [...new Set(list.map((v) => String(v?._id || v || '').trim())
+    .filter((v) => mongoose.Types.ObjectId.isValid(v)))];
+};
+const COST_CENTER_GO_LIVE_ROLES = ['super_admin', 'admin', 'finance_manager'];
+
+// @route   GET /api/procurement/cost-centers/policy
+// @desc    Go-live date from which payable documents must carry a cost center (null = not live)
+// @access  Private (any signed-in user — forms need it to know whether the field is required)
+router.get('/cost-centers/policy',
+  asyncHandler(async (req, res) => {
+    const policy = await costCenterPolicy.getCostCenterMandatoryFrom();
+    res.json({
+      success: true,
+      data: { ...policy, canEdit: COST_CENTER_GO_LIVE_ROLES.includes(req.user?.role) }
+    });
+  })
+);
+
+// @route   PUT /api/procurement/cost-centers/policy
+// @desc    Set or clear the cost center go-live date. Body: { mandatoryFrom: 'YYYY-MM-DD' | null }
+// @access  Private (Finance / admin)
+router.put('/cost-centers/policy',
+  authorize(...COST_CENTER_GO_LIVE_ROLES),
+  asyncHandler(async (req, res) => {
+    const date = await costCenterPolicy.setCostCenterMandatoryFrom(req.body?.mandatoryFrom || null, req.user.id);
+    const policy = await costCenterPolicy.getCostCenterMandatoryFrom();
+    res.json({
+      success: true,
+      message: date ? 'Cost center go-live date saved' : 'Cost center go-live date cleared',
+      data: { ...policy, canEdit: true }
+    });
+  })
+);
+
+// @route   GET /api/procurement/cost-centers/department-coverage
+// @desc    Every active department with its default cost center, flagging departments that have none
+// @access  Private
+router.get('/cost-centers/department-coverage',
+  authorize(...COST_CENTER_MANAGER_ROLES),
+  asyncHandler(async (req, res) => {
+    const coverage = await costCenterPolicy.getDepartmentCoverage();
+    res.json({ success: true, data: coverage });
+  })
+);
+
+// @route   GET /api/procurement/cost-centers/options
+// @desc    Active cost centers for document dropdowns (indent, PO, cash approval, bills)
+// @access  Private (any signed-in user)
+router.get('/cost-centers/options',
+  asyncHandler(async (req, res) => {
+    const options = await costCenterPolicy.listCostCenterOptions();
+    res.json({
+      success: true,
+      data: { costCenters: options, canCreate: COST_CENTER_MANAGER_ROLES.includes(req.user?.role) }
+    });
+  })
+);
+
+// @route   GET /api/procurement/cost-centers/department-default/:departmentId
+// @desc    The cost center documents raised by this department pre-fill with (null when none)
+// @access  Private (any signed-in user — used to pre-fill forms)
+router.get('/cost-centers/department-default/:departmentId',
+  asyncHandler(async (req, res) => {
+    const costCenter = await costCenterPolicy.getDepartmentDefaultCostCenter(req.params.departmentId);
+    res.json({ success: true, data: costCenter });
+  })
+);
+
+// @route   PUT /api/procurement/cost-centers/:id/make-department-default
+// @desc    Make this cost center its department's default (the previous default is unset)
+// @access  Private
+router.put('/cost-centers/:id/make-department-default',
+  authorize(...COST_CENTER_MANAGER_ROLES),
+  asyncHandler(async (req, res) => {
+    const cc = await costCenterPolicy.makeDepartmentDefault(req.params.id, req.user.id);
+    res.json({ success: true, message: `${cc.code} — ${cc.name} is now the department default`, data: cc });
+  })
+);
+
 // @route   GET /api/procurement/cost-centers
 // @desc    Get all cost centers (flat with pagination or full tree)
 // @access  Private
@@ -7263,7 +7356,7 @@ router.get('/cost-centers',
       query.department = department;
     }
     if (company) {
-      query.company = company;
+      query.$and = [...(query.$and || []), { $or: [{ companies: company }, { company }] }];
     }
     if (project) {
       query.project = project;
@@ -7283,6 +7376,7 @@ router.get('/cost-centers',
         .populate('manager', 'firstName lastName email name')
         .populate('department', 'name code')
         .populate('company', 'name code companyCode')
+        .populate('companies', 'name code companyCode')
         .populate('project', 'name code')
         .populate('parent', 'name code path')
         .sort({ level: 1, name: 1 })
@@ -7301,6 +7395,7 @@ router.get('/cost-centers',
       .populate('manager', 'firstName lastName email name')
       .populate('department', 'name code')
       .populate('company', 'name code companyCode')
+      .populate('companies', 'name code companyCode')
       .populate('project', 'name code')
       .populate('parent', 'name code path')
       .sort({ path: 1, code: 1 })
@@ -7335,6 +7430,7 @@ router.get('/cost-centers/:id',
       .populate('manager', 'firstName lastName email name')
       .populate('department', 'name code')
       .populate('company', 'name code companyCode')
+      .populate('companies', 'name code companyCode')
       .populate('project', 'name code')
       .populate('parent', 'name code path')
       .populate('createdBy', 'firstName lastName')
@@ -7366,19 +7462,40 @@ router.post('/cost-centers',
     const {
       code, name, description, parent, company, project,
       department, departmentName, location, manager, managerName,
-      budget, budgetPeriod, isActive, notes
+      budget, budgetPeriod, isActive, notes, isDepartmentDefault
     } = req.body;
-    
+
     const existingCode = await CostCenter.findOne({ code: code.toUpperCase() });
     if (existingCode) {
       return res.status(400).json({ success: false, message: 'Cost center code already exists' });
     }
-    
+
     const parentId = parent && parent.trim() !== '' ? parent : null;
+    const sameName = await CostCenter.findOne({
+      parent: parentId,
+      name: { $regex: `^${name.trim().replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}$`, $options: 'i' }
+    }).select('code name').lean();
+    if (sameName) {
+      return res.status(400).json({
+        success: false,
+        message: `A cost center named "${sameName.name}" already exists (${sameName.code}). Use that one instead.`
+      });
+    }
     const { level, path } = await computeCostCenterHierarchy(parentId, name.trim());
 
     const deptId = department && department.trim() !== '' ? department : null;
+    const wantsDefault = isDepartmentDefault === true || isDepartmentDefault === 'true';
+    if (wantsDefault) {
+      if (!deptId) {
+        return res.status(400).json({ success: false, message: 'Pick a department to make this its default cost center' });
+      }
+      if (isActive === false) {
+        return res.status(400).json({ success: false, message: 'An inactive cost center cannot be a department default' });
+      }
+      await costCenterPolicy.assertDepartmentDefaultFree(deptId);
+    }
     const companyId = company && company.trim() !== '' ? company : null;
+    const companyIds = parseCostCenterCompanies(req.body.companies, companyId);
     const projectId = project && project.trim() !== '' ? project : null;
     const managerId = manager && manager.trim() !== '' ? manager : null;
     
@@ -7387,12 +7504,14 @@ router.post('/cost-centers',
       name: name.trim(),
       description,
       parent: parentId,
-      company: companyId,
+      companies: companyIds,
+      company: companyIds[0] || null,
       project: projectId,
       level,
       path,
       department: deptId,
       departmentName: departmentName || '',
+      isDepartmentDefault: wantsDefault,
       location,
       manager: managerId,
       managerName: managerName || '',
@@ -7404,9 +7523,11 @@ router.post('/cost-centers',
     });
     
     await costCenter.save();
+    await syncFinanceCopies(costCenter._id);
     await costCenter.populate('manager', 'firstName lastName name');
     await costCenter.populate('department', 'name code');
     await costCenter.populate('company', 'name code companyCode');
+    await costCenter.populate('companies', 'name code companyCode');
     await costCenter.populate('project', 'name code');
     await costCenter.populate('parent', 'name code path');
     
@@ -7433,9 +7554,9 @@ router.put('/cost-centers/:id',
     const {
       code, name, description, parent, company, project,
       department, departmentName, location, manager, managerName,
-      budget, budgetPeriod, isActive, notes
+      budget, budgetPeriod, isActive, notes, isDepartmentDefault
     } = req.body;
-    
+
     if (code && code.toUpperCase() !== costCenter.code) {
       const existingCode = await CostCenter.findOne({ code: code.toUpperCase() });
       if (existingCode) {
@@ -7470,7 +7591,11 @@ router.put('/cost-centers/:id',
     costCenter.level = level;
     costCenter.path = path;
 
-    if (company !== undefined) costCenter.company = company && company.trim() !== '' ? company : null;
+    if (req.body.companies !== undefined) {
+      costCenter.companies = parseCostCenterCompanies(req.body.companies, null);
+    } else if (company !== undefined) {
+      costCenter.companies = company && company.trim() !== '' ? [company] : [];
+    }
     if (project !== undefined) costCenter.project = project && project.trim() !== '' ? project : null;
     if (department !== undefined) costCenter.department = department && department.trim() !== '' ? department : null;
     if (departmentName !== undefined) costCenter.departmentName = departmentName;
@@ -7481,12 +7606,22 @@ router.put('/cost-centers/:id',
     if (budgetPeriod) costCenter.budgetPeriod = budgetPeriod;
     if (isActive !== undefined) costCenter.isActive = isActive;
     if (notes !== undefined) costCenter.notes = notes;
+    if (isDepartmentDefault !== undefined) {
+      costCenter.isDepartmentDefault = isDepartmentDefault === true || isDepartmentDefault === 'true';
+    }
+    // A default needs a department and must be active; otherwise it quietly stops being the default
+    if (!costCenter.department || !costCenter.isActive) costCenter.isDepartmentDefault = false;
+    if (costCenter.isDepartmentDefault) {
+      await costCenterPolicy.assertDepartmentDefaultFree(costCenter.department, costCenter._id);
+    }
     costCenter.updatedBy = req.user.id;
-    
+
     await costCenter.save();
+    await syncFinanceCopies(costCenter._id);
     await costCenter.populate('manager', 'firstName lastName name');
     await costCenter.populate('department', 'name code');
     await costCenter.populate('company', 'name code companyCode');
+    await costCenter.populate('companies', 'name code companyCode');
     await costCenter.populate('project', 'name code');
     await costCenter.populate('parent', 'name code path');
     
@@ -7530,6 +7665,7 @@ router.delete('/cost-centers/:id',
       });
     }
     
+    await deactivateFinanceCopies(costCenter);
     await CostCenter.findByIdAndDelete(req.params.id);
     
     res.json({
@@ -9184,9 +9320,10 @@ router.get('/quotations/:id',
     const quotation = await Quotation.findById(req.params.id)
       .populate({
         path: 'indent',
-        select: 'indentNumber title items erpRef requestedDate requiredDate department requestedBy justification signatures comparativeStatementApprovals comparativeApproval',
+        select: 'indentNumber title items erpRef requestedDate requiredDate department costCenter requestedBy justification signatures comparativeStatementApprovals comparativeApproval',
         populate: [
           { path: 'department', select: 'name code' },
+          { path: 'costCenter', select: 'code name path' },
           { path: 'requestedBy', select: 'firstName lastName email' },
           { path: 'comparativeApproval.rejectionObservations.rejectedBy', select: 'firstName lastName email' }
         ]

@@ -359,9 +359,10 @@ const Payroll = () => {
         acc[key].totalEmployees++;
         // Same Gross as the monthly PDF / Excel export (Total Earn, full before any salary cut)
         acc[key].totalGrossSalary += payrollExportGross(payroll);
-        // Match monthly CSV Net Payable: exclude attendance deduction from net
+        // Match monthly CSV Net Payable: exclude attendance deduction from net, and round each employee
+        // to whole rupees before adding (the export does the same), so the totals agree to the rupee
         acc[key].totalNetSalary +=
-          (payroll.netSalary || 0) + (payroll.attendanceDeduction || 0);
+          Math.round((payroll.netSalary || 0) + (payroll.attendanceDeduction || 0));
         acc[key].totalBasicSalary += payroll.basicSalary || 0;
         acc[key].statuses.add(payroll.status);
         return acc;

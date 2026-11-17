@@ -178,6 +178,7 @@ function mergeLineUploadsIntoBillLines(files, billData) {
 }
 
 const populateUtilityBill = (query) => query
+  .populate('costCenter', 'code name path')
   .populate('createdBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
   .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature approvalStamp')
   .populate('draftApproverIds', 'firstName lastName email employeeId digitalSignature approvalStamp')
@@ -202,6 +203,7 @@ const populateUtilityBill = (query) => query
 
 const populateUtilityBillDocument = async (bill) => {
   await bill.populate([
+    { path: 'costCenter', select: 'code name path' },
     { path: 'createdBy', select: 'firstName lastName email employeeId digitalSignature approvalStamp' },
     { path: 'approvalChain.approver', select: 'firstName lastName email employeeId digitalSignature approvalStamp' },
     { path: 'draftApproverIds', select: 'firstName lastName email employeeId digitalSignature approvalStamp' },
@@ -1111,6 +1113,15 @@ router.post('/', upload.any(), requireBillPermission('create'), async (req, res)
       });
     }
 
+    // Cost center: required on bills created from the go-live date (utils/costCenterPolicy)
+    if (!billData.costCenter || billData.costCenter === 'null') billData.costCenter = null;
+    if (!billData.costCenter) {
+      const { isCostCenterMandatory } = require('../utils/costCenterPolicy');
+      if (await isCostCenterMandatory(new Date())) {
+        return res.status(400).json({ success: false, message: 'Cost center is required' });
+      }
+    }
+
     const bill = new UtilityBill(billData);
     if (Array.isArray(bill.billLines) && bill.billLines.length) {
       bill.markModified('billLines');
@@ -1133,6 +1144,9 @@ router.post('/', upload.any(), requireBillPermission('create'), async (req, res)
         success: false,
         message: 'Bill ID already exists'
       });
+    }
+    if (error.statusCode === 400) {
+      return res.status(400).json({ success: false, message: error.message });
     }
     console.error('Error creating utility bill:', error);
     const message =
@@ -1278,6 +1292,17 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
     delete updateData.duplicateReason;
     delete updateData.duplicateConfirmation;
 
+    if (Object.prototype.hasOwnProperty.call(updateData, 'costCenter')) {
+      if (!updateData.costCenter || updateData.costCenter === 'null') updateData.costCenter = null;
+      if (!updateData.costCenter) {
+        // Bills created before go-live stay exempt; newer ones cannot drop their cost center
+        const { isCostCenterMandatory } = require('../utils/costCenterPolicy');
+        if (await isCostCenterMandatory(bill.createdAt || new Date())) {
+          return res.status(400).json({ success: false, message: 'Cost center is required' });
+        }
+      }
+    }
+
     const { billLines, ...scalarUpdate } = updateData;
     Object.keys(scalarUpdate).forEach((key) => {
       if (key.startsWith('existingLineAttachments_')) return;
@@ -1314,6 +1339,9 @@ router.put('/:id', upload.any(), requireBillPermission('update'), async (req, re
         success: false,
         message: 'Bill ID already exists'
       });
+    }
+    if (error.statusCode === 400) {
+      return res.status(400).json({ success: false, message: error.message });
     }
     console.error('Error updating utility bill:', error);
     res.status(500).json({ success: false, message: 'Failed to update utility bill' });

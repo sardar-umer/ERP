@@ -702,7 +702,7 @@ export const MODULES = {
         path: '/finance/accounts',
         subItems: [
           { name: 'Chart of Accounts',    path: '/finance/accounts'               },
-          { name: 'Cost Centers',         path: '/finance/cost-centers'           },
+          { name: 'Cost Centers',         path: '/finance/cost-centers'           }, // opens the Store page
           { name: 'Tax Management',       path: '/finance/taxes'                  },
           { name: 'Finance Journals',     path: '/finance/journals'               },
           { name: 'Fiscal Periods',       path: '/finance/fiscal-periods'         },
@@ -1065,8 +1065,7 @@ export const MODULES = {
         subItems: [
           { name: 'Dashboard', path: '/general/indents/dashboard' },
           { name: 'All Indents', path: '/general/indents' },
-          { name: 'Create Indent', path: '/general/indents/create' },
-          { name: 'Cost Centers', path: '/general/cost-centers' }
+          { name: 'Create Indent', path: '/general/indents/create' }
         ]
       },
       {
@@ -1442,6 +1441,10 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
 
   // Finance approvals — the API lists only documents where the user is a finance authority
   if (path === '/finance/approvals') return true;
+
+  // The one Cost Centers page (Store) — also for Finance / HR managers, who manage cost centers without Procurement access
+  if (path === '/procurement/store/cost-center'
+    && ['admin', 'finance_manager', 'procurement_manager', 'hr_manager'].includes(userRole)) return true;
   
   // Super Admin, Higher Management, and Developer have access to everything
   if (userRole === 'super_admin' || userRole === 'higher_management' || userRole === 'developer') {

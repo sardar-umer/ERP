@@ -49,6 +49,7 @@ import MainCostReport from '../../components/ProjectManagement/MainCostReport';
 import ProjectProcurementTab from '../../components/ProjectManagement/ProjectProcurementTab';
 import { ContractTypeTag } from '../../components/ProjectManagement/mainProjectUi';
 import { useAuth } from '../../contexts/AuthContext';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 /** Segregated budget groups for Sub project category allocation */
@@ -179,7 +180,7 @@ const BOQTab = ({ projectId, project }) => {
   const [vendors, setVendors] = useState([]);
   const [vendorsLoading, setVendorsLoading] = useState(false);
   const [poItems, setPoItems] = useState([]);
-  const [poForm, setPoForm] = useState({ vendorId: '', expectedDeliveryDate: '', deliveryAddress: '', notes: '' });
+  const [poForm, setPoForm] = useState({ vendorId: '', expectedDeliveryDate: '', deliveryAddress: '', notes: '', costCenter: '' });
 
   // POs already created for this project
   const [projectPOs, setProjectPOs] = useState([]);
@@ -254,7 +255,7 @@ const BOQTab = ({ projectId, project }) => {
         specification: i.specification || ''
       }))
     );
-    setPoForm({ vendorId: '', expectedDeliveryDate: '', deliveryAddress: '', notes: '' });
+    setPoForm({ vendorId: '', expectedDeliveryDate: '', deliveryAddress: '', notes: '', costCenter: '' });
   };
 
   const setPoItemField = (idx, field) => (e) => {
@@ -268,6 +269,10 @@ const BOQTab = ({ projectId, project }) => {
   const handleSubmitPO = async () => {
     if (!poForm.vendorId) { setError('Please select a vendor'); return; }
     if (!poForm.expectedDeliveryDate) { setError('Please set expected delivery date'); return; }
+    if (!poForm.costCenter) {
+      const policy = await loadCostCenterPolicy().catch(() => null);
+      if (isCostCenterRequiredNow(policy)) { setError('Cost center is required'); return; }
+    }
     if (poItems.some(i => !i.quantity || Number(i.quantity) <= 0)) {
       setError('All items must have a quantity greater than 0'); return;
     }
@@ -278,6 +283,7 @@ const BOQTab = ({ projectId, project }) => {
         expectedDeliveryDate: poForm.expectedDeliveryDate,
         deliveryAddress: poForm.deliveryAddress,
         notes: poForm.notes,
+        costCenter: poForm.costCenter || null,
         items: poItems.map(i => ({
           boqItemId: i.boqItemId,
           description: i.description,
@@ -1220,6 +1226,12 @@ const BOQTab = ({ projectId, project }) => {
                 fullWidth label="Delivery Address"
                 value={poForm.deliveryAddress}
                 onChange={e => setPoForm(p => ({ ...p, deliveryAddress: e.target.value }))}
+              />
+            </Grid>
+            <Grid item xs={12}>
+              <CostCenterSelect
+                value={poForm.costCenter}
+                onChange={(id) => setPoForm(p => ({ ...p, costCenter: id }))}
               />
             </Grid>
 

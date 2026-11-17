@@ -69,6 +69,7 @@ import {
   storeItemMatchesBillKind
 } from '../../../utils/centralizedStoreBillKind';
 import CentralizedStoreAddItemDialog from '../../../components/UtilityBill/CentralizedStoreAddItemDialog';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../../components/CostCenter/CostCenterSelect';
 
 const userDisplayName = (user) => {
   if (!user) return '';
@@ -327,6 +328,7 @@ const UtilityBillForm = () => {
     notes: '',
     location: 'Main Office',
     department: '',
+    costCenter: '',
     custodian: 'Lt.Col.Safeer Ahmed'
   });
 
@@ -826,6 +828,7 @@ const UtilityBillForm = () => {
         notes: bill.notes || '',
         location: bill.location || 'Main Office',
         department: bill.department || '',
+        costCenter: bill.costCenter?._id || bill.costCenter || '',
         custodian: bill.custodian || ''
       });
 
@@ -1036,6 +1039,14 @@ const UtilityBillForm = () => {
       }
     }
     
+    if (!isEdit && !formData.costCenter) {
+      const policy = await loadCostCenterPolicy().catch(() => null);
+      if (isCostCenterRequiredNow(policy)) {
+        setError('Cost center is required');
+        return;
+      }
+    }
+
     try {
       setLoading(true);
       setError(null);
@@ -1393,6 +1404,19 @@ const UtilityBillForm = () => {
                     </Link>
                   )}
                 </Stack>
+              </Grid>
+
+              <Grid item xs={12} md={6}>
+                <CostCenterSelect
+                  value={formData.costCenter}
+                  companyId={(() => {
+                    // Bills are charged to the company named in their site (first line's site on store bills)
+                    const site = String(((useStoreBill || isCentralizedStoreBill) ? billLines[0]?.site : formData.site) || '')
+                      .trim().toLowerCase();
+                    return (companiesList || []).find((c) => String(c?.name || '').trim().toLowerCase() === site)?._id;
+                  })()}
+                  onChange={(id) => setFormData((prev) => ({ ...prev, costCenter: id }))}
+                />
               </Grid>
 
               {(useStoreBill || isCentralizedStoreBill) && (

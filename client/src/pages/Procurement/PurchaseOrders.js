@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback, useRef, useMemo } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   Box,
   Typography,
@@ -82,6 +82,7 @@ import {
 } from '../../components/Procurement/PurchaseOrderAttachments';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
+import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
@@ -198,7 +199,7 @@ const PurchaseOrders = () => {
   const [purchaseOrders, setPurchaseOrders] = useState([]);
   const [statistics, setStatistics] = useState(null);
   const [vendors, setVendors] = useState([]);
-  const [costCenters, setCostCenters] = useState([]);
+  const [costCenterPolicy, setCostCenterPolicy] = useState(null);
   const [companies, setCompanies] = useState([]);
   
   // Pagination and filters
@@ -288,14 +289,13 @@ const PurchaseOrders = () => {
     costCenter: ''
   });
 
-  // Filter cost centers based on selected company in form (or show all if no company selected)
-  const filteredCostCenters = useMemo(() => {
-    if (!formData.company) return costCenters;
-    return costCenters.filter((cc) => {
-      const ccCompanyId = cc.company?._id || cc.company;
-      return !ccCompanyId || String(ccCompanyId) === String(formData.company);
-    });
-  }, [costCenters, formData.company]);
+  // A PO from an indent carries the indent's cost center; the server enforces the same
+  const poIndentCostCenter = formDialog.mode === 'edit'
+    ? formDialog.data?.indent?.costCenter
+    : formDialog.indentCostCenter;
+  const poCostCenterLock = poIndentCostCenter
+    ? `Copied from indent ${formDialog.mode === 'edit' ? (formDialog.data?.indent?.indentNumber || '') : (formDialog.indentNumber || '')}`.trim()
+    : '';
 
   // Prefilled quotation tracking info
   const [quotationPrefillInfo, setQuotationPrefillInfo] = useState(null);
@@ -371,7 +371,14 @@ const PurchaseOrders = () => {
           avpTaj: approvals.avpTaj || approvals.authorisedRep || '',
           technicalDepartment: approvals.technicalDepartment || ''
         });
-        setFormDialog({ open: true, mode: 'create', data: null, quotationId });
+        setFormDialog({
+          open: true,
+          mode: 'create',
+          data: null,
+          quotationId,
+          indentCostCenter: q.indent?.costCenter || null,
+          indentNumber: q.indent?.indentNumber || ''
+        });
       } catch (err) {
         console.error('Failed to load quotation for PO', err);
         setError(err.response?.data?.message || 'Failed to load quotation');
@@ -429,14 +436,11 @@ const PurchaseOrders = () => {
     }
   }, []);
 
-  const loadCostCenters = useCallback(async () => {
+  const loadCostCenterPolicyState = useCallback(async () => {
     try {
-      const response = await api.get('/procurement/cost-centers', { params: { limit: 1000, isActive: true } });
-      if (response.data.success) {
-        setCostCenters(response.data.data.costCenters || []);
-      }
+      setCostCenterPolicy(await loadCostCenterPolicy());
     } catch (err) {
-      console.error('Error loading cost centers:', err);
+      console.error('Error loading cost center policy:', err);
     }
   }, []);
 
@@ -458,9 +462,9 @@ const PurchaseOrders = () => {
   useEffect(() => {
     loadStatistics();
     loadVendors();
-    loadCostCenters();
+    loadCostCenterPolicyState();
     loadCompanies();
-  }, [loadStatistics, loadVendors, loadCostCenters, loadCompanies]);
+  }, [loadStatistics, loadVendors, loadCostCenterPolicyState, loadCompanies]);
 
   const handleCreate = () => {
     setApprovalAuthority({
@@ -711,6 +715,13 @@ const PurchaseOrders = () => {
         return;
       }
       payload.items = validItems;
+
+      if (formDialog.mode === 'create' && !poCostCenterLock && !payload.costCenter && isCostCenterRequiredNow(costCenterPolicy)) {
+        setError('Cost center is required');
+        setLoading(false);
+        return;
+      }
+      if (!payload.costCenter) payload.costCenter = null;
 
       // When editing, ensure status is handled properly
       if (formDialog.mode === 'edit' && formDialog.data) {
@@ -1444,7 +1455,6 @@ const PurchaseOrders = () => {
                 value={formData.company || ''}
                 onChange={(e) => setFormData({ ...formData, company: e.target.value })}
                 disabled={formDialog.mode === 'edit' && formDialog.data?.status === 'Rejected'}
-                helperText="Filters available cost centers"
               >
                 <MenuItem value=""><em>All / General</em></MenuItem>
                 {companies.map((comp) => (
@@ -1455,21 +1465,13 @@ const PurchaseOrders = () => {
               </TextField>
             </Grid>
             <Grid item xs={12} md={6}>
-              <TextField
-                fullWidth
-                select
-                label="Cost Center"
-                value={formData.costCenter || ''}
-                onChange={(e) => setFormData({ ...formData, costCenter: e.target.value })}
+              <CostCenterSelect
+                value={poCostCenterLock ? poIndentCostCenter : formData.costCenter}
+                companyId={formData.company || formData.companyId?._id || formData.companyId}
+                onChange={(id) => setFormData((prev) => ({ ...prev, costCenter: id }))}
+                lockedReason={poCostCenterLock}
                 disabled={formDialog.mode === 'edit' && formDialog.data?.status === 'Rejected'}
-              >
-                <MenuItem value=""><em>None</em></MenuItem>
-                {filteredCostCenters.map((cc) => (
-                  <MenuItem key={cc._id} value={cc._id}>
-                    {cc.level > 0 ? ' '.repeat(cc.level * 3) + '↳ ' : ''}{cc.code} — {cc.name}
-                  </MenuItem>
-                ))}
-              </TextField>
+              />
             </Grid>
             <Grid item xs={12} md={6}>
               <TextField

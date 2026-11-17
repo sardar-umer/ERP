@@ -74,6 +74,12 @@ const goodsReceiveSchema = new mongoose.Schema({
   },
   /** Construction Project → Sub Project these goods are charged to — copied from the PO (separate from the stock `project` above) */
   chargeTo: { type: chargeToSchema, default: () => ({}) },
+  /** Store cost center — always copied from the PO (utils/costCenterPolicy); flows on to the GRN bill */
+  costCenter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CostCenter',
+    default: null
+  },
   gatePassNo: {
     type: String,
     trim: true
@@ -297,6 +303,19 @@ goodsReceiveSchema.pre('save', async function(next) {
     }
   } catch (err) {
     console.warn('[GRN] project link from PO skipped:', err.message);
+  }
+  next();
+});
+
+// Cost center comes from the PO (GRNs never pick their own)
+goodsReceiveSchema.pre('save', async function(next) {
+  try {
+    if (this.purchaseOrder && (this.isNew || this.isModified('purchaseOrder') || !this.costCenter)) {
+      const po = await mongoose.model('PurchaseOrder').findById(this.purchaseOrder).select('costCenter').lean();
+      if (po?.costCenter) this.costCenter = po.costCenter;
+    }
+  } catch (err) {
+    console.warn('[GRN] cost center from PO skipped:', err.message);
   }
   next();
 });

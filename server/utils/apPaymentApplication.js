@@ -8,6 +8,7 @@ const CashApproval = require('../models/procurement/CashApproval');
 const Employee = require('../models/hr/Employee');
 const ApPaymentApplication = require('../models/finance/ApPaymentApplication');
 const FinanceHelper = require('./financeHelper');
+const { assertBillsHaveCostCenter } = require('./costCenterPolicy');
 const { syncLinkedUtilityBillsFromApPayment } = require('./utilityBillFinance');
 const { syncIpcFromApPayment } = require('./projectIpcFinance');
 const {
@@ -260,10 +261,20 @@ const rejectApplication = async (app, user, comments) => {
   return app;
 };
 
+/** Finance approval: every bill in the payment needs its cost center (Finance can set it on the bill first) */
+const assertApplicationBillsCostCenter = async (app) => {
+  const billIds = (app.bills?.length ? app.bills.map((b) => b.billId) : [app.accountsPayableId]).filter(Boolean);
+  if (!billIds.length) return;
+  const billDocs = await AccountsPayable.find({ _id: { $in: billIds } })
+    .select('billNumber costCenter referenceType referenceId linkedGRNs createdAt').lean();
+  await assertBillsHaveCostCenter(billDocs, 'paid');
+};
+
 const recordAuthorityApproval = async (app, user, comments = '') => {
   if (app.workflowStatus !== 'pending_authority') {
     throw new Error('Finance approval only applies while settlement is pending signatures');
   }
+  await assertApplicationBillsCostCenter(app);
   const slots = getRequiredFinanceAuthoritySlots(app);
   if (!slots.length) {
     throw new Error('Finance approval authorities are not configured on this settlement');
@@ -403,6 +414,7 @@ const submitSettlement = async ({
 }) => {
   const amount_ = round2(amount);
   if (amount_ <= 0) throw new Error('Settlement amount must be greater than zero');
+  await assertBillsHaveCostCenter([bill], 'paid or settled');
 
   const outstanding = FinanceHelper.getAPOutstanding(bill);
   if (amount_ > outstanding + 0.009) {
@@ -484,6 +496,7 @@ const submitBatchSettlement = async ({
 }) => {
   let totalAmount = 0;
   const billObjects = [];
+  await assertBillsHaveCostCenter((bills || []).map((b) => b.bill), 'paid or settled');
 
   for (const item of bills) {
     const amount_ = round2(item.amount);

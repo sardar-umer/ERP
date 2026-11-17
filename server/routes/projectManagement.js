@@ -3379,7 +3379,7 @@ router.delete('/slab-schedules/:scheduleId', asyncHandler(async (req, res) => {
 router.post('/projects/:id/boq/create-po', asyncHandler(async (req, res) => {
   if (!isValidId(req.params.id)) return badRequest(res, 'Invalid project ID');
 
-  const { vendorId, expectedDeliveryDate, deliveryAddress, notes, items } = req.body;
+  const { vendorId, expectedDeliveryDate, deliveryAddress, notes, items, costCenter } = req.body;
 
   if (!vendorId) return badRequest(res, 'Vendor is required');
   if (!expectedDeliveryDate) return badRequest(res, 'Expected delivery date is required');
@@ -3420,6 +3420,7 @@ router.post('/projects/:id/boq/create-po', asyncHandler(async (req, res) => {
     totalAmount: subtotal + taxAmount,
     notes: notes || '',
     internalNotes: `Created from Construction Project: ${project.name} (${project.projectNumber})`,
+    costCenter: costCenter || null,
     status: 'Draft',
     createdBy: req.user?._id
   });

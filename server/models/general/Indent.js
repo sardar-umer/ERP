@@ -38,6 +38,15 @@ const indentSchema = new mongoose.Schema({
     ref: 'Department',
     required: [true, 'Department is required']
   },
+  /**
+   * Store cost center this indent's spend is charged to; copied to its POs (and on to GRN / bill).
+   * Required from the cost center go-live date (utils/costCenterPolicy); pre-filled from the department default.
+   */
+  costCenter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CostCenter',
+    default: null
+  },
   /** Optional: the Construction Project → Sub Project this indent is for (empty = department-only indent) */
   chargeTo: { type: chargeToSchema, default: () => ({}) },
   requestedBy: {
@@ -606,6 +615,18 @@ indentSchema.pre('save', async function (next) {
     console.warn('[Indent] item catalog link skipped:', err.message);
   }
   next();
+});
+
+// Cost center: must be active; required for indents created on/after the cost center go-live date
+indentSchema.pre('save', async function (next) {
+  try {
+    if (this.costCenter === '') this.costCenter = null;
+    const { checkDocumentCostCenter } = require('../../utils/costCenterPolicy');
+    await checkDocumentCostCenter(this, { label: 'Indent' });
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Pre-save middleware to calculate total estimated cost and generate ERP Ref and Indent Number

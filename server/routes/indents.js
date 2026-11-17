@@ -761,6 +761,7 @@ router.get('/:id',
   asyncHandler(async (req, res) => {
     const indent = await Indent.findById(req.params.id)
       .populate('department', 'name code')
+      .populate('costCenter', 'code name path')
       .populate('companyId', 'name code symbol')
       .populate('requestedBy', 'firstName lastName email employeeId department digitalSignature')
       .populate('approvedBy', 'firstName lastName email digitalSignature')
@@ -870,6 +871,7 @@ router.post('/',
     };
 
     delete indentData.approvalChain;
+    if (!indentData.costCenter) indentData.costCenter = null;
     if (Array.isArray(indentData.draftApproverIds)) {
       const uniq = [...new Set(indentData.draftApproverIds.map(String).filter(Boolean))];
       if (uniq.length > 3) {
@@ -945,6 +947,7 @@ router.post('/',
     await indent.save();
 
     await indent.populate('department', 'name code');
+    await indent.populate('costCenter', 'code name path');
     await indent.populate('requestedBy', 'firstName lastName email digitalSignature');
     await indent.populate('createdBy', 'firstName lastName email');
     await indent.populate('workflowHistory.changedBy', 'firstName lastName email');
@@ -1064,6 +1067,8 @@ router.put('/:id',
     const newAttachments = mapUploadedAttachments(req.files || []);
     indent.attachments = [...existing, ...newAttachments];
 
+    if (req.body.costCenter !== undefined && !req.body.costCenter) req.body.costCenter = null;
+
     // Update fields (now also allowing indentNumber updates); never take approvalChain from client
     Object.keys(req.body).forEach(key => {
       if (key !== '_id' && key !== 'createdAt' && key !== 'updatedAt' && key !== 'approvalChain' && key !== 'draftApproverIds' && key !== 'attachments' && key !== 'removedAttachmentIds' && key !== 'data') {
@@ -1100,6 +1105,7 @@ router.put('/:id',
     await indent.save();
 
     await indent.populate('department', 'name code');
+    await indent.populate('costCenter', 'code name path');
     await indent.populate('requestedBy', 'firstName lastName email digitalSignature');
     await indent.populate('updatedBy', 'firstName lastName email');
 
@@ -1211,6 +1217,7 @@ router.put('/:id/comparative-statement-approvals',
     await indent.save();
 
     await indent.populate('department', 'name code');
+    await indent.populate('costCenter', 'code name path');
     await indent.populate('requestedBy', 'firstName lastName email digitalSignature');
     await indent.populate('updatedBy', 'firstName lastName email');
 

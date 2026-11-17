@@ -1521,6 +1521,12 @@ const UtilityBillDetails = ({
             <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{displayValue(bill.site || bill.location)}</Typography>
             <Typography sx={{ fontWeight: 800, color: 'grey.700', fontSize: 13 }}>From:</Typography>
             <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{displayValue(bill.department)}</Typography>
+            <Typography sx={{ fontWeight: 800, color: 'grey.700', fontSize: 13 }}>Cost Center:</Typography>
+            <Typography sx={{ fontWeight: 700, fontSize: 13 }}>
+              {bill.costCenter && typeof bill.costCenter === 'object'
+                ? `${bill.costCenter.code} — ${bill.costCenter.path || bill.costCenter.name}`
+                : '—'}
+            </Typography>
             <Typography sx={{ fontWeight: 800, color: 'grey.700', fontSize: 13 }}>Custodian:</Typography>
             <Typography sx={{ fontWeight: 700, fontSize: 13 }}>{displayValue(bill.custodian)}</Typography>
           </Box>

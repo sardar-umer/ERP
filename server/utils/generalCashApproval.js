@@ -168,6 +168,7 @@ const buildGeneralCashApprovalDocument = (body, createdBy, advanceRecipient = {}
     advanceGlAccountNumber: advanceRecipient.advanceGlAccountNumber || '',
     advanceToName: advanceRecipient.advanceToName || '',
     advanceAmount: totals.totalAmount,
+    costCenter: body.costCenter || null,
     items: totals.items,
     subtotal: totals.subtotal,
     taxAmount: totals.taxAmount,

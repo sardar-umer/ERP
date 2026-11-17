@@ -45,6 +45,7 @@ import {
 import { resolveUploadPublicUrl, formatDateTime, userDisplayName as caUserDisplayName } from '../../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import LineAttachmentCell from '../../../components/common/LineAttachmentCell';
 import { WorkflowAuditFeedbackPanel } from '../../../components/Admin/workflowAuditReturn';
+import CostCenterSelect, { loadCostCenterPolicy } from '../../../components/CostCenter/CostCenterSelect';
 import {
   canEditGeneralCashApproval,
   isGeneralCashApprovalRejected,
@@ -113,12 +114,17 @@ const GeneralCashApprovalForm = () => {
     purpose: '',
     notes: '',
     requestingDepartment: user?.department || '',
+    costCenter: '',
     priority: 'Urgent',
     approvalDate: new Date().toISOString().split('T')[0],
     expectedPurchaseDate: '',
     discountAmount: 0
   });
   const [advanceEmployee, setAdvanceEmployee] = useState(null);
+  const [costCenterPolicy, setCostCenterPolicy] = useState(null);
+  useEffect(() => {
+    loadCostCenterPolicy().then(setCostCenterPolicy).catch(() => setCostCenterPolicy(null));
+  }, []);
   const [advanceEmployeeOptions, setAdvanceEmployeeOptions] = useState([]);
   const [advanceEmployeeLoading, setAdvanceEmployeeLoading] = useState(false);
   const [managerApprover, setManagerApprover] = useState(null);
@@ -235,6 +241,7 @@ const GeneralCashApprovalForm = () => {
           purpose: ca.purpose || '',
           notes: ca.notes || '',
           requestingDepartment: ca.requestingDepartment || '',
+          costCenter: ca.costCenter?._id || ca.costCenter || '',
           priority: ca.priority || 'Urgent',
           approvalDate: ca.approvalDate ? new Date(ca.approvalDate).toISOString().split('T')[0] : '',
           expectedPurchaseDate: ca.expectedPurchaseDate
@@ -331,6 +338,7 @@ const GeneralCashApprovalForm = () => {
     fd.append('purpose', header.purpose.trim());
     fd.append('notes', header.notes || '');
     fd.append('requestingDepartment', header.requestingDepartment || user?.department || '');
+    fd.append('costCenter', header.costCenter || '');
     fd.append('priority', header.priority);
     fd.append('approvalDate', header.approvalDate);
     if (header.expectedPurchaseDate) fd.append('expectedPurchaseDate', header.expectedPurchaseDate);
@@ -357,6 +365,10 @@ const GeneralCashApprovalForm = () => {
 
   const validate = (mode) => {
     if (!header.requestingDepartment?.trim()) return 'Department is required';
+    if (!header.costCenter && costCenterPolicy?.mandatoryFrom) {
+      const startedAt = loadedCa?.createdAt ? new Date(loadedCa.createdAt) : new Date();
+      if (startedAt >= new Date(costCenterPolicy.mandatoryFrom)) return 'Cost center is required';
+    }
     if (!advanceEmployee?._id) return 'Advance to (employee) is required';
     if (!header.purpose.trim()) return 'Purpose / narration is required';
     if (!lines.some((l) => (l.itemName || l.description) && Number(l.amount) > 0)) {
@@ -533,6 +545,17 @@ const GeneralCashApprovalForm = () => {
                 </Typography>
               )}
             </FormControl>
+          </Grid>
+          <Grid item xs={12} md={6}>
+            <CostCenterSelect
+              size="small"
+              value={header.costCenter}
+              companyId={header.companyId}
+              departmentId={departmentOptions.find((d) => d.name === header.requestingDepartment)?._id}
+              departments={departmentOptions}
+              lockedReason={loadedCa?.indent && loadedCa?.costCenter ? 'Copied from the indent' : ''}
+              onChange={(id) => setHeader((h) => ({ ...h, costCenter: id }))}
+            />
           </Grid>
           <Grid item xs={12} md={3}>
             <TextField

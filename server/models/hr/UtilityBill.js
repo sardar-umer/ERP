@@ -325,6 +325,12 @@ const utilityBillSchema = new mongoose.Schema({
     trim: true,
     maxlength: [100, 'Department cannot exceed 100 characters']
   },
+  /** Store cost center (utils/costCenterPolicy); copied to the Finance bill when posted. Required from go-live. */
+  costCenter: {
+    type: mongoose.Schema.Types.ObjectId,
+    ref: 'CostCenter',
+    default: null
+  },
   custodian: {
     type: String,
     trim: true,
@@ -428,6 +434,26 @@ utilityBillSchema.virtual('daysOverdue').get(function() {
 // Virtual for payment percentage
 utilityBillSchema.virtual('paymentPercentage').get(function() {
   return this.amount > 0 ? Math.round((this.paidAmount / this.amount) * 100) : 0;
+});
+
+// Cost center must be active and allowed for the bill's company (worked out from its site, as on posting)
+utilityBillSchema.pre('save', async function(next) {
+  try {
+    if (this.costCenter && (this.isNew || this.isModified('costCenter') || this.isModified('site') || this.isModified('billLines'))) {
+      const { costCenterProblem } = require('../../utils/costCenterPolicy');
+      const { resolveUtilityBillCompanyId } = require('../../utils/utilityBillFinance');
+      const companyId = await resolveUtilityBillCompanyId(this).catch(() => null);
+      const problem = await costCenterProblem(this.costCenter, companyId);
+      if (problem) {
+        const err = new Error(`Cost center: ${problem}`);
+        err.statusCode = 400;
+        return next(err);
+      }
+    }
+    next();
+  } catch (err) {
+    next(err);
+  }
 });
 
 // Pre-save middleware to update status

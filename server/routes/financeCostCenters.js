@@ -13,6 +13,11 @@ router.get('/',
   authorize('super_admin', 'admin', 'finance_manager', 'accountant'),
   asyncHandler(async (req, res) => {
     const { companyId, q } = await financeScope(req);
+    // Cost centers are managed on Store → Cost Center; make sure this company has a copy of each that applies to it
+    if (companyId) {
+      const { ensureFinanceCopiesForCompany } = require('../utils/costCenterLink');
+      await ensureFinanceCopiesForCompany(companyId);
+    }
     const costCenters = await CostCenter.find(q({})).sort({ code: 1 });
     
     res.json({

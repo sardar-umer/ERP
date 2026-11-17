@@ -362,6 +362,32 @@ purchaseOrderSchema.pre('save', async function(next) {
   next();
 });
 
+// Cost center: a PO from an indent takes the indent's cost center (cannot differ); a PO without an indent picks
+// its own. Required when the chain (the indent, else this PO) started on/after the cost center go-live date.
+purchaseOrderSchema.pre('save', async function(next) {
+  try {
+    if (!(this.isNew || this.isModified('indent') || this.isModified('costCenter') || this.isModified('companyId'))) return next();
+    let chainStartDate = null;
+    let inherited = false;
+    if (this.indent) {
+      const indent = await mongoose.model('Indent').findById(this.indent).select('costCenter createdAt').lean();
+      if (indent) {
+        chainStartDate = indent.createdAt;
+        if (indent.costCenter) {
+          this.costCenter = indent.costCenter;
+          inherited = true;
+        }
+      }
+    }
+    const { checkDocumentCostCenter } = require('../../utils/costCenterPolicy');
+    // The indent's cost center was already checked against the indent's company
+    await checkDocumentCostCenter(this, { chainStartDate, label: 'Purchase order', checkCompany: !inherited });
+    next();
+  } catch (err) {
+    next(err);
+  }
+});
+
 // Generate order number
 purchaseOrderSchema.pre('save', async function(next) {
   if (this.isNew && !this.orderNumber) {

@@ -52,6 +52,13 @@ const systemSettingsSchema = new mongoose.Schema(
         'usmantanveer@tovus.net'
       ])
     },
+    /**
+     * Cost center go-live: payable documents whose chain starts on/after this date must carry a cost center.
+     * Null = not live yet (nothing is blocked). See utils/costCenterPolicy.
+     */
+    costCenterMandatoryFrom: { type: Date, default: null },
+    costCenterMandatoryUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
+    costCenterMandatoryUpdatedAt: { type: Date, default: null },
     updatedBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }
