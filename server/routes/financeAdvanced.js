@@ -9536,61 +9536,127 @@ router.post('/reports/bank-reconciliation/reconcile',
 // ─────────────────────────────────────────────────────────────────────────────
 // COST CENTER P&L REPORT
 // ─────────────────────────────────────────────────────────────────────────────
+// Revenue and expense per Finance cost center for the selected company. A line's own cost center wins; otherwise the
+// journal's header cost center. Lines with neither are reported as "Not tagged" so Finance can see what is missing.
 router.get('/reports/cost-center-pl',
   authorize('super_admin', 'admin', 'finance_manager'),
   asyncHandler(async (req, res) => {
-    const mongoose = require('mongoose');
+    const FinanceCostCenter = require('../models/finance/CostCenter');
+    const PlacementCompany = mongoose.model('PlacementCompany');
+    const round2 = (n) => Math.round((Number(n || 0) + Number.EPSILON) * 100) / 100;
     const { costCenterId, fromDate, toDate } = req.query;
-    const { jeMatch } = await financeScope(req);
+    const { company, jeMatch } = await financeScope(req);
+
     const match = jeMatch({ status: 'posted', ...notClosingEntry });
     if (fromDate || toDate) {
       match.date = {};
-      if (fromDate) match.date.$gte = new Date(fromDate);
-      if (toDate) match.date.$lte = new Date(toDate);
+      if (fromDate) { const f = new Date(fromDate); f.setHours(0, 0, 0, 0); match.date.$gte = f; }
+      if (toDate) { const t = new Date(toDate); t.setHours(23, 59, 59, 999); match.date.$lte = t; }
     }
 
-    const pipeline = [
+    let ccFilter = null;
+    if (costCenterId === 'untagged') ccFilter = { cc: null };
+    else if (costCenterId) {
+      if (!mongoose.Types.ObjectId.isValid(String(costCenterId))) {
+        return res.status(400).json({ success: false, message: 'Invalid cost center' });
+      }
+      ccFilter = { cc: new mongoose.Types.ObjectId(String(costCenterId)) };
+    }
+
+    const grouped = await JournalEntry.aggregate([
       { $match: match },
       { $unwind: '$lines' },
-      ...(costCenterId ? [{ $match: { 'lines.costCenter': new mongoose.Types.ObjectId(costCenterId) } }] : [{ $match: { 'lines.costCenter': { $exists: true, $ne: null } } }]),
-      {
-        $lookup: {
-          from: 'accounts', localField: 'lines.account', foreignField: '_id', as: 'accDoc'
-        }
-      },
-      { $unwind: '$accDoc' },
+      { $project: { companyId: 1, line: '$lines', cc: { $ifNull: ['$lines.costCenter', { $ifNull: ['$costCenter', null] }] } } },
+      ...(ccFilter ? [{ $match: ccFilter }] : []),
+      { $lookup: { from: 'accounts', localField: 'line.account', foreignField: '_id', as: 'acc' } },
+      { $unwind: '$acc' },
+      { $match: { 'acc.type': { $in: [...REVENUE_TYPES, ...EXPENSE_TYPES] } } },
       {
         $group: {
-          _id: { costCenter: '$lines.costCenter', accountType: '$accDoc.type' },
-          totalDebit: { $sum: '$lines.debit' },
-          totalCredit: { $sum: '$lines.credit' }
+          _id: { cc: '$cc', account: '$acc._id' },
+          companyId: { $first: '$companyId' },
+          accountNumber: { $first: '$acc.accountNumber' },
+          accountName: { $first: '$acc.name' },
+          accountType: { $first: '$acc.type' },
+          debit: { $sum: { $ifNull: ['$line.debit', 0] } },
+          credit: { $sum: { $ifNull: ['$line.credit', 0] } }
         }
-      },
-      {
-        $lookup: {
-          from: 'costcenters', localField: '_id.costCenter', foreignField: '_id', as: 'ccDoc'
-        }
-      },
-      { $unwind: { path: '$ccDoc', preserveNullAndEmptyArrays: true } },
-      {
-        $group: {
-          _id: '$_id.costCenter',
-          costCenterName: { $first: '$ccDoc.name' },
-          costCenterCode: { $first: '$ccDoc.code' },
-          lines: {
-            $push: {
-              accountType: '$_id.accountType',
-              totalDebit: '$totalDebit',
-              totalCredit: '$totalCredit'
-            }
-          }
-        }
-      },
-      { $sort: { costCenterName: 1 } }
-    ];
+      }
+    ]);
 
-    const data = await JournalEntry.aggregate(pipeline);
-    res.json({ success: true, data });
+    const ccIds = [...new Set(grouped.map((g) => g._id.cc).filter(Boolean).map(String))];
+    const ccDocs = await FinanceCostCenter.find({ _id: { $in: ccIds } }).select('name code companyId isActive').lean();
+    const ccById = new Map(ccDocs.map((c) => [String(c._id), c]));
+    const companyIds = [...new Set(ccDocs.map((c) => String(c.companyId)).filter(Boolean))];
+    const companies = await PlacementCompany.find({ _id: { $in: companyIds } }).select('name companyCode').lean();
+    const companyById = new Map(companies.map((c) => [String(c._id), c]));
+
+    const buckets = new Map();
+    grouped.forEach((g) => {
+      const key = g._id.cc ? String(g._id.cc) : 'untagged';
+      if (!buckets.has(key)) {
+        const cc = g._id.cc ? ccById.get(key) : null;
+        const co = cc ? companyById.get(String(cc.companyId)) : null;
+        buckets.set(key, {
+          _id: g._id.cc || null,
+          code: cc?.code || '',
+          name: g._id.cc ? (cc?.name || 'Unknown cost center') : 'Not tagged',
+          isActive: cc ? cc.isActive !== false : true,
+          companyName: co?.name || '',
+          revenue: [],
+          expenses: []
+        });
+      }
+      const b = buckets.get(key);
+      const isRevenue = REVENUE_TYPES.includes(g.accountType);
+      const amount = round2(isRevenue ? g.credit - g.debit : g.debit - g.credit);
+      if (!amount) return;
+      (isRevenue ? b.revenue : b.expenses).push({
+        accountId: g._id.account,
+        accountNumber: g.accountNumber,
+        accountName: g.accountName,
+        amount
+      });
+    });
+
+    const byNumber = (a, b) => String(a.accountNumber || '').localeCompare(String(b.accountNumber || ''));
+    const rows = [...buckets.values()].map((b) => {
+      b.revenue.sort(byNumber);
+      b.expenses.sort(byNumber);
+      b.totalRevenue = round2(b.revenue.reduce((s, r) => s + r.amount, 0));
+      b.totalExpenses = round2(b.expenses.reduce((s, r) => s + r.amount, 0));
+      b.net = round2(b.totalRevenue - b.totalExpenses);
+      return b;
+    }).filter((b) => b.revenue.length || b.expenses.length);
+
+    const untagged = rows.find((r) => !r._id) || null;
+    const costCenters = rows.filter((r) => r._id)
+      .sort((a, b) => (a.companyName || '').localeCompare(b.companyName || '')
+        || String(a.code || a.name).localeCompare(String(b.code || b.name)));
+
+    const sum = (key) => round2(rows.reduce((s, r) => s + r[key], 0));
+    const totalExpenses = sum('totalExpenses');
+    const taggedExpenses = round2(totalExpenses - (untagged?.totalExpenses || 0));
+
+    res.json({
+      success: true,
+      data: {
+        company: company && !company.isAll
+          ? { _id: company._id, name: company.name, companyCode: company.companyCode }
+          : { _id: 'all', name: 'All Companies' },
+        fromDate: fromDate || null,
+        toDate: toDate || null,
+        costCenters,
+        untagged,
+        totals: {
+          revenue: sum('totalRevenue'),
+          expenses: totalExpenses,
+          net: sum('net'),
+          taggedExpenses,
+          taggedExpensePct: totalExpenses ? round2((taggedExpenses / totalExpenses) * 100) : null
+        }
+      }
+    });
   })
 );
 
