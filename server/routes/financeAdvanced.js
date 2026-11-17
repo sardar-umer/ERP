@@ -5444,6 +5444,35 @@ router.post('/accounts-payable/:id/department-approve',
 
     if (allApproved) {
       await notifyCoaBillAuditQueue({ actorId: userId, bill });
+    } else if (historyModule === 'Procurement') {
+      // GRN bill: tell the next approval authority (e.g. Sr Manager Procurement) it is their turn
+      const next = (bill.approvalChain || []).find((step) => step.status === 'pending');
+      if (next?.approver) {
+        try {
+          const { createAndEmitNotification } = require('../services/realtimeNotificationService');
+          const recipientIds = [String(next.approver)];
+          await createAndEmitNotification({
+            recipientIds,
+            title: 'Vendor Bill waiting for your approval',
+            message: `Vendor Bill ${bill.billNumber} was approved by ${roleLabel} and now needs your approval before it goes to Audit.`,
+            type: 'info',
+            category: 'approval',
+            priority: 'high',
+            actionUrl: `/procurement/vendor-bills?bill=${bill._id}`,
+            createdBy: userId,
+            excludeUserId: userId,
+            metadata: { module: 'procurement', entityId: bill._id, entityType: 'AccountsPayable', targetModule: 'procurement' }
+          });
+          notifyChatApprovers(recipientIds, {
+            docType: 'Vendor Bill',
+            docNumber: bill.billNumber || '',
+            url: `/procurement/vendor-bills?bill=${bill._id}`,
+            fromUser: req.user
+          }).catch(() => {});
+        } catch (nErr) {
+          console.warn('GRN bill next approver notification failed:', nErr.message);
+        }
+      }
     }
 
     const populated = await AccountsPayable.findById(bill._id)

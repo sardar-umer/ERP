@@ -125,6 +125,7 @@ const VendorBills = () => {
   const [vendorInvoiceNumber, setVendorInvoiceNumber] = useState('');
   const [notes, setNotes] = useState('');
   const [approvers, setApprovers] = useState([]);
+  const [srManager, setSrManager] = useState(null);
   const [approvalAuthorityId, setApprovalAuthorityId] = useState('');
   const [billsAwaitingMe, setBillsAwaitingMe] = useState(0);
   const [approveBill, setApproveBill] = useState(null);
@@ -213,7 +214,10 @@ const VendorBills = () => {
       .then((res) => setCompanies(res.data?.data || []))
       .catch(() => setCompanies([]));
     api.get('/procurement/vendor-bills/approval-authorities')
-      .then((res) => setApprovers(res.data?.data || []))
+      .then((res) => {
+        setApprovers(res.data?.data || []);
+        setSrManager(res.data?.srManager || null);
+      })
       .catch(() => setApprovers([]));
   }, []);
 
@@ -427,10 +431,12 @@ const VendorBills = () => {
               fullWidth
               select
               required
-              label="Approval Authority"
+              label="Approval Authority (Manager Procurement)"
               value={approvalAuthorityId}
               onChange={(e) => setApprovalAuthorityId(e.target.value)}
-              helperText={approvers.length ? 'Procurement user who approves this bill before it goes to Audit' : 'No other active Procurement department user found'}
+              helperText={approvers.length
+                ? `Approves first${srManager ? `, then ${srManager.name} (${srManager.label}) signs` : ''}; the bill goes to Audit after both`
+                : 'No other active Procurement department user found'}
             >
               {approvers.map((u) => (
                 <MenuItem key={u._id} value={u._id}>{u.name}{u.position ? ` — ${u.position}` : ''}</MenuItem>
@@ -570,7 +576,7 @@ const VendorBills = () => {
                       const statusLabel = rejected
                         ? 'Rejected by Audit'
                         : pendingApproval
-                          ? `Pending approval — ${approverName}`
+                          ? `Pending approval — ${approverName}${(b.approval?.steps || []).length > 1 ? ` (${b.approval.steps.filter((st) => st.status === 'approved').length + 1} of ${b.approval.steps.length})` : ''}`
                           : rejectedByAuthority
                             ? `Rejected by ${approverName}`
                             : (b.status || 'Draft');
@@ -656,7 +662,7 @@ const VendorBills = () => {
                                   <EditIcon fontSize="small" />
                                 </IconButton>
                               </Tooltip>
-                              <Tooltip title={rejectedByAuthority ? 'Resubmit to the approval authority' : 'Resubmit to Pre-Audit'}>
+                              <Tooltip title={(rejectedByAuthority || b.approval?.resubmitsToApprovers) ? 'Resubmit to the approval authority' : 'Resubmit to Pre-Audit'}>
                                 <IconButton size="small" color="warning" onClick={() => { setResubmitComments(''); setResubmitBill(b); }}>
                                   <SendIcon fontSize="small" />
                                 </IconButton>
@@ -792,7 +798,7 @@ const VendorBills = () => {
       {/* Resubmit to Pre-Audit */}
       <Dialog open={!!resubmitBill} onClose={() => !actionBusy && setResubmitBill(null)} maxWidth="sm" fullWidth>
         <DialogTitle sx={{ fontWeight: 700 }}>
-          Resubmit {resubmitBill?.billNumber} to {resubmitBill?.approval?.status === 'Rejected' ? (resubmitBill.approval.approverName || 'the approval authority') : 'Pre-Audit'}
+          Resubmit {resubmitBill?.billNumber} to {(resubmitBill?.approval?.status === 'Rejected' || resubmitBill?.approval?.resubmitsToApprovers) ? (resubmitBill.approval.approverName || 'the approval authority') : 'Pre-Audit'}
         </DialogTitle>
         <DialogContent dividers>
           {resubmitBill?.approval?.status === 'Rejected' && resubmitBill.approval.rejectionReason && (
@@ -800,6 +806,11 @@ const VendorBills = () => {
           )}
           {resubmitBill?.auditReturn?.reason && (
             <Alert severity="error" sx={{ mb: 2 }}>Audit said: {resubmitBill.auditReturn.reason}</Alert>
+          )}
+          {resubmitBill?.approval?.resubmitsToApprovers && (
+            <Alert severity="info" sx={{ mb: 2 }}>
+              This bill goes for approval first: {(resubmitBill.approval.steps || []).filter((st) => st.status !== 'approved').map((st) => `${st.name} (${st.label})`).join(', then ')}. It reaches Pre-Audit after their approval.
+            </Alert>
           )}
           <TextField
             fullWidth
