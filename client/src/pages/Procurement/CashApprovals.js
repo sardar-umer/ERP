@@ -42,6 +42,7 @@ import {
 } from '../../utils/cashApprovalFormAttachments';
 import { resolveUploadPublicUrl } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
+import { printFitToOneA4 } from '../../utils/printFitToOneA4';
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -1946,7 +1947,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
                   <Button variant="outlined" size="small" startIcon={<EditIcon />} onClick={() => openCashApprovalEdit(viewDialog.data)}>Edit</Button>
                 )}
                 <Button variant="outlined" size="small" startIcon={<HistoryIcon />} onClick={() => setWorkflowHistoryDialog({ open: true, document: viewDialog.data })}>Workflow History</Button>
-                <Button variant="contained" size="small" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+                <Button variant="contained" size="small" startIcon={<PrintIcon />} onClick={() => printFitToOneA4('.print-content')}>Print</Button>
               </Stack>
             </Box>
           </DialogTitle>
@@ -2024,6 +2025,8 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
               .MuiDialogTitle-root { display: none !important; }
               .MuiDialogActions-root { display: none !important; }
               .MuiBackdrop-root { display: none !important; }
+              .print-content { page-break-after: avoid !important; break-after: avoid !important; }
+              .print-content .MuiPaper-root { page-break-inside: avoid !important; break-inside: avoid !important; }
               .ca-print-page { page-break-inside: avoid !important; }
               .ca-print-page table th, .ca-print-page table td { padding-top: 6px !important; padding-bottom: 6px !important; }
             }

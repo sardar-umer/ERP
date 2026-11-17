@@ -12,6 +12,7 @@ import { formatPKR } from '../../utils/currency';
 import { getDocCompanyName } from '../../utils/documentCompany';
 import CashApprovalGeneralDetailShell from '../../components/CashApprovals/CashApprovalGeneralDetailShell';
 import { isGeneralModuleCashApproval } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
+import { printFitToOneA4 } from '../../utils/printFitToOneA4';
 
 const CashApprovalDocumentView = () => {
   const { id } = useParams();
@@ -75,7 +76,7 @@ const CashApprovalDocumentView = () => {
       {/* Screen-only action bar */}
       <Box sx={{ display: 'flex', gap: 1, p: 2, mb: 1 }} className="app-print-hide">
         <Button startIcon={<BackIcon />} onClick={() => navigate(-1)}>Back</Button>
-        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printFitToOneA4('#ca-print-area')}>Print</Button>
       </Box>
 
       {/* Printable document */}
@@ -253,7 +254,9 @@ const CashApprovalDocumentView = () => {
 
       <style>{`
         @media print {
+          @page { size: A4; margin: 8mm; }
           .app-print-hide { display: none !important; }
+          #ca-print-area { page-break-inside: avoid !important; break-inside: avoid !important; }
           body { margin: 0; }
           #ca-print-area { max-width: 100% !important; padding: 20px !important; }
         }
