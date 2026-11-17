@@ -802,15 +802,6 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
                 </Grid>
 
                 <Grid item xs={12} sm={6} md={6}>
-                  <CostCenterSelect
-                    size="small"
-                    value={billCostCenter}
-                    companyId={selectedCompany?._id}
-                    onChange={(id) => setBillCostCenter(id)}
-                  />
-                </Grid>
-
-                <Grid item xs={12} sm={6} md={6}>
                   <TextField
                     fullWidth
                     label="Vendor Invoice #"
@@ -837,6 +828,17 @@ const StandardVendorBillForm = ({ onSwitchToStoreBill }) => {
                         fullWidth
                       />
                     )}
+                  />
+                </Grid>
+
+                <Grid item xs={12} sm={6} md={6}>
+                  <CostCenterSelect
+                    size="small"
+                    value={billCostCenter}
+                    companyId={selectedCompany?._id}
+                    disabled={!selectedCompany?._id}
+                    helperText={selectedCompany?._id ? undefined : 'Select the company first'}
+                    onChange={(id) => setBillCostCenter(id)}
                   />
                 </Grid>
               </Grid>

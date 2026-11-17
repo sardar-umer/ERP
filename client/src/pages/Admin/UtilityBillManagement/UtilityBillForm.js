@@ -574,6 +574,43 @@ const UtilityBillForm = () => {
 
   const billLinesTotal = billLines.reduce((s, l) => s + (Number(l.amount) || 0), 0);
 
+  // The bill is charged to the company of its site (store bills: the first item row's company). The cost center is
+  // picked after that, from that company's cost centers only.
+  const isLineBill = useStoreBill || isCentralizedStoreBill;
+  const billCompany = useMemo(() => {
+    const norm = (v) => String(v || '').trim().toLowerCase();
+    const findCompany = (site) => (companiesList || []).find((c) => norm(c?.name) === norm(site));
+    const sites = isLineBill
+      ? [...new Set(billLines.map((l) => String(l.site || '').trim()).filter(Boolean))]
+      : [String(formData.site || '').trim()].filter(Boolean);
+    const first = sites[0] || '';
+    return {
+      site: first,
+      companyId: first ? findCompany(first)?._id : undefined,
+      mixed: isLineBill && sites.length > 1
+    };
+  }, [isLineBill, billLines, formData.site, companiesList]);
+
+  const billCostCenterField = (
+    <Grid item xs={12} md={6}>
+      <CostCenterSelect
+        value={formData.costCenter}
+        companyId={billCompany.companyId}
+        disabled={isLineBill && !billCompany.site}
+        helperText={isLineBill && !billCompany.site
+          ? 'Add an item and select its company first'
+          : (billCompany.companyId ? `Cost centers of ${billCompany.site}` : undefined)}
+        onChange={(id) => setFormData((prev) => ({ ...prev, costCenter: id }))}
+      />
+      {billCompany.mixed && (
+        <Alert severity="warning" sx={{ mt: 1 }}>
+          Item rows have different companies. The whole bill goes to Finance under {billCompany.site} (first row) with
+          this one cost center. Use one company per bill, or make a separate bill for each company.
+        </Alert>
+      )}
+    </Grid>
+  );
+
   const lockedBillKind = useMemo(() => {
     if (!isCentralizedStoreBill) return null;
     const fromLines = getLockedBillKindFromLines(billLines);
@@ -1406,18 +1443,6 @@ const UtilityBillForm = () => {
                 </Stack>
               </Grid>
 
-              <Grid item xs={12} md={6}>
-                <CostCenterSelect
-                  value={formData.costCenter}
-                  companyId={(() => {
-                    // Bills are charged to the company named in their site (first line's site on store bills)
-                    const site = String(((useStoreBill || isCentralizedStoreBill) ? billLines[0]?.site : formData.site) || '')
-                      .trim().toLowerCase();
-                    return (companiesList || []).find((c) => String(c?.name || '').trim().toLowerCase() === site)?._id;
-                  })()}
-                  onChange={(id) => setFormData((prev) => ({ ...prev, costCenter: id }))}
-                />
-              </Grid>
 
               {(useStoreBill || isCentralizedStoreBill) && (
                 <>
@@ -1935,6 +1960,7 @@ const UtilityBillForm = () => {
                       </Typography>
                     )}
                   </Grid>
+                  {billCostCenterField}
                 </>
               )}
 
@@ -1971,6 +1997,8 @@ const UtilityBillForm = () => {
                 />
               </Grid>
               )}
+
+              {!isLineBill && billCostCenterField}
 
               {!isCentralizedStoreBill && !useStoreBill && (
               <Grid item xs={12} md={6}>

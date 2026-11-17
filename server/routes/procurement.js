@@ -7265,6 +7265,9 @@ const parseCostCenterCompanies = (raw, single = null) => {
     .filter((v) => mongoose.Types.ObjectId.isValid(v)))];
 };
 const COST_CENTER_GO_LIVE_ROLES = ['super_admin', 'admin', 'finance_manager'];
+// authorize() always lets these roles through, so the screen must also show them as allowed
+const FULL_ACCESS_ROLES = ['super_admin', 'higher_management', 'developer'];
+const roleAllowed = (user, roles) => FULL_ACCESS_ROLES.includes(user?.role) || roles.includes(user?.role);
 
 // @route   GET /api/procurement/cost-centers/policy
 // @desc    Go-live date from which payable documents must carry a cost center (null = not live)
@@ -7274,7 +7277,7 @@ router.get('/cost-centers/policy',
     const policy = await costCenterPolicy.getCostCenterMandatoryFrom();
     res.json({
       success: true,
-      data: { ...policy, canEdit: COST_CENTER_GO_LIVE_ROLES.includes(req.user?.role) }
+      data: { ...policy, canEdit: roleAllowed(req.user, COST_CENTER_GO_LIVE_ROLES) }
     });
   })
 );
@@ -7314,7 +7317,7 @@ router.get('/cost-centers/options',
     const options = await costCenterPolicy.listCostCenterOptions();
     res.json({
       success: true,
-      data: { costCenters: options, canCreate: COST_CENTER_MANAGER_ROLES.includes(req.user?.role) }
+      data: { costCenters: options, canCreate: roleAllowed(req.user, COST_CENTER_MANAGER_ROLES) }
     });
   })
 );
