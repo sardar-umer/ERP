@@ -246,6 +246,7 @@ import Payments from './pages/General/Payments';
 import ProjectManagement from './pages/General/ProjectManagement';
 import ProjectPortfolioDashboard from './pages/General/ProjectPortfolioDashboard';
 import BudgetApprovals from './pages/General/BudgetApprovals';
+import FinanceApprovals from './pages/Finance/FinanceApprovals';
 import ProjectDetail from './pages/General/ProjectDetail';
 import ProjectWorkspaceRedirect from './pages/General/ProjectWorkspaceRedirect';
 import WbsActivities from './pages/General/WbsActivities';
@@ -1371,6 +1372,7 @@ function App() {
                     <Route path="/finance/budgets/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BudgetForm /></ProtectedRoute>} />
                     <Route path="/finance/deferred-entries" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><DeferredEntries /></ProtectedRoute>} />
                     <Route path="/finance/bank-statement-import" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><BankStatementImport /></ProtectedRoute>} />
+                    <Route path="/finance/approvals" element={<ProtectedRoute><FinanceApprovals /></ProtectedRoute>} />
                     <Route path="/finance/vouchers" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><Vouchers /></ProtectedRoute>} />
                     <Route path="/finance/vouchers/:id" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><VoucherView /></ProtectedRoute>} />
                     <Route path="/finance/setup" element={<ProtectedRoute requiredRole={["super_admin"]}><FinanceSetup /></ProtectedRoute>} />

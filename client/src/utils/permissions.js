@@ -613,6 +613,7 @@ export const MODULES = {
     roles: ['super_admin', 'admin', 'finance_manager', 'tcm_manager', 'developer'],
     subItems: [
       { name: 'Finance Dashboard', path: '/finance' },
+      { name: 'Approvals', path: '/finance/approvals', icon: 'TaskAlt' },
       { name: 'Voucher Center', path: '/finance/vouchers', icon: 'ReceiptLong' },
 
       // ── CUSTOMERS (AR) ──────────────────────────────────────────────────────
@@ -1166,6 +1167,7 @@ export const MODULES = {
  */
 const CATALOG_PATH_OVERRIDES = {
   '/finance': 'finance_dashboard',
+  '/finance/approvals': 'finance_dashboard',
   '/finance/accounts': 'chart_of_accounts',
   '/finance/companies': 'finance_companies',
   '/finance/company-profile': 'company_profile',
@@ -1437,6 +1439,9 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
 
   // Project budget approvals (COO / AVP / CEO, from notifications) — the API lists only budgets the user approves
   if (path === '/budget-approvals') return true;
+
+  // Finance approvals — the API lists only documents where the user is a finance authority
+  if (path === '/finance/approvals') return true;
   
   // Super Admin, Higher Management, and Developer have access to everything
   if (userRole === 'super_admin' || userRole === 'higher_management' || userRole === 'developer') {

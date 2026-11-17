@@ -36,6 +36,7 @@ const attendanceRoutes = require('./routes/attendance');
 const biometricRoutes = require('./routes/biometric');
 const financeRoutes = require('./routes/finance');
 const financeAdvancedRoutes = require('./routes/financeAdvanced');
+const financeMyApprovalsRoutes = require('./routes/financeMyApprovals');
 const financeCostCentersRoutes = require('./routes/financeCostCenters');
 const procurementRoutes = require('./routes/procurement');
 const salesRoutes = require('./routes/sales');
@@ -594,6 +595,7 @@ app.use('/api/finance/recovery-task-rules', authMiddleware, activityLogger, reco
 app.use('/api/finance/recovery-tasks', authMiddleware, activityLogger, recoveryTasksRoutes);
 app.use('/api/finance/recovery-campaigns', authMiddleware, activityLogger, recoveryCampaignsRoutes);
 app.use('/api/finance/companies', authMiddleware, activityLogger, financeCompaniesRoutes);
+app.use('/api/finance/my-approvals', authMiddleware, financeMyApprovalsRoutes);
 app.use('/api/finance', authMiddleware, activityLogger, financeAdvancedRoutes);
 app.use('/api/finance/cost-centers', authMiddleware, activityLogger, financeCostCentersRoutes);
 app.use('/api/finance/journals', authMiddleware, activityLogger, financeJournalsRoutes);
