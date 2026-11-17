@@ -9,6 +9,7 @@ import {
   Refresh as RefreshIcon, PriorityHigh as PriorityIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const STATUS_COLORS = {
   draft: 'default', pending: 'warning', approved: 'info', paid: 'success', overdue: 'error'
@@ -52,6 +53,7 @@ export default function BilledNotReceived() {
     return Math.floor((new Date(d) - Date.now()) / 864e5);
   };
 
+  const pg = useClientPagination(data.bills);
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
@@ -136,7 +138,7 @@ export default function BilledNotReceived() {
                   </TableCell>
                 </TableRow>
               ) : (
-                data.bills.map((bill, i) => {
+                pg.rows.map((bill, i) => {
                   const due = daysToDue(bill.dueDate);
                   const balance = (bill.totalAmount || 0) - (bill.amountPaid || 0);
                   return (
@@ -188,7 +190,7 @@ export default function BilledNotReceived() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

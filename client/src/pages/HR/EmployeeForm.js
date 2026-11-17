@@ -887,6 +887,9 @@ const EmployeeForm = () => {
           note: o.note || '',
           amounts: Object.fromEntries(
             MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, o.amounts?.[key] ?? ''])
+          ),
+          arrears: Object.fromEntries(
+            MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, o.arrears?.[key] ?? ''])
           )
         })),
         cashSalary: employeeData.cashSalary || false
@@ -1164,7 +1167,7 @@ const EmployeeForm = () => {
           }
         }
         
-        // One-month allowance changes: keep only the amounts HR filled in (blank = keep the original)
+        // One-month allowance changes: keep only the amounts / arrears HR filled in (blank = keep the original)
         if (Array.isArray(cleanedValues.monthlyAllowanceOverrides)) {
           cleanedValues.monthlyAllowanceOverrides = cleanedValues.monthlyAllowanceOverrides
             .map((o) => ({
@@ -1175,9 +1178,14 @@ const EmployeeForm = () => {
                 Object.entries(o.amounts || {})
                   .filter(([, v]) => v !== '' && v !== null && v !== undefined && Number(v) >= 0)
                   .map(([k, v]) => [k, Number(v)])
+              ),
+              arrears: Object.fromEntries(
+                Object.entries(o.arrears || {})
+                  .filter(([, v]) => v !== '' && v !== null && v !== undefined && Number(v) > 0)
+                  .map(([k, v]) => [k, Number(v)])
               )
             }))
-            .filter((o) => Object.keys(o.amounts).length > 0);
+            .filter((o) => Object.keys(o.amounts).length > 0 || Object.keys(o.arrears).length > 0);
         }
 
         // Process academicBackground array - filter out empty objects and convert dates
@@ -4246,8 +4254,10 @@ const EmployeeForm = () => {
               <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
                 Pick a payroll month and enter the amount to pay in that month only. Leave a field blank to keep the
                 original amount. The allowances above are not changed, so the next month goes back to the original
-                automatically. Final settlement always uses the original allowances. If that month's payroll is
-                already generated, regenerate it to apply the change.
+                automatically. To pay arrears with an allowance, enter them under Arrears: they are added on top of that
+                month's allowance and taxed the same way as the allowance in Payroll Taxes (a fully exempt allowance
+                means its arrears are not taxed). Final settlement always uses the original allowances and ignores
+                arrears. If that month's payroll is already generated, regenerate it to apply the change.
               </Typography>
             </Grid>
             <Grid item xs={6} md={3}>
@@ -4290,7 +4300,8 @@ const EmployeeForm = () => {
                       month,
                       year,
                       note: '',
-                      amounts: Object.fromEntries(MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, '']))
+                      amounts: Object.fromEntries(MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, ''])),
+                      arrears: Object.fromEntries(MONTHLY_OVERRIDE_ALLOWANCES.map(({ key }) => [key, '']))
                     }
                   ]);
                 }}
@@ -4344,6 +4355,32 @@ const EmployeeForm = () => {
                           </Grid>
                         );
                       })}
+                      <Grid item xs={12}>
+                        <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
+                          Arrears for {monthLabel} {override.year}
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Added on top of the allowance for this month only.
+                        </Typography>
+                      </Grid>
+                      {MONTHLY_OVERRIDE_ALLOWANCES.map(({ key, label }) => (
+                        <Grid item xs={12} sm={6} md={4} key={`arrear-${key}`}>
+                          <TextField
+                            fullWidth
+                            size="small"
+                            type="number"
+                            label={`${label} Arrears`}
+                            value={override.arrears?.[key] ?? ''}
+                            onChange={(e) => formik.setFieldValue(
+                              `monthlyAllowanceOverrides.${index}.arrears.${key}`,
+                              e.target.value
+                            )}
+                            inputProps={{ min: 0 }}
+                            InputLabelProps={{ shrink: true }}
+                            placeholder="None"
+                          />
+                        </Grid>
+                      ))}
                       <Grid item xs={12}>
                         <TextField
                           fullWidth

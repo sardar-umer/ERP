@@ -29,6 +29,7 @@ import RegistryViewer from './RegistryViewer';
 import PossessionViewer from './PossessionViewer';
 import KhasraSummaryViewer from './KhasraSummaryViewer';
 import PendingPossessionRegistryViewer from './PendingPossessionRegistryViewer';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const TABLE_HEAD_SX = {
   fontWeight: 700,
@@ -258,6 +259,7 @@ const MozaReportTable = ({ mozaId, mozaName, active }) => {
     }
   };
 
+  const pg = useClientPagination(filteredEntries);
   if (!active) return null;
 
   return (
@@ -334,7 +336,7 @@ const MozaReportTable = ({ mozaId, mozaName, active }) => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {filteredEntries.map((row) => (
+              {pg.rows.map((row) => (
                 <TableRow key={row.khasraEntryId} hover>
                   <TableCell align="center" sx={COMPACT_CELL_SX}>{row.srNo}</TableCell>
                   <TableCell align="center" sx={COMPACT_CELL_SX}>{row.khewatNo}</TableCell>
@@ -382,7 +384,7 @@ const MozaReportTable = ({ mozaId, mozaName, active }) => {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

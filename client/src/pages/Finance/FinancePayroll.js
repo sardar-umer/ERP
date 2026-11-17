@@ -65,6 +65,7 @@ import {
   PROJECT_SUMMARY_AMOUNT_COLUMNS,
   aggregatePayrollBreakdownFromRows
 } from '../../utils/payrollFinanceSummaryReport';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const SR_MANAGER_ACCOUNTS_NAME = 'Muhammad Iftikhar Rashid';
 
@@ -632,6 +633,7 @@ export default function FinancePayroll() {
     setSearchParams(next, { replace: true });
   };
 
+  const pg = useClientPagination(filteredPayrolls);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
@@ -1025,9 +1027,9 @@ export default function FinancePayroll() {
                           No employees match the selected company filter.
                         </TableCell>
                       </TableRow>
-                    ) : filteredPayrolls.map((row, index) => (
+                    ) : pg.rows.map((row, index) => (
                       <TableRow key={row._id} hover>
-                        <TableCell>{index + 1}</TableCell>
+                        <TableCell>{pg.offset + index + 1}</TableCell>
                         <TableCell>{row.employee?.employeeId || '—'}</TableCell>
                         <TableCell>
                           <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5 }}>
@@ -1071,7 +1073,7 @@ export default function FinancePayroll() {
                       <TableCell sx={grandTotalRowSx} />
                     </TableRow>
                   </TableFooter>
-                </Table>
+                </Table>{pg.bar}
               </TableContainer>
             </>
           ) : null}

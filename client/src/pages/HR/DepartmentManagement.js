@@ -31,6 +31,7 @@ import {
   Business as BusinessIcon
 } from '@mui/icons-material';
 import api from '../../services/authService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const DepartmentManagement = () => {
   const [departments, setDepartments] = useState([]);
@@ -165,6 +166,7 @@ const DepartmentManagement = () => {
     }));
   };
 
+  const pg = useClientPagination(departments);
   if (loading) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
@@ -198,7 +200,7 @@ const DepartmentManagement = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {departments.map((department) => (
+            {pg.rows.map((department) => (
               <TableRow key={department._id}>
                 <TableCell>
                   <Box>
@@ -251,7 +253,7 @@ const DepartmentManagement = () => {
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       {/* Add/Edit Dialog */}

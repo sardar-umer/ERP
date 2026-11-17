@@ -24,6 +24,7 @@ import {
 import { authService } from '../../services/authService';
 import { getImageUrl, handleImageError } from '../../utils/imageService';
 import { useAuth } from '../../contexts/AuthContext';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const OnlineUsers = () => {
   const { user } = useAuth();
@@ -83,6 +84,7 @@ const OnlineUsers = () => {
     return [...set].sort();
   }, [rows]);
 
+  const pg = useClientPagination(rows);
   if (user?.role !== 'super_admin' && user?.role !== 'developer' && user?.role !== 'admin') {
     return (
       <Box sx={{ p: 3 }}>
@@ -160,7 +162,7 @@ const OnlineUsers = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  rows.map((u) => (
+                  pg.rows.map((u) => (
                     <TableRow key={u.id}>
                       <TableCell>
                         <Stack direction="row" spacing={1.25} alignItems="center">
@@ -187,7 +189,7 @@ const OnlineUsers = () => {
                   ))
                 )}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         )}
       </Paper>

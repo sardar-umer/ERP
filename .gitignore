@@ -146,3 +146,5 @@ uploads/
 
 # ZKBio Time session storage
 server/zkbio-session.json 
+# Local backups (may hold production data)
+backups/

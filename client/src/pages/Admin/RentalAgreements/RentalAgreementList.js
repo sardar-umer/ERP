@@ -49,6 +49,7 @@ import { format } from 'date-fns';
 import { useNavigate } from 'react-router-dom';
 import api from '../../../services/api';
 import { getImageUrl } from '../../../utils/imageService';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const RentalAgreementList = () => {
   const navigate = useNavigate();
@@ -339,6 +340,7 @@ const RentalAgreementList = () => {
   };
 
 
+  const pg = useClientPagination(agreements);
   if (loading) {
     return (
       <Box sx={{ p: 3 }}>
@@ -426,7 +428,7 @@ const RentalAgreementList = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {agreements.map((agreement) => (
+                {pg.rows.map((agreement) => (
                   <TableRow key={agreement._id}>
                     <TableCell>{agreement.agreementNumber}</TableCell>
                     <TableCell>{agreement.propertyName}</TableCell>
@@ -492,7 +494,7 @@ const RentalAgreementList = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </CardContent>
       </Card>

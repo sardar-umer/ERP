@@ -8,6 +8,7 @@ import { Print as PrintIcon, ArrowBack as BackIcon } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import api from '../../services/api';
 import { openPrintHtml } from '../../utils/employeeFormPrint';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (v) => new Intl.NumberFormat('en-PK', { maximumFractionDigits: 2 }).format(Number(v || 0));
 /** Payable shows plain; a negative balance means the vendor holds our advance */
@@ -108,6 +109,8 @@ export default function VendorLedger() {
     ['Advance not yet adjusted', fmt(data.unadjustedAdvance)]
   ] : [];
 
+  const pg = useClientPagination(vendors);
+  const pg2 = useClientPagination(data?.entries);
   return (
     <Box sx={{ p: { xs: 2, sm: 3 } }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} gap={2} sx={{ mb: 2 }}>
@@ -146,7 +149,7 @@ export default function VendorLedger() {
                 ))}
               </TableRow></TableHead>
               <TableBody>
-                {vendors.map((v) => (
+                {pg.rows.map((v) => (
                   <TableRow key={v.vendorId} hover sx={{ cursor: 'pointer' }} onClick={() => setParam('vendor', v.vendorId)}>
                     <TableCell>
                       <Link component="button" underline="hover" sx={{ textAlign: 'left' }}>{v.name}</Link>
@@ -174,7 +177,7 @@ export default function VendorLedger() {
                   <TableRow><TableCell colSpan={7} align="center"><Typography color="text.secondary" py={3}>No vendor has a GRN bill or purchase advance yet</Typography></TableCell></TableRow>
                 )}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         )
       )}
@@ -216,7 +219,7 @@ export default function VendorLedger() {
                   <TableCell colSpan={7}><strong>Opening balance</strong></TableCell>
                   <TableCell align="right"><strong>{fmtBalance(data.openingBalance)}</strong></TableCell>
                 </TableRow>
-                {data.entries.map((e, i) => (
+                {pg2.rows.map((e, i) => (
                   // eslint-disable-next-line react/no-array-index-key
                   <TableRow key={i} hover>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>{fmtDate(e.date)}</TableCell>
@@ -253,7 +256,7 @@ export default function VendorLedger() {
                   <TableCell align="right"><strong>{fmtBalance(data.totals.closingBalance)}</strong></TableCell>
                 </TableRow>
               </TableBody>
-            </Table>
+            </Table>{pg2.bar}
           </TableContainer>
           <Typography variant="caption" color="text.secondary">
             Balance is what is still payable to the vendor; “Adv” means the vendor holds more advance than has been billed.

@@ -10,6 +10,7 @@ import {
   CalendarMonth as TermIcon, Bolt as SeedIcon, AddCircle as AddLineIcon, RemoveCircle as RemoveLineIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const emptyLine = { type: 'balance', value: 100, daysAfterInvoice: 0, description: '' };
 const emptyForm = { name: '', code: '', note: '', lines: [{ ...emptyLine }] };
@@ -91,6 +92,7 @@ export default function PaymentTerms() {
   const addLine    = () => setForm({ ...form, lines: [...form.lines, { ...emptyLine, type: 'percent' }] });
   const removeLine = (idx) => setForm({ ...form, lines: form.lines.filter((_, i) => i !== idx) });
 
+  const pg = useClientPagination(terms);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
@@ -124,7 +126,7 @@ export default function PaymentTerms() {
               {terms.length === 0 && (
                 <TableRow><TableCell colSpan={5} align="center" sx={{ color: 'text.secondary', py: 4 }}>No payment terms. Click "Seed Defaults" to start.</TableCell></TableRow>
               )}
-              {terms.map(t => (
+              {pg.rows.map(t => (
                 <TableRow key={t._id} hover>
                   <TableCell><b>{t.code}</b></TableCell>
                   <TableCell>{t.name}</TableCell>
@@ -137,7 +139,7 @@ export default function PaymentTerms() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

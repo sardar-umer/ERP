@@ -38,6 +38,7 @@ import { LocalizationProvider } from '@mui/x-date-pickers/LocalizationProvider';
 import { AdapterDateFns } from '@mui/x-date-pickers/AdapterDateFns';
 import api from '../../services/api';
 import { formatAttendanceTime, formatLocalDate, isLateCheckIn, getTimeDifference } from '../../utils/timezoneHelper';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const AttendanceReport = () => {
   const [loading, setLoading] = useState(false);
@@ -185,6 +186,7 @@ const AttendanceReport = () => {
     return Math.round((diffMs / (1000 * 60 * 60)) * 100) / 100;
   };
 
+  const pg = useClientPagination(attendanceData);
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4" sx={{ mb: 3, fontWeight: 'bold' }}>
@@ -404,7 +406,7 @@ const AttendanceReport = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                attendanceData.map((record, index) => (
+                pg.rows.map((record, index) => (
                   <TableRow 
                     key={record._id || index}
                     sx={{
@@ -414,7 +416,7 @@ const AttendanceReport = () => {
                   >
                     <TableCell>{record.employee?.employeeId || ''}</TableCell>
                     <TableCell>{record.employee?._id?.slice(-4) || ''}</TableCell>
-                    <TableCell>{index + 1}</TableCell>
+                    <TableCell>{pg.offset + index + 1}</TableCell>
                     <TableCell>
                       {record.employee ? `${record.employee.firstName} ${record.employee.lastName}` : ''}
                     </TableCell>
@@ -460,7 +462,7 @@ const AttendanceReport = () => {
                 ))
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

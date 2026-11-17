@@ -54,6 +54,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import trainingProgramService from '../../services/trainingProgramService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const TrainingPrograms = () => {
   const theme = useTheme();
@@ -211,6 +212,7 @@ const TrainingPrograms = () => {
     setPage(1);
   };
 
+  const pg = useClientPagination(programs);
   if (loading && programs.length === 0) {
     return (
       <Container maxWidth="xl">
@@ -357,7 +359,7 @@ const TrainingPrograms = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {programs.map((program) => (
+                {pg.rows.map((program) => (
                   <TableRow key={program._id} hover>
                     <TableCell>
                       <Box>
@@ -482,7 +484,7 @@ const TrainingPrograms = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </Card>
 

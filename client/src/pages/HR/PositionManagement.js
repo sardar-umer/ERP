@@ -32,6 +32,7 @@ import {
   Work as WorkIcon
 } from '@mui/icons-material';
 import api from '../../services/authService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const PositionManagement = () => {
   const [positions, setPositions] = useState([]);
@@ -253,6 +254,7 @@ const PositionManagement = () => {
     }));
   };
 
+  const pg = useClientPagination(positions);
   if (loading) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
@@ -296,7 +298,7 @@ const PositionManagement = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {positions.map((position) => (
+            {pg.rows.map((position) => (
               <TableRow key={position._id}>
                 <TableCell>
                   <Box>
@@ -346,7 +348,7 @@ const PositionManagement = () => {
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       {/* Quick Add Dialog */}

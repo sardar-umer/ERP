@@ -25,6 +25,7 @@ import {
 import dayjs from 'dayjs';
 import relativeTime from 'dayjs/plugin/relativeTime';
 import evaluationTrackingService from '../../services/evaluationTrackingService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 dayjs.extend(relativeTime);
 
@@ -76,6 +77,7 @@ const EvaluationTracking = () => {
     return dayjs(date).fromNow(true);
   };
 
+  const pg = useClientPagination(filteredData);
   return (
     <Box sx={{ p: 3 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
@@ -139,7 +141,7 @@ const EvaluationTracking = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredData.map((item) => (
+                  {pg.rows.map((item) => (
                     <TableRow key={item._id} hover>
                       <TableCell>
                         <Typography fontWeight={600}>{item.employeeName || '—'}</Typography>
@@ -203,7 +205,7 @@ const EvaluationTracking = () => {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
         </CardContent>

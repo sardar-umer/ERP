@@ -41,6 +41,7 @@ import {
   isCashApprovalDeptApproved
 } from '../../../utils/departmentApprovalListActions';
 import { canEditGeneralCashApproval } from '../../../utils/generalCashApprovalWorkflow';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const statusColor = (status) => {
   if (status === 'Draft') return 'default';
@@ -123,6 +124,7 @@ const GeneralCashApprovalsList = () => {
     }
   };
 
+  const pg = useClientPagination(rows);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="flex-start" mb={3} flexWrap="wrap" gap={2}>
@@ -180,7 +182,7 @@ const GeneralCashApprovalsList = () => {
                   </TableCell>
                 </TableRow>
               ) : (
-                rows.map((row) => (
+                pg.rows.map((row) => (
                   <TableRow key={row._id} hover>
                     <TableCell>{row.caNumber}</TableCell>
                     <TableCell>
@@ -251,7 +253,7 @@ const GeneralCashApprovalsList = () => {
                 ))
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

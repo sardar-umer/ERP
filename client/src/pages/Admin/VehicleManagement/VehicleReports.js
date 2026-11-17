@@ -33,6 +33,7 @@ import vehicleService from '../../../services/vehicleService';
 import vehicleMaintenanceService from '../../../services/vehicleMaintenanceService';
 import vehicleLogBookService from '../../../services/vehicleLogBookService';
 import { formatDate, formatCurrency } from '../../../utils/dateUtils';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 // Lightweight reusable components
 const ReportCard = ({ title, value, subtitle, icon: Icon, color = 'primary' }) => (
@@ -480,6 +481,8 @@ const VehicleReports = () => {
     return csvRows.map(row => row.join(',')).join('\n');
   };
 
+  const pg = useClientPagination(reports?.filteredMaintenance);
+  const pg2 = useClientPagination(reports?.filteredLogBook);
   if (loading) {
     return (
       <Box sx={{ p: 3 }}>
@@ -720,7 +723,7 @@ const VehicleReports = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  reports.filteredMaintenance.map((record) => (
+                  pg.rows.map((record) => (
                     <TableRow key={record._id}>
                     <TableCell>
                       {record.vehicleId?.make} {record.vehicleId?.model}
@@ -740,7 +743,7 @@ const VehicleReports = () => {
                   ))
                 )}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </CardContent>
       </Card>
@@ -776,7 +779,7 @@ const VehicleReports = () => {
                     </TableCell>
                   </TableRow>
                 ) : (
-                  reports.filteredLogBook.map((entry) => (
+                  pg2.rows.map((entry) => (
                     <TableRow key={entry._id}>
                     <TableCell>
                       {entry.vehicleId?.make} {entry.vehicleId?.model}
@@ -792,7 +795,7 @@ const VehicleReports = () => {
                   ))
                 )}
               </TableBody>
-            </Table>
+            </Table>{pg2.bar}
           </TableContainer>
         </CardContent>
       </Card>

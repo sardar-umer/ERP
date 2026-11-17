@@ -10,6 +10,7 @@ import {
   Refresh as RefreshIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const STATUS_COLORS = { draft: 'default', confirmed: 'warning', posted: 'success' };
 const REASON_LABELS = {
@@ -46,6 +47,7 @@ export default function VendorRefunds() {
   const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
 
+  const pg = useClientPagination(data.returns);
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
@@ -141,7 +143,7 @@ export default function VendorRefunds() {
                   </TableCell>
                 </TableRow>
               ) : (
-                data.returns.map((r, i) => (
+                pg.rows.map((r, i) => (
                   <TableRow key={r._id || i} hover sx={{ '&:nth-of-type(even)': { bgcolor: 'grey.50' } }}>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600} color="error.main">{r.returnNumber}</Typography>
@@ -182,7 +184,7 @@ export default function VendorRefunds() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

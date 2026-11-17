@@ -662,7 +662,8 @@ const employeeSchema = new mongoose.Schema({
     }]
   },
   /**
-   * Allowance amounts for one payroll month only (set amounts replace the master for that month).
+   * Allowance amounts for one payroll month only (set amounts replace the master for that month;
+   * arrears are added on top of that month's allowance).
    * The master allowances are untouched, so later months and the final settlement use the original.
    */
   monthlyAllowanceOverrides: [{
@@ -670,6 +671,18 @@ const employeeSchema = new mongoose.Schema({
     month: { type: Number, min: 1, max: 12, required: true },
     year: { type: Number, min: 2020, required: true },
     amounts: {
+      conveyance: { type: Number, min: 0 },
+      food: { type: Number, min: 0 },
+      mobile: { type: Number, min: 0 },
+      vehicle: { type: Number, min: 0 },
+      fuel: { type: Number, min: 0 },
+      medical: { type: Number, min: 0 },
+      houseRent: { type: Number, min: 0 },
+      special: { type: Number, min: 0 },
+      other: { type: Number, min: 0 }
+    },
+    /** Arrears paid with an allowance in this month only — added on top and taxed like that allowance */
+    arrears: {
       conveyance: { type: Number, min: 0 },
       food: { type: Number, min: 0 },
       mobile: { type: Number, min: 0 },

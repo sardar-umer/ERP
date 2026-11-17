@@ -9,6 +9,7 @@ import {
   Print as PrintIcon, Refresh as RefreshIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const STATUS_COLOR = { paid: 'success', pending: 'warning', partial: 'info', overdue: 'error', draft: 'default' };
@@ -99,6 +100,8 @@ export default function CustomerStatement() {
     }, 50);
   };
 
+  const pg = useClientPagination(customers);
+
   // ── Customer List ──────────────────────────────────────────────────────────
   if (!selectedCustomer) {
     return (
@@ -140,7 +143,7 @@ export default function CustomerStatement() {
                     No customer invoices found
                   </TableCell></TableRow>
                 )}
-                {customers.map((c, i) => (
+                {pg.rows.map((c, i) => (
                   <TableRow key={i} hover>
                     <TableCell>
                       <Stack direction="row" alignItems="center" gap={1.5}>
@@ -175,7 +178,7 @@ export default function CustomerStatement() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         )}
       </Box>

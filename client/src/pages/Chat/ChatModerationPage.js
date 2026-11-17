@@ -14,6 +14,7 @@ import {
 } from '@mui/material';
 import { useAuth } from '../../contexts/AuthContext';
 import ChatService from '../../services/chatService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const adminRoles = new Set(['super_admin', 'admin', 'developer']);
 
@@ -51,6 +52,7 @@ const ChatModerationPage = () => {
     }
   };
 
+  const pg = useClientPagination(rows);
   if (!allowed) {
     return (
       <Box sx={{ p: 3 }}>
@@ -96,7 +98,7 @@ const ChatModerationPage = () => {
           </TableRow>
         </TableHead>
         <TableBody>
-          {rows.map((r) => (
+          {pg.rows.map((r) => (
             <TableRow key={r.id}>
               <TableCell>{r.createdAt ? new Date(r.createdAt).toLocaleString() : ''}</TableCell>
               <TableCell>{r.sender?.name || r.sender?.id || '—'}</TableCell>
@@ -110,7 +112,7 @@ const ChatModerationPage = () => {
             </TableRow>
           ))}
         </TableBody>
-      </Table>
+      </Table>{pg.bar}
     </Box>
   );
 };

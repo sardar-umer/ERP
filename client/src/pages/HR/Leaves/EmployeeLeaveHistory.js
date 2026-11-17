@@ -35,6 +35,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom';
 import { format } from 'date-fns';
 import leaveService from '../../../services/leaveService';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const EmployeeLeaveHistory = () => {
   const { employeeId } = useParams();
@@ -108,6 +109,8 @@ const EmployeeLeaveHistory = () => {
     if (!date) return 'N/A';
     return format(new Date(date), 'MMM dd, yyyy');
   };
+
+  const pg = useClientPagination(leaveSummary?.history);
 
   if (loading) {
     return (
@@ -568,7 +571,7 @@ const EmployeeLeaveHistory = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {leaveHistoryList.map((leave) => (
+                  {pg.rows.map((leave) => (
                     <TableRow key={leave._id} hover>
                       <TableCell>
                         <Chip
@@ -623,7 +626,7 @@ const EmployeeLeaveHistory = () => {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
         </CardContent>

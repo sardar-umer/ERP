@@ -9,6 +9,7 @@ import {
   Refresh as RefreshIcon, WarningAmber as WarningIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 export default function BillToReceive() {
   const [data, setData]       = useState({ grns: [], totalAccrual: 0, count: 0 });
@@ -44,6 +45,7 @@ export default function BillToReceive() {
     return `${diff}d ago`;
   };
 
+  const pg = useClientPagination(data.grns);
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
@@ -128,7 +130,7 @@ export default function BillToReceive() {
                   </TableCell>
                 </TableRow>
               ) : (
-                data.grns.map((grn, i) => {
+                pg.rows.map((grn, i) => {
                   const age = grn.receiveDate ? Math.floor((Date.now() - new Date(grn.receiveDate)) / 864e5) : 0;
                   return (
                     <TableRow key={grn._id || i} hover
@@ -174,7 +176,7 @@ export default function BillToReceive() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

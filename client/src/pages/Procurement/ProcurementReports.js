@@ -33,6 +33,7 @@ import dayjs from 'dayjs';
 import procurementService from '../../services/procurementService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const STATUS_COLORS = {
   Draft: 'default',
@@ -206,6 +207,7 @@ const ProcurementReports = () => {
     URL.revokeObjectURL(url);
   };
 
+  const pg = useClientPagination(vendorSpend);
   if (loading) {
     return (
       <Box sx={{ p: 3, display: 'flex', justifyContent: 'center', minHeight: 320, alignItems: 'center' }}>
@@ -386,7 +388,7 @@ const ProcurementReports = () => {
                         </TableCell>
                       </TableRow>
                     ) : (
-                      vendorSpend.map((v) => (
+                      pg.rows.map((v) => (
                         <TableRow key={v.vendorName} hover>
                           <TableCell>{v.vendorName}</TableCell>
                           <TableCell>{v.orders}</TableCell>
@@ -395,7 +397,7 @@ const ProcurementReports = () => {
                       ))
                     )}
                   </TableBody>
-                </Table>
+                </Table>{pg.bar}
               </TableContainer>
             </CardContent>
           </Card>

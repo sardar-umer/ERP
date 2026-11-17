@@ -11,6 +11,7 @@ import {
 } from '../../services/projectManagementService';
 import UnitProgressGrid from '../../components/ProjectManagement/UnitProgressGrid';
 import { unitWord } from '../../utils/wbsProjectTypes';
+import useClientPagination from '../../hooks/useClientPagination';
 
 export { unitWord };
 
@@ -160,6 +161,7 @@ export default function UnitsTab({ projectId, project }) {
     }
   };
 
+  const pg = useClientPagination(units);
   return (
     <Box>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', sm: 'center' }} gap={1} sx={{ mb: 2 }}>
@@ -212,9 +214,9 @@ export default function UnitsTab({ projectId, project }) {
               </TableRow>
             </TableHead>
             <TableBody>
-              {units.map((u, i) => (
+              {pg.rows.map((u, i) => (
                 <TableRow key={u._id} hover>
-                  <TableCell>{i + 1}</TableCell>
+                  <TableCell>{pg.offset + i + 1}</TableCell>
                   <TableCell sx={{ fontWeight: 600 }}>{u.name}</TableCell>
                   <TableCell>{u.plotNumber || '—'}</TableCell>
                   <TableCell>{u.street || '—'}</TableCell>
@@ -227,7 +229,7 @@ export default function UnitsTab({ projectId, project }) {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

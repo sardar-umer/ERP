@@ -9,6 +9,7 @@ import {
   Refresh as RefreshIcon, TrendingDown as TrendingDownIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const STATUS_COLORS = {
   draft: 'default', pending: 'warning', approved: 'info',
@@ -43,6 +44,7 @@ export default function CreditNotes() {
   const fmt = (n) => `PKR ${Math.abs(Number(n || 0)).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
 
+  const pg = useClientPagination(data.notes);
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
@@ -125,7 +127,7 @@ export default function CreditNotes() {
                   </TableCell>
                 </TableRow>
               ) : (
-                data.notes.map((cn, i) => (
+                pg.rows.map((cn, i) => (
                   <TableRow key={cn._id || i} hover sx={{ '&:nth-of-type(even)': { bgcolor: 'grey.50' } }}>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600} color="warning.dark">
@@ -162,7 +164,7 @@ export default function CreditNotes() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

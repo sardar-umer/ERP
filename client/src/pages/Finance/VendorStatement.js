@@ -6,6 +6,7 @@ import {
 } from '@mui/material';
 import { ArrowBack as BackIcon, Receipt as VendorIcon } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -50,6 +51,8 @@ export default function VendorStatement() {
     }
   };
 
+  const pg = useClientPagination(vendors);
+  const pg2 = useClientPagination(statement?.bills);
   if (selectedVendor) {
     return (
       <Box sx={{ p: 3 }}>
@@ -96,7 +99,7 @@ export default function VendorStatement() {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {statement.bills.map(b => (
+                  {pg2.rows.map(b => (
                     <TableRow key={b._id} hover>
                       <TableCell>{b.referenceNumber || '—'}</TableCell>
                       <TableCell>{b.createdAt ? new Date(b.createdAt).toLocaleDateString() : '—'}</TableCell>
@@ -111,7 +114,7 @@ export default function VendorStatement() {
                     <TableRow><TableCell colSpan={7} align="center" sx={{ color: 'text.secondary' }}>No bills found</TableCell></TableRow>
                   )}
                 </TableBody>
-              </Table>
+              </Table>{pg2.bar}
             </TableContainer>
           </>
         )}
@@ -145,7 +148,7 @@ export default function VendorStatement() {
               {vendors.length === 0 && (
                 <TableRow><TableCell colSpan={6} align="center" sx={{ color: 'text.secondary', py: 4 }}>No vendor data found</TableCell></TableRow>
               )}
-              {vendors.map(v => (
+              {pg.rows.map(v => (
                 <TableRow key={v._id} hover>
                   <TableCell>
                     <Stack direction="row" alignItems="center" gap={1}>
@@ -167,7 +170,7 @@ export default function VendorStatement() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

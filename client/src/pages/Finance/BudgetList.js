@@ -11,6 +11,7 @@ import {
   CheckCircle as ApproveIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 0 })}`;
 const STATUS_COLOR = { draft: 'default', approved: 'success', locked: 'error' };
@@ -64,6 +65,7 @@ export default function BudgetList() {
   const totalBudgeted  = budgets.reduce((s, b) => s + (b.totalBudget || 0), 0);
   const approvedCount  = budgets.filter(b => b.status === 'approved').length;
 
+  const pg = useClientPagination(budgets);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
@@ -122,7 +124,7 @@ export default function BudgetList() {
                   No budgets found. Create your first budget.
                 </TableCell></TableRow>
               )}
-              {budgets.map(b => (
+              {pg.rows.map(b => (
                 <TableRow key={b._id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight={700} color="primary.main">{b.name}</Typography>
@@ -174,7 +176,7 @@ export default function BudgetList() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

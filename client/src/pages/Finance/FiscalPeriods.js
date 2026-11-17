@@ -10,6 +10,7 @@ import {
   Close as CloseIcon, Add as AddIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const statusColor = (s) => ({ open: 'success', closed: 'warning', locked: 'error' }[s] || 'default');
 
@@ -85,6 +86,7 @@ export default function FiscalPeriods() {
     } catch (e) { setError(e.response?.data?.message || 'Failed'); }
   };
 
+  const pg = useClientPagination(periods);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
@@ -130,7 +132,7 @@ export default function FiscalPeriods() {
                 <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                   No periods for {filterYear}. Click "Generate Year" to create them.
                 </TableCell></TableRow>
-              ) : periods.map(p => (
+              ) : pg.rows.map(p => (
                 <TableRow key={p._id} hover>
                   <TableCell><Typography fontWeight={600}>{p.name}</Typography></TableCell>
                   <TableCell>{new Date(p.startDate).toLocaleDateString('en-PK')}</TableCell>
@@ -164,7 +166,7 @@ export default function FiscalPeriods() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       </Paper>
 

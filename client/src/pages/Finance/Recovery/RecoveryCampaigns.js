@@ -34,6 +34,7 @@ import {
   updateRecoveryCampaign,
   deleteRecoveryCampaign
 } from '../../../services/recoveryCampaignService';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const getCreatedByName = (doc) => {
   const u = doc.createdBy;
@@ -155,6 +156,7 @@ const RecoveryCampaigns = () => {
     }
   };
 
+  const pg = useClientPagination(campaigns);
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 2, flexWrap: 'wrap', gap: 2 }}>
@@ -197,7 +199,7 @@ const RecoveryCampaigns = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {campaigns.map((c) => (
+                  {pg.rows.map((c) => (
                     <TableRow key={c._id}>
                       <TableCell><Typography fontWeight={500}>{c.whatsappTemplateName || '—'}</Typography></TableCell>
                       <TableCell>{c.whatsappLanguageCode || '—'}</TableCell>
@@ -220,7 +222,7 @@ const RecoveryCampaigns = () => {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
         </CardContent>

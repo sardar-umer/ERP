@@ -42,6 +42,7 @@ import {
 import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) =>
   Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -395,6 +396,7 @@ export default function FinanceCustomersList() {
   </Dialog>
   );
 
+  const pg = useClientPagination(customers);
   if (selected) {
     const customer = detail?.customer || selected;
     const summary = detail?.summary || selected.finance || {};
@@ -1022,7 +1024,7 @@ export default function FinanceCustomersList() {
                   </TableCell>
                 </TableRow>
               )}
-              {customers.map((c) => (
+              {pg.rows.map((c) => (
                 <TableRow key={c._id} hover>
                   <TableCell>
                     <Stack direction="row" alignItems="center" gap={1}>
@@ -1052,7 +1054,7 @@ export default function FinanceCustomersList() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

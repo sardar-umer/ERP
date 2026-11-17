@@ -11,6 +11,7 @@ import {
 import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const METHOD_COLORS = {
   bank_transfer: 'primary', check: 'secondary', cheque: 'secondary',
@@ -46,6 +47,7 @@ export default function CustomerPayments() {
   const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
   const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
 
+  const pg = useClientPagination(data.payments);
   return (
     <Box sx={{ p: 3 }}>
       {/* Header */}
@@ -120,7 +122,7 @@ export default function CustomerPayments() {
                   </TableCell>
                 </TableRow>
               ) : (
-                data.payments.map((p, i) => (
+                pg.rows.map((p, i) => (
                   <TableRow key={p._id || i} hover sx={{ '&:nth-of-type(even)': { bgcolor: 'grey.50' } }}>
                     <TableCell>{fmtDate(p.paymentDate)}</TableCell>
                     <TableCell>
@@ -153,7 +155,7 @@ export default function CustomerPayments() {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

@@ -10,6 +10,7 @@ import {
   MenuBook as JournalIcon, CheckCircle as SeedIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const JOURNAL_TYPES = [
   { value: 'purchase',    label: 'Purchase Journal',     color: 'error' },
@@ -101,6 +102,7 @@ export default function FinanceJournals() {
     }
   };
 
+  const pg = useClientPagination(journals);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
@@ -148,7 +150,7 @@ export default function FinanceJournals() {
                 <TableRow><TableCell colSpan={7} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                   No journals. Click "Seed System Journals" to create the standard set.
                 </TableCell></TableRow>
-              ) : journals.map(j => (
+              ) : pg.rows.map(j => (
                 <TableRow key={j._id} hover>
                   <TableCell><Typography fontWeight={700} fontFamily="monospace">{j.code}</Typography></TableCell>
                   <TableCell>{j.name}</TableCell>
@@ -171,7 +173,7 @@ export default function FinanceJournals() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       </Paper>
 

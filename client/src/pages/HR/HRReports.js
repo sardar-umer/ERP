@@ -126,6 +126,7 @@ import {
 } from '@mui/icons-material';
 import { formatPKR } from '../../utils/currency';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const HRReports = () => {
   const theme = useTheme();
@@ -645,6 +646,7 @@ const HRReports = () => {
   };
 
   // Show loading state for initial data loading
+  const pg = useClientPagination(reportData?.data);
   if (loading && departments.length === 0 && designations.length === 0 && employees.length === 0) {
     return (
       <PageLoading 
@@ -1502,7 +1504,7 @@ const HRReports = () => {
                         </TableRow>
                       </TableHead>
                       <TableBody>
-                        {reportData.data.map((row, index) => (
+                        {pg.rows.map((row, index) => (
                           <TableRow 
                             key={index}
                                                          sx={{ 
@@ -1529,7 +1531,7 @@ const HRReports = () => {
                           </TableRow>
                         ))}
                       </TableBody>
-                    </Table>
+                    </Table>{pg.bar}
                   </TableContainer>
                 </Box>
               )}

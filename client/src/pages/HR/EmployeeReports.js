@@ -50,6 +50,7 @@ import {
 } from '@mui/icons-material';
 import { formatPKR } from '../../utils/currency';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const EmployeeReports = () => {
   const [startDate, setStartDate] = useState('');
@@ -173,6 +174,7 @@ const EmployeeReports = () => {
     });
   };
 
+  const pg = useClientPagination(reportData?.employees);
   return (
     <Box sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom>
@@ -345,7 +347,7 @@ const EmployeeReports = () => {
                     </TableRow>
                   </TableHead>
                   <TableBody>
-                    {reportData.employees.map((employee) => (
+                    {pg.rows.map((employee) => (
                       <TableRow key={employee.employeeId}>
                         <TableCell>{employee.employeeId}</TableCell>
                         <TableCell>
@@ -390,7 +392,7 @@ const EmployeeReports = () => {
                       </TableRow>
                     ))}
                   </TableBody>
-                </Table>
+                </Table>{pg.bar}
               </TableContainer>
             </CardContent>
           </Card>

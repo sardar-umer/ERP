@@ -10,6 +10,7 @@ import {
   Percent as TaxIcon, Bolt as SeedIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const TAX_TYPES = [
   { value: 'gst',         label: 'GST (Sales Tax)',       color: 'primary' },
@@ -102,6 +103,7 @@ export default function TaxManagement() {
 
   const typeInfo = (t) => TAX_TYPES.find(x => x.value === t) || { label: t, color: 'default' };
 
+  const pg = useClientPagination(taxes);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
@@ -138,7 +140,7 @@ export default function TaxManagement() {
               {taxes.length === 0 && (
                 <TableRow><TableCell colSpan={8} align="center" sx={{ color: 'text.secondary', py: 4 }}>No taxes configured. Click "Seed Pakistan Defaults" to start.</TableCell></TableRow>
               )}
-              {taxes.map(t => (
+              {pg.rows.map(t => (
                 <TableRow key={t._id} hover>
                   <TableCell><b>{t.code}</b></TableCell>
                   <TableCell>{t.name}</TableCell>
@@ -154,7 +156,7 @@ export default function TaxManagement() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

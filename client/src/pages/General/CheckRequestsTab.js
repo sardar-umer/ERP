@@ -61,6 +61,7 @@ import { normalizeWbsProjectType, wbsProjectTypeLabel, unitWord } from '../../ut
 import { printCheckRequest } from '../../utils/checkRequestPrint';
 import InspectionReportDialog from '../../components/ProjectManagement/InspectionReportDialog';
 import { CheckRequestAttachmentsField, CheckRequestAttachmentsList } from '../../components/ProjectManagement/CheckRequestAttachments';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (v) =>
   new Intl.NumberFormat('en-PK', {
@@ -649,6 +650,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
     }
   };
 
+  const pg = useClientPagination(rows);
   if (loading) {
     return (
       <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
@@ -767,7 +769,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
                 </TableCell>
               </TableRow>
             ) : (
-              rows.map((row) => (
+              pg.rows.map((row) => (
                 <TableRow key={row._id} hover>
                   <TableCell>{row.checkRequestNumber}</TableCell>
                   <TableCell>
@@ -877,7 +879,7 @@ const CheckRequestsTab = ({ projectId, project, onGoToTab }) => {
               ))
             )}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       {/* Create / Edit */}

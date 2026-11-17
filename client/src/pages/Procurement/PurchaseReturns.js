@@ -13,6 +13,7 @@ import { useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import { getDocCompanyName } from '../../utils/documentCompany';
 import GrnReturnDialog from '../../components/Procurement/Store/GrnReturnDialog';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const STATUS_COLOR = { draft: 'default', confirmed: 'info', posted: 'success' };
 
@@ -96,6 +97,7 @@ export default function PurchaseReturns() {
     }
   };
 
+  const pg = useClientPagination(returns);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
@@ -139,7 +141,7 @@ export default function PurchaseReturns() {
               {returns.length === 0 && (
                 <TableRow><TableCell colSpan={9} align="center" sx={{ color: 'text.secondary', py: 4 }}>No purchase returns yet.</TableCell></TableRow>
               )}
-              {returns.map(r => (
+              {pg.rows.map(r => (
                 <TableRow key={r._id} hover>
                   <TableCell><b>{r.returnNumber}</b></TableCell>
                   <TableCell>{getDocCompanyName(r)}</TableCell>
@@ -161,7 +163,7 @@ export default function PurchaseReturns() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

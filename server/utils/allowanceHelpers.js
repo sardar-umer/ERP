@@ -98,9 +98,14 @@ const overrideAmounts = (amounts) => {
   return out;
 };
 
+/** Allowance arrears that are actually set (blank / zero = none). */
+const overrideArrears = (arrears) =>
+  Object.fromEntries(Object.entries(overrideAmounts(arrears)).filter(([, amount]) => amount > 0));
+
 /**
  * One-month allowance change set on the employee for this payroll month, or null.
- * @returns {{ month: number, year: number, amounts: object, note?: string }|null}
+ * `amounts` replace the master allowance for the month; `arrears` are added on top of it.
+ * @returns {{ month: number, year: number, amounts: object, arrears: object, note?: string }|null}
  */
 const getMonthlyAllowanceOverride = (employee, month, year) => {
   const list = employee?.monthlyAllowanceOverrides;
@@ -108,13 +113,15 @@ const getMonthlyAllowanceOverride = (employee, month, year) => {
   const entry = list.find((o) => Number(o.month) === Number(month) && Number(o.year) === Number(year));
   if (!entry) return null;
   const amounts = overrideAmounts(entry.amounts);
-  if (!Object.keys(amounts).length) return null;
-  return { month: Number(month), year: Number(year), amounts, note: entry.note || '' };
+  const arrears = overrideArrears(entry.arrears);
+  if (!Object.keys(amounts).length && !Object.keys(arrears).length) return null;
+  return { month: Number(month), year: Number(year), amounts, arrears, note: entry.note || '' };
 };
 
 /**
  * Employee allowances for one payroll month: the master allowances, with any one-month change for
- * that month applied on top. The master is never modified, so the next month is back to normal.
+ * that month applied on top (changed amounts, then any arrears added to their allowance). The master
+ * is never modified, so the next month is back to normal.
  * Final settlement does not use this — it reads the master allowances.
  */
 const allowancesForPayrollMonth = (employee, month, year) => {
@@ -126,7 +133,8 @@ const allowancesForPayrollMonth = (employee, month, year) => {
     allowances[key] = { isActive: amount > 0, amount };
   });
   // Changing vehicle or fuel moves a legacy combined amount onto the split fields
-  if (override.amounts.vehicle !== undefined || override.amounts.fuel !== undefined) {
+  const touched = { ...override.arrears, ...override.amounts };
+  if (touched.vehicle !== undefined || touched.fuel !== undefined) {
     if (override.amounts.vehicle === undefined) {
       allowances.vehicle = { isActive: vehicleAllowanceAmount(master) > 0, amount: vehicleAllowanceAmount(master) };
     }
@@ -135,10 +143,15 @@ const allowancesForPayrollMonth = (employee, month, year) => {
     }
     allowances.vehicleFuel = defaultEntry();
   }
+  // Arrears ride on their allowance for this month, so they follow that allowance's tax rule
+  // (e.g. a fully exempt food allowance → its arrears are not taxed either)
+  Object.entries(override.arrears).forEach(([key, arrear]) => {
+    allowances[key] = { isActive: true, amount: activeAmount(allowances[key]) + arrear };
+  });
   return { allowances, override };
 };
 
-/** Clean one-month allowance changes from the employee form (one entry per month, set amounts only). */
+/** Clean one-month allowance changes from the employee form (one entry per month, set amounts / arrears only). */
 const buildMonthlyAllowanceOverridesPayload = (list) => {
   if (!Array.isArray(list)) return [];
   const byPeriod = new Map();
@@ -147,8 +160,9 @@ const buildMonthlyAllowanceOverridesPayload = (list) => {
     const year = parseInt(entry?.year, 10);
     if (!(month >= 1 && month <= 12) || !(year >= 2020)) return;
     const amounts = overrideAmounts(entry.amounts);
-    if (!Object.keys(amounts).length) return;
-    byPeriod.set(`${year}-${month}`, { month, year, amounts, note: String(entry.note || '').trim().slice(0, 300) });
+    const arrears = overrideArrears(entry.arrears);
+    if (!Object.keys(amounts).length && !Object.keys(arrears).length) return;
+    byPeriod.set(`${year}-${month}`, { month, year, amounts, arrears, note: String(entry.note || '').trim().slice(0, 300) });
   });
   return [...byPeriod.values()].sort((a, b) => (a.year - b.year) || (a.month - b.month));
 };

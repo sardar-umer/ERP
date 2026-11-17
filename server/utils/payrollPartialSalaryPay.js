@@ -69,12 +69,13 @@ const ALLOWANCE_LABELS = {
 };
 
 const buildAllowanceOverrideRemarksSuffix = (proration) => {
-  const amounts = proration?.allowanceOverride?.amounts;
-  if (!amounts || !Object.keys(amounts).length) return '';
-  const parts = Object.entries(amounts).map(
-    ([key, amount]) => `${ALLOWANCE_LABELS[key] || key} ${Number(amount).toLocaleString('en-PK')}`
-  );
-  return ` (Allowance changed for this month only: ${parts.join(', ')})`;
+  const list = (values) => Object.entries(values || {})
+    .map(([key, amount]) => `${ALLOWANCE_LABELS[key] || key} ${Number(amount).toLocaleString('en-PK')}`)
+    .join(', ');
+  const changed = list(proration?.allowanceOverride?.amounts);
+  const arrears = list(proration?.allowanceOverride?.arrears);
+  return (changed ? ` (Allowance changed for this month only: ${changed})` : '') +
+    (arrears ? ` (Allowance arrears paid this month only: ${arrears})` : '');
 };
 
 const buildPayrollProrationRemarksSuffix = (proration) => {

@@ -35,6 +35,7 @@ import {
   Star as StarIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const emptyBankForm = () => ({
   bankName: '',
@@ -225,6 +226,7 @@ export default function FinanceCompanies() {
     }
   };
 
+  const pg = useClientPagination(filteredCompanies);
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
@@ -297,7 +299,7 @@ export default function FinanceCompanies() {
                 </TableCell>
               </TableRow>
             ) : (
-              filteredCompanies.map((company) => (
+              pg.rows.map((company) => (
                 <TableRow key={company._id} hover>
                   <TableCell>
                     <Typography fontWeight={600}>{company.name}</Typography>
@@ -351,7 +353,7 @@ export default function FinanceCompanies() {
               ))
             )}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       <Dialog open={banksDialogOpen} onClose={handleCloseBanksDialog} maxWidth="md" fullWidth>

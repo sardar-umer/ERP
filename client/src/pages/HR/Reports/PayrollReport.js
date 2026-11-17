@@ -44,6 +44,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom';
 import { formatPKR } from '../../../utils/currency';
 import api from '../../../services/api';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const PayrollReport = () => {
   const theme = useTheme();
@@ -301,6 +302,8 @@ const PayrollReport = () => {
     );
   };
 
+  const pg = useClientPagination(getFilteredData());
+
   // Render data table
   const renderDataTable = () => {
     if (!reportData?.data || !Array.isArray(reportData.data)) return null;
@@ -349,7 +352,7 @@ const PayrollReport = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filteredData.map((row, index) => (
+                {pg.rows.map((row, index) => (
                   <TableRow key={index} hover>
                     <TableCell sx={{ fontWeight: 'bold', color: theme.palette.primary.main }}>
                       {row.employeeId || 'N/A'}
@@ -365,7 +368,7 @@ const PayrollReport = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </CardContent>
       </Card>

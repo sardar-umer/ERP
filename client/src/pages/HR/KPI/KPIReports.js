@@ -41,6 +41,7 @@ import * as XLSX from 'xlsx';
 import { toast } from 'react-hot-toast';
 import KPITabNavigation from '../../../components/HR/KPITabNavigation';
 import { fetchKpiSubmissions } from '../../../services/kpiWorksheetService';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const MONTHS = [
   { v: 1, label: 'January' },
@@ -350,6 +351,8 @@ const KPIReports = () => {
     window.print();
   };
 
+  const pg = useClientPagination(filteredRecords);
+  const pg2 = useClientPagination(detailedRows);
   return (
     <Box sx={{ p: 3 }}>
       {/* Top Navigation Tabs */}
@@ -639,7 +642,7 @@ const KPIReports = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {filteredRecords.map((row) => {
+                  {pg.rows.map((row) => {
                     const statusMeta = STATUS_META[row.status] || STATUS_META.not_started;
                     return (
                       <TableRow key={row.employee?._id || row.worksheetId} hover>
@@ -673,7 +676,7 @@ const KPIReports = () => {
                     );
                   })}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
 
@@ -695,7 +698,7 @@ const KPIReports = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {detailedRows.map((d) => (
+                  {pg2.rows.map((d) => (
                     <TableRow key={d.id} hover>
                       <TableCell>{d.employeeId}</TableCell>
                       <TableCell sx={{ fontWeight: 600 }}>{d.employeeName}</TableCell>
@@ -709,7 +712,7 @@ const KPIReports = () => {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </Table>{pg2.bar}
             </TableContainer>
           )}
 

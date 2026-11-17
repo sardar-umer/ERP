@@ -47,6 +47,7 @@ import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPag
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
 import VendorTrialBalancePanel from './VendorTrialBalancePanel';
 import EmployeeTrialBalancePanel from './EmployeeTrialBalancePanel';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) =>
   Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
@@ -206,6 +207,8 @@ export default function FinanceVendorsList() {
     }
   };
 
+  const pg = useClientPagination(vendors);
+  const pg2 = useClientPagination(employees);
   if (selectedEmployee) {
     const emp = employeeDetail?.employee || selectedEmployee;
     const summary = employeeDetail?.summary || selectedEmployee.finance || {};
@@ -753,7 +756,7 @@ export default function FinanceVendorsList() {
                     </TableCell>
                   </TableRow>
                 )}
-                {vendors.map((v) => (
+                {pg.rows.map((v) => (
                   <TableRow key={v._id} hover>
                     <TableCell>{v.supplierId}</TableCell>
                     <TableCell>
@@ -780,7 +783,7 @@ export default function FinanceVendorsList() {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         )
       )}
@@ -813,7 +816,7 @@ export default function FinanceVendorsList() {
                     </TableCell>
                   </TableRow>
                 )}
-                {employees.map((e) => {
+                {pg2.rows.map((e) => {
                   const name =
                     e.name || [e.firstName, e.lastName].filter(Boolean).join(' ').trim() || e.employeeId;
                   return (
@@ -858,7 +861,7 @@ export default function FinanceVendorsList() {
                   );
                 })}
               </TableBody>
-            </Table>
+            </Table>{pg2.bar}
           </TableContainer>
         )
       )}

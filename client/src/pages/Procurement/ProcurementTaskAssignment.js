@@ -31,6 +31,7 @@ import { useNavigate } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import procurementService from '../../services/procurementService';
 import { formatDate } from '../../utils/dateUtils';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const StatCard = ({ title, value, subtitle, color = 'primary.main' }) => (
   <Card sx={{ height: '100%' }}>
@@ -194,6 +195,7 @@ const ProcurementTaskAssignment = () => {
     }
   };
 
+  const pg = useClientPagination(tasks);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ xs: 'flex-start', md: 'center' }} sx={{ mb: 3 }} spacing={2}>
@@ -345,7 +347,7 @@ const ProcurementTaskAssignment = () => {
                       </TableCell>
                     </TableRow>
                   ) : (
-                    tasks.map((task) => {
+                    pg.rows.map((task) => {
                       const assignment = task.procurementAssignment || {};
                       const assigneeName = assignment.assignedTo
                         ? `${assignment.assignedTo.firstName || ''} ${assignment.assignedTo.lastName || ''}`.trim()
@@ -409,7 +411,7 @@ const ProcurementTaskAssignment = () => {
                     })
                   )}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
         </CardContent>

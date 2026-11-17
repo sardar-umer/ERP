@@ -15,6 +15,7 @@ import api from '../../services/api';
 import { financeListFromResponse } from '../../utils/financeApiData';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const FREQ_COLORS = { daily: 'error', weekly: 'warning', monthly: 'primary', quarterly: 'success', yearly: 'secondary' };
 const FREQ_LABELS = { daily: 'Daily', weekly: 'Weekly', monthly: 'Monthly', quarterly: 'Quarterly', yearly: 'Yearly' };
@@ -149,6 +150,7 @@ export default function RecurringJournals() {
     }
   };
 
+  const pg = useClientPagination(rows);
   return (
     <Box sx={{ p: 3 }}>
       <FinanceCompanyPageHeader title="Recurring Journal Entries" icon={RecurIcon}>
@@ -183,7 +185,7 @@ export default function RecurringJournals() {
                     No recurring journals yet — click "New Recurring Journal" to create one
                   </TableCell>
                 </TableRow>
-              ) : rows.map(rj => (
+              ) : pg.rows.map(rj => (
                 <TableRow key={rj._id} hover sx={{ '&:nth-of-type(even)': { bgcolor: 'grey.50' }, opacity: rj.isActive ? 1 : 0.55 }}>
                   <TableCell>
                     <Typography variant="body2" fontWeight={600}>{rj.name}</Typography>
@@ -238,7 +240,7 @@ export default function RecurringJournals() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

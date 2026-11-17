@@ -37,6 +37,7 @@ import {
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import incrementService from '../../services/incrementService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const IncrementList = () => {
   const navigate = useNavigate();
@@ -186,6 +187,7 @@ const IncrementList = () => {
     }
   };
 
+  const pg = useClientPagination(filteredIncrements);
   if (loading) {
     return (
       <Box display="flex" justifyContent="center" alignItems="center" minHeight="400px">
@@ -334,7 +336,7 @@ const IncrementList = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {filteredIncrements.map((increment) => (
+                {pg.rows.map((increment) => (
                   <TableRow key={increment._id}>
                     <TableCell>
                       <Box>
@@ -421,7 +423,7 @@ const IncrementList = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </CardContent>
       </Card>

@@ -11,6 +11,7 @@ import {
   PublishedWithChanges as ApplyStdIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const AccountPicker = ({ label, value, onChange, accounts }) => (
   <Autocomplete
@@ -183,6 +184,7 @@ export default function InventoryCategories() {
 
   const accLabel = (a) => a ? `${a.accountNumber} – ${a.name}` : '—';
 
+  const pg = useClientPagination(categories);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3}>
@@ -234,7 +236,7 @@ export default function InventoryCategories() {
                 <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>
                   No categories. Click "Seed Defaults" to create standard categories with account links.
                 </TableCell></TableRow>
-              ) : categories.map(cat => (
+              ) : pg.rows.map(cat => (
                 <TableRow key={cat._id} hover>
                   <TableCell>
                     <Typography fontWeight={700}>
@@ -273,7 +275,7 @@ export default function InventoryCategories() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       </Paper>
 

@@ -11,6 +11,7 @@ import api from '../../../services/api';
 import storeService from '../../../services/storeService';
 import { formatDate } from '../../../utils/dateUtils';
 import { formatPKR } from '../../../utils/currency';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const SLOW_DAY_OPTIONS = [30, 60, 90, 180, 365];
 
@@ -143,6 +144,8 @@ const StockReports = () => {
     </Paper>
   );
 
+  const pg = useClientPagination(rows);
+  const pg2 = useClientPagination(slowRows);
   return (
     <Box sx={{ p: { xs: 1.5, md: 3 } }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} gap={2} sx={{ mb: 2 }}>
@@ -209,7 +212,7 @@ const StockReports = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {rows.map((r) => (
+              {pg.rows.map((r) => (
                 <TableRow key={`${r.store}-${r.project}-${r.item}`} hover>
                   <TableCell>{r.storeName}</TableCell>
                   <TableCell>{r.projectName}</TableCell>
@@ -228,7 +231,7 @@ const StockReports = () => {
                 <TableRow><TableCell colSpan={8} align="center" sx={{ py: 4, color: 'text.secondary' }}>No stock for these filters</TableCell></TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 
@@ -264,7 +267,7 @@ const StockReports = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {slowRows.map((r) => (
+                {pg2.rows.map((r) => (
                   <TableRow key={`${r.store}-${r.project}-${r.item}`} hover>
                     <TableCell>
                       <Typography variant="body2" fontWeight={600}>{r.itemName}</Typography>
@@ -280,7 +283,7 @@ const StockReports = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg2.bar}
           </TableContainer>
         </>
       )}

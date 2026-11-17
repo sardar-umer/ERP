@@ -32,6 +32,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../../services/api';
 import toast from 'react-hot-toast';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const KPITemplates = () => {
   const [templates, setTemplates] = useState([]);
@@ -138,6 +139,7 @@ const KPITemplates = () => {
     }
   };
 
+  const pg = useClientPagination(templates);
   return (
     <Box>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
@@ -168,7 +170,7 @@ const KPITemplates = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {templates.map((template) => (
+            {pg.rows.map((template) => (
               <TableRow key={template._id}>
                 <TableCell>
                   <Typography variant="subtitle2">{template.title}</Typography>
@@ -200,7 +202,7 @@ const KPITemplates = () => {
               </TableRow>
             )}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       {/* CREATE/EDIT/VIEW TEMPLATE DIALOG */}

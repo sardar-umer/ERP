@@ -29,6 +29,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../../services/api';
 import toast from 'react-hot-toast';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 export default function CostCenters() {
   const [costCenters, setCostCenters] = useState([]);
@@ -120,6 +121,7 @@ export default function CostCenters() {
     }
   };
 
+  const pg = useClientPagination(costCenters);
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
@@ -157,7 +159,7 @@ export default function CostCenters() {
                   <TableCell colSpan={4} align="center">No Cost Centers found</TableCell>
                 </TableRow>
               ) : (
-                costCenters.map((cc) => (
+                pg.rows.map((cc) => (
                   <TableRow key={cc._id} hover>
                     <TableCell sx={{ fontWeight: 600 }}>{cc.name}</TableCell>
                     <TableCell>{cc.description}</TableCell>
@@ -183,6 +185,7 @@ export default function CostCenters() {
           </Table>
         )}
       </TableContainer>
+      {pg.bar}
 
       <Dialog open={dialogOpen} onClose={handleCloseDialog} maxWidth="sm" fullWidth>
         <DialogTitle>{currentCostCenter ? 'Edit Cost Center' : 'Add Cost Center'}</DialogTitle>

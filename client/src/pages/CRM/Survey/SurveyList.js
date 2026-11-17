@@ -37,6 +37,7 @@ import {
 } from '@mui/icons-material';
 import surveyService from '../../../services/surveyService';
 import SurveyAnalysisReportDialog from './SurveyAnalysisReportDialog';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const statusColor = {
   draft: 'default',
@@ -201,6 +202,8 @@ const SurveyList = () => {
     loadManaged();
   };
 
+  const pg = useClientPagination(managed);
+  const pg2 = useClientPagination(mine);
   return (
     <Box sx={{ p: { xs: 2, md: 3 } }}>
       <Stack direction={{ xs: 'column', sm: 'row' }} justifyContent="space-between" alignItems={{ sm: 'center' }} spacing={2} sx={{ mb: 3 }}>
@@ -254,7 +257,7 @@ const SurveyList = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {managed.map((survey) => (
+                {pg.rows.map((survey) => (
                   <TableRow key={survey._id} hover>
                     <TableCell>
                       <Stack direction="row" alignItems="center" spacing={0.75} flexWrap="wrap">
@@ -333,7 +336,7 @@ const SurveyList = () => {
                   </TableRow>
                 )}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </>
       )}
@@ -351,7 +354,7 @@ const SurveyList = () => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {mine.map((survey) => (
+              {pg2.rows.map((survey) => (
                 <TableRow key={survey._id} hover>
                   <TableCell>
                     <Typography fontWeight={600}>{survey.title}</Typography>
@@ -402,7 +405,7 @@ const SurveyList = () => {
                 </TableRow>
               )}
             </TableBody>
-          </Table>
+          </Table>{pg2.bar}
         </TableContainer>
       )}
 

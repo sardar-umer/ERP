@@ -54,6 +54,7 @@ import {
 import { useNavigate } from 'react-router-dom';
 import { useTheme } from '@mui/material/styles';
 import enrollmentService from '../../services/enrollmentService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const Enrollments = () => {
   const theme = useTheme();
@@ -208,6 +209,7 @@ const Enrollments = () => {
     setPage(1);
   };
 
+  const pg = useClientPagination(enrollments);
   if (loading && enrollments.length === 0) {
     return (
       <Container maxWidth="xl">
@@ -360,7 +362,7 @@ const Enrollments = () => {
                 </TableRow>
               </TableHead>
               <TableBody>
-                {enrollments.map((enrollment) => (
+                {pg.rows.map((enrollment) => (
                   <TableRow key={enrollment._id} hover>
                     <TableCell>
                       <Box sx={{ display: 'flex', alignItems: 'center' }}>
@@ -461,7 +463,7 @@ const Enrollments = () => {
                   </TableRow>
                 ))}
               </TableBody>
-            </Table>
+            </Table>{pg.bar}
           </TableContainer>
         </Card>
 

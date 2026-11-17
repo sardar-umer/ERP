@@ -5,6 +5,7 @@ import {
 } from '@mui/material';
 import { History as HistoryIcon, Refresh as RefreshIcon } from '@mui/icons-material';
 import api from '../../services/api';
+import useClientPagination from '../../hooks/useClientPagination';
 
 export default function TagEventsPage() {
   const [events, setEvents] = useState([]);
@@ -26,6 +27,7 @@ export default function TagEventsPage() {
 
   useEffect(() => { load(); }, [load]);
 
+  const pg = useClientPagination(events);
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={2}>
@@ -57,7 +59,7 @@ export default function TagEventsPage() {
               {events.length === 0 && (
                 <TableRow><TableCell colSpan={6} align="center" sx={{ py: 4, color: 'text.secondary' }}>No events yet.</TableCell></TableRow>
               )}
-              {events.map((ev) => (
+              {pg.rows.map((ev) => (
                 <TableRow key={ev._id}>
                   <TableCell>{new Date(ev.createdAt).toLocaleString()}</TableCell>
                   <TableCell>{ev.eventType?.replace(/_/g, ' ')}</TableCell>
@@ -68,7 +70,7 @@ export default function TagEventsPage() {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
     </Box>

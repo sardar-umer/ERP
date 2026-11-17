@@ -22,6 +22,7 @@ import ClientBillingLines from '../../components/ProjectManagement/ClientBilling
 import IpcApprovalTrail, { IPC_APPROVAL_COLOR, ipcStageText } from '../../components/ProjectManagement/IpcApprovalTrail';
 import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const isIpc = (inv) => inv?.invoiceType === 'Subcontractor_IPC';
 /** Documents that travel the approval chain: every IPC, and client invoices raised since the chain existed */
@@ -462,6 +463,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
 
   const invoicesList = data?.invoices || [];
 
+  const pg = useClientPagination(invoicesList);
   return (
     <Box>
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
@@ -598,7 +600,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
               </TableRow>
             </TableHead>
             <TableBody>
-              {invoicesList.map(inv => (
+              {pg.rows.map(inv => (
                 <TableRow key={inv._id} hover>
                   <TableCell>
                     <Typography variant="body2" fontWeight={700}>
@@ -704,7 +706,7 @@ const ProjectInvoicesTab = ({ project, onGoToTab }) => {
                 </TableRow>
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

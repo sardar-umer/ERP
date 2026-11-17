@@ -32,6 +32,7 @@ import {
   AccountBalance as BankIcon
 } from '@mui/icons-material';
 import api from '../../services/authService';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const BankManagement = () => {
   const [banks, setBanks] = useState([]);
@@ -178,6 +179,7 @@ const BankManagement = () => {
     }));
   };
 
+  const pg = useClientPagination(banks);
   if (loading) {
     return (
       <Box sx={{ p: 3, textAlign: 'center' }}>
@@ -213,7 +215,7 @@ const BankManagement = () => {
             </TableRow>
           </TableHead>
           <TableBody>
-            {banks.map((bank) => (
+            {pg.rows.map((bank) => (
               <TableRow key={bank._id}>
                 <TableCell>
                   <Box>
@@ -269,7 +271,7 @@ const BankManagement = () => {
               </TableRow>
             ))}
           </TableBody>
-        </Table>
+        </Table>{pg.bar}
       </TableContainer>
 
       {/* Add/Edit Dialog */}

@@ -11,6 +11,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../services/api';
 import WhtField, { computeWht, whtPayload } from '../../components/Finance/WhtField';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
@@ -127,6 +128,7 @@ export default function BatchPayment() {
     }
   };
 
+  const pg = useClientPagination(filtered);
   return (
     <Box sx={{ p: 3 }}>
       <Box display="flex" justifyContent="space-between" alignItems="center" mb={3}>
@@ -183,7 +185,7 @@ export default function BatchPayment() {
                       No unpaid bills found
                     </TableCell></TableRow>
                   )}
-                  {filtered.map(bill => {
+                  {pg.rows.map(bill => {
                     const balance = bill.outstandingAmount ?? ((bill.totalAmount || 0) - (bill.amountPaid || 0) - (bill.advanceApplied || 0));
                     const isSelected = selected.has(bill._id);
                     const overdue = bill.dueDate && new Date(bill.dueDate) < new Date();
@@ -216,7 +218,7 @@ export default function BatchPayment() {
                     );
                   })}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
         </Grid>

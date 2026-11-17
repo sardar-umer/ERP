@@ -14,6 +14,7 @@ import api from '../../services/api';
 import { financeListFromResponse } from '../../utils/financeApiData';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
+import useClientPagination from '../../hooks/useClientPagination';
 
 const fmt     = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 0 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK') : '—';
@@ -183,6 +184,7 @@ export default function DeferredEntries() {
 
   const getAcc = (id) => accounts.find(a => a._id === id) || null;
 
+  const pg = useClientPagination(entries);
   return (
     <Box sx={{ p: 3 }}>
       <FinanceCompanyPageHeader title="Deferred Revenue & Expenses" icon={DeferredIcon}>
@@ -245,11 +247,11 @@ export default function DeferredEntries() {
                   No deferred entries. Create one to spread revenue/expense over multiple periods.
                 </TableCell></TableRow>
               )}
-              {entries.map(e => (
+              {pg.rows.map(e => (
                 <ScheduleRow key={e._id} entry={e} onRecognize={handleRecognize} />
               ))}
             </TableBody>
-          </Table>
+          </Table>{pg.bar}
         </TableContainer>
       )}
 

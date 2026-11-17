@@ -112,9 +112,15 @@ const display = async (path, raw) => {
     const list = JSON.parse(raw) || [];
     if (!list.length) return 'None';
     return list.map((o) => {
-      const parts = Object.entries(o.amounts || {})
-        .filter(([, v]) => v !== null && v !== undefined)
-        .map(([k, v]) => `${(ALLOWANCES.find(([key]) => key === k) || [k, k])[1]} ${money(v)}`);
+      const label = (k) => (ALLOWANCES.find(([key]) => key === k) || [k, k])[1];
+      const parts = [
+        ...Object.entries(o.amounts || {})
+          .filter(([, v]) => v !== null && v !== undefined)
+          .map(([k, v]) => `${label(k)} ${money(v)}`),
+        ...Object.entries(o.arrears || {})
+          .filter(([, v]) => Number(v) > 0)
+          .map(([k, v]) => `${label(k)} arrears ${money(v)}`)
+      ];
       return `${String(o.month).padStart(2, '0')}/${o.year}: ${parts.join(', ')}`;
     }).join('; ');
   }

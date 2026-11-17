@@ -44,6 +44,7 @@ import {
   updateRecoveryMember,
   deleteRecoveryMember
 } from '../../../services/recoveryMemberService';
+import useClientPagination from '../../../hooks/useClientPagination';
 
 const formValidationSchema = Yup.object({
   employee: Yup.mixed().nullable(),
@@ -227,6 +228,7 @@ const RecoveryMembers = () => {
   const activeMembers = members.filter((m) => m.isActive !== false);
   const inactiveCount = members.length - activeMembers.length;
 
+  const pg = useClientPagination(members);
   return (
     <Box sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3, flexWrap: 'wrap', gap: 2 }}>
@@ -292,7 +294,7 @@ const RecoveryMembers = () => {
                   </TableRow>
                 </TableHead>
                 <TableBody>
-                  {members.map((member) => (
+                  {pg.rows.map((member) => (
                     <TableRow key={member._id} hover>
                       <TableCell>{getEmployeeDisplayName(member.employee) || '-'}</TableCell>
                       <TableCell>{member.employee?.employeeId ?? '-'}</TableCell>
@@ -331,7 +333,7 @@ const RecoveryMembers = () => {
                     </TableRow>
                   ))}
                 </TableBody>
-              </Table>
+              </Table>{pg.bar}
             </TableContainer>
           )}
 
