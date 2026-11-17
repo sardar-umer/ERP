@@ -28,7 +28,7 @@ import { formatPKR } from '../../utils/currency';
 import { useAuth } from '../../contexts/AuthContext';
 import CashApprovalDetailTabsView from '../../components/Procurement/CashApprovalDetailTabsView';
 import CashApprovalGeneralDetailShell from '../../components/CashApprovals/CashApprovalGeneralDetailShell';
-import { isGeneralModuleCashApproval } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
+import { isGeneralModuleCashApproval, printGeneralCashApproval } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import CashApprovalAdvancePaymentDialog from '../../components/CashApprovals/CashApprovalAdvancePaymentDialog';
 import CashApprovalPaymentFieldsView from '../../components/CashApprovals/CashApprovalPaymentFieldsView';
 import { useCashApprovalPaymentFields } from '../../components/CashApprovals/useCashApprovalPaymentFields';
@@ -1947,7 +1947,9 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
                   <Button variant="outlined" size="small" startIcon={<EditIcon />} onClick={() => openCashApprovalEdit(viewDialog.data)}>Edit</Button>
                 )}
                 <Button variant="outlined" size="small" startIcon={<HistoryIcon />} onClick={() => setWorkflowHistoryDialog({ open: true, document: viewDialog.data })}>Workflow History</Button>
-                <Button variant="contained" size="small" startIcon={<PrintIcon />} onClick={() => printFitToOneA4('.print-content')}>Print</Button>
+                <Button variant="contained" size="small" startIcon={<PrintIcon />} onClick={() => (isGeneralModuleCashApproval(viewDialog.data)
+                  ? printGeneralCashApproval(viewDialog.data, (msg) => window.alert(msg))
+                  : printFitToOneA4('.print-content'))}>Print</Button>
               </Stack>
             </Box>
           </DialogTitle>

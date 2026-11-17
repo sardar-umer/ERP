@@ -1,4 +1,6 @@
 import { normalizeUploadPath, resolveUploadFileHref } from '../../utils/uploadPaths';
+import { getImageUrl } from '../../utils/imageService';
+import { numberToWords } from '../../utils/numberToWords';
 
 export { normalizeUploadPath };
 
@@ -279,83 +281,237 @@ export const buildGeneralCashApprovalStampRows = (ca) => {
   ].filter((r) => r.stampImage);
 };
 
+const PRINT_STATUS_TONE = (status) => {
+  if (['Completed', 'Advance Issued', 'Payment Settled', 'Finance Authority Approved'].includes(status)) return 'ok';
+  if (['Rejected', 'Cancelled'].includes(status)) return 'bad';
+  if (status === 'Draft') return 'muted';
+  return 'info';
+};
+
+/** Absolute URL for an uploaded image, so the print window (about:blank) can load it. */
+const absoluteImageUrl = (path) => {
+  const src = getImageUrl(path);
+  if (!src) return '';
+  try {
+    return new URL(src, window.location.origin).href;
+  } catch {
+    return src;
+  }
+};
+
+/**
+ * Printable A4 cash approval: company header, details, line items, totals with amount in words,
+ * and the approval signatures as a sign-off grid. Scaled down when needed to fit one page.
+ */
 export const buildGeneralCashApprovalPrintHtml = (ca) => {
   if (!ca) return '';
   const linesTotal = (ca.items || []).reduce((s, li) => s + (Number(li.amount) || 0), 0);
+  const netTotal = Number(ca.totalAmount) || linesTotal;
   const approvalRows = buildGeneralCashApprovalApprovalRows(ca);
+  const stampRows = buildGeneralCashApprovalStampRows(ca);
   const esc = (s) =>
     String(s ?? '')
       .replace(/&/g, '&amp;')
       .replace(/</g, '&lt;')
-      .replace(/>/g, '&gt;');
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;');
+  const dash = (v) => (v === null || v === undefined || String(v).trim() === '' ? '—' : v);
+  const company = getCashApprovalCompanyLabel(ca) || '';
+  const glAccount = [
+    ca.advanceGlAccount?.accountNumber || ca.advanceGlAccountNumber,
+    ca.advanceGlAccount?.name
+  ].filter(Boolean).join(' — ');
+
   const rows = (ca.items || [])
     .map((line, i) => {
       const amt = Number(line.amount) || 0;
       const qty = Number(line.quantity) || 1;
       const rate = Number(line.unitPrice) || amt;
+      const item = line.itemName || line.description || '—';
+      const desc = line.specification || line.description || '';
       return `<tr>
-          <td class="c">${i + 1}</td>
-          <td>${esc(line.itemName || line.description)}</td>
-          <td>${esc(line.specification || line.description)}</td>
-          <td>${esc(line.location || '—')}</td>
+          <td class="c muted">${i + 1}</td>
+          <td><div class="item">${esc(item)}</div>${desc && desc !== item ? `<div class="sub">${esc(desc)}</div>` : ''}</td>
+          <td>${esc(dash(line.location))}</td>
           <td class="c">${esc(line.unit || 'pcs')}</td>
-          <td class="r">${formatDecimalPk(qty)}</td>
-          <td class="r">${formatDecimalPk(rate)}</td>
-          <td class="r">${formatDecimalPk(amt)}</td>
+          <td class="r num">${formatDecimalPk(qty)}</td>
+          <td class="r num">${formatDecimalPk(rate)}</td>
+          <td class="r num strong">${formatDecimalPk(amt)}</td>
         </tr>`;
     })
     .join('');
-  const approvalHtml = approvalRows
-    .map(
-      (row) => `<tr>
-          <td>${esc(row.authority)}</td>
-          <td>${esc(row.name || '—')}</td>
-          <td>${getSignatureSource(row) ? '<em>Signed</em>' : '—'}</td>
-          <td>${esc(row.dateTime || '—')}</td>
-        </tr>`
-    )
+
+  const signatures = approvalRows
+    .map((row) => {
+      const source = getSignatureSource(row);
+      const signed = Boolean(row.typedSignature || source || (row.dateTime && row.dateTime !== '—'));
+      const mark = row.typedSignature
+        ? `<div class="typed">${esc(row.typedSignature)}</div>`
+        : source
+          ? `<img src="${esc(absoluteImageUrl(source))}" alt="" onerror="this.replaceWith(Object.assign(document.createElement('div'),{className:'signed-mark',textContent:'Approved'}))" />`
+          : signed ? '<div class="signed-mark">Approved</div>' : '';
+      return `<div class="sig ${signed ? '' : 'pending'}">
+          <div class="sig-area">${mark}</div>
+          <div class="sig-line"></div>
+          <div class="sig-name">${esc(dash(row.name))}</div>
+          <div class="sig-role">${esc(row.authority)}</div>
+          <div class="sig-date">${signed ? esc(dash(row.dateTime)) : 'Pending'}</div>
+        </div>`;
+    })
     .join('');
 
-  return `<!DOCTYPE html><html><head><title>${esc(ca.caNumber)}</title>
-      <style>
-        body{font-family:Georgia,serif;padding:24px;color:#111;font-size:12px}
-        h1,h2{text-align:center;margin:0}
-        h2{font-size:16px;margin-top:4px}
-        .meta{display:grid;grid-template-columns:1fr 1fr;gap:8px 24px;margin:16px 0;padding-bottom:12px;border-bottom:1px solid #999}
-        .meta div{display:grid;grid-template-columns:100px 1fr;gap:4px}
-        .meta b{color:#444}
-        .narration{background:#ffe7c2;border:1px solid #e8b86a;padding:10px;margin-bottom:14px;font-weight:700}
-        table{width:100%;border-collapse:collapse;margin-bottom:12px}
-        th,td{border:1px solid #666;padding:6px}
-        th{background:#f0f0f0;font-size:11px}
-        .r{text-align:right}.c{text-align:center}
-        .total{text-align:right;font-weight:800;font-size:14px;margin-top:8px}
-      </style></head><body>
-      <h1>${esc(ca.requestingDepartment || 'General')}</h1>
-      <h2>Cash Approval</h2>
-      <div class="meta">
-        <div><b>Date</b><span>${formatInvoiceDateDmy(ca.approvalDate || ca.createdAt)}</span></div>
-        <div><b>Reference</b><span>${esc(ca.caNumber)}</span></div>
-        <div><b>Department</b><span>${esc(ca.requestingDepartment)}</span></div>
-        <div><b>Priority</b><span>${esc(ca.priority)}</span></div>
-        <div><b>Advance to</b><span>${esc(advanceEmployeeLabel(ca))}</span></div>
-        <div><b>Finance company</b><span>${esc(getCashApprovalCompanyLabel(ca) || '—')}</span></div>
-        <div><b>GL account</b><span>${esc(ca.advanceGlAccount?.accountNumber || ca.advanceGlAccountNumber || '—')}</span></div>
-        <div><b>Time</b><span>${formatInvoiceTime12h(ca.createdAt)}</span></div>
-      </div>
-      <div class="narration">Narration: ${esc(ca.purpose)}</div>
-      <table><thead><tr>
-        <th>S.No</th><th>Item</th><th>Description</th><th>Location</th><th>Unit</th><th>Qty</th><th>Rate</th><th>Net Amount</th>
-      </tr></thead><tbody>${rows}
-      <tr><td colspan="7" class="r"><b>Sub Total</b></td><td class="r"><b>${formatDecimalPk(linesTotal)}</b></td></tr>
-      ${Number(ca.discountAmount) > 0 ? `<tr><td colspan="7" class="r"><b>Discount</b></td><td class="r"><b>-${formatDecimalPk(ca.discountAmount)}</b></td></tr>` : ''}
-      </tbody></table>
-      <p class="total">Net Total: ${formatDecimalPk(ca.totalAmount || linesTotal)}</p>
-      <table><thead><tr><th>Authority</th><th>Name</th><th>Signature</th><th>Date &amp; Time</th></tr></thead>
-      <tbody>${approvalHtml}</tbody></table>
-      </body></html>`
+  const stamps = stampRows.length
+    ? `<div class="stamps">${stampRows.map((r) => `<div class="stamp">
+          <img src="${esc(absoluteImageUrl(r.stampImage))}" alt="" />
+          <div class="sig-role">${esc(r.authority)}</div>
+          <div class="sig-date">${esc(dash(r.dateTime))}</div>
+        </div>`).join('')}</div>`
+    : '';
+
+  const printedAt = formatDateTime(new Date());
+  const tone = PRINT_STATUS_TONE(ca.status);
+
+  return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(ca.caNumber)} — Cash Approval</title>
+<style>
+  @page { size: A4 portrait; margin: 12mm; }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; }
+  body { font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1f2933; font-size: 11.5px; line-height: 1.45;
+    -webkit-print-color-adjust: exact; print-color-adjust: exact; background: #fff; }
+  .doc { width: 186mm; margin: 0 auto; }
+  .num { font-variant-numeric: tabular-nums; }
+  .muted { color: #7b8794; }
+  .strong { font-weight: 700; }
+  .c { text-align: center; } .r { text-align: right; }
+
+  .head { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; padding-bottom: 12px; border-bottom: 3px solid #1e3a5f; }
+  .org { font-size: 17px; font-weight: 700; color: #1e3a5f; letter-spacing: .2px; }
+  .dept { font-size: 11.5px; color: #52606d; margin-top: 2px; }
+  .title { text-align: right; }
+  .title h1 { margin: 0; font-size: 21px; letter-spacing: 3px; text-transform: uppercase; color: #1e3a5f; font-weight: 700; }
+  .ref { font-size: 13px; font-weight: 600; margin-top: 3px; }
+  .pill { display: inline-block; margin-top: 6px; padding: 2px 10px; border-radius: 999px; font-size: 10px; font-weight: 600; letter-spacing: .3px; border: 1px solid; }
+  .pill.ok { color: #1e6b3a; border-color: #9fd3b1; background: #eaf7ef; }
+  .pill.bad { color: #a12b2b; border-color: #efb1b1; background: #fdeeee; }
+  .pill.info { color: #1e4f8a; border-color: #a9c6ea; background: #eef4fc; }
+  .pill.muted { color: #52606d; border-color: #cbd2d9; background: #f5f7fa; }
+
+  .grid { display: grid; grid-template-columns: repeat(3, 1fr); margin-top: 14px; border: 1px solid #d9e2ec; border-radius: 6px; overflow: hidden; }
+  .cell { padding: 8px 12px; border-right: 1px solid #d9e2ec; border-bottom: 1px solid #d9e2ec; }
+  .cell:nth-child(3n) { border-right: 0; }
+  .cell:nth-last-child(-n+3) { border-bottom: 0; }
+  .label { font-size: 9px; text-transform: uppercase; letter-spacing: .8px; color: #7b8794; font-weight: 600; }
+  .value { font-size: 12px; font-weight: 600; margin-top: 2px; word-break: break-word; }
+
+  .narration { margin-top: 12px; padding: 9px 12px; background: #f5f8fc; border-left: 3px solid #1e3a5f; border-radius: 0 6px 6px 0; }
+  .narration .value { font-weight: 500; white-space: pre-wrap; }
+
+  table.items { width: 100%; border-collapse: collapse; margin-top: 14px; }
+  table.items th { background: #1e3a5f; color: #fff; font-size: 9.5px; text-transform: uppercase; letter-spacing: .6px; font-weight: 600; padding: 7px 8px; text-align: left; }
+  table.items th.r { text-align: right; } table.items th.c { text-align: center; }
+  table.items td { padding: 7px 8px; border-bottom: 1px solid #e4e7eb; vertical-align: top; }
+  table.items tbody tr:nth-child(even) td { background: #f9fafb; }
+  table.items thead { display: table-header-group; }
+  table.items tr { break-inside: avoid; page-break-inside: avoid; }
+  .dense table.items td { padding: 4px 8px; }
+  .dense .sub { font-size: 10px; }
+  .keep { break-inside: avoid; page-break-inside: avoid; }
+  .item { font-weight: 600; }
+  .sub { color: #52606d; font-size: 10.5px; margin-top: 1px; white-space: pre-wrap; }
+
+  .totals-wrap { display: flex; justify-content: space-between; align-items: flex-start; gap: 18px; margin-top: 12px; }
+  .words { flex: 1; padding: 9px 12px; border: 1px dashed #bcccdc; border-radius: 6px; }
+  .words .value { font-weight: 600; font-style: italic; }
+  .totals { width: 245px; }
+  .trow { display: flex; justify-content: space-between; padding: 4px 2px; }
+  .trow.grand { margin-top: 4px; padding: 8px 10px; background: #1e3a5f; color: #fff; border-radius: 6px; font-size: 13.5px; font-weight: 700; }
+
+  .notes { margin-top: 12px; padding: 9px 12px; border: 1px solid #e4e7eb; border-radius: 6px; }
+  .notes .value { font-weight: 500; white-space: pre-wrap; }
+
+  .section { margin-top: 18px; font-size: 10px; text-transform: uppercase; letter-spacing: 1.2px; color: #1e3a5f; font-weight: 700;
+    display: flex; align-items: center; gap: 8px; }
+  .section:after { content: ""; flex: 1; border-top: 1px solid #d9e2ec; }
+  .sigs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px 16px; margin-top: 10px; }
+  .sig { text-align: center; }
+  .sig-area { height: 62px; display: flex; align-items: flex-end; justify-content: center; }
+  .sig-area img { max-height: 60px; max-width: 100%; object-fit: contain; }
+  .typed { font-family: "Brush Script MT", "Segoe Script", cursive; font-size: 20px; color: #1e3a5f; }
+  .signed-mark { font-size: 9.5px; font-weight: 700; letter-spacing: 1px; text-transform: uppercase; color: #1e6b3a; border: 1px solid #9fd3b1; border-radius: 4px; padding: 2px 8px; margin-bottom: 6px; }
+  .sig-line { border-top: 1px solid #52606d; margin: 3px 6px 4px; }
+  .sig-name { font-weight: 600; font-size: 11px; }
+  .sig-role { font-size: 9.5px; color: #52606d; text-transform: uppercase; letter-spacing: .5px; margin-top: 1px; }
+  .sig-date { font-size: 9.5px; color: #7b8794; margin-top: 1px; }
+  .sig.pending .sig-name, .sig.pending .sig-date { color: #9aa5b1; }
+  .stamps { display: flex; gap: 16px; margin-top: 12px; }
+  .stamp { flex: 1; text-align: center; border: 1px solid #e4e7eb; border-radius: 6px; padding: 8px; }
+  .stamp img { max-height: 80px; max-width: 100%; object-fit: contain; }
+
+  .foot { margin-top: 18px; padding-top: 8px; border-top: 1px solid #d9e2ec; display: flex; justify-content: space-between; font-size: 9.5px; color: #7b8794; }
+</style></head><body>
+<div class="doc${(ca.items || []).length > 12 ? ' dense' : ''}" id="doc">
+  <div class="head">
+    <div>
+      <div class="org">${esc(company || 'Cash Approval')}</div>
+      <div class="dept">${esc(ca.requestingDepartment || 'General')}</div>
+    </div>
+    <div class="title">
+      <h1>Cash Approval</h1>
+      <div class="ref">${esc(ca.caNumber)}</div>
+      <span class="pill ${tone}">${esc(ca.status || '')}</span>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="cell"><div class="label">Date</div><div class="value">${esc(formatInvoiceDateDmy(ca.approvalDate || ca.createdAt))} · ${esc(formatInvoiceTime12h(ca.createdAt))}</div></div>
+    <div class="cell"><div class="label">Department</div><div class="value">${esc(dash(ca.requestingDepartment))}</div></div>
+    <div class="cell"><div class="label">Priority</div><div class="value">${esc(dash(ca.priority))}</div></div>
+    <div class="cell"><div class="label">Advance to</div><div class="value">${esc(advanceEmployeeLabel(ca))}</div></div>
+    <div class="cell"><div class="label">Finance company</div><div class="value">${esc(dash(company))}</div></div>
+    <div class="cell"><div class="label">GL account</div><div class="value">${esc(dash(glAccount))}</div></div>
+  </div>
+
+  <div class="narration"><div class="label">Narration</div><div class="value">${esc(dash(ca.purpose))}</div></div>
+
+  <table class="items">
+    <thead><tr>
+      <th class="c" style="width:5%">#</th><th style="width:37%">Item / description</th><th style="width:14%">Location</th>
+      <th class="c" style="width:7%">Unit</th><th class="r" style="width:9%">Qty</th><th class="r" style="width:13%">Rate</th><th class="r" style="width:15%">Amount (PKR)</th>
+    </tr></thead>
+    <tbody>${rows || '<tr><td colspan="7" class="c muted">No line items</td></tr>'}</tbody>
+  </table>
+
+  <div class="keep">
+  <div class="totals-wrap">
+    <div class="words"><div class="label">Amount in words</div><div class="value">${esc(numberToWords(netTotal))}</div></div>
+    <div class="totals">
+      <div class="trow"><span class="muted">Sub total</span><span class="num">${formatDecimalPk(linesTotal)}</span></div>
+      ${Number(ca.discountAmount) > 0 ? `<div class="trow"><span class="muted">Discount</span><span class="num">-${formatDecimalPk(ca.discountAmount)}</span></div>` : ''}
+      <div class="trow grand"><span>Net total</span><span class="num">PKR ${formatDecimalPk(netTotal)}</span></div>
+    </div>
+  </div>
+
+  ${ca.notes ? `<div class="notes"><div class="label">Notes</div><div class="value">${esc(ca.notes)}</div></div>` : ''}
+  </div>
+
+  <div class="keep">
+  <div class="section">Approvals</div>
+  <div class="sigs">${signatures}</div>
+  ${stamps}
+  </div>
+
+  <div class="foot">
+    <span>System-generated document · ${esc(ca.caNumber)}</span>
+    <span>Printed ${esc(printedAt)}</span>
+  </div>
+</div>
+</body></html>`;
 };
 
+/**
+ * Opens the A4 print page, waits for signature images, shrinks it to one page if it is taller (down to 70%),
+ * then prints.
+ */
 export const printGeneralCashApproval = (ca, onError) => {
   const html = buildGeneralCashApprovalPrintHtml(ca);
   const w = window.open('', '_blank');
@@ -365,11 +521,45 @@ export const printGeneralCashApproval = (ca, onError) => {
   }
   w.document.write(html);
   w.document.close();
-  setTimeout(() => {
+
+  const fitAndPrint = () => {
+    const doc = w.document.getElementById('doc');
+    if (doc) {
+      // A4 printable height at 12mm margins (96 px per inch), with a small safety margin
+      const pageHeight = ((297 - 24) * 96) / 25.4 * 0.96;
+      const height = doc.scrollHeight;
+      // Shrink to one page, but never below 70% (still readable); a very long list continues on page 2
+      // with the table header repeated and the totals / signatures kept together
+      if (height > pageHeight) {
+        const scale = Math.max(0.7, Math.floor((pageHeight / height) * 1000) / 1000);
+        doc.style.zoom = String(scale);
+      }
+    }
     w.focus();
     w.print();
     w.close();
-  }, 400);
+  };
+
+  const images = [...w.document.images];
+  const pending = images.filter((img) => !img.complete);
+  if (!pending.length) {
+    setTimeout(fitAndPrint, 150);
+    return;
+  }
+  let left = pending.length;
+  let done = false;
+  const finish = () => {
+    if (done) return;
+    done = true;
+    setTimeout(fitAndPrint, 100);
+  };
+  pending.forEach((img) => {
+    const tick = () => { left -= 1; if (left <= 0) finish(); };
+    img.addEventListener('load', tick, { once: true });
+    img.addEventListener('error', tick, { once: true });
+  });
+  // Never wait forever on a slow image
+  setTimeout(finish, 3000);
 };
 
 export const documentPaperSx = {
