@@ -179,13 +179,25 @@ const PossessionViewer = () => {
   const handleExport = async () => {
     setExporting(true);
     try {
-      const res = await getPossessions({
-        page: 1,
-        limit: 100000,
-        ...(mozaFilter && { moza: mozaFilter }),
-        ...(recordSearchDebounced && { search: recordSearchDebounced })
-      });
-      const data = res.data?.data?.possessions || [];
+      // The API returns at most 200 records per request, so walk every page
+      // (same moza / search filters as the table) to export the full record set.
+      const EXPORT_PAGE_SIZE = 200;
+      const data = [];
+      let exportPage = 1;
+      let exportTotal = Infinity;
+      while (data.length < exportTotal) {
+        const res = await getPossessions({
+          page: exportPage,
+          limit: EXPORT_PAGE_SIZE,
+          ...(mozaFilter && { moza: mozaFilter }),
+          ...(recordSearchDebounced && { search: recordSearchDebounced })
+        });
+        const batch = res.data?.data?.possessions || [];
+        exportTotal = res.data?.data?.pagination?.total ?? 0;
+        data.push(...batch);
+        if (batch.length < EXPORT_PAGE_SIZE) break;
+        exportPage += 1;
+      }
       if (!data.length) {
         toast.error('No data to export');
         setExporting(false);

@@ -349,7 +349,7 @@ router.get('/possessions', authMiddleware, asyncHandler(async (req, res) => {
       .populate('moza', 'name slug')
       .populate('registry', 'registryNo inteqalNo registryDate totalArea')
       .populate('lines.registry', 'registryNo inteqalNo registryDate')
-      .sort({ possessionDate: -1, createdAt: -1 })
+      .sort({ possessionDate: -1, createdAt: -1, _id: -1 })
       .skip(skip)
       .limit(limitNum),
     LandPossession.countDocuments(filter),

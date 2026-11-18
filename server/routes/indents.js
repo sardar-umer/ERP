@@ -762,7 +762,7 @@ router.get('/:id',
     const indent = await Indent.findById(req.params.id)
       .populate('department', 'name code')
       .populate('costCenter', 'code name path')
-      .populate('companyId', 'name code symbol')
+      .populate('companyId', 'name code symbol contactInfo website')
       .populate('requestedBy', 'firstName lastName email employeeId department digitalSignature')
       .populate('approvedBy', 'firstName lastName email digitalSignature')
       .populate('approvalChain.approver', 'firstName lastName email employeeId digitalSignature')

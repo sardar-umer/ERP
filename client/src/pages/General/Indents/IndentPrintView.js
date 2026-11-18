@@ -16,6 +16,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import indentService from '../../../services/indentService';
 import dayjs from 'dayjs';
 import { DigitalSignatureImage } from '../../../components/common/DigitalSignatureImage';
+import { TovusDocHeader, TovusDocFooter } from '../../../components/common/TovusDocumentBrand';
 
 const IndentPrintView = () => {
   const { id } = useParams();
@@ -111,7 +112,10 @@ const IndentPrintView = () => {
 
       {/* Print Content */}
       <Paper
+        className="indent-print-doc"
         sx={{
+          display: 'flex',
+          flexDirection: 'column',
           p: { xs: 2, sm: 4 },
           maxWidth: '210mm',
           width: '100%',
@@ -121,71 +125,19 @@ const IndentPrintView = () => {
           overflowX: 'auto',
           '@media print': {
             boxShadow: 'none',
-            p: 2.5,
+            // bottom padding keeps content clear of the Tovus footer pinned to the page bottom
+            p: '8mm 10mm 40mm',
+            minHeight: 'auto',
             maxWidth: '100%',
             backgroundColor: '#fff'
           }
         }}
       >
-        {/* Header Section - Logo and Company Name */}
-        <Box
-          sx={{
-            display: 'flex',
-            flexDirection: { xs: 'column', sm: 'row' },
-            justifyContent: 'center',
-            alignItems: 'center',
-            mb: 0,
-            position: 'relative',
-            minHeight: { xs: 'auto', sm: 150 },
-            gap: { xs: 1, sm: 0 }
-          }}
-        >
-          <Box
-            component="img"
-            src="/images/taj-logo.png"
-            alt="Company Logo"
-            sx={{
-              height: { xs: 72, sm: 150 },
-              width: 'auto',
-              objectFit: 'contain',
-              position: { xs: 'static', sm: 'absolute' },
-              left: 0,
-              top: { sm: 10 },
-              alignSelf: { xs: 'flex-start', sm: 'auto' }
-            }}
-            onError={(e) => {
-              e.target.style.display = 'none';
-            }}
-          />
-          <Typography
-            variant="h6"
-            fontWeight={700}
-            sx={{
-              fontSize: { xs: '1.6rem', print: '1.4rem' },
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-              textAlign: 'center'
-            }}
-          >
-            {indent.companyId?.name || '—'}
-          </Typography>
-        </Box>
-
-        {/* Document Title */}
-        <Typography
-          variant="h5"
-          fontWeight={700}
-          align="center"
-          sx={{
-            textTransform: 'uppercase',
-            mb: 1,
-            fontSize: { xs: '1.1rem', print: '0.95rem' },
-            letterSpacing: 1.5,
-            mt: -4
-          }}
-        >
-          Purchase Request Form
-        </Typography>
+        <TovusDocHeader
+          title="Purchase Request Form"
+          docNumber={indent.indentNumber}
+          companyName={indent.companyId?.name}
+        />
 
         {/* Indent Title */}
         {indent.title && (
@@ -274,6 +226,7 @@ const IndentPrintView = () => {
         {/* Items Table */}
         <Box sx={{ mb: 3, overflowX: 'auto', WebkitOverflowScrolling: 'touch' }}>
           <table
+            className="indent-print-table"
             style={{
               width: '100%',
               minWidth: 640,
@@ -380,7 +333,7 @@ const IndentPrintView = () => {
         {/* Signatures Section */}
         <Box sx={{ mb: 3 }}>
           <Grid container spacing={1.5}>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={3} className="indent-print-sig">
               <Box sx={{ border: '1px solid #ccc', p: 1.5, minHeight: '90px', textAlign: 'left' }}>
                 <Typography variant="body2" fontWeight={600} sx={{ mb: 1, fontSize: '0.85rem' }}>
                   Sig of Requester:
@@ -403,7 +356,7 @@ const IndentPrintView = () => {
                 )}
               </Box>
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={3} className="indent-print-sig">
               <Box sx={{ border: '1px solid #ccc', p: 1.5, minHeight: '90px', textAlign: 'left' }}>
                 <Typography variant="body2" fontWeight={600} sx={{ mb: 1, fontSize: '0.85rem' }}>
                   Head of Department:
@@ -423,7 +376,7 @@ const IndentPrintView = () => {
                 )}
               </Box>
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={3} className="indent-print-sig">
               <Box sx={{ border: '1px solid #ccc', p: 1.5, minHeight: '90px', textAlign: 'left' }}>
                 <Typography variant="body2" fontWeight={600} sx={{ mb: 1, fontSize: '0.85rem' }}>
                   Approved by GM/PD:
@@ -443,7 +396,7 @@ const IndentPrintView = () => {
                 )}
               </Box>
             </Grid>
-            <Grid item xs={12} sm={6} md={3}>
+            <Grid item xs={12} sm={6} md={3} className="indent-print-sig">
               <Box sx={{ border: '1px solid #ccc', p: 1.5, minHeight: '90px', textAlign: 'left' }}>
                 <Typography variant="body2" fontWeight={600} sx={{ mb: 1, fontSize: '0.85rem' }}>
                   SVP/AVP Approval:
@@ -466,26 +419,48 @@ const IndentPrintView = () => {
           </Grid>
         </Box>
 
-        {/* Distribution Section - Bottom Left */}
-        <Box sx={{ mt: 3, pt: 1.5, borderTop: '1px solid #ccc', fontSize: '0.8rem' }}>
-          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-            <strong>Original:</strong> Procurement
-          </Typography>
-          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-            <strong>Green:</strong> Store
-          </Typography>
-          <Typography variant="caption" sx={{ display: 'block' }}>
-            <strong>Yellow:</strong> For Book Record
-          </Typography>
-        </Box>
+        <TovusDocFooter company={indent.companyId} docRef={indent.indentNumber} pinToPageBottom />
       </Paper>
 
       {/* Print Styles */}
       <style jsx global>{`
         @media print {
+          /* margin 0 stops the browser printing its date/title (top) and URL (bottom);
+             the page spacing comes from the document padding instead */
           @page {
             size: A4;
-            margin: 15mm;
+            margin: 0;
+          }
+          /* whole printed page white: the app layout behind the sheet is grey (theme background) */
+          html,
+          body,
+          #root,
+          #root *:has(.indent-print-doc) {
+            background: #fff !important;
+            background-color: #fff !important;
+          }
+          /* keep the whole indent on one A4 page */
+          .indent-print-doc {
+            font-size: 0.82rem;
+          }
+          .indent-print-doc > .MuiBox-root {
+            margin-bottom: 10px;
+          }
+          .indent-print-table {
+            min-width: 0 !important;
+            font-size: 0.75rem !important;
+          }
+          .indent-print-table th,
+          .indent-print-table td {
+            padding: 4px 6px !important;
+          }
+          .indent-print-sig {
+            flex-basis: 25% !important;
+            max-width: 25% !important;
+          }
+          .indent-print-sig > .MuiBox-root {
+            min-height: 70px !important;
+            padding: 6px 8px !important;
           }
           body {
             -webkit-print-color-adjust: exact;
