@@ -120,6 +120,7 @@ import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/Purc
 import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 /** Comment from the most recent workflow step that moved the document to Pre-Audit (Send to Audit), e.g. resubmit notes. */
 function getLatestSendToAuditWorkflowComment(workflowHistory) {
@@ -1849,7 +1850,7 @@ const PreAudit = () => {
         { key: 'srManagerProcurement', label: 'Sr Manager Procurement', user: null, fallback: authorityText.srManagerProcurement || '' }
       ] : []),
       { key: 'chiefOperatingOfficer', label: 'Chief operating officer', user: null, fallback: authorityText.chiefOperatingOfficer || authorityText.verifiedBy || csa.verifiedBy || '' },
-      { key: 'avpTaj', label: 'AVP Taj', user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
+      { key: 'avpTaj', label: poAuthorityLabel(poData, 'avpTaj', 'AVP Taj'), user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
       ...(authorityText.technicalDepartment || csa.technicalDepartment ? [
         { key: 'technicalDepartment', label: 'Technical Department', user: null, fallback: authorityText.technicalDepartment || csa.technicalDepartment || '' }
       ] : []),

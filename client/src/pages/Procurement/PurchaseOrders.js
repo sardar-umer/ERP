@@ -84,6 +84,7 @@ import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
   { key: 'preparedBy', label: 'Prepared By' },
@@ -2537,7 +2538,7 @@ const PurchaseOrders = () => {
                       },
                       {
                         key: 'avpTaj',
-                        label: 'AVP Taj',
+                        label: poAuthorityLabel(viewDialog.data, 'avpTaj', 'AVP Taj'),
                         user: null,
                         fallback: viewDialog.data.approvalAuthorities?.avpTaj || viewDialog.data.approvalAuthorities?.authorisedRep || approvals.authorisedRep || ''
                       },

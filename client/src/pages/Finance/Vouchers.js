@@ -67,6 +67,7 @@ import toast from 'react-hot-toast';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { printTovusElement } from '../../utils/tovusPrintBrand';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 const formatDateForPrint = (date) => {
   if (!date) return '—';
@@ -1855,7 +1856,7 @@ const Vouchers = () => {
                                   { key: 'srManagerProcurement', label: 'Sr Manager Procurement', user: null, fallback: authorityText.srManagerProcurement || '' }
                                 ] : []),
                                 { key: 'chiefOperatingOfficer', label: 'Chief operating officer', user: null, fallback: authorityText.chiefOperatingOfficer || authorityText.verifiedBy || csa.verifiedBy || '' },
-                                { key: 'avpTaj', label: 'AVP Taj', user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
+                                { key: 'avpTaj', label: poAuthorityLabel(poData, 'avpTaj', 'AVP Taj'), user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
                                 ...(authorityText.technicalDepartment || csa.technicalDepartment ? [
                                   { key: 'technicalDepartment', label: 'Technical Department', user: null, fallback: authorityText.technicalDepartment || csa.technicalDepartment || '' }
                                 ] : []),

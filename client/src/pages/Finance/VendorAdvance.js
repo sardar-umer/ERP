@@ -65,6 +65,7 @@ import toast from 'react-hot-toast';
 import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { printTovusElement } from '../../utils/tovusPrintBrand';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 // Default finance voucher signatories (same as Bill Payment / vendor bill form)
 const SR_MANAGER_ACCOUNTS_NAME = 'Muhammad Iftikhar Rashid';
@@ -2357,7 +2358,7 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
                                 { key: 'srManagerProcurement', label: 'Sr Manager Procurement', user: null, fallback: authorityText.srManagerProcurement || '' }
                               ] : []),
                               { key: 'chiefOperatingOfficer', label: 'Chief operating officer', user: null, fallback: authorityText.chiefOperatingOfficer || authorityText.verifiedBy || csa.verifiedBy || '' },
-                              { key: 'avpTaj', label: 'AVP Taj', user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
+                              { key: 'avpTaj', label: poAuthorityLabel(poData, 'avpTaj', 'AVP Taj'), user: null, fallback: authorityText.avpTaj || authorityText.authorisedRep || csa.authorisedRep || '' },
                               ...(authorityText.technicalDepartment || csa.technicalDepartment ? [
                                 { key: 'technicalDepartment', label: 'Technical Department', user: null, fallback: authorityText.technicalDepartment || csa.technicalDepartment || '' }
                               ] : []),

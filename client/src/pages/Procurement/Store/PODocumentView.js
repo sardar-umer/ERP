@@ -7,6 +7,7 @@ import { AuditActionAttachmentsPanel } from '../../../components/Audit/AuditActi
 import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/PurchaseOrderAttachments';
 import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
+import { poAuthorityLabel } from '../../../utils/poAuthorityLabel';
 
 const formatDateForPrint = (date) => {
   if (!date) return '';
@@ -117,7 +118,7 @@ const PODocumentView = ({ data }) => {
     },
     {
       key: 'avpTaj',
-      label: 'AVP Taj',
+      label: poAuthorityLabel(data, 'avpTaj', 'AVP Taj'),
       user: null,
       fallback: auth.avpTaj || auth.authorisedRep || csa.authorisedRep || ''
     },

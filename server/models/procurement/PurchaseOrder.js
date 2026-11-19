@@ -253,6 +253,11 @@ const purchaseOrderSchema = new mongoose.Schema({
     trim: true
   },
   // Approval authorities (names/designations) for signature section - prefilled from comparative statement when created from quotation
+  // Per-PO title for an authority slot, e.g. { avpTaj: 'Patron-In-Chief-Education' } when someone other than
+  // the AVP Taj signs that slot on this PO. Empty = the standard title.
+  authorityLabelOverrides: {
+    avpTaj: { type: String, trim: true, default: '' }
+  },
   approvalAuthorities: {
     preparedBy: { type: String, trim: true, default: '' },
     managerProcurement: { type: String, trim: true, default: '' },

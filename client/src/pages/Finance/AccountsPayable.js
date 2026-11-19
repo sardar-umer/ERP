@@ -112,6 +112,7 @@ import BillSupportingDocuments from '../../components/Finance/BillSupportingDocu
 import WhtField, { computeWht, whtPayload } from '../../components/Finance/WhtField';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 const getBillPayeeEmployeeId = (bill) => {
   const pe = bill?.payeeEmployee;
@@ -3394,7 +3395,7 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                                     { key: 'managerProcurement', label: 'Manager Procurement', value: authText.managerProcurement },
                                     { key: 'srManagerProcurement', label: 'Sr Manager Procurement', value: authText.srManagerProcurement },
                                     { key: 'chiefOperatingOfficer', label: 'Chief operating officer', value: authText.chiefOperatingOfficer || authText.verifiedBy },
-                                    { key: 'avpTaj', label: 'AVP Taj', value: authText.avpTaj || authText.authorisedRep },
+                                    { key: 'avpTaj', label: poAuthorityLabel(po, 'avpTaj', 'AVP Taj'), value: authText.avpTaj || authText.authorisedRep },
                                     { key: 'technicalDepartment', label: 'Technical Department', value: authText.technicalDepartment }
                                   ]
                                     .filter((a) => a.value && String(a.value).trim())

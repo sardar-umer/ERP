@@ -1976,7 +1976,8 @@ router.put('/purchase-orders/:id/approve',
     pendingMatchedSlots.forEach((slot) => {
       approvals.push({
         authorityKey: slot.key,
-        authorityLabel: slot.label,
+        authorityLabel: (['avpTaj', 'authorisedRep'].includes(slot.key) && String(purchaseOrder.authorityLabelOverrides?.avpTaj || '').trim())
+          || slot.label,
         approver: req.user.id,
         approvedAt: now,
         comments: req.body.comments || ''

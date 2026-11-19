@@ -87,6 +87,7 @@ import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/Purc
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 import { brandPrintHtml } from '../../utils/tovusPrintBrand';
+import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -1401,7 +1402,7 @@ const Payments = () => {
               },
               {
                 key: 'avpTaj',
-                label: 'AVP Taj',
+                label: poAuthorityLabel(poData, 'avpTaj', 'AVP Taj'),
                 user: null,
                 fallback: poData.approvalAuthorities?.avpTaj || poData.approvalAuthorities?.authorisedRep || approvals.authorisedRep || auth.authorisedRep || ''
               },
