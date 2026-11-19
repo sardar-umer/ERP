@@ -22,6 +22,7 @@ import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 import jsPDF from 'jspdf';
 import autoTable from 'jspdf-autotable';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const STATUS_COLOR = {
   draft: 'default',
@@ -30,6 +31,18 @@ const STATUS_COLOR = {
   paid: 'success',
   partial: 'warning',
   cancelled: 'error'
+};
+
+/** Tovus-branded print: the bill fits page 1 (A4, footer pinned); attachments follow on their own pages. */
+const printBillDocument = (bill) => {
+  const isCentralizedStore = bill?.referenceType === 'utility_bill' || bill?.module === 'taj_utilities';
+  return printTovusElement('.print-content', {
+    title: isCentralizedStore ? (getCentralizedStoreDocumentTypeLabel(bill) || 'Bill') : 'Vendor Bill Invoice',
+    docRef: bill?.billNumber,
+    fitTarget: '.bill-print-page',
+    // the bill's own document-type line under the company name (now in the Tovus header)
+    strip: ['.bill-print-page > .MuiBox-root:first-child > .MuiBox-root:first-child > .MuiTypography-root:nth-child(2)']
+  });
 };
 
 export default function BillPrint() {
@@ -68,7 +81,7 @@ export default function BillPrint() {
         img.addEventListener('load', resolve, { once: true });
         img.addEventListener('error', resolve, { once: true });
       })));
-      window.print();
+      printBillDocument(bill);
     }, 300);
     return () => clearTimeout(timer);
   }, [autoPrint, loading, bill, attachmentsReady]);
@@ -338,7 +351,7 @@ export default function BillPrint() {
           Back
         </Button>
         <Box display="flex" gap={1}>
-          <Button variant="contained" color="primary" startIcon={<PrintIcon />} onClick={() => window.print()}>
+          <Button variant="contained" color="primary" startIcon={<PrintIcon />} onClick={() => printBillDocument(bill)}>
             Print Bill
           </Button>
         </Box>

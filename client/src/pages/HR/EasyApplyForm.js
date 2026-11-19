@@ -46,6 +46,7 @@ import {
 import { useNavigate, useParams } from 'react-router-dom';
 import { Formik, Form, Field } from 'formik';
 import * as Yup from 'yup';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 // Validation schema for Easy Apply
 const easyApplyValidationSchema = Yup.object({
@@ -537,7 +538,7 @@ const EasyApplyForm = () => {
 
       case 4:
         return (
-          <Box sx={{ textAlign: 'center' }}>
+          <Box className="tv-application-confirmation" sx={{ textAlign: 'center' }}>
             <CheckCircle color="success" sx={{ fontSize: 80, mb: 2 }} />
             <Typography variant="h4" color="success.main" gutterBottom>
               Application Submitted Successfully!
@@ -557,7 +558,7 @@ const EasyApplyForm = () => {
             </Button>
             <Button
               variant="outlined"
-              onClick={() => window.print()}
+              onClick={() => printTovusElement('.tv-application-confirmation', { title: 'Application Confirmation' })}
             >
               Print Confirmation
             </Button>

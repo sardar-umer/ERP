@@ -15,6 +15,7 @@ import presidentEventService, {
   formatEventTimeRange,
   getEventVenueDisplay
 } from '../../../services/presidentEventService';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const DetailRow = ({ label, value }) => (
   <Box
@@ -144,7 +145,7 @@ const EventPrintView = () => {
         >
           Back
         </Button>
-        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>
+        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-ps-doc', { title: 'Event Details', docRef: event?.eventNumber, strip: [':scope > .MuiBox-root:first-of-type > .MuiTypography-h6'] })}>
           Print
         </Button>
       </Box>
@@ -158,6 +159,7 @@ const EventPrintView = () => {
         }}
       >
         <Paper
+          className="tv-ps-doc"
           sx={{
             width: '100%',
             maxWidth: 820,

@@ -229,7 +229,7 @@ export const SectionHeading = ({ children }) => (
 );
 
 export const ActionBar = ({ children }) => (
-  <Paper variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover', display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
+  <Paper className="print-hide-toolbar" variant="outlined" sx={{ p: 1.5, borderRadius: 2, bgcolor: 'action.hover', display: 'flex', gap: 1.5, flexWrap: 'wrap', alignItems: 'center' }}>
     {children}
   </Paper>
 );

@@ -36,6 +36,7 @@ import {
   whiteCollarPersonalAttributes,
   overallResultOptions
 } from '../constants';
+import { printTovusElement } from '../../../../utils/tovusPrintBrand';
 
 // Read-only evaluation table component
 const ReadOnlyEvaluationTable = ({ categories, scores, subTotalMarks = 50, showDescription = false }) => {
@@ -201,7 +202,10 @@ const DocumentViewer = ({ open, document, onClose, canEdit = false, onDocumentUp
   const isBlueCollar = document.formType === 'blue_collar';
 
   const handlePrint = () => {
-    window.print();
+    printTovusElement('.MuiDialog-root .MuiDialogContent-root', {
+      title: 'Evaluation Document',
+      docRef: [document.employee?.firstName, document.employee?.lastName].filter(Boolean).join(' ') || undefined
+    });
   };
 
   const handleDownload = () => {

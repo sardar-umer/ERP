@@ -28,6 +28,7 @@ import {
 import MonthlyPayrollApprovalSection from './MonthlyPayrollApprovalSection';
 import PayrollApprovalAuthorityTable from './PayrollApprovalAuthorityTable';
 import { getPayrollStatusColor, getPayrollStatusLabel } from '../../utils/payrollStatusHelpers';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const formatCurrency = (amount) => {
   const value = Number(amount) || 0;
@@ -265,7 +266,12 @@ const PayrollMonthlyComparisonDialog = ({
   };
 
   const handlePrint = () => {
-    window.print();
+    // Tovus-branded report print (normal size, flows over pages, footer on every page)
+    printTovusElement('#payroll-comparison-print-area', {
+      title: 'Payroll Monthly Comparison',
+      docRef: displayPeriodLabel !== '—' ? displayPeriodLabel : undefined,
+      fit: false
+    });
   };
 
   return (

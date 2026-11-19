@@ -62,6 +62,7 @@ import { generateElectricityInvoicePDF as generateElectricityInvoicePDFUtil } fr
 import api from '../../../services/api';
 import pakistanBanks from '../../../constants/pakistanBanks';
 import { getImageUrl } from '../../../utils/imageService';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 // Number to words converter
 const numberToWords = (num) => {
@@ -1815,7 +1816,7 @@ const Electricity = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Electricity Bill' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

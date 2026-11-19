@@ -35,6 +35,7 @@ import { useNavigate, useParams } from 'react-router-dom';
 import vehicleService from '../../../services/vehicleService';
 import vehicleMaintenanceService from '../../../services/vehicleMaintenanceService';
 import vehicleLogBookService from '../../../services/vehicleLogBookService';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const VehicleDetailsView = () => {
   const navigate = useNavigate();
@@ -458,7 +459,7 @@ const VehicleDetailsView = () => {
     `;
 
     // Write the content to the new window
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Vehicle Details' })); // Tovus ERP branded print
     printWindow.document.close();
 
     // Wait for content to load, then trigger print

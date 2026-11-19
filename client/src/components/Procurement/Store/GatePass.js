@@ -8,6 +8,7 @@ import EditIcon from '@mui/icons-material/Edit';
 import LocalShippingIcon from '@mui/icons-material/LocalShipping';
 import api from '../../../services/api';
 import { formatDate } from '../../../utils/dateUtils';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const EMPTY = { vehicleNumber: '', driverName: '', driverPhone: '', transporter: '', deliverTo: '', deliveryAddress: '', remarks: '', returnable: false };
 const esc = (v) => String(v ?? '').replace(/[&<>"]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
@@ -21,8 +22,8 @@ const printGatePass = (sin) => {
     <td class="r">${esc(it.qtyIssued ?? it.quantity)} ${esc(it.unit)}</td><td>${esc(it.remarks || '')}</td></tr>`).join('');
   const field = (label, value) => `<div class="f"><span>${label}</span><b>${esc(value) || '&nbsp;'}</b></div>`;
   const html = `<!doctype html><html><head><meta charset="utf-8"><title>${esc(gp.number)}</title><style>
-    body{font-family:Arial,sans-serif;color:#111;margin:28px;font-size:13px}
-    h1{font-size:20px;margin:0}.sub{color:#555;margin-top:2px}
+    body{font-family:Arial,sans-serif;color:#111;font-size:13px}
+    .sub{color:#333;font-size:14px;font-weight:bold}
     .head{display:flex;justify-content:space-between;align-items:flex-start;border-bottom:2px solid #111;padding-bottom:10px;margin-bottom:14px}
     .tag{border:2px solid #111;padding:4px 10px;font-weight:bold;font-size:12px}
     .grid{display:grid;grid-template-columns:1fr 1fr;gap:6px 24px;margin-bottom:14px}
@@ -31,9 +32,8 @@ const printGatePass = (sin) => {
     th{background:#f0f0f0}.r{text-align:right}
     .sign{display:grid;grid-template-columns:repeat(4,1fr);gap:24px;margin-top:56px}
     .sign div{border-top:1px solid #111;padding-top:4px;text-align:center;font-size:12px}
-    @media print{body{margin:12mm}}
   </style></head><body>
-    <div class="head"><div><h1>Outward Gate Pass / Delivery Note</h1>
+    <div class="head"><div>
       <div class="sub">${esc(gp.number)} &middot; ${esc(formatDate(gp.dispatchedAt || new Date()))}</div></div>
       <div class="tag">${gp.returnable ? 'RETURNABLE' : 'NON-RETURNABLE'}</div></div>
     <div class="grid">
@@ -48,12 +48,13 @@ const printGatePass = (sin) => {
       <tfoot><tr><th colspan="3">Total</th><th class="r">${esc(sin.totalQuantity)}</th><th></th></tr></tfoot></table>
     ${gp.remarks ? `<div><b>Remarks:</b> ${esc(gp.remarks)}</div>` : ''}
     <div class="sign"><div>Store Keeper<br>${esc(personName(gp.issuedBy))}</div><div>Security / Gate</div><div>Driver</div><div>Received by</div></div>
-    <script>window.onload=function(){window.print()}</script>
+    <script>window.onload=function(){if(window.tovusFit)window.tovusFit();window.print()}</script>
   </body></html>`;
+  const branded = brandPrintHtml(html, { title: 'Outward Gate Pass / Delivery Note', docRef: gp.number });
   const w = window.open('', '_blank', 'width=900,height=1000');
   if (!w) return false;
   w.document.open();
-  w.document.write(html);
+  w.document.write(branded);
   w.document.close();
   return true;
 };

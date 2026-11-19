@@ -25,6 +25,7 @@ import GrnReturnDialog from '../../components/Procurement/Store/GrnReturnDialog'
 import GrnDeveloperEditDialog from '../../components/Procurement/Store/GrnDeveloperEditDialog';
 import { resolveUploadFileHref } from '../../utils/uploadPaths';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 // Keep in step with GRN_ATTACHMENT_MAX_MB in server/routes/procurement.js.
 const GRN_ATTACHMENT_MAX_MB = 20;
@@ -1335,7 +1336,7 @@ const GoodsReceive = () => {
       <Dialog open={viewDialog.open} onClose={() => setViewDialog({ open: false, data: null })} maxWidth="md" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>GRN - {viewDialog.data?.receiveNumber}</span>
-          <Button startIcon={<PrintIcon />} size="small" onClick={() => window.print()} sx={{ mr: 1 }}>Print</Button>
+          <Button startIcon={<PrintIcon />} size="small" onClick={() => printTovusElement('#grn-document', { title: 'Goods Received Note', docRef: viewDialog.data?.receiveNumber, company: viewDialog.data?.companyId, strip: [':scope > .MuiGrid-container:first-child > .MuiGrid-item:nth-child(2) .MuiTypography-h6'] })} sx={{ mr: 1 }}>Print</Button>
         </DialogTitle>
         <DialogContent>
           {viewLoading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}

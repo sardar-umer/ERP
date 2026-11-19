@@ -69,6 +69,7 @@ import {
 import { generateWaterInvoicePDF as generateWaterInvoicePDFUtil } from '../../../utils/invoicePDFGenerators';
 import api from '../../../services/api';
 import pakistanBanks from '../../../constants/pakistanBanks';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 // Number to words converter
 const numberToWords = (num) => {
@@ -1194,7 +1195,7 @@ const WaterBills = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Water Bill' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

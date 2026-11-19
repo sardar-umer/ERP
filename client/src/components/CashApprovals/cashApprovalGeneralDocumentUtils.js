@@ -1,6 +1,7 @@
 import { normalizeUploadPath, resolveUploadFileHref } from '../../utils/uploadPaths';
 import { getImageUrl } from '../../utils/imageService';
 import { numberToWords } from '../../utils/numberToWords';
+import { brandPrintHtml } from '../../utils/tovusPrintBrand';
 
 export { normalizeUploadPath };
 
@@ -373,7 +374,6 @@ export const buildGeneralCashApprovalPrintHtml = (ca) => {
 
   return `<!DOCTYPE html><html><head><meta charset="utf-8"><title>${esc(ca.caNumber)} — Cash Approval</title>
 <style>
-  @page { size: A4 portrait; margin: 12mm; }
   * { box-sizing: border-box; }
   html, body { margin: 0; padding: 0; }
   body { font-family: "Segoe UI", -apple-system, "Helvetica Neue", Arial, sans-serif; color: #1f2933; font-size: 11.5px; line-height: 1.45;
@@ -456,7 +456,6 @@ export const buildGeneralCashApprovalPrintHtml = (ca) => {
       <div class="dept">${esc(ca.requestingDepartment || 'General')}</div>
     </div>
     <div class="title">
-      <h1>Cash Approval</h1>
       <div class="ref">${esc(ca.caNumber)}</div>
       <span class="pill ${tone}">${esc(ca.status || '')}</span>
     </div>
@@ -500,10 +499,6 @@ export const buildGeneralCashApprovalPrintHtml = (ca) => {
   ${stamps}
   </div>
 
-  <div class="foot">
-    <span>System-generated document · ${esc(ca.caNumber)}</span>
-    <span>Printed ${esc(printedAt)}</span>
-  </div>
 </div>
 </body></html>`;
 };
@@ -519,22 +514,13 @@ export const printGeneralCashApproval = (ca, onError) => {
     onError?.('Allow pop-ups to print');
     return;
   }
-  w.document.write(html);
+  // Tovus ERP branding: header, pinned footer, A4 portrait, shared one-page auto-fit (never cuts)
+  w.document.write(brandPrintHtml(html, { title: 'Cash Approval', docRef: ca.caNumber }));
   w.document.close();
 
   const fitAndPrint = () => {
-    const doc = w.document.getElementById('doc');
-    if (doc) {
-      // A4 printable height at 12mm margins (96 px per inch), with a small safety margin
-      const pageHeight = ((297 - 24) * 96) / 25.4 * 0.96;
-      const height = doc.scrollHeight;
-      // Shrink to one page, but never below 70% (still readable); a very long list continues on page 2
-      // with the table header repeated and the totals / signatures kept together
-      if (height > pageHeight) {
-        const scale = Math.max(0.7, Math.floor((pageHeight / height) * 1000) / 1000);
-        doc.style.zoom = String(scale);
-      }
-    }
+    // re-fit now that signature images have their real size (shared Tovus fit)
+    try { if (typeof w.tovusFit === 'function') w.tovusFit(); } catch { /* ignore */ }
     w.focus();
     w.print();
     w.close();

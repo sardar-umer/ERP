@@ -1,3 +1,5 @@
+import { printTovusElement } from './tovusPrintBrand';
+
 /**
  * Print one document on a single A4 portrait page: lays the element out at the A4 printable width,
  * measures what will print (elements hidden in print are left out) and shrinks it with CSS zoom
@@ -10,10 +12,19 @@
  */
 const MM_TO_PX = 96 / 25.4;
 
-export function printFitToOneA4(selector, { marginMm = 8, hiddenInPrint = '.app-print-hide, .MuiTabs-root' } = {}) {
+export function printFitToOneA4(
+  selector,
+  { marginMm = 8, hiddenInPrint = '.app-print-hide, .MuiTabs-root', title = 'Cash Approval', docRef, tovus = true } = {}
+) {
   const el = typeof document !== 'undefined' ? document.querySelector(selector) : null;
   if (!el) {
     window.print();
+    return;
+  }
+  // Tovus ERP branded print (header, pinned footer, A4 portrait, one-page auto-fit that never cuts).
+  // The document's own uppercase title (e.g. "CASH APPROVAL") moves into the Tovus header.
+  if (tovus) {
+    printTovusElement(el, { title, docRef, strip: ['.MuiTypography-h5'] });
     return;
   }
 

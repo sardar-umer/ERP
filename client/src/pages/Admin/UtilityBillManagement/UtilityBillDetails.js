@@ -63,6 +63,7 @@ import {
   isWorkflowAuditBlockingEditStatus
 } from '../../../components/Admin/workflowAuditReturn';
 import { getCentralizedStoreDocumentTypeLabel } from '../../../utils/centralizedStoreBillKind';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const formatMemoDate = (date) => {
   if (!date) return '';
@@ -988,7 +989,7 @@ const UtilityBillDetails = ({
       return;
     }
 
-    printWindow.document.write(getPrintContent());
+    printWindow.document.write(brandPrintHtml(getPrintContent(), { title: 'Utility Bill' })); // Tovus ERP branded print
     printWindow.document.close();
     try {
       printWindow.document.title = '';

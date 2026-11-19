@@ -133,94 +133,68 @@ const IndentPrintView = () => {
           }
         }}
       >
-        <TovusDocHeader
-          title="Purchase Request Form"
-          docNumber={indent.indentNumber}
-          companyName={indent.companyId?.name}
-        />
+        <TovusDocHeader title="Purchase Request Form" />
 
-        {/* Indent Title */}
-        {indent.title && (
-          <Typography variant="h6" fontWeight={600} align="center" sx={{ mb: 2, fontSize: '1rem' }}>
-            {indent.title}
-          </Typography>
-        )}
-
-        {/* ERP Ref - Single Row (Centered) */}
-        <Box sx={{ mb: 1.5, fontSize: '0.9rem', lineHeight: 1.8, textAlign: 'center' }}>
-          <Box>
-            <Typography component="span" fontWeight={600}>ERP Ref:</Typography>
-            <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-              {indent.erpRef || 'PR #' + (indent.indentNumber?.split('-').pop() || '')}
-            </Typography>
-          </Box>
-        </Box>
-
-        {/* Date, Required Date, Indent No. - Single Row */}
-        <Box sx={{ mb: 1.5, fontSize: '0.9rem', lineHeight: 1.8 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start' }}>
-            <Box sx={{ minWidth: '120px' }}>
-              <Typography component="span" fontWeight={600}>Date:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {formatDate(indent.requestedDate)}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '150px' }}>
-              <Typography component="span" fontWeight={600}>Required Date:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {indent.requiredDate ? formatDate(indent.requiredDate) : '___________'}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '120px' }}>
-              <Typography component="span" fontWeight={600}>Indent No.:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {indent.indentNumber || '___________'}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Department and Originator - Single Row */}
-        <Box sx={{ mb: 3, fontSize: '0.9rem', lineHeight: 1.8 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start' }}>
-            <Box sx={{ minWidth: '200px' }}>
-              <Typography component="span" fontWeight={600}>Department:</Typography>
-              <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-                {indent.department?.name || '___________'}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '200px' }}>
-              <Typography component="span" fontWeight={600}>Originator:</Typography>
-              <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-                {indent.requestedBy?.firstName && indent.requestedBy?.lastName
+        {/* Date / Required Date / Indent No. and Department / Originator / Category:
+            same plain "Label: value" style, laid out on a 3-column grid so every column lines up */}
+        <Box
+          sx={{
+            mt: 2.5,
+            mb: 3,
+            fontSize: '0.9rem',
+            lineHeight: 1.8,
+            display: 'grid',
+            gridTemplateColumns: { xs: '1fr', sm: 'repeat(3, 1fr)' },
+            columnGap: 3,
+            rowGap: 0.25,
+            '@media print': { gridTemplateColumns: 'repeat(3, 1fr)', mt: 2 }
+          }}
+        >
+          {[
+            { label: 'ERP Ref', value: indent.erpRef || 'PR #' + (indent.indentNumber?.split('-').pop() || ''), upper: true },
+            { label: 'Indent No.', value: indent.indentNumber },
+            { label: 'Date', value: formatDate(indent.requestedDate) },
+            { label: 'Required Date', value: indent.requiredDate ? formatDate(indent.requiredDate) : '' },
+            { label: 'Department', value: indent.department?.name, upper: true },
+            {
+              label: 'Originator',
+              value:
+                indent.requestedBy?.firstName && indent.requestedBy?.lastName
                   ? `${indent.requestedBy.firstName} ${indent.requestedBy.lastName}`
-                  : '___________'}
+                  : '',
+              upper: true
+            },
+            { label: 'Category', value: indent.category, upper: true },
+            { label: 'Company', value: indent.companyId?.name, upper: true, span: 2 },
+            ...(indent.title ? [{ label: 'Subject', value: indent.title, full: true }] : []),
+            ...(indent.chargeTo?.project
+              ? [{
+                  label: 'Charged to',
+                  value: `${indent.chargeTo.projectName || ''}${indent.chargeTo.subProjectName ? ` › ${indent.chargeTo.subProjectName}` : ''}`,
+                  full: true
+                }]
+              : []),
+            ...(indent.category === 'Others' && indent.categoryOtherDescription?.trim()
+              ? [{ label: 'Specified need', value: indent.categoryOtherDescription.trim(), full: true }]
+              : [])
+          ].map((f) => (
+            <Box
+              key={f.label}
+              sx={{
+                gridColumn: f.full ? '1 / -1' : f.span ? { xs: 'auto', sm: `span ${f.span}` } : 'auto',
+                ...(f.span && { '@media print': { gridColumn: `span ${f.span}` } }),
+                minWidth: 0
+              }}
+            >
+              <Typography component="span" fontWeight={600}>{f.label}:</Typography>
+              <Typography
+                component="span"
+                sx={{ ml: 1, textTransform: f.upper ? 'uppercase' : 'none', whiteSpace: f.full ? 'pre-wrap' : 'normal' }}
+              >
+                {f.value || '___________'}
               </Typography>
             </Box>
-          </Box>
-          {(indent.category || indent.categoryOtherDescription) && (
-            <Box sx={{ mt: 1 }}>
-              <Typography component="span" fontWeight={600}>Category:</Typography>
-              <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-                {indent.category || '___________'}
-              </Typography>
-              {indent.category === 'Others' && indent.categoryOtherDescription?.trim() && (
-                <Typography component="div" sx={{ mt: 0.5, ml: 0, whiteSpace: 'pre-wrap', textTransform: 'none' }}>
-                  <Typography component="span" fontWeight={600}>Specified need: </Typography>
-                  {indent.categoryOtherDescription.trim()}
-                </Typography>
-              )}
-            </Box>
-          )}
-          {indent.chargeTo?.project && (
-            <Box sx={{ mt: 1 }}>
-              <Typography component="span" fontWeight={600}>Charged to:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {indent.chargeTo.projectName}
-                {indent.chargeTo.subProjectName ? ` › ${indent.chargeTo.subProjectName}` : ''}
-              </Typography>
-            </Box>
-          )}
+          ))}
         </Box>
 
         {/* Items Table */}

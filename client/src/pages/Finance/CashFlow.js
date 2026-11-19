@@ -13,6 +13,7 @@ import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
 import { exportCashFlowPDF, exportCashFlowExcel } from '../../utils/reportExport';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -83,7 +84,7 @@ export default function CashFlow() {
   useFinanceCompanyReload(load, { skipInitial: true });
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-report-area" sx={{ p: 3 }}>
       <FinanceCompanyPageHeader title="Cash Flow Statement" icon={CashIcon}>
           <TextField label="From" type="date" size="small" value={filters.fromDate}
             onChange={e => setFilters({ ...filters, fromDate: e.target.value })} InputLabelProps={{ shrink: true }} />
@@ -95,7 +96,7 @@ export default function CashFlow() {
           {data && <>
             <Button variant="outlined" startIcon={<PdfIcon />} color="error" onClick={() => exportCashFlowPDF(data, filters)}>PDF</Button>
             <Button variant="outlined" startIcon={<ExcelIcon />} color="success" onClick={() => exportCashFlowExcel(data, filters)}>Excel</Button>
-            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-report-area', { title: 'Cash Flow Statement', fit: false })}>Print</Button>
           </>}
       </FinanceCompanyPageHeader>
 

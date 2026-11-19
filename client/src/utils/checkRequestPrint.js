@@ -1,4 +1,5 @@
 import { openPrintHtml } from './employeeFormPrint';
+import { brandPrintHtml } from './tovusPrintBrand';
 
 const escapeHtml = (value) => {
   if (value == null || value === '') return '';
@@ -25,7 +26,6 @@ const date = (v) => {
 const qty = (v, unit) => `${escapeHtml((Number(v) || 0).toLocaleString('en-PK'))} ${escapeHtml(unit || '')}`.trim();
 
 const STYLES = `
-  @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
   body { font-family: Arial, Helvetica, sans-serif; color: #1f2937; font-size: 12px; margin: 0; }
   .head { display: flex; justify-content: space-between; align-items: flex-start; border-bottom: 2px solid #1f2937; padding-bottom: 10px; }
@@ -95,7 +95,6 @@ export const buildCheckRequestPrintHtml = (doc) => {
     <style>${STYLES}</style></head><body>
     <div class="head">
       <div>
-        <h1>Check Request</h1>
         <div class="muted">${display(doc.title)}</div>
         ${doc.contractLabel ? `<div class="contract">${escapeHtml(doc.contractLabel)}</div>` : ''}
       </div>
@@ -136,4 +135,5 @@ export const buildCheckRequestPrintHtml = (doc) => {
   </body></html>`;
 };
 
-export const printCheckRequest = (doc) => openPrintHtml(buildCheckRequestPrintHtml(doc));
+export const printCheckRequest = (doc) =>
+  openPrintHtml(brandPrintHtml(buildCheckRequestPrintHtml(doc), { title: 'Check Request', docRef: doc?.number }));

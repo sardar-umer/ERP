@@ -1,3 +1,8 @@
+import { printTovusElement } from './tovusPrintBrand';
+
+/** Switch back to the old unbranded PO print by setting this to false. */
+const TOVUS_BRANDED_PO_PRINT = true;
+
 /**
  * Shared print CSS + fit-to-one-A4 helper for Purchase Orders
  * (items + Store Vetting + Approval Authorities on a single page).
@@ -105,6 +110,16 @@ export function printPoFitToOneA4(selector = '.po-print-page') {
   const el = typeof document !== 'undefined' ? document.querySelector(selector) : null;
   if (!el) {
     window.print();
+    return;
+  }
+  // Tovus ERP branded print (header, pinned footer, A4 portrait, one-page auto-fit that never cuts).
+  // The PO's own "Purchase Order" heading is removed from the printed copy (shown in the Tovus header).
+  if (TOVUS_BRANDED_PO_PRINT) {
+    printTovusElement(el, {
+      title: 'Purchase Order',
+      docRef: el.getAttribute('data-doc-ref') || undefined,
+      strip: ['.MuiTypography-h4']
+    });
     return;
   }
 

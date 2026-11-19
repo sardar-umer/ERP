@@ -52,6 +52,40 @@ export function formatNewHiringPackage(value) {
   return String(value);
 }
 
+/**
+ * All amounts written in one package cell, added together.
+ * The field is free text, so every number in it is picked up:
+ *   "80000" → 80000, "Rs 1,25,000" → 125000, "Rs. 80,000 + fuel 10,000" → 90000, "As per negotiation" → 0
+ */
+export function sumAmountsInText(value) {
+  const matches = String(value ?? '').match(/\d[\d,]*(?:\.\d+)?/g) || [];
+  return matches.reduce((sum, m) => {
+    const n = Number(m.replace(/,/g, ''));
+    return Number.isFinite(n) ? sum + n : sum;
+  }, 0);
+}
+
+/** Total of "Current Package Monthly" across candidates (every amount in every row). */
+export function getNewHiringPackageTotal(employees) {
+  let total = 0;
+  let counted = 0;
+  (employees || []).forEach((e) => {
+    const rowTotal = sumAmountsInText(e?.currentPackageMonthly ?? e?.expectedWages);
+    if (rowTotal > 0) {
+      total += rowTotal;
+      counted += 1;
+    }
+  });
+  return { total, counted };
+}
+
+/** e.g. "245,000 PKR"; "—" when no row has an amount. */
+export function formatNewHiringPackageTotal(employees) {
+  const { total, counted } = getNewHiringPackageTotal(employees);
+  if (!counted) return '—';
+  return `${total.toLocaleString('en-PK', { maximumFractionDigits: 2 })} PKR`;
+}
+
 /** Tentative DOJ is free text; format ISO dates nicely, otherwise show as typed. */
 export function formatNewHiringDoj(value) {
   if (value == null || String(value).trim() === '') return '—';

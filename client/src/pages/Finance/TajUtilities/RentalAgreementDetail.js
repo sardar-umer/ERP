@@ -31,6 +31,7 @@ import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../../services/api';
 import { getImageUrl, handleImageError } from '../../../utils/imageService';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const RentalAgreementDetail = () => {
   const { id } = useParams();
@@ -332,7 +333,7 @@ const RentalAgreementDetail = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Rental Agreement' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

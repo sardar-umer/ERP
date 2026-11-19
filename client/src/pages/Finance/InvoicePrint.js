@@ -9,6 +9,7 @@ import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import { useAuth } from '../../contexts/AuthContext';
 import { numberToWords } from '../../utils/numberToWords';
 import { getImageUrl } from '../../utils/imageService';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => `PKR ${Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
 const fmtDate = (d) => d ? new Date(d).toLocaleDateString('en-PK', { year: 'numeric', month: 'long', day: 'numeric' }) : '—';
@@ -134,7 +135,7 @@ export default function InvoicePrint() {
         img.addEventListener('load', resolve, { once: true });
         img.addEventListener('error', resolve, { once: true });
       })));
-      window.print();
+      printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber });
     }, 300);
     return () => clearTimeout(timer);
   }, [autoPrint, loading, invoice]);
@@ -317,7 +318,7 @@ export default function InvoicePrint() {
         <Button startIcon={<BackIcon />} onClick={() => navigate(-1)}>Back</Button>
         <Box display="flex" gap={1}>
           <Button variant="outlined" color="error" startIcon={<DownloadIcon />} onClick={handleDownloadPDF}>Download PDF</Button>
-          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber })}>Print</Button>
         </Box>
       </Box>
 

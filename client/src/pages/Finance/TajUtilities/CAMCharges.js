@@ -70,6 +70,7 @@ import { generateCAMInvoicePDF as generateCAMInvoicePDFUtil } from '../../../uti
 import { getAdjustedGrandTotal as getInvoiceAdjustedGrandTotal } from '../../../utils/invoiceGracePeriodUtils';
 import api from '../../../services/api';
 import pakistanBanks from '../../../constants/pakistanBanks';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 // Number to words converter
 const numberToWords = (num) => {
@@ -1156,7 +1157,7 @@ const CAMCharges = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'CAM Charges' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

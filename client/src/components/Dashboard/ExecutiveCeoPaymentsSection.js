@@ -91,10 +91,12 @@ import { printNewHiringApproval } from '../../utils/newHiringApprovalPrint';
 import {
   formatNewHiringDoj,
   formatNewHiringPackage,
+  formatNewHiringPackageTotal,
   getNewHiringAuthorityCards,
   getNewHiringEmployees
 } from '../../utils/newHiringEmployees';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { brandPrintHtml } from '../../utils/tovusPrintBrand';
 
 /** `showIpcTab`: give contractor IPCs their own tab (President Dashboard) */
 const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
@@ -1314,7 +1316,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
           </div>`;
       }).join('');
 
-      printWindow.document.write(`<!DOCTYPE html>
+      printWindow.document.write(brandPrintHtml(`<!DOCTYPE html>
 <html>
 <head>
   <meta charset="utf-8" />
@@ -1351,7 +1353,6 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
 </head>
 <body>
   <div class="company">${escapeHtml(settlement.companyName || 'Sardar Group Of Companies')}</div>
-  <h1>Manual Salary Details</h1>
   <div class="sub">Status: ${display(settlement.workflowStatus || settlement.status)} · Period: ${display(period)}</div>
 
   <div class="header-row">
@@ -1388,14 +1389,14 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
     <p>Printed: ${escapeHtml(printDate)}</p>
   </div>
 </body>
-</html>`);
+</html>`, { title: 'Manual Salary Details', docRef: settlement.empId || undefined }));
       printWindow.document.close();
       printWindow.focus();
       setTimeout(() => printWindow.print(), 250);
       return;
     }
 
-    printWindow.document.write(`
+    printWindow.document.write(brandPrintHtml(`
       <!DOCTYPE html>
       <html>
         <head>
@@ -1461,7 +1462,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
           </div>
         </body>
       </html>
-    `);
+    `, { title: 'Payment Settlement', docRef: settlement?.referenceNumber || undefined }));
     printWindow.document.close();
     printWindow.print();
   };
@@ -2931,6 +2932,17 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
                               </TableRow>
                             );
                           })}
+                          {getNewHiringEmployees(viewDialog.settlement).length > 0 && (
+                            <TableRow sx={{ bgcolor: 'grey.100' }}>
+                              <TableCell colSpan={7} align="right">
+                                <b>Total ({getNewHiringEmployees(viewDialog.settlement).length} {getNewHiringEmployees(viewDialog.settlement).length === 1 ? 'candidate' : 'candidates'})</b>
+                              </TableCell>
+                              <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                                <b>{formatNewHiringPackageTotal(getNewHiringEmployees(viewDialog.settlement))}</b>
+                              </TableCell>
+                              <TableCell colSpan={2} />
+                            </TableRow>
+                          )}
                           {getNewHiringEmployees(viewDialog.settlement).length === 0 && (
                             <TableRow>
                               <TableCell colSpan={10} align="center">No candidates</TableCell>

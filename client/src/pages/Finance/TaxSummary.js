@@ -7,6 +7,7 @@ import {
 import { Percent as TaxIcon, Refresh as RefreshIcon, Print as PrintIcon, PictureAsPdf as PdfIcon, GridOn as ExcelIcon } from '@mui/icons-material';
 import api from '../../services/api';
 import { exportTaxSummaryPDF, exportTaxSummaryExcel } from '../../utils/reportExport';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -33,7 +34,7 @@ export default function TaxSummary() {
   }, [filters]);
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-report-area" sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={3} className="print-hide-toolbar">
         <Typography variant="h5" fontWeight={700} display="flex" alignItems="center" gap={1}>
           <TaxIcon color="error" /> Tax Summary — FBR Report
@@ -49,7 +50,7 @@ export default function TaxSummary() {
           {data && <>
             <Button variant="outlined" startIcon={<PdfIcon />} color="error" onClick={() => exportTaxSummaryPDF(data, filters)}>PDF</Button>
             <Button variant="outlined" startIcon={<ExcelIcon />} color="success" onClick={() => exportTaxSummaryExcel(data, filters)}>Excel</Button>
-            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-report-area', { title: 'Tax Summary', fit: false })}>Print</Button>
           </>}
         </Stack>
       </Stack>

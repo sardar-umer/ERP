@@ -9,6 +9,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { getImageUrl } from '../../utils/imageService';
+import { brandPrintHtml, preloadTovusLogo } from '../../utils/tovusPrintBrand';
 
 /**
  * Document-style view of a vendor bill raised from GRN(s), laid out like the Centralized Store
@@ -152,7 +153,6 @@ const GrnVendorBillView = () => {
   <head>
     <title></title>
     <style>
-      @page { size: A4 portrait; margin: 10mm 12mm; }
       * { box-sizing: border-box; }
       html, body { width: 100%; margin: 0; padding: 0; background: #fff; color: #111;
         font-family: Arial, Helvetica, sans-serif; font-size: 11px;
@@ -188,7 +188,6 @@ const GrnVendorBillView = () => {
   <body>
     <div class="doc-title">
       ${bill.companyName ? `<div class="org">${esc(bill.companyName)}</div>` : ''}
-      <div class="sub">Vendor Bill (GRN)</div>
     </div>
     <div class="meta">
       <div>${metaHtml}</div>
@@ -221,17 +220,20 @@ const GrnVendorBillView = () => {
 </html>`;
   };
 
-  const handlePrint = () => {
+  const handlePrint = async () => {
     if (!bill) return;
     const printWindow = window.open('', '_blank');
     if (!printWindow) {
       setError('Unable to open print window. Please allow pop-ups and try again.');
       return;
     }
-    printWindow.document.write(buildPrintHtml());
+    await preloadTovusLogo(); // embed the Tovus logo in the print
+    // Tovus ERP branding: header (logo + title), pinned footer, A4 portrait, one-page auto-fit
+    printWindow.document.write(brandPrintHtml(buildPrintHtml(), { title: 'Vendor Bill (GRN)', docRef: bill.billNumber }));
     printWindow.document.close();
-    // Give signature images a moment to load before the print dialog opens
+    // Give signature images a moment to load, re-fit with their real size, then print
     setTimeout(() => {
+      try { if (typeof printWindow.tovusFit === 'function') printWindow.tovusFit(); } catch { /* ignore */ }
       printWindow.focus();
       printWindow.print();
     }, 500);

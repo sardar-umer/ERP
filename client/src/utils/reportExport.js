@@ -1,3 +1,11 @@
+import {
+  applyTovusPdfFooters,
+  drawTovusPdfHeaderWithInfo,
+  ensureTovusPdfSpace,
+  preloadTovusLogo,
+  withTovusFooterSpace
+} from './tovusPdfBrand';
+
 /**
  * Shared report export utility.
  * Uses jspdf + jspdf-autotable for PDF, xlsx for Excel.
@@ -13,37 +21,27 @@ const todayStr = () => new Date().toLocaleDateString('en-PK', { year: 'numeric',
 
 function baseDoc(title, subtitle, jsPDF, companyName = COMPANY) {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
-  // Header bar
-  doc.setFillColor(25, 118, 210);
-  doc.rect(0, 0, 210, 22, 'F');
-  doc.setTextColor(255, 255, 255);
-  doc.setFontSize(14);
-  doc.setFont('helvetica', 'bold');
-  doc.text(companyName || COMPANY, 14, 10);
-  doc.setFontSize(10);
-  doc.setFont('helvetica', 'normal');
-  doc.text(title, 14, 17);
-  // Subtitle / date line
-  doc.setTextColor(80, 80, 80);
-  doc.setFontSize(9);
-  doc.text(subtitle, 14, 28);
-  doc.text(`Generated: ${todayStr()}`, 14, 33);
-  doc.setDrawColor(200, 200, 200);
-  doc.line(14, 36, 196, 36);
+  // Tovus ERP header (logo + centred title) with the company, period and generated date under it
+  doc.tovusTop = drawTovusPdfHeaderWithInfo(doc, {
+    title,
+    lines: [companyName || COMPANY, subtitle, `Generated: ${todayStr()}`]
+  });
   return doc;
 }
 
 // ─── Balance Sheet ───────────────────────────────────────────────────────────
 export async function exportBalanceSheetPDF(data) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   const doc = baseDoc('Balance Sheet', `As of ${new Date(data.asOfDate).toLocaleDateString('en-PK', { year: 'numeric', month: 'long', day: 'numeric' })}`, jsPDF);
-  let y = 42;
+  let y = doc.tovusTop;
 
   const addSection = (title, rows, total, color) => {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...color);
+    y = ensureTovusPdfSpace(doc, y, 16);
     doc.text(title.toUpperCase(), 14, y);
     y += 2;
     doc.setTextColor(60, 60, 60);
@@ -64,6 +62,7 @@ export async function exportBalanceSheetPDF(data) {
   addSection('Liabilities', data.liabilities.rows, data.liabilities.total, [198, 40, 40]);
   addSection('Equity',      data.equity.rows,       data.equity.total,      [46, 125, 50]);
 
+  applyTovusPdfFooters(doc);
   doc.save(`Balance-Sheet-${data.asOfDate}.pdf`);
 }
 
@@ -103,15 +102,17 @@ export async function exportBalanceSheetExcel(data) {
 // ─── Profit & Loss ───────────────────────────────────────────────────────────
 export async function exportProfitLossPDF(data, filters) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   const sub = `Period: ${filters.fromDate || 'Start'} → ${filters.toDate || 'Today'}`;
   const doc = baseDoc('Profit & Loss Statement', sub, jsPDF);
-  let y = 42;
+  let y = doc.tovusTop;
 
   const addSection = (title, rows, total, color) => {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...color);
+    y = ensureTovusPdfSpace(doc, y, 16);
     doc.text(title.toUpperCase(), 14, y);
     y += 2;
     doc.setTextColor(60, 60, 60);
@@ -136,7 +137,9 @@ export async function exportProfitLossPDF(data, filters) {
   doc.setFont('helvetica', 'bold');
   const netColor = data.netProfit >= 0 ? [46, 125, 50] : [198, 40, 40];
   doc.setTextColor(...netColor);
+  y = ensureTovusPdfSpace(doc, y, 12);
   doc.text(`Net ${data.netProfit >= 0 ? 'Profit' : 'Loss'}: ${fmtPKR(Math.abs(data.netProfit))}`, 14, y + 4);
+  applyTovusPdfFooters(doc);
   doc.save(`Profit-Loss-${filters.fromDate}-${filters.toDate}.pdf`);
 }
 
@@ -169,14 +172,15 @@ export async function exportProfitLossExcel(data, filters) {
 // ─── Trial Balance ───────────────────────────────────────────────────────────
 export async function exportTrialBalancePDF(data, asOfDate) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   const doc = baseDoc('Trial Balance', `As of ${asOfDate}`, jsPDF);
   const totalOpening = data.accounts?.reduce((s, a) => s + (a.openingBalance || 0), 0) || 0;
   const totalDebits = data.accounts?.reduce((s, a) => s + (a.totalDebit || 0), 0) || 0;
   const totalCredits = data.accounts?.reduce((s, a) => s + (a.totalCredit || 0), 0) || 0;
   const totalClosing = data.accounts?.reduce((s, a) => s + (a.closingBalance || 0), 0) || 0;
   autoTable(doc, {
-    startY: 42,
+    startY: doc.tovusTop,
     head: [['Account #', 'Account Name', 'Type', 'Opening (PKR)', 'Debit (PKR)', 'Credit (PKR)', 'Closing (PKR)']],
     body: (data.accounts || []).map(a => [
       a.accountNumber || '', a.accountName || '', a.accountType || '',
@@ -193,9 +197,10 @@ export async function exportTrialBalancePDF(data, asOfDate) {
     ]],
     styles: { fontSize: 7.5, cellPadding: 1.8 },
     headStyles: { fillColor: [245, 245, 245], textColor: [60, 60, 60], fontStyle: 'bold' },
-    footStyles: { fillColor: [240, 240, 240], fontStyle: 'bold' },
+    footStyles: { fillColor: [240, 240, 240], textColor: [20, 20, 20], fontStyle: 'bold' },
     columnStyles: { 3: { halign: 'right' }, 4: { halign: 'right' }, 5: { halign: 'right' }, 6: { halign: 'right' } },
   });
+  applyTovusPdfFooters(doc);
   doc.save(`Trial-Balance-${asOfDate}.pdf`);
 }
 
@@ -226,15 +231,17 @@ export async function exportTrialBalanceExcel(data, asOfDate) {
 // ─── Cash Flow ───────────────────────────────────────────────────────────────
 export async function exportCashFlowPDF(data, filters) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   const sub = `Period: ${filters.fromDate || 'Start'} → ${filters.toDate || 'Today'}`;
   const doc = baseDoc('Cash Flow Statement', sub, jsPDF);
-  let y = 42;
+  let y = doc.tovusTop;
 
   const addSection = (title, items, total, color) => {
     doc.setFontSize(10);
     doc.setFont('helvetica', 'bold');
     doc.setTextColor(...color);
+    y = ensureTovusPdfSpace(doc, y, 16);
     doc.text(title.toUpperCase(), 14, y);
     y += 2;
     doc.setTextColor(60, 60, 60);
@@ -258,7 +265,9 @@ export async function exportCashFlowPDF(data, filters) {
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(30, 30, 30);
+  y = ensureTovusPdfSpace(doc, y, 12);
   doc.text(`Net Change in Cash: ${fmtPKR(data.netChange)}`, 14, y + 4);
+  applyTovusPdfFooters(doc);
   doc.save(`Cash-Flow-${filters.fromDate}-${filters.toDate}.pdf`);
 }
 
@@ -291,14 +300,16 @@ export async function exportCashFlowExcel(data, filters) {
 // ─── Tax Summary ─────────────────────────────────────────────────────────────
 export async function exportTaxSummaryPDF(data, filters) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   const sub = `Period: ${filters.fromDate || 'Start'} → ${filters.toDate || 'Today'}`;
   const doc = baseDoc('FBR Tax Summary', sub, jsPDF);
-  let y = 42;
+  let y = doc.tovusTop;
 
   const addTable = (title, rows, color) => {
     doc.setFontSize(10); doc.setFont('helvetica', 'bold');
     doc.setTextColor(...color);
+    y = ensureTovusPdfSpace(doc, y, 16);
     doc.text(title, 14, y); y += 2;
     doc.setTextColor(60, 60, 60);
     autoTable(doc, {
@@ -319,13 +330,16 @@ export async function exportTaxSummaryPDF(data, filters) {
   doc.setFontSize(11); doc.setFont('helvetica', 'bold');
   doc.setTextColor(30, 30, 30);
   const net = (data.totalOutputTax || 0) - (data.totalInputTax || 0);
+  y = ensureTovusPdfSpace(doc, y, 12);
   doc.text(`Net Tax Payable: ${fmtPKR(net)}`, 14, y + 4);
+  applyTovusPdfFooters(doc);
   doc.save(`Tax-Summary-${filters.fromDate}-${filters.toDate}.pdf`);
 }
 
 export async function exportBankReconciliationPDF(data, filters, bankName, companyName) {
   const jsPDF = (await import('jspdf')).default;
-  const autoTable = (await import('jspdf-autotable')).default;
+  const autoTable = withTovusFooterSpace((await import('jspdf-autotable')).default);
+  await preloadTovusLogo();
   
   let subtitle = `${bankName} | As of: ${filters.asOfDate}`;
   if (data.reconciledUpTo) {
@@ -334,7 +348,7 @@ export async function exportBankReconciliationPDF(data, filters, bankName, compa
   
   const doc = baseDoc('Bank Reconciliation Statement', subtitle, jsPDF, companyName);
 
-  let y = 45;
+  let y = doc.tovusTop + 2;
 
   // Summary Table
   autoTable(doc, {
@@ -353,6 +367,7 @@ export async function exportBankReconciliationPDF(data, filters, bankName, compa
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(30, 30, 30);
+  y = ensureTovusPdfSpace(doc, y, 12);
   doc.text(`Unpresented / Uncleared Cheques & Payments (${(data.unpresentedTransactions || []).length})`, 14, y);
   y += 5;
 
@@ -387,6 +402,7 @@ export async function exportBankReconciliationPDF(data, filters, bankName, compa
   doc.setFontSize(11);
   doc.setFont('helvetica', 'bold');
   doc.setTextColor(30, 30, 30);
+  y = ensureTovusPdfSpace(doc, y, 12);
   doc.text(`Period Activity (${filters.fromDate} to ${filters.toDate})`, 14, y);
   y += 5;
 
@@ -415,6 +431,7 @@ export async function exportBankReconciliationPDF(data, filters, bankName, compa
     }
   });
 
+  applyTovusPdfFooters(doc);
   doc.save(`Bank-Reconciliation-${filters.asOfDate}.pdf`);
 }
 

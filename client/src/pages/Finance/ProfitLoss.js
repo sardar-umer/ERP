@@ -17,6 +17,7 @@ import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
 import { exportProfitLossPDF, exportProfitLossExcel } from '../../utils/reportExport';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -201,7 +202,7 @@ export default function ProfitLoss() {
   const grossProfit = data ? (Number(data.totals?.totalRevenue) || 0) : 0;
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-report-area" sx={{ p: 3 }}>
       <FinanceCompanyPageHeader title="Profit & Loss (Income Statement)" icon={PLIcon}>
         <TextField
           label="From Date"
@@ -226,7 +227,7 @@ export default function ProfitLoss() {
           <>
             <Button variant="outlined" startIcon={<PdfIcon />} color="error" onClick={() => exportProfitLossPDF(data, filters)}>PDF</Button>
             <Button variant="outlined" startIcon={<ExcelIcon />} color="success" onClick={() => exportProfitLossExcel(data, filters)}>Excel</Button>
-            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-report-area', { title: 'Profit & Loss Statement', fit: false })}>Print</Button>
           </>
         )}
       </FinanceCompanyPageHeader>

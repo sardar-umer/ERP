@@ -1,6 +1,12 @@
 import { getImageUrl } from './imageService';
 import { openPrintHtml } from './employeeFormPrint';
-import { formatNewHiringDoj, getNewHiringAuthorityCards, getNewHiringEmployees } from './newHiringEmployees';
+import { tovusPrintCss, tovusPrintHeaderHtml, tovusPrintFooterHtml, tovusFitScript } from './tovusPrintBrand';
+import {
+  formatNewHiringDoj,
+  formatNewHiringPackageTotal,
+  getNewHiringAuthorityCards,
+  getNewHiringEmployees
+} from './newHiringEmployees';
 
 const escapeHtml = (value) => {
   if (value == null || value === '') return '';
@@ -207,15 +213,16 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
   <title>New-Hiring Approval - ${escapeHtml(record.recordNumber || '')}</title>
   <style>
     * { box-sizing: border-box; }
-    body { font-family: Arial, Helvetica, sans-serif; color: #111; margin: 24px; font-size: 12px; }
-    .company { font-size: 16px; font-weight: 700; text-align: center; margin: 0 0 6px; letter-spacing: 0.02em; text-transform: uppercase; }
-    h1 { font-size: 18px; margin: 0 0 4px; text-align: center; }
-    .sub { text-align: center; color: #555; margin-bottom: 20px; font-size: 12px; }
+    body { font-family: Arial, Helvetica, sans-serif; color: #111; font-size: 12px; }
+    ${tovusPrintCss({ pageSize: 'A4', footerSpaceMm: 36 })}
+    .details { display: grid; grid-template-columns: repeat(3, 1fr); column-gap: 24px; font-size: 13px; line-height: 1.8; margin-bottom: 6px; }
+    .details b { font-weight: 700; margin-right: 6px; }
     h2 { font-size: 13px; margin: 18px 0 8px; text-transform: uppercase; letter-spacing: 0.04em; color: #444; }
     table { width: 100%; border-collapse: collapse; margin-bottom: 8px; }
     th, td { border: 1px solid #333; padding: 6px 8px; vertical-align: top; text-align: left; }
     th { background: #f0f0f0; font-weight: 700; }
     td.right { text-align: right; }
+    tr.total-row td { background: #f0f0f0; font-weight: 700; }
     td.center { text-align: center; }
     .auth-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 16px; margin-top: 8px; }
     .auth-card { border: 1px solid #ccc; border-radius: 4px; padding: 10px 12px; min-height: 110px; page-break-inside: avoid; }
@@ -232,7 +239,6 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
       print-color-adjust: exact;
     }
     @media print {
-      body { margin: 12mm; }
       .auth-grid { grid-template-columns: repeat(3, 1fr); }
       .sig-line img {
         -webkit-print-color-adjust: exact;
@@ -241,10 +247,14 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
     }
   </style>
 </head>
-<body>
-  <div class="company">Sardar Group Of Companies</div>
-  <h1>New-Hiring Approval Details</h1>
-  <div class="sub">Record ${display(record.recordNumber)}${record.status ? ` · Status: ${display(record.status)}` : ''}</div>
+<body class="tovus-doc">
+  <div class="tv-fit">
+  ${tovusPrintHeaderHtml({ title: 'New-Hiring Approval' })}
+  <div class="details">
+    <div><b>Record No.:</b>${display(record.recordNumber)}</div>
+    <div><b>Status:</b>${display(record.workflowStatus || record.status)}</div>
+    <div><b>Date:</b>${record.createdAt ? formatDateTime(record.createdAt).split(',')[0] : '—'}</div>
+  </div>
 
   <h2>Candidates recommended for hiring (${employees.length})</h2>
   <table>
@@ -264,7 +274,12 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
       </tr>
     </thead>
     <tbody>
-      ${rows || '<tr><td colspan="10" style="text-align:center">No candidates</td></tr>'}
+      ${rows || '<tr><td colspan="11" style="text-align:center">No candidates</td></tr>'}
+      ${employees.length ? `<tr class="total-row">
+        <td colspan="7" class="right">Total (${employees.length} ${employees.length === 1 ? 'candidate' : 'candidates'})</td>
+        <td class="right">${escapeHtml(formatNewHiringPackageTotal(employees))}</td>
+        <td colspan="3"></td>
+      </tr>` : ''}
     </tbody>
   </table>
 
@@ -272,6 +287,9 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
   <div class="auth-grid">
     ${authorityCards}
   </div>
+  </div>
+  ${tovusPrintFooterHtml({ docRef: record.recordNumber })}
+  ${tovusFitScript({ pageWidthMm: 210, pageHeightMm: 297, bottomMm: 36 })}
 </body>
 </html>`;
 };

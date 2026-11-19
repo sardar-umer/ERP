@@ -86,6 +86,7 @@ import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemM
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
+import { brandPrintHtml } from '../../utils/tovusPrintBrand';
 
 const Payments = () => {
   const navigate = useNavigate();
@@ -830,7 +831,7 @@ const Payments = () => {
     const settlement = viewDialog.settlement;
     const printDate = new Date().toLocaleString();
     
-    printWindow.document.write(`
+    printWindow.document.write(brandPrintHtml(`
       <!DOCTYPE html>
       <html>
         <head>
@@ -849,7 +850,6 @@ const Payments = () => {
         </head>
         <body>
           <div class="header">
-            <h1>PAYMENT SETTLEMENT</h1>
             <div class="subtitle">Reference Number: ${settlement?.referenceNumber?.trim() || settlement?._id || 'N/A'}</div>
           </div>
           <div class="section">
@@ -896,7 +896,7 @@ const Payments = () => {
           </div>
         </body>
       </html>
-    `);
+    `, { title: 'Payment Settlement', docRef: settlement?.referenceNumber?.trim() || undefined }));
     printWindow.document.close();
     printWindow.print();
   };
@@ -1011,6 +1011,7 @@ const Payments = () => {
     return (
       <Paper
         className="po-print-page"
+        data-doc-ref={poData?.orderNumber || undefined}
         sx={{
           p: { xs: 3, sm: 3.5, md: 4 },
           maxWidth: '210mm',

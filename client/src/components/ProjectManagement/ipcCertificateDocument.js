@@ -2,6 +2,7 @@ import dayjs from 'dayjs';
 import { getImageUrl } from '../../utils/imageService';
 import { numberToWords } from '../../utils/numberToWords';
 import { ipcStageText } from './IpcApprovalTrail';
+import { brandPrintHtml } from '../../utils/tovusPrintBrand';
 
 /**
  * The payment certificate as one self-contained HTML document. The review dialog shows it in an iframe and
@@ -209,7 +210,7 @@ export const printIpcCertificate = (d) => {
   const w = window.open('', '_blank', 'width=960,height=1100');
   if (!w) return false;
   w.document.open();
-  w.document.write(ipcCertificateHtml(d, { print: true }));
+  w.document.write(brandPrintHtml(ipcCertificateHtml(d, { print: true }), { title: 'IPC Certificate' })); // Tovus ERP branded print
   w.document.close();
   return true;
 };

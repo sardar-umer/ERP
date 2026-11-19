@@ -11,6 +11,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import landAcquisitionPurchaseService from '../../services/landAcquisitionPurchaseService';
 import landAcquisitionTransferService from '../../services/landAcquisitionTransferService';
 import { formatAreaReadable } from '../../utils/landAreaUnits';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const formatDate = (value) => {
   if (!value) return '';
@@ -112,7 +113,7 @@ export default function LandPurchaseDetailPage() {
   }
 
   const handlePrint = () => {
-    window.print();
+    printTovusElement('.tv-land-purchase-doc', { title: 'Land Purchase' });
   };
 
   const khasrasText = purchase.lines?.map(l => l.khasraNo).filter(Boolean).join(', ') || '';
@@ -124,7 +125,7 @@ export default function LandPurchaseDetailPage() {
   const totalPaymentsReceived = totalInstallmentPaid; // In actual logic, this might be from a separate payments endpoint
 
   return (
-    <Box sx={{ p: { xs: 2, md: 4 }, bgcolor: 'grey.100', minHeight: '100vh', '@media print': { bgcolor: 'white', p: 0, m: 0 } }}>
+    <Box className="tv-land-purchase-doc" sx={{ p: { xs: 2, md: 4 }, bgcolor: 'grey.100', minHeight: '100vh', '@media print': { bgcolor: 'white', p: 0, m: 0 } }}>
       <Stack direction="row" justifyContent="space-between" mb={2} sx={{ '@media print': { display: 'none' }, maxWidth: 800, mx: 'auto' }}>
         <Button startIcon={<ArrowBackIcon />} onClick={() => navigate('/taj-residencia/land-purchase')}>
           Back

@@ -8,6 +8,7 @@ import api from '../../services/api';
 import { exportTrialBalancePDF, exportTrialBalanceExcel } from '../../utils/reportExport';
 import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelector';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const dateFmt = (d) => (d ? new Date(d).toLocaleDateString('en-PK') : '—');
@@ -165,7 +166,7 @@ export default function TrialBalance() {
     || 'Selected company';
 
   return (
-    <Box sx={{ p: 2 }}>
+    <Box className="tv-report-area" sx={{ p: 2 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" mb={1.5} className="print-hide-toolbar" flexWrap="wrap" gap={1}>
         <Typography variant="h5" fontWeight={700} display="flex" alignItems="center" gap={1}>
           <TBIcon color="primary" /> Trial Balance
@@ -182,7 +183,7 @@ export default function TrialBalance() {
           {data && <>
             <Button variant="outlined" startIcon={<PdfIcon />} color="error" onClick={() => exportTrialBalancePDF(data, asOfDate)}>PDF</Button>
             <Button variant="outlined" startIcon={<ExcelIcon />} color="success" onClick={() => exportTrialBalanceExcel(data, asOfDate)}>Excel</Button>
-            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-report-area', { title: 'Trial Balance', fit: false })}>Print</Button>
           </>}
         </Stack>
       </Stack>

@@ -34,6 +34,7 @@ import vehicleMaintenanceService from '../../../services/vehicleMaintenanceServi
 import vehicleLogBookService from '../../../services/vehicleLogBookService';
 import { formatDate, formatCurrency } from '../../../utils/dateUtils';
 import useClientPagination from '../../../hooks/useClientPagination';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 // Lightweight reusable components
 const ReportCard = ({ title, value, subtitle, icon: Icon, color = 'primary' }) => (
@@ -277,7 +278,7 @@ const VehicleReports = () => {
         return;
       }
       
-      printWindow.document.write(htmlContent);
+      printWindow.document.write(brandPrintHtml(htmlContent, { title: 'Vehicle Report', fit: false })); // Tovus ERP branded print
       printWindow.document.close();
       
       // Wait a moment for content to load, then trigger print

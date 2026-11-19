@@ -1,3 +1,4 @@
+import { brandPrintHtml } from './tovusPrintBrand';
 const esc = (value) => String(value ?? '—')
   .replace(/&/g, '&amp;')
   .replace(/</g, '&lt;')
@@ -256,7 +257,6 @@ const buildSummaryHtml = ({ periodLabel, company = {}, summary }) => {
   <meta charset="utf-8" />
   <title>Payroll Summary — ${esc(periodLabel)}</title>
   <style>
-    @page { size: A4 landscape; margin: 10mm 12mm; }
     * { box-sizing: border-box; }
     body {
       font-family: Arial, Helvetica, sans-serif;
@@ -342,6 +342,7 @@ const printHtmlInHiddenFrame = (html, frameId = 'payroll-summary-print-frame') =
   const triggerPrint = () => {
     try {
       win.focus();
+      try { if (typeof win.tovusFit === 'function') win.tovusFit(); } catch { /* ignore */ }
       win.print();
       win.addEventListener('afterprint', cleanup, { once: true });
       setTimeout(cleanup, 60000);
@@ -365,7 +366,12 @@ export const openPayrollCompanySummaryPrint = ({ periodLabel, company = {}, summ
   if (!summary?.rows?.length) {
     return { ok: false, message: 'No payroll summary data available.' };
   }
-  const html = buildSummaryHtml({ periodLabel, company, summary });
+  // Tovus ERP branding (kept landscape: this is a wide multi-column report, as it was before)
+  const html = brandPrintHtml(buildSummaryHtml({ periodLabel, company, summary }), {
+    title: 'Payroll Summary',
+    docRef: periodLabel,
+    pageSize: 'A4 landscape'
+  });
   return printHtmlInHiddenFrame(html);
 };
 

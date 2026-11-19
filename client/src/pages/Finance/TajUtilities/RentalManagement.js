@@ -74,6 +74,7 @@ import {
 } from '../../../services/propertyInvoiceService';
 import { generateRentInvoicePDF as generateRentInvoicePDFUtil, outputPDF } from '../../../utils/invoicePDFGenerators';
 import pakistanBanks from '../../../constants/pakistanBanks';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const paymentMethods = ['Cash', 'Bank Transfer', 'Cheque', 'Online'];
 const paymentStatuses = ['Draft', 'Unpaid', 'Pending Approval', 'Approved', 'Rejected', 'Cancelled'];
@@ -722,7 +723,8 @@ const RentalManagement = () => {
   };
 
   const handlePrintInvoice = () => {
-    window.print();
+    // Tovus-branded print of the rent invoice preview (keeps the invoice's own letterhead)
+    printTovusElement('#invoice-print', { title: 'Rent Invoice' });
   };
 
   const handleDownloadPDF = (invoiceDataParam = null, propertyParam = null, options = {}) => {

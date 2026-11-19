@@ -37,6 +37,7 @@ import { printNewHiringApproval } from '../../../utils/newHiringApprovalPrint';
 import {
   formatNewHiringDoj,
   formatNewHiringPackage,
+  formatNewHiringPackageTotal,
   getNewHiringAuthorityCards,
   getNewHiringEmployees
 } from '../../../utils/newHiringEmployees';
@@ -832,6 +833,17 @@ const NonEmployeeOnboarding = () => {
                   {getNewHiringEmployees(viewDialog.record).length === 0 && (
                     <TableRow>
                       <TableCell colSpan={11} align="center">No candidates</TableCell>
+                    </TableRow>
+                  )}
+                                  {getNewHiringEmployees(viewDialog.record).length > 0 && (
+                    <TableRow sx={{ bgcolor: 'grey.100' }}>
+                      <TableCell colSpan={7} align="right">
+                        <b>Total ({getNewHiringEmployees(viewDialog.record).length} {getNewHiringEmployees(viewDialog.record).length === 1 ? 'candidate' : 'candidates'})</b>
+                      </TableCell>
+                      <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
+                        <b>{formatNewHiringPackageTotal(getNewHiringEmployees(viewDialog.record))}</b>
+                      </TableCell>
+                      <TableCell colSpan={3} />
                     </TableRow>
                   )}
                 </TableBody>

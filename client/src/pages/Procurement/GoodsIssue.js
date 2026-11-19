@@ -22,6 +22,7 @@ import { StoreReturnDialog, CancelSinDialog, StoreReturnsList } from '../../comp
 import GatePassDialog from '../../components/Procurement/Store/GatePass';
 import { SubProjectChargePicker, emptySiteCharge } from '../../components/Procurement/SubProjectChargePicker';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const formatSINDate = (d) => {
   if (!d) return '';
@@ -1100,7 +1101,7 @@ const GoodsIssue = ({ initialTab = 0 }) => {
       <Dialog open={viewDialog.open} onClose={() => setViewDialog({ open: false, data: null })} maxWidth="md" fullWidth>
         <DialogTitle sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
           <span>Store Issue Note - {viewDialog.data?.sinNumber || viewDialog.data?.issueNumber}</span>
-          <Button startIcon={<PrintIcon />} size="small" onClick={() => window.print()}>Print</Button>
+          <Button startIcon={<PrintIcon />} size="small" onClick={() => printTovusElement('#sin-document', { title: 'Store Issue Note', docRef: viewDialog.data?.sinNumber || viewDialog.data?.issueNumber, company: viewDialog.data?.companyId, strip: [':scope > .MuiGrid-container:first-child > .MuiGrid-item:nth-child(2) .MuiTypography-h6'] })}>Print</Button>
         </DialogTitle>
         <DialogContent>
           {viewLoading && <Box sx={{ display: 'flex', justifyContent: 'center', py: 4 }}><CircularProgress /></Box>}

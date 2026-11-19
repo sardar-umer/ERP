@@ -1,3 +1,5 @@
+import { brandPrintHtml } from './tovusPrintBrand';
+
 const escapeHtml = (value) => {
   if (value == null || value === '') return '';
   return String(value)
@@ -51,7 +53,6 @@ const tenureLabel = (hireDate) => {
 const PRINT_STYLES = `
   @import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap');
 
-  @page { size: A4; margin: 10mm 12mm; }
 
   * { box-sizing: border-box; margin: 0; padding: 0; }
 
@@ -677,7 +678,6 @@ export const buildEmployeeDetailPrintHtml = ({
       <div class="hero-top">
         <div class="left">
           <div class="company">Sardar Group of Companies</div>
-          <div class="doc-type">Employee Profile</div>
         </div>
         <div class="right">
           <div class="doc-date">${escapeHtml(generatedAt)}</div>
@@ -746,8 +746,14 @@ const waitForImages = (doc) => {
 };
 
 export const openEmployeeDetailPrint = (options) => {
-  const html = buildEmployeeDetailPrintHtml(options);
-  if (!html) return;
+  const raw = buildEmployeeDetailPrintHtml(options);
+  if (!raw) return;
+  // Tovus ERP branding; the full employee record runs over several pages at normal size
+  const html = brandPrintHtml(raw, {
+    title: 'Employee Profile',
+    docRef: options?.employee?.employeeId ? `Emp ID ${options.employee.employeeId}` : undefined,
+    fit: false
+  });
 
   const existing = document.getElementById('employee-detail-print-frame');
   if (existing) existing.remove();
@@ -777,6 +783,7 @@ export const openEmployeeDetailPrint = (options) => {
   const triggerPrint = async () => {
     try {
       await waitForImages(doc);
+      try { if (typeof win.tovusFit === 'function') win.tovusFit(); } catch { /* ignore */ }
       win.focus();
       win.print();
       win.addEventListener('afterprint', cleanup, { once: true });

@@ -19,6 +19,7 @@ import dayjs from 'dayjs';
 import presidentMeetingService, {
   formatMeetingTimeRange
 } from '../../../services/presidentMeetingService';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const DetailRow = ({ label, value }) => (
   <Box
@@ -156,7 +157,7 @@ const MeetingPrintView = () => {
         >
           Back
         </Button>
-        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>
+        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-ps-doc', { title: 'Minutes of Meeting', docRef: meeting?.meetingNumber, strip: [':scope > .MuiBox-root:first-of-type > .MuiTypography-h6'] })}>
           Print
         </Button>
       </Box>
@@ -170,6 +171,7 @@ const MeetingPrintView = () => {
         }}
       >
         <Paper
+          className="tv-ps-doc"
           sx={{
             width: '100%',
             maxWidth: 820,

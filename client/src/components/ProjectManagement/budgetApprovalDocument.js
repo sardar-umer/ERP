@@ -1,6 +1,7 @@
 import dayjs from 'dayjs';
 import { getImageUrl } from '../../utils/imageService';
 import { numberToWords } from '../../utils/numberToWords';
+import { brandPrintHtml } from '../../utils/tovusPrintBrand';
 
 /**
  * The Main Project budget as one self-contained HTML document (same style as the IPC certificate).
@@ -224,7 +225,7 @@ export const printBudgetDocument = (b, opts = {}) => {
   const w = window.open('', '_blank', 'width=960,height=1100');
   if (!w) return false;
   w.document.open();
-  w.document.write(budgetDocumentHtml(b, { ...opts, print: true }));
+  w.document.write(brandPrintHtml(budgetDocumentHtml(b, { ...opts, print: true }), { title: 'Budget Approval', docRef: b?.documentNo })); // Tovus ERP branded print
   w.document.close();
   return true;
 };

@@ -20,6 +20,7 @@ import { formatPKR } from '../../utils/currency';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
 import { useAuth } from '../../contexts/AuthContext';
 import { useFinanceCompany } from '../../context/FinanceCompanyContext';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const formatDateForPrint = (date) => {
   if (!date) return '—';
@@ -531,13 +532,23 @@ const VoucherView = () => {
               Edit Voucher
             </Button>
           )}
-          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>
+          <Button
+            variant="contained"
+            startIcon={<PrintIcon />}
+            onClick={() => printTovusElement('.voucher-print-doc', {
+              title: voucherTitle,
+              docRef: entry?.entryNumber,
+              // the voucher's own coloured title line (now in the Tovus header)
+              strip: [':scope > .MuiBox-root:first-of-type > .MuiBox-root:first-child > .MuiTypography-root:nth-child(2)']
+            })}
+          >
             Print
           </Button>
         </Box>
       </Box>
 
       <Paper
+        className="voucher-print-doc"
         sx={{
           p: 3,
           maxWidth: '1200px',

@@ -64,6 +64,7 @@ import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice'
 import toast from 'react-hot-toast';
 import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 // Default finance voucher signatories (same as Bill Payment / vendor bill form)
 const SR_MANAGER_ACCOUNTS_NAME = 'Muhammad Iftikhar Rashid';
@@ -1859,7 +1860,10 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
               <Button
                 variant="contained"
                 startIcon={<PrintIcon />}
-                onClick={() => window.print()}
+                onClick={() => printTovusElement('.MuiDialog-root .print-content', {
+                  title: ['Purchase Request Form', 'Purchase Order', 'Comparative Statement', 'Quotation', 'Goods Received Note', 'Attached Documents'][viewDialog.poAuditTab ?? 0],
+                  docRef: viewDialog.po?.orderNumber
+                })}
                 size="small"
                 sx={{ '@media print': { display: 'none' } }}
               >

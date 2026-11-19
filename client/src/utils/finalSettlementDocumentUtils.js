@@ -2,6 +2,7 @@ import jsPDF from 'jspdf';
 import { getCalendarDaysInMonth, resolveSettlementRateDate } from './finalSettlementDays';
 import { numberToWords } from './numberToWords';
 import { getImageUrl } from './imageService';
+import { applyTovusPdfFooters, drawTovusPdfHeader, ensureTovusPdfSpace, preloadTovusLogo } from './tovusPdfBrand';
 
 /**
  * Final Dues (final settlement) — single A4 page in the same layout as Sidat's "FINAL DUES":
@@ -76,10 +77,14 @@ const addressText = (address) => {
   return [address.street, address.area, typeof address.city === 'object' ? address.city?.name : ''].filter(Boolean).join(', ');
 };
 
-export const generateFinalSettlementPdf = (settlement, company = {}) => {
+const finalSettlementFooterOpts = (settlement) => {
+  const code = settlement?.employeeId || settlement?.employee?.employeeId;
+  return { docRef: code ? `Emp ID ${code}` : undefined };
+};
+
+export const generateFinalSettlementPdf = (settlement, company = {}, { footers = true } = {}) => {
   const doc = new jsPDF({ orientation: 'portrait', unit: 'mm', format: 'a4' });
   const W = doc.internal.pageSize.getWidth();
-  const H = doc.internal.pageSize.getHeight();
   const L = 14;
   const R = W - 14;
   const emp = settlement.employee && typeof settlement.employee === 'object' ? settlement.employee : {};
@@ -123,15 +128,14 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
   const joined = emp.appointmentDate || emp.hireDate;
   const confirmed = emp.confirmationDate && new Date(emp.confirmationDate) <= new Date(settlement.lastWorkingDate || Date.now());
 
-  // ---- Header
+  // ---- Header: Tovus ERP branding (logo + centred title), then the company and month as before
+  const headerBottom = drawTovusPdfHeader(doc, { title: 'Final Dues' });
   doc.setTextColor(20, 20, 20);
   doc.setFont('helvetica', 'bold');
-  doc.setFontSize(15);
-  doc.text(company.name || 'Sardar Group of Companies', W / 2, 16, { align: 'center' });
-  doc.setFontSize(11);
-  doc.text('FINAL DUES', W / 2, 23, { align: 'center' });
+  doc.setFontSize(12.5);
+  doc.text(company.name || 'Sardar Group of Companies', W / 2, headerBottom + 1, { align: 'center' });
   doc.setFontSize(8.5);
-  doc.text(`For the month of ${monthYear(settlement.settlementDate || settlement.lastWorkingDate)}`, W / 2, 29, { align: 'center' });
+  doc.text(`For the month of ${monthYear(settlement.settlementDate || settlement.lastWorkingDate)}`, W / 2, headerBottom + 6.5, { align: 'center' });
 
   // ---- Employee block: two columns of "Label : Value", labels / colons / values each on one line-up
   const cleanText = (value) => String(value ?? '').replace(/\s+/g, ' ').trim() || '—';
@@ -165,7 +169,7 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
     ['Address', addressText(emp.address)]
   ];
   // Same row on both sides shares one baseline; a wrapped value pushes the whole row down
-  let y = 39;
+  let y = headerBottom + 16;
   left.forEach(([label, value], i) => {
     const leftLines = infoCell(leftCol, y, label, value);
     const rightLines = right[i] ? infoCell(rightCol, y, right[i][0], right[i][1]) : 1;
@@ -173,7 +177,9 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
   });
   y += 2;
 
-  // ---- Columns
+  // ---- Columns (the whole figures block moves to a new page rather than run into the footer)
+  const rowCountForSpace = Math.max(allowanceRows.length, deductionRows.length, nonSalaryRows.length, 1);
+  y = ensureTovusPdfSpace(doc, y - 2, 12 + rowCountForSpace * 5.6 + 8) + 2;
   const cols = {
     allowance: L, standard: L + 64, actual: L + 86, deduction: L + 92, dedActual: L + 138, nonSalary: L + 146, nonActual: R
   };
@@ -234,7 +240,7 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
   totalCell(cols.nonActual, 20, totalNonSalary);
 
   // ---- Net payable (right, in line with the amount columns) with the amount in words
-  const ny = ty + 17;
+  const ny = ensureTovusPdfSpace(doc, ty + 11, 18) + 6;
   const boxW = 40;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10);
@@ -247,7 +253,11 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
   doc.text(`Amount in words: ${numberToWords(Math.round(netPayable))}`, R, ny + 8.5, { align: 'right' });
 
   // ---- Receipt statement across the page
-  const receiptY = ny + 24;
+  let receiptY = ny + 24;
+  {
+    const lines = doc.splitTextToSize(`I, ${name}, have received Rs. ${amt(netPayable)} against the full and final settlement of my dues.`, R - L);
+    receiptY = ensureTovusPdfSpace(doc, receiptY - 7, lines.length * 4 + 9) + 7;
+  }
   doc.setLineWidth(0.2);
   doc.line(L, receiptY - 7, R, receiptY - 7);
   const receipt = `I, ${name}, have received Rs. ${amt(netPayable)} against the full and final settlement of my dues.`;
@@ -255,7 +265,7 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
   doc.text(receiptLines, L, receiptY);
 
   // ---- Signatures: four across the page, a line with the title under it
-  const signY = receiptY + receiptLines.length * 4 + 26;
+  const signY = ensureTovusPdfSpace(doc, receiptY + receiptLines.length * 4 + 26, 7, 30);
   const signTitles = ['Prepared By', 'Verified By', 'Approved By', 'Employee Signature'];
   const slotW = (R - L) / signTitles.length;
   doc.setFont('helvetica', 'bold');
@@ -265,16 +275,14 @@ export const generateFinalSettlementPdf = (settlement, company = {}) => {
     doc.text(title, center, signY + 4.5, { align: 'center' });
   });
 
-  // ---- Footer
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.5);
-  doc.setTextColor(60, 60, 60);
-  doc.text('Tovus ERP', W / 2, H - 10, { align: 'center' });
+  // ---- Footer: Tovus ERP footer on every page (the print path adds it after the attachment pages)
+  if (footers) applyTovusPdfFooters(doc, finalSettlementFooterOpts(settlement));
 
   return doc;
 };
 
-export const downloadFinalSettlementPdf = (settlement, company = {}) => {
+export const downloadFinalSettlementPdf = async (settlement, company = {}) => {
+  await preloadTovusLogo(); // embed the Tovus logo
   const doc = generateFinalSettlementPdf(settlement, company);
   const fileName = `final-dues-${settlement.employeeId || 'record'}-${new Date(settlement.settlementDate || Date.now()).toISOString().slice(0, 10)}.pdf`;
   doc.save(fileName);
@@ -387,10 +395,13 @@ export const addAttachmentPages = (doc, attachments = []) => {
  * The print tab is opened straight away (browsers block a tab opened after waiting for files to load).
  */
 export const printFinalSettlementPdf = async (settlement, company = {}) => {
-  const doc = generateFinalSettlementPdf(settlement, company);
+  // footers are added last, so the attachment pages get the Tovus footer too
+  // (the logo is already cached — the print tab must open straight away, without waiting)
+  const doc = generateFinalSettlementPdf(settlement, company, { footers: false });
   const documents = (settlement.documents || []).filter((d) => d && d.filePath);
 
   if (!documents.length) {
+    applyTovusPdfFooters(doc, finalSettlementFooterOpts(settlement));
     const printWindow = window.open(doc.output('bloburl'), '_blank');
     if (printWindow) {
       printWindow.onload = () => {
@@ -409,6 +420,7 @@ export const printFinalSettlementPdf = async (settlement, company = {}) => {
   }
   const attachments = await loadSettlementAttachments(documents);
   addAttachmentPages(doc, attachments);
+  applyTovusPdfFooters(doc, finalSettlementFooterOpts(settlement));
   const blobUrl = doc.output('bloburl');
   if (printWindow && !printWindow.closed) {
     printWindow.location.replace(blobUrl);

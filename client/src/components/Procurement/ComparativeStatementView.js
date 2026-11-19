@@ -29,6 +29,16 @@ import {
   getComparativeQuoteGrandTotal,
   isBlankQuoteItem
 } from '../../utils/comparativeQuoteItemMatch';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
+
+/** Tovus-branded print of the Comparative Statement (A4, auto-fit, footer pinned). Reused by every screen that shows it. */
+export const printComparativeStatement = (requisition) =>
+  printTovusElement('.comparative-statement-view', {
+    title: 'Comparative Statement',
+    docRef: requisition?.indentNumber,
+    company: requisition?.companyId,
+    strip: ['.MuiTypography-h4']
+  });
 
 /**
  * Shared Comparative Statement view. Used in Procurement (Comparative Statements page) and Pre-Audit (PO view tab).
@@ -218,7 +228,13 @@ const ComparativeStatementView = ({
 
       {showPrintButton && (
         <Box sx={{ mb: 2, textAlign: 'right', '@media print': { display: 'none' } }}>
-          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+          <Button
+            variant="contained"
+            startIcon={<PrintIcon />}
+            onClick={() => printComparativeStatement(selectedRequisition)}
+          >
+            Print
+          </Button>
         </Box>
       )}
 

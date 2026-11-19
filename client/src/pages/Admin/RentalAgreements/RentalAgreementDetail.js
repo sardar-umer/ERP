@@ -31,6 +31,7 @@ import { format } from 'date-fns';
 import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../../services/api';
 import { getImageUrl, handleImageError } from '../../../utils/imageService';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const RentalAgreementDetail = ({ onEdit }) => {
   const { id } = useParams();
@@ -357,7 +358,7 @@ const RentalAgreementDetail = ({ onEdit }) => {
     `;
 
     // Write the content to the new window
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Rental Agreement' })); // Tovus ERP branded print
     printWindow.document.close();
 
     // Wait for content to load, then trigger print

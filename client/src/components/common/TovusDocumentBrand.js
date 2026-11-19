@@ -1,5 +1,6 @@
-import React from 'react';
-import { Box, Typography } from '@mui/material';
+import React, { useEffect, useRef } from 'react';
+import { Box, GlobalStyles, Typography } from '@mui/material';
+import { fitTovusContent, resetTovusFit } from '../../utils/tovusPrintBrand';
 import dayjs from 'dayjs';
 
 /**
@@ -45,8 +46,8 @@ export const TovusWordmark = ({ fontSize = '0.95rem' }) => (
  * document title / number / issuing company on the right.
  */
 export const TovusDocHeader = ({ title, docNumber, companyName, sx = {} }) => (
-  <Box sx={{ mb: 2.5, '@media print': { mb: 1.5 }, ...printExact, ...sx }}>
-    <Box sx={{ display: 'flex', height: 5, mb: 2, '@media print': { mb: 1.25 } }}>
+  <Box sx={{ mb: 3.5, '@media print': { mb: 2.5 }, ...printExact, ...sx }}>
+    <Box sx={{ display: 'flex', height: 5, mb: 4, '@media print': { mb: 3 } }}>
       <Box sx={{ flex: '1 1 auto', bgcolor: TOVUS_NAVY }} />
       <Box sx={{ flex: '0 0 28%', bgcolor: TOVUS_ORANGE }} />
     </Box>
@@ -58,7 +59,7 @@ export const TovusDocHeader = ({ title, docNumber, companyName, sx = {} }) => (
         justifyItems: { xs: 'center', sm: 'stretch' },
         alignItems: 'center',
         gap: { xs: 1, sm: 2 },
-        '@media print': { gridTemplateColumns: '1fr auto 1fr', justifyItems: 'stretch' }
+        '@media print': { gridTemplateColumns: '1fr auto 1fr', justifyItems: 'stretch', columnGap: '8px' }
       }}
     >
       <Box
@@ -81,15 +82,22 @@ export const TovusDocHeader = ({ title, docNumber, companyName, sx = {} }) => (
           sx={{
             fontWeight: 800,
             textTransform: 'uppercase',
-            letterSpacing: 1,
-            color: '#1d1d1d',
-            fontSize: { xs: '1.2rem', sm: '1.45rem' },
+            letterSpacing: { xs: 1.5, sm: 3 },
+            color: TOVUS_NAVY,
+            fontSize: { xs: '1.15rem', sm: '1.5rem' },
             lineHeight: 1.15,
-            '@media print': { fontSize: '1.3rem' }
+            whiteSpace: { sm: 'nowrap' },
+            '@media print': { fontSize: '1.3rem', letterSpacing: 2.5, whiteSpace: 'nowrap' }
           }}
         >
           {title}
         </Typography>
+        {/* brand accent under the title: orange bar flanked by thin navy rules */}
+        <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 0.75, mt: 0.75 }}>
+          <Box sx={{ width: 36, height: '1px', bgcolor: TOVUS_NAVY, opacity: 0.6 }} />
+          <Box sx={{ width: 44, height: 3, bgcolor: TOVUS_ORANGE, borderRadius: 2 }} />
+          <Box sx={{ width: 36, height: '1px', bgcolor: TOVUS_NAVY, opacity: 0.6 }} />
+        </Box>
         {docNumber && (
           <Typography component="div" sx={{ fontSize: '0.85rem', color: '#444', mt: 0.25, letterSpacing: 0.3 }}>
             {docNumber}
@@ -178,6 +186,170 @@ export const TovusDocFooter = ({ company, docRef, pinToPageBottom = false, sx = 
         </Box>
       </Box>
       <SegmentBar />
+    </Box>
+  );
+};
+
+/**
+ * Aligned "Label: value" details grid used under the header of every document
+ * (same plain style the user approved on the Indent print). 3 columns on screen ≥ sm and in print.
+ *   fields: [{ label, value, upper?, full? (whole row), span? (columns) }]
+ * Empty values show `blank` (default '___________').
+ */
+export const TovusDocDetails = ({ fields = [], columns = 3, blank = '___________', sx = {} }) => (
+  <Box
+    sx={{
+      mt: 2.5,
+      mb: 3,
+      fontSize: '0.9rem',
+      lineHeight: 1.8,
+      display: 'grid',
+      gridTemplateColumns: { xs: '1fr', sm: `repeat(${columns}, 1fr)` },
+      columnGap: 3,
+      rowGap: 0.25,
+      '@media print': { gridTemplateColumns: `repeat(${columns}, 1fr)`, mt: 2 },
+      ...sx
+    }}
+  >
+    {fields.filter(Boolean).map((f) => (
+      <Box
+        key={f.label}
+        sx={{
+          gridColumn: f.full ? '1 / -1' : f.span ? { xs: 'auto', sm: `span ${f.span}` } : 'auto',
+          ...(f.span && !f.full && { '@media print': { gridColumn: `span ${f.span}` } }),
+          minWidth: 0
+        }}
+      >
+        <Typography component="span" fontWeight={600} sx={{ fontSize: 'inherit' }}>{f.label}:</Typography>
+        <Typography
+          component="span"
+          sx={{ ml: 1, fontSize: 'inherit', textTransform: f.upper ? 'uppercase' : 'none', whiteSpace: f.full ? 'pre-wrap' : 'normal' }}
+        >
+          {f.value === 0 ? '0' : f.value || blank}
+        </Typography>
+      </Box>
+    ))}
+  </Box>
+);
+
+/**
+ * Reusable branded print document (React). Wrap any document body with it:
+ *
+ *   <TovusPrintDocument title="Purchase Order" docRef={po.poNumber} company={po.company}>
+ *     …existing document body (remove its old logo / company / title heading)…
+ *   </TovusPrintDocument>
+ *
+ * It adds the Tovus header (logo + centred title) and the footer, and when printing:
+ *  - A4 portrait (or `pageSize="A4 landscape"`), @page margin 0 (no browser date/title/URL)
+ *  - white page, footer pinned to the bottom edge of every sheet
+ *  - a page frame that keeps top / footer space on every page, so nothing is ever cut off
+ *  - auto-fit to ONE page just before printing (compact spacing, then the largest zoom that fits),
+ *    undone after printing so the screen view is unchanged
+ * `fit={false}` turns the auto-fit off (e.g. long reports that should flow over several pages).
+ * `footerSpaceMm` must cover the footer height (taller company address → raise it).
+ */
+const FOOTER_SPACE_MM = 38;
+
+export const TovusPrintDocument = ({
+  title,
+  docRef,
+  company,
+  pageSize = 'A4',
+  fit = true,
+  footerSpaceMm = FOOTER_SPACE_MM,
+  sideMm = 12,
+  sx = {},
+  children
+}) => {
+  const fitRef = useRef(null);
+  const portrait = !/landscape/i.test(pageSize);
+
+  useEffect(() => {
+    if (!fit) return undefined;
+    const before = () => {
+      // the app shell adds ~4mm side padding in print (print.css main.app-main-print)
+      fitTovusContent(fitRef.current, {
+        pageWidthMm: portrait ? 210 : 297,
+        pageHeightMm: portrait ? 297 : 210,
+        sideMm: sideMm + 5,
+        topMm: 10,
+        bottomMm: footerSpaceMm
+      });
+    };
+    const after = () => resetTovusFit(fitRef.current);
+    window.addEventListener('beforeprint', before);
+    window.addEventListener('afterprint', after);
+    return () => {
+      window.removeEventListener('beforeprint', before);
+      window.removeEventListener('afterprint', after);
+    };
+  }, [fit, portrait, footerSpaceMm, sideMm]);
+
+  return (
+    <Box
+      className="tovus-print-doc"
+      sx={{
+        bgcolor: '#fff',
+        color: '#111',
+        maxWidth: portrait ? '210mm' : '297mm',
+        width: '100%',
+        minHeight: { xs: 'auto', sm: portrait ? '297mm' : '210mm' },
+        mx: 'auto',
+        p: { xs: 2, sm: 4 },
+        display: 'flex',
+        flexDirection: 'column',
+        boxShadow: { sm: '0 1px 4px rgba(0,0,0,0.15)' },
+        '@media print': { boxShadow: 'none', p: `0 ${sideMm}mm`, maxWidth: '100%', minHeight: 'auto', display: 'block' },
+        ...sx
+      }}
+    >
+      <GlobalStyles
+        styles={{
+          '@media print': {
+            '@page': { size: pageSize, margin: 0 },
+            'html, body, #root, #root *:has(.tovus-print-doc)': {
+              background: '#fff !important',
+              backgroundColor: '#fff !important'
+            },
+            body: { WebkitPrintColorAdjust: 'exact', printColorAdjust: 'exact' },
+            '.tovus-print-doc table.tv-page': { width: '100%', borderCollapse: 'collapse' },
+            '.tovus-print-doc table.tv-page > thead > tr > td, .tovus-print-doc table.tv-page > tbody > tr > td, .tovus-print-doc table.tv-page > tfoot > tr > td':
+              { border: '0 !important', padding: '0 !important', background: 'none !important' },
+            '.tovus-print-doc .tv-sp-top': { display: 'block !important', height: '10mm' },
+            '.tovus-print-doc .tv-sp-bot': { display: 'block !important', height: `${footerSpaceMm}mm` }
+          },
+          '.tv-fit.tv-dense th, .tv-fit.tv-dense td': { padding: '3px 5px !important', lineHeight: '1.25 !important' },
+          '.tv-fit.tv-dense .MuiTableCell-root': { padding: '3px 5px !important' }
+        }}
+      />
+      {/* page frame: thead/tfoot spacers repeat on every printed page (hidden on screen) */}
+      <table className="tv-page" style={{ width: '100%', borderCollapse: 'collapse', flex: '1 0 auto' }}>
+        <thead>
+          <tr>
+            <td style={{ padding: 0, border: 0 }}>
+              <div className="tv-sp-top" style={{ display: 'none' }} />
+            </td>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td style={{ padding: 0, border: 0, verticalAlign: 'top' }}>
+              <div className="tv-fit" ref={fitRef}>
+                <TovusDocHeader title={title} />
+                {children}
+              </div>
+            </td>
+          </tr>
+        </tbody>
+        <tfoot>
+          <tr>
+            <td style={{ padding: 0, border: 0 }}>
+              <div className="tv-sp-bot" style={{ display: 'none' }} />
+            </td>
+          </tr>
+        </tfoot>
+      </table>
+      <TovusDocFooter company={company} docRef={docRef} pinToPageBottom />
     </Box>
   );
 };

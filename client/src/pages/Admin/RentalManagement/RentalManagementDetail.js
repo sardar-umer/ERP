@@ -64,6 +64,7 @@ import {
   useAdminWorkflowAuditReturn,
   isWorkflowAuditBlockingEditStatus
 } from '../../../components/Admin/workflowAuditReturn';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const rentalObservationKey = (obs) => {
   if (!obs) return '';
@@ -448,7 +449,7 @@ const RentalManagementDetail = ({
         </body>
       </html>
     `;
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Rental Management' })); // Tovus ERP branded print
     printWindow.document.close();
     setTimeout(() => {
       printWindow.focus();

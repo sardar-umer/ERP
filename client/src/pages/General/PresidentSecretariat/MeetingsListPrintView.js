@@ -18,6 +18,7 @@ import dayjs from 'dayjs';
 import presidentMeetingService, {
   formatMeetingTimeRange
 } from '../../../services/presidentMeetingService';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const MeetingsListPrintView = () => {
   const navigate = useNavigate();
@@ -114,13 +115,14 @@ const MeetingsListPrintView = () => {
         >
           Back
         </Button>
-        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => window.print()}>
+        <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-ps-doc', { title: bucket === 'schedule' ? 'Meeting Schedule' : 'Meetings List', fit: false, strip: [':scope > .MuiBox-root:first-of-type > .MuiTypography-subtitle1'] })}>
           Print
         </Button>
       </Box>
 
       <Box sx={{ display: 'flex', justifyContent: 'center', px: { xs: 1.5, sm: 3 }, '@media print': { px: 0 } }}>
       <Paper
+          className="tv-ps-doc"
         sx={{
           p: { xs: 2, sm: 3.5 },
           maxWidth: 1100,

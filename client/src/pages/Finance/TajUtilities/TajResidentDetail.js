@@ -29,6 +29,7 @@ import {
 import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchResidentById, fetchResidentTransactions } from '../../../services/tajResidentsService';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PK', {
@@ -268,7 +269,7 @@ const TajResidentDetail = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Resident Details' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

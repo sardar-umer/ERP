@@ -34,6 +34,7 @@ import { useAuth } from '../../../contexts/AuthContext';
 import { getImageUrl } from '../../../utils/imageService';
 import toast from 'react-hot-toast';
 import ResubmissionHistory from './ResubmissionHistory';
+import { formatNewHiringPackageTotal } from '../../../utils/newHiringEmployees';
 
 const emptyCandidate = () => ({
   name: '',
@@ -565,6 +566,15 @@ const NonEmployeeForm = ({
                     </TableCell>
                   </TableRow>
                 ))}
+                <TableRow sx={{ bgcolor: 'grey.100' }}>
+                  <TableCell sx={cellSx} colSpan={7} align="right">
+                    <b>Total ({records.length} {records.length === 1 ? 'candidate' : 'candidates'})</b>
+                  </TableCell>
+                  <TableCell sx={{ ...cellSx, whiteSpace: 'nowrap' }} align="right">
+                    <b>{formatNewHiringPackageTotal(records)}</b>
+                  </TableCell>
+                  <TableCell sx={cellSx} colSpan={4} />
+                </TableRow>
               </TableBody>
             </Table>
           </TableContainer>

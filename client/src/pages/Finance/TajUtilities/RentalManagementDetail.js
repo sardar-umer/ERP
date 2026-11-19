@@ -44,6 +44,7 @@ import dayjs from 'dayjs';
 import { useParams, useNavigate } from 'react-router-dom';
 import { fetchPropertyById, fetchInvoice, updatePaymentStatus } from '../../../services/tajRentalManagementService';
 import { generateRentInvoicePDF } from '../../../utils/invoicePDFGenerators';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const formatCurrency = (value) =>
   new Intl.NumberFormat('en-PK', {
@@ -314,7 +315,7 @@ const RentalManagementDetail = () => {
         </html>
       `;
 
-      printWindow.document.write(printContent);
+      printWindow.document.write(brandPrintHtml(printContent, { title: 'Rent Invoice' })); // Tovus ERP branded print
       printWindow.document.close();
 
       printWindow.onload = function() {

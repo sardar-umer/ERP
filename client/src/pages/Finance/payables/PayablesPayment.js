@@ -6,6 +6,7 @@ import api from '../../../services/api';
 import {
   ActionBar, InfoCard, JournalCard, SectionHeading, StatusChip, TableCard, TotalsCard, fmtDate, money
 } from './PayablesDetailParts';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const HUB = '/finance/payables-hub';
 
@@ -37,7 +38,7 @@ export default function PayablesPayment() {
   if (!payment) return <Box sx={{ p: 3 }}><Skeleton width={320} height={48} /><Skeleton variant="rounded" height={480} sx={{ mt: 2 }} /></Box>;
 
   return (
-    <Box sx={{ p: { xs: 2, sm: 3 }, maxWidth: 1400 }}>
+    <Box className="tv-payment-doc" sx={{ p: { xs: 2, sm: 3 }, maxWidth: 1400 }}>
       <Breadcrumbs sx={{ mb: 0.5 }}>
         <Link component={RouterLink} to={HUB} underline="hover" variant="body2">Payables</Link>
         <Typography variant="body2" color="text.secondary">Payments</Typography>
@@ -92,7 +93,18 @@ export default function PayablesPayment() {
 
       <ActionBar>
         <Button variant="contained" startIcon={<VoucherIcon />} onClick={() => navigate(payment.voucherUrl)}>Open voucher</Button>
-        <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+        <Button
+          variant="outlined"
+          startIcon={<PrintIcon />}
+          onClick={() => printTovusElement('.tv-payment-doc', {
+            title: payment.kindLabel || 'Payment',
+            docRef: payment.number,
+            // breadcrumbs, the on-screen title row and the action buttons are not part of the document
+            strip: [':scope > .MuiBreadcrumbs-root', ':scope > .MuiStack-root:first-of-type .MuiTypography-h5']
+          })}
+        >
+          Print
+        </Button>
         <Link component="button" type="button" underline="hover" onClick={() => navigate(-1)} sx={{ ml: 0.5 }}>Back</Link>
       </ActionBar>
     </Box>

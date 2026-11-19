@@ -2125,6 +2125,7 @@ const PurchaseOrders = () => {
             <Box sx={{ width: '100%' }} className="print-content">
               <Paper
                 className="po-print-page"
+        data-doc-ref={viewDialog.data?.orderNumber || undefined}
                 sx={{
                   p: { xs: 3, sm: 3.5, md: 4 },
                   maxWidth: '210mm',

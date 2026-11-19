@@ -10,6 +10,7 @@ import {
 } from '@mui/icons-material';
 import api from '../../services/api';
 import useClientPagination from '../../hooks/useClientPagination';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const STATUS_COLOR = { paid: 'success', pending: 'warning', partial: 'info', overdue: 'error', draft: 'default' };
@@ -187,7 +188,7 @@ export default function CustomerStatement() {
 
   // ── Customer Detail Statement ──────────────────────────────────────────────
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-report-area" sx={{ p: 3 }}>
       <Stack direction="row" alignItems="center" gap={1} mb={3} className="print-hide-toolbar">
         <IconButton onClick={back}><BackIcon /></IconButton>
         <Typography variant="h5" fontWeight={700}>
@@ -195,7 +196,7 @@ export default function CustomerStatement() {
         </Typography>
         <Box flex={1} />
         <Tooltip title="Print Statement">
-          <IconButton onClick={() => window.print()}><PrintIcon /></IconButton>
+          <IconButton onClick={() => printTovusElement('.tv-report-area', { title: 'Customer Statement', fit: false })}><PrintIcon /></IconButton>
         </Tooltip>
       </Stack>
 

@@ -71,6 +71,7 @@ import { scopeComparativeToDocumentLot } from '../../../utils/comparativeQuoteIt
 import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/PurchaseOrderAttachments';
 import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 // Stat Card Component
 const StatCard = ({ title, value, subtitle, icon, color, onClick }) => (
@@ -284,7 +285,13 @@ const IndentsDashboard = () => {
   // Handle print
   const handlePrint = () => {
     if (!viewDialog.settlement) return;
-    window.print();
+    // Tovus-branded print of the open document
+    const target = document.querySelector('.MuiDialog-root .print-content')
+      || document.querySelector('.MuiDialog-root .MuiDialogContent-root');
+    printTovusElement(target, {
+      title: viewDialog.isPurchaseOrder ? 'Purchase Order' : viewDialog.isCashApproval ? 'Cash Approval' : 'Payment Settlement',
+      docRef: viewDialog.settlement?.orderNumber || viewDialog.settlement?.referenceNumber || undefined
+    });
   };
 
   // Number to words converter for Purchase Orders

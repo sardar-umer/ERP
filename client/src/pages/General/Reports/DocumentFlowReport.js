@@ -25,6 +25,7 @@ import {
 } from '@mui/icons-material';
 import dayjs from 'dayjs';
 import api from '../../../services/api';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const KIND_COLORS = {
   indent: '#3b6fb6',
@@ -160,7 +161,7 @@ const DocumentFlowReport = () => {
   const summary = flow?.summary;
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-docflow-report" sx={{ p: 3 }}>
       <Stack direction={{ xs: 'column', md: 'row' }} justifyContent="space-between" alignItems={{ md: 'center' }} spacing={1} sx={{ mb: 2 }}>
         <Box>
           <Typography variant="h4" sx={{ fontWeight: 700 }}>
@@ -180,7 +181,15 @@ const DocumentFlowReport = () => {
             <Button startIcon={<DownloadIcon />} variant="outlined" onClick={exportCsv}>
               Export CSV
             </Button>
-            <Button startIcon={<PrintIcon />} variant="outlined" onClick={() => window.print()}>
+            <Button
+              startIcon={<PrintIcon />}
+              variant="outlined"
+              onClick={() => printTovusElement('.tv-docflow-report', {
+                title: 'Document Flow Report',
+                fit: false,
+                strip: [':scope > .MuiStack-root:first-child'] // on-screen title + buttons
+              })}
+            >
               Print
             </Button>
           </Stack>

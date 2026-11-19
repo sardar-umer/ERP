@@ -17,6 +17,7 @@ import api from '../../services/api';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
 import { exportBalanceSheetPDF, exportBalanceSheetExcel } from '../../utils/reportExport';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const fmt = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 
@@ -239,7 +240,7 @@ export default function BalanceSheet() {
   const isBalanced = Math.abs(totalAssets - totalLiabilitiesAndEquity) < 1;
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-report-area" sx={{ p: 3 }}>
       <FinanceCompanyPageHeader title="Balance Sheet" icon={BSIcon}>
         <TextField
           label="As of Date"
@@ -256,7 +257,7 @@ export default function BalanceSheet() {
           <>
             <Button variant="outlined" startIcon={<PdfIcon />} color="error" onClick={() => exportBalanceSheetPDF(data)}>PDF</Button>
             <Button variant="outlined" startIcon={<ExcelIcon />} color="success" onClick={() => exportBalanceSheetExcel(data)}>Excel</Button>
-            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+            <Button variant="outlined" startIcon={<PrintIcon />} onClick={() => printTovusElement('.tv-report-area', { title: 'Balance Sheet', fit: false })}>Print</Button>
           </>
         )}
       </FinanceCompanyPageHeader>

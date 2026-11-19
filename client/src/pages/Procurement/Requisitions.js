@@ -57,6 +57,8 @@ import {
   isBlankQuoteItem
 } from '../../utils/comparativeQuoteItemMatch';
 import dayjs from 'dayjs';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
+import { printComparativeStatement } from '../../components/Procurement/ComparativeStatementView';
 
 const ITEM_DESC_PREVIEW_CHARS = 72;
 const ITEM_DESC_COMBINED_PREVIEW_CHARS = 100;
@@ -737,7 +739,15 @@ const Requisitions = () => {
             <Button
               variant="contained"
               startIcon={<PrintIcon />}
-              onClick={() => window.print()}
+              onClick={() => (viewDialog.tab === 0
+                ? printTovusElement('.MuiDialog-root .print-content > .MuiPaper-root', {
+                    title: 'Purchase Request Form',
+                    docRef: viewDialog.data?.indentNumber,
+                    company: viewDialog.data?.companyId,
+                    // old Taj logo + company heading and the plain title (the Tovus header replaces them)
+                    strip: [':scope > .MuiBox-root:first-child', ':scope > .MuiTypography-h5']
+                  })
+                : printComparativeStatement(viewDialog.data))}
               size="small"
             >
               Print

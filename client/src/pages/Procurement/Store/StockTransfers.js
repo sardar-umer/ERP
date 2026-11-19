@@ -16,6 +16,7 @@ import api from '../../../services/api';
 import storeService from '../../../services/storeService';
 import { formatDate } from '../../../utils/dateUtils';
 import { formatPKR } from '../../../utils/currency';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const EMPTY_FORM = {
   transferDate: new Date().toISOString().slice(0, 10),
@@ -385,7 +386,7 @@ const StockTransfers = () => {
       <Dialog open={Boolean(viewing)} onClose={() => setViewing(null)} maxWidth="md" fullWidth>
         <DialogContent>{viewing && <TransferNoteView t={viewing} />}</DialogContent>
         <DialogActions className="app-print-hide">
-          <Button startIcon={<PrintIcon />} onClick={() => window.print()}>Print</Button>
+          <Button startIcon={<PrintIcon />} onClick={() => printTovusElement('.stn-print', { title: 'Stock Transfer Note', docRef: viewing?.transferNumber, strip: [':scope > .MuiStack-root:first-child .MuiTypography-h6'] })}>Print</Button>
           <Button variant="contained" onClick={() => setViewing(null)}>Close</Button>
         </DialogActions>
       </Dialog>

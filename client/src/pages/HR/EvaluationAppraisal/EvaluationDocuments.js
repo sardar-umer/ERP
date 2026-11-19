@@ -37,6 +37,7 @@ import {
   whiteCollarPersonalAttributes,
   initializeScores
 } from './constants';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 
 const validationSchema = Yup.object({
@@ -156,7 +157,11 @@ const EvaluationDocuments = () => {
   const percentage = useMemo(() => totalScore > 0 ? ((totalScore / totalPossibleScore) * 100).toFixed(2) : 0, [totalScore, totalPossibleScore]);
 
   const handlePrint = useCallback(() => {
-    window.print();
+    // Tovus-branded print of the evaluation form (screen title row + buttons are left out)
+    printTovusElement('.tv-evaluation-doc', {
+      title: 'Evaluation & Appraisal',
+      strip: [':scope > .MuiBox-root:first-child']
+    });
   }, []);
 
   const handleDownload = useCallback(() => {
@@ -192,7 +197,7 @@ const EvaluationDocuments = () => {
   }, [formik]);
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-evaluation-doc" sx={{ p: 3 }}>
       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 3 }}>
         <Typography variant="h4" component="h1" sx={{ fontWeight: 600 }}>
           Evaluation & Appraisal - Documents

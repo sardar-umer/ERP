@@ -2,7 +2,6 @@ import React, { useState, useEffect } from 'react';
 import {
   Box,
   Typography,
-  Paper,
   Button,
   CircularProgress,
   Alert,
@@ -16,6 +15,7 @@ import { useParams, useNavigate } from 'react-router-dom';
 import api from '../../services/api';
 import dayjs from 'dayjs';
 import { DigitalSignatureImage } from '../../components/common/DigitalSignatureImage';
+import { TovusPrintDocument, TovusDocDetails } from '../../components/common/TovusDocumentBrand';
 
 function renderIndentItemDescriptionCell(item) {
   const name = String(item?.itemName || '').trim();
@@ -126,123 +126,27 @@ const RequisitionPrintView = () => {
         </Button>
       </Box>
 
-      {/* Print Content */}
-      <Paper
-        sx={{
-          p: 4,
-          maxWidth: '210mm',
-          minHeight: '297mm',
-          mx: 'auto',
-          backgroundColor: '#fff',
-          '@media print': {
-            boxShadow: 'none',
-            p: 2.5,
-            maxWidth: '100%',
-            backgroundColor: '#fff'
-          }
-        }}
-      >
-        {/* Header Section - Logo and Company Name */}
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', mb: 0, position: 'relative', minHeight: { xs: 150, print: 130 } }}>
-          <Box
-            component="img"
-            src="/images/taj-logo.png"
-            alt="Company Logo"
-            sx={{
-              height: { xs: 150, print: 130 },
-              width: 'auto',
-              objectFit: 'contain',
-              position: 'absolute',
-              left: 0,
-              top: { xs: 10, print: 5 }
-            }}
-            onError={(e) => {
-              e.target.style.display = 'none';
-            }}
-          />
-          <Typography
-            variant="h6"
-            fontWeight={700}
-            sx={{
-              fontSize: { xs: '1.6rem', print: '1.4rem' },
-              textTransform: 'uppercase',
-              letterSpacing: 0.5,
-              textAlign: 'center'
-            }}
-          >
-            {requisition?.companyId?.name || '—'}
-          </Typography>
-        </Box>
-
-        {/* Document Title */}
-        <Typography
-          variant="h5"
-          fontWeight={700}
-          align="center"
-          sx={{
-            textTransform: 'uppercase',
-            mb: 2,
-            fontSize: { xs: '1.1rem', print: '0.95rem' },
-            letterSpacing: 1.5,
-            mt: -4
-          }}
-        >
-          Purchase Request Form
-        </Typography>
-
-        {/* ERP Ref - Single Row (Centered) */}
-        <Box sx={{ mb: 1.5, fontSize: '0.9rem', lineHeight: 1.8, textAlign: 'center' }}>
-          <Box>
-            <Typography component="span" fontWeight={600}>ERP Ref:</Typography>
-            <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-              {requisition.erpRef || 'PR #' + (requisition.indentNumber?.split('-').pop() || '')}
-            </Typography>
-          </Box>
-        </Box>
-
-        {/* Date, Required Date, Indent No. - Single Row */}
-        <Box sx={{ mb: 1.5, fontSize: '0.9rem', lineHeight: 1.8 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start' }}>
-            <Box sx={{ minWidth: '120px' }}>
-              <Typography component="span" fontWeight={600}>Date:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {formatDate(requisition.requestedDate)}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '150px' }}>
-              <Typography component="span" fontWeight={600}>Required Date:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {requisition.requiredDate ? formatDate(requisition.requiredDate) : '___________'}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '120px' }}>
-              <Typography component="span" fontWeight={600}>Indent No.:</Typography>
-              <Typography component="span" sx={{ ml: 1 }}>
-                {requisition.indentNumber || '___________'}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
-
-        {/* Department and Originator - Single Row */}
-        <Box sx={{ mb: 3, fontSize: '0.9rem', lineHeight: 1.8 }}>
-          <Box sx={{ display: 'flex', flexWrap: 'wrap', gap: 6, justifyContent: 'flex-start' }}>
-            <Box sx={{ minWidth: '200px' }}>
-              <Typography component="span" fontWeight={600}>Department:</Typography>
-              <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-                {requisition.department?.name || '___________'}
-              </Typography>
-            </Box>
-            <Box sx={{ minWidth: '200px' }}>
-              <Typography component="span" fontWeight={600}>Originator:</Typography>
-              <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
-                {requisition.requestedBy?.firstName && requisition.requestedBy?.lastName
-                  ? `${requisition.requestedBy.firstName} ${requisition.requestedBy.lastName}`
-                  : '___________'}
-              </Typography>
-            </Box>
-          </Box>
-        </Box>
+      {/* Print Content — Tovus branded A4 document (header, footer, one-page auto-fit) */}
+      <TovusPrintDocument title="Purchase Request Form" docRef={requisition.indentNumber} company={requisition.companyId}>
+        <TovusDocDetails
+          fields={[
+            { label: 'ERP Ref', value: requisition.erpRef || 'PR #' + (requisition.indentNumber?.split('-').pop() || ''), upper: true },
+            { label: 'Indent No.', value: requisition.indentNumber },
+            { label: 'Date', value: formatDate(requisition.requestedDate) },
+            { label: 'Required Date', value: requisition.requiredDate ? formatDate(requisition.requiredDate) : '' },
+            { label: 'Department', value: requisition.department?.name, upper: true },
+            {
+              label: 'Originator',
+              value: requisition.requestedBy?.firstName && requisition.requestedBy?.lastName
+                ? `${requisition.requestedBy.firstName} ${requisition.requestedBy.lastName}`
+                : '',
+              upper: true
+            },
+            { label: 'Category', value: requisition.category, upper: true },
+            { label: 'Company', value: requisition.companyId?.name, upper: true, span: 2 },
+            requisition.title ? { label: 'Subject', value: requisition.title, full: true } : null
+          ]}
+        />
 
         {/* Items Table */}
         <Box sx={{ mb: 3 }}>
@@ -460,36 +364,8 @@ const RequisitionPrintView = () => {
           </Grid>
         </Box>
 
-        {/* Distribution Section - Bottom Left */}
-        <Box sx={{ mt: 3, pt: 1.5, borderTop: '1px solid #ccc', fontSize: '0.8rem' }}>
-          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-            <strong>Original:</strong> Procurement
-          </Typography>
-          <Typography variant="caption" sx={{ display: 'block', mb: 0.5 }}>
-            <strong>Green:</strong> Store
-          </Typography>
-          <Typography variant="caption" sx={{ display: 'block' }}>
-            <strong>Yellow:</strong> For Book Record
-          </Typography>
-        </Box>
-      </Paper>
+      </TovusPrintDocument>
 
-      {/* Print Styles */}
-      <style jsx global>{`
-        @media print {
-          @page {
-            size: A4;
-            margin: 15mm;
-          }
-          body {
-            -webkit-print-color-adjust: exact;
-            print-color-adjust: exact;
-          }
-          .no-print {
-            display: none !important;
-          }
-        }
-      `}</style>
     </>
   );
 };

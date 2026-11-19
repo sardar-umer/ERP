@@ -1,5 +1,6 @@
 import { computeAutoSalaryBreakdown } from './salaryBreakdown';
 import { vehicleAllowanceAmount, fuelAllowanceAmount } from './allowanceHelpers';
+import { brandPrintHtml } from './tovusPrintBrand';
 
 const MONTH_NAMES = [
   '', 'January', 'February', 'March', 'April', 'May', 'June',
@@ -82,7 +83,6 @@ const categoryLabel = (value) => {
 };
 
 const SECTION_STYLES = `
-  @page { size: A4; margin: 14mm; }
   * { box-sizing: border-box; }
   body {
     font-family: 'Segoe UI', system-ui, sans-serif;
@@ -166,7 +166,13 @@ const sectionCard = (title, rows) => `
   </div>
 `;
 
-const wrapSectionDocument = ({ pageTitle, sectionTitle, employeeLabel, employeeId, bodyHtml }) => `<!DOCTYPE html>
+// Tovus ERP branding: header (logo + section title), pinned footer, A4 portrait, one-page auto-fit
+const wrapSectionDocument = (opts) => brandPrintHtml(rawSectionDocument(opts), {
+  title: opts.sectionTitle,
+  docRef: opts.employeeId ? `Emp ID ${opts.employeeId}` : undefined
+});
+
+const rawSectionDocument = ({ pageTitle, sectionTitle, employeeLabel, employeeId, bodyHtml }) => `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
@@ -176,7 +182,6 @@ const wrapSectionDocument = ({ pageTitle, sectionTitle, employeeLabel, employeeI
 <body>
   <div class="header">
     <div class="company">Sardar Group of Companies</div>
-    <div class="title">${escapeHtml(sectionTitle)}</div>
     <div class="meta">
       ${employeeLabel ? `Employee: ${escapeHtml(employeeLabel)}` : 'Employee (draft)'}
       ${employeeId ? ` · ID: ${escapeHtml(employeeId)}` : ''}
@@ -184,7 +189,7 @@ const wrapSectionDocument = ({ pageTitle, sectionTitle, employeeLabel, employeeI
     </div>
   </div>
   ${bodyHtml}
-  <div class="footer">Sardar Group of Companies · Human Resources · Confidential</div>
+  <div class="footer">Human Resources · Confidential</div>
 </body>
 </html>`;
 
@@ -200,12 +205,12 @@ export const buildJoiningReportPrintHtml = (report = {}, employeeLabel = '') => 
     ? formatDate(report.hrSignatureDate)
     : '_________________________';
 
-  return `<!DOCTYPE html>
+  // Tovus ERP footer only (formal letter: no header banner), letter margins kept as before
+  return brandPrintHtml(`<!DOCTYPE html>
 <html>
   <head>
     <title>Joining Report${employeeLabel ? ` - ${escapeHtml(employeeLabel)}` : ''}</title>
     <style>
-      @page { margin: 22mm 18mm 22mm 32mm; size: A4; }
       * { margin: 0; padding: 0; box-sizing: border-box; }
       body {
         font-family: 'Times New Roman', serif;
@@ -396,7 +401,12 @@ export const buildJoiningReportPrintHtml = (report = {}, employeeLabel = '') => 
       This document is exclusive property of SGC. It is confidential and cannot be published, copied or multiplied without authorization.
     </div>
   </body>
-</html>`;
+</html>`, {
+    title: 'Joining Report',
+    header: false,
+    // same white space as the old @page 22/18/32mm margins + the body's own padding
+    margins: { topMm: 28, leftMm: 45, rightMm: 23 }
+  });
 };
 
 const buildPersonalHtml = (values, meta) => wrapSectionDocument({
@@ -660,6 +670,12 @@ export const openPrintHtml = (html) => {
   const triggerPrint = async () => {
     try {
       await waitForImages(doc);
+      // Tovus-branded documents: re-run the one-page auto-fit now that images have their real size
+      try {
+        if (typeof win.tovusFit === 'function') win.tovusFit();
+      } catch {
+        /* ignore */
+      }
       win.focus();
       win.print();
       win.addEventListener('afterprint', cleanup, { once: true });

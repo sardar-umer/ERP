@@ -38,6 +38,7 @@ import { fetchResidents } from '../../../services/tajResidentsService';
 import { getImageUrl, handleImageError } from '../../../utils/imageService';
 import { useAuth } from '../../../contexts/AuthContext';
 import jsPDF from 'jspdf';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const propertyStatuses = ['Pending', 'Active', 'Inactive', 'Under Maintenance', 'Rented', 'Available', 'Reserved'];
 
@@ -658,7 +659,7 @@ const TajPropertyDetail = () => {
       </html>
     `;
 
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Property Details' })); // Tovus ERP branded print
     printWindow.document.close();
 
     printWindow.onload = function() {

@@ -42,6 +42,7 @@ import { toast } from 'react-hot-toast';
 import KPITabNavigation from '../../../components/HR/KPITabNavigation';
 import { fetchKpiSubmissions } from '../../../services/kpiWorksheetService';
 import useClientPagination from '../../../hooks/useClientPagination';
+import { printTovusElement } from '../../../utils/tovusPrintBrand';
 
 const MONTHS = [
   { v: 1, label: 'January' },
@@ -348,13 +349,14 @@ const KPIReports = () => {
   };
 
   const handlePrint = () => {
-    window.print();
+    // Tovus-branded report print (normal size, flows over pages, footer on every page)
+    printTovusElement('.tv-kpi-report', { title: 'KPI Report', fit: false });
   };
 
   const pg = useClientPagination(filteredRecords);
   const pg2 = useClientPagination(detailedRows);
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-kpi-report" sx={{ p: 3 }}>
       {/* Top Navigation Tabs */}
       <KPITabNavigation />
 

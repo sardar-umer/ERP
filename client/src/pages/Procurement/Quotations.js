@@ -58,6 +58,7 @@ import {
   isBlankQuoteItem,
   isQuoteLineStillOrderable
 } from '../../utils/comparativeQuoteItemMatch';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const Quotations = () => {
   const navigate = useNavigate();
@@ -1350,7 +1351,7 @@ const Quotations = () => {
             <Button
               variant="contained"
               startIcon={<PrintIcon />}
-              onClick={() => window.print()}
+              onClick={() => printTovusElement('.MuiDialog-root .print-content', { title: 'Quotation', docRef: viewDialog.data?.quotationNumber, strip: ['.MuiTypography-h4'] })}
               size="small"
             >
               Print

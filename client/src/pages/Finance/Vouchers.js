@@ -66,6 +66,7 @@ import { useAuth } from '../../contexts/AuthContext';
 import toast from 'react-hot-toast';
 import DeleteIcon from '@mui/icons-material/Delete';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const formatDateForPrint = (date) => {
   if (!date) return '—';
@@ -644,8 +645,14 @@ const Vouchers = () => {
   const handlePrintCurrentTabOnly = () => {
     setMultiPrintMode(false);
     setPrintMenuAnchor(null);
+    // Tovus-branded print of the open tab (A4, one-page auto-fit, footer pinned)
+    const tabTitles = ['Voucher', 'Purchase Request Form', 'Purchase Order', 'Comparative Statement', 'Quotation', 'Goods Received Note', 'Bill', 'Attachments'];
+    const activeVoucher = viewDialog.billVoucher || viewDialog.voucher;
     setTimeout(() => {
-      window.print();
+      printTovusElement('.MuiDialog-root .print-content', {
+        title: tabTitles[viewDialog.poAuditTab] || 'Voucher',
+        docRef: viewDialog.poAuditTab === 0 ? activeVoucher?.entryNumber : (viewDialog.po?.orderNumber || activeVoucher?.entryNumber)
+      });
     }, 150);
   };
 

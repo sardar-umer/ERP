@@ -28,6 +28,7 @@ import {
 } from '@mui/icons-material';
 import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip as RechartsTooltip, Legend, ResponsiveContainer, PieChart, Pie, Cell, LineChart, Line } from 'recharts';
 import api from '../../services/api';
+import { printTovusElement } from '../../utils/tovusPrintBrand';
 
 const AuditReports = () => {
   const theme = useTheme();
@@ -331,7 +332,7 @@ const AuditReports = () => {
   }
 
   return (
-    <Box sx={{ p: 3 }}>
+    <Box className="tv-audit-report" sx={{ p: 3 }}>
       <Typography variant="h4" gutterBottom sx={{ fontWeight: 'bold', color: theme.palette.primary.dark }}>
         <AssessmentIcon sx={{ mr: 1, verticalAlign: 'middle' }} /> Audit Reports
       </Typography>
@@ -407,7 +408,7 @@ const AuditReports = () => {
               <Button
                 variant="outlined"
                 startIcon={<PrintIcon />}
-                onClick={() => window.print()}
+                onClick={() => printTovusElement('.tv-audit-report', { title: 'Audit Report', fit: false, strip: [':scope > .MuiTypography-h4'] })}
                 size="small"
               >
                 Print

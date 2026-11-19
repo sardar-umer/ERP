@@ -35,6 +35,7 @@ import vehicleService from '../../../services/vehicleService';
 import vehicleMaintenanceService from '../../../services/vehicleMaintenanceService';
 import vehicleLogBookService from '../../../services/vehicleLogBookService';
 import VehicleLocation from './VehicleLocation';
+import { brandPrintHtml } from '../../../utils/tovusPrintBrand';
 
 const VehicleDetails = () => {
   const navigate = useNavigate();
@@ -472,7 +473,7 @@ const VehicleDetails = () => {
     `;
 
     // Write the content to the new window
-    printWindow.document.write(printContent);
+    printWindow.document.write(brandPrintHtml(printContent, { title: 'Vehicle Details' })); // Tovus ERP branded print
     printWindow.document.close();
 
     // Wait for content to load, then trigger print
