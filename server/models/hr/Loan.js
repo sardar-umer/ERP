@@ -208,8 +208,48 @@ const loanSchema = new mongoose.Schema({
     },
     paymentMethod: {
       type: String,
-      enum: ['Salary Deduction', 'Direct Payment', 'Bank Transfer', 'Cash']
-    }
+      enum: ['Salary Deduction', 'Direct Payment', 'Bank Transfer', 'Cash', 'Cheque']
+    },
+    /** Amount received against this row (Partial rows). Was missing from schema, so partials were lost on save. */
+    paidAmount: { type: Number, default: 0, min: 0 },
+    paymentReference: { type: String, trim: true },
+    /** Row added for a lump-sum (advance) payment outside the normal EMI */
+    isLumpSum: { type: Boolean, default: false }
+  }],
+  /**
+   * Payment ledger for payments recorded by HR outside payroll (lump sum / full settlement).
+   * Each entry keeps the before/after picture so the reschedule is auditable.
+   */
+  payments: [{
+    paymentType: {
+      type: String,
+      enum: ['Lump Sum', 'Full Settlement'],
+      required: true
+    },
+    amount: { type: Number, required: true, min: 0 },
+    paymentDate: { type: Date, required: true },
+    paymentMethod: {
+      type: String,
+      enum: ['Cash', 'Bank Transfer', 'Cheque', 'Direct Payment'],
+      default: 'Cash'
+    },
+    reference: { type: String, trim: true, maxlength: 100 },
+    /** reduce_tenure = keep installment, fewer months; reduce_installment = keep months, smaller installment */
+    rescheduleMode: { type: String, enum: ['reduce_tenure', 'reduce_installment'] },
+    principalBefore: { type: Number },
+    principalAfter: { type: Number },
+    installmentBefore: { type: Number },
+    installmentAfter: { type: Number },
+    remainingInstallmentsBefore: { type: Number },
+    remainingInstallmentsAfter: { type: Number },
+    remarks: { type: String, trim: true, maxlength: 500 },
+    /** Finance receipt voucher + HR request this payment came from */
+    lumpSumRequest: { type: mongoose.Schema.Types.ObjectId, ref: 'LoanLumpSumRequest' },
+    requestNumber: { type: String, trim: true },
+    journalEntry: { type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' },
+    voucherNumber: { type: String, trim: true },
+    recordedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    recordedAt: { type: Date, default: Date.now }
   }],
   // Payment tracking
   totalPaid: {
@@ -306,6 +346,8 @@ const loanSchema = new mongoose.Schema({
     pausedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     pausedAt: { type: Date, default: Date.now }
   }],
+  /** Payrolls whose loan deduction has been applied to this loan (prevents applying the same payroll twice). */
+  appliedPayrolls: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Payroll' }],
   /** When true, pre-save will not overwrite monthlyInstallment from loanAmount/term. */
   emiManuallyAdjusted: {
     type: Boolean,
@@ -588,6 +630,29 @@ loanSchema.methods.recalculateScheduleFromNewEmi = function (newEmi) {
   };
 };
 
+/**
+ * Record a lump-sum (advance) payment and rebuild the unpaid schedule.
+ * - reduce_tenure (default): installment stays the same, fewer installments
+ *   (e.g. 250,000 left at 100,000/month → 100k, 100k, 50k).
+ * - reduce_installment: same number of remaining installments, smaller installment.
+ * Paid rows are kept; a Partial row is closed at what was actually received.
+ * Pass dryRun: true to get the preview without changing the document.
+ */
+loanSchema.methods.applyLumpSumPayment = function ({
+  amount,
+  mode = 'reduce_tenure',
+  paymentDate,
+  paymentMethod = 'Cash',
+  reference,
+  remarks,
+  userId
+} = {}, { dryRun = false } = {}) {
+  const { applyLumpSumToLoan } = require('../../utils/loanLumpSumPayment');
+  return applyLumpSumToLoan(this, {
+    amount, mode, paymentDate, paymentMethod, reference, remarks, userId
+  }, { dryRun });
+};
+
 loanSchema.methods.reconcileScheduleWithPauses = function () {
   const { reconcileScheduleWithPauses } = require('../../utils/loanPauseSchedule');
   return reconcileScheduleWithPauses(this);
@@ -600,14 +665,15 @@ loanSchema.methods.processPayment = function (amount, paymentMethod = 'Salary De
   }
 
   let remainingAmount = amount;
-  let updatedInstallments = [];
 
-  // Process payments starting from the oldest pending installment
+  // Process payments starting from the oldest pending installment.
+  // Rows are updated in place — the old version rebuilt the array and stopped at the
+  // last row it touched, which silently dropped every later installment.
   for (let installment of this.loanSchedule) {
     if (remainingAmount <= 0) break;
 
     if (['Pending', 'Overdue', 'Partial'].includes(installment.status)) {
-      const amountToPay = Math.min(remainingAmount, installment.amount);
+      const amountToPay = Math.min(remainingAmount, installment.amount - (installment.paidAmount || 0));
       const newPaidAmount = (installment.paidAmount || 0) + amountToPay;
 
       if (newPaidAmount >= installment.amount) {
@@ -622,11 +688,9 @@ loanSchema.methods.processPayment = function (amount, paymentMethod = 'Salary De
 
       remainingAmount -= amountToPay;
     }
-
-    updatedInstallments.push(installment);
   }
 
-  this.loanSchedule = updatedInstallments;
+  this.markModified('loanSchedule');
   this.totalPaid += (amount - remainingAmount);
   this.outstandingBalance = this.totalPayable - this.totalPaid;
 

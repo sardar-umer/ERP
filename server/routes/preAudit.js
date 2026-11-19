@@ -54,11 +54,25 @@ const CA_PRE_AUDIT_VISIBLE_STATUSES = [
   'Pending Finance'
 ];
 
+/** Statuses where a document is (again) sitting in the audit queue itself */
+const IN_AUDIT_STATUSES = ['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'Sent to Audit'];
+/** Statuses where a document went back to its originator before audit (e.g. a revised PO) */
+const BEFORE_AUDIT_STATUSES = ['Draft', 'Pending Approval'];
+
+/**
+ * Approved by the Audit Director and since moved on (CEO, Finance, paid, received …).
+ * Such documents stay on the Pre-Audit "Approved" tab instead of disappearing.
+ */
+const wasDirectorApproved = (doc) => Boolean(doc?.auditApprovedAt)
+  && !IN_AUDIT_STATUSES.includes(doc.status)
+  && !BEFORE_AUDIT_STATUSES.includes(doc.status);
+
 const mapCashApprovalToPreAuditStatus = (ca) => {
   const status = ca?.status;
   if (status === 'Returned from Audit') return 'returned_with_observations';
   if (status === 'Forwarded to Audit Director') return 'forwarded_to_director';
   if (status === 'Send to CEO Office' || status === 'Pending Finance') return 'approved';
+  if (wasDirectorApproved(ca)) return 'approved';
   if (status === 'Pending Audit' && ca?.preAuditInitialApprovedAt) return 'under_review';
   return 'pending';
 };
@@ -349,17 +363,24 @@ router.get('/',
     try {
       const PurchaseOrder = require('../models/procurement/PurchaseOrder');
       const auditStatuses = ['Pending Audit', 'Forwarded to Audit Director', 'Pending Finance', 'Returned from Audit', 'Sent to Audit'];
-      const poQuery = { status: { $in: auditStatuses } };
-      if (search) {
-        poQuery.$and = [
+      // Also POs the Audit Director approved that have since moved on (CEO Office, Approved, Received …)
+      const poVisible = {
+        $or: [
           { status: { $in: auditStatuses } },
+          { auditApprovedAt: { $ne: null }, status: { $nin: BEFORE_AUDIT_STATUSES } }
+        ]
+      };
+      const poQuery = { ...poVisible };
+      if (search) {
+        delete poQuery.$or;
+        poQuery.$and = [
+          poVisible,
           { $or: [
             { orderNumber: { $regex: search, $options: 'i' } },
             { notes: { $regex: search, $options: 'i' } },
             { internalNotes: { $regex: search, $options: 'i' } }
           ]}
         ];
-        delete poQuery.status;
       }
       const poDocs = await PurchaseOrder.find(poQuery)
         .populate('vendor', 'name email phone')
@@ -374,6 +395,7 @@ router.get('/',
         else if (doc.status === 'Returned from Audit') preAuditStatus = 'returned_with_observations';
         else if (doc.status === 'Forwarded to Audit Director') preAuditStatus = 'forwarded_to_director';
         else if (doc.status === 'Sent to Audit') preAuditStatus = 'pending'; // post-GRN audit queue
+        else if (wasDirectorApproved(doc)) preAuditStatus = 'approved'; // moved on after Director approval
         workflowDocs.push({
           _id: doc._id,
           documentNumber: doc.orderNumber || doc._id.toString(),
@@ -410,10 +432,18 @@ router.get('/',
     // Cash Approvals in audit queue (same lifecycle as PO pre-audit / director forward)
     try {
       const CashApproval = require('../models/procurement/CashApproval');
-      const caQuery = { status: { $in: CA_PRE_AUDIT_VISIBLE_STATUSES } };
-      if (search) {
-        caQuery.$and = [
+      // Also CAs the Audit Director approved that have since moved on (CEO, advance issued, paid …)
+      const caVisible = {
+        $or: [
           { status: { $in: CA_PRE_AUDIT_VISIBLE_STATUSES } },
+          { auditApprovedAt: { $ne: null }, status: { $nin: BEFORE_AUDIT_STATUSES } }
+        ]
+      };
+      const caQuery = { ...caVisible };
+      if (search) {
+        delete caQuery.$or;
+        caQuery.$and = [
+          caVisible,
           {
             $or: [
               { caNumber: { $regex: search, $options: 'i' } },
@@ -421,7 +451,6 @@ router.get('/',
             ]
           }
         ];
-        delete caQuery.status;
       }
       const caDocs = await CashApproval.find(caQuery)
         .populate('vendor', 'name email phone')
@@ -472,7 +501,8 @@ router.get('/',
         invoiceType: { $in: ['Subcontractor_IPC', 'Client_Invoice'] },
         $or: [
           { approvalStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director', 'Send to CEO Office', 'Forwarded to CEO', 'Approved'] } },
-          { approvalStatus: 'Rejected', returnedFromStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director'] } }
+          { approvalStatus: 'Rejected', returnedFromStatus: { $in: ['Pending Audit', 'Forwarded to Audit Director'] } },
+          { approvalStatus: 'Rejected', auditApprovedAt: { $ne: null } }
         ]
       };
       if (search) {
@@ -494,7 +524,10 @@ router.get('/',
       const ipcCompanies = await ipcCompanyNames(ipcDocs);
       for (const doc of ipcDocs) {
         const st = doc.approvalStatus;
-        const preAuditStatus = st === 'Rejected' ? 'returned_with_observations'
+        const rejectedAfterAudit = st === 'Rejected' && doc.auditApprovedAt
+          && !['Pending Audit', 'Forwarded to Audit Director'].includes(doc.returnedFromStatus);
+        const preAuditStatus = rejectedAfterAudit ? 'approved'
+          : st === 'Rejected' ? 'returned_with_observations'
           : st === 'Forwarded to Audit Director' ? 'forwarded_to_director'
             : ['Send to CEO Office', 'Forwarded to CEO', 'Approved'].includes(st) ? 'approved'
               : doc.preAuditInitialApprovedAt ? 'under_review' : 'pending';
@@ -549,14 +582,21 @@ router.get('/',
     try {
       const AccountsPayableModel = require('../models/finance/AccountsPayable');
       const vbAuditStatuses = ['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit', 'approved'];
-      const vbQuery = { 
-        status: { $in: vbAuditStatuses },
-        referenceType: { $ne: 'utility_bill' }
-      };
-      if (search) {
-        vbQuery.$and = [
+      // Also bills Audit approved that have since been paid / part-paid / gone overdue
+      const vbVisible = {
+        $or: [
           { status: { $in: vbAuditStatuses } },
-          { referenceType: { $ne: 'utility_bill' } },
+          {
+            status: { $in: ['partial', 'paid', 'overdue'] },
+            workflowHistory: { $elemMatch: { module: 'Pre-Audit', toStatus: 'approved' } }
+          }
+        ]
+      };
+      const vbQuery = { ...vbVisible, referenceType: { $ne: 'utility_bill' } };
+      if (search) {
+        delete vbQuery.$or;
+        vbQuery.$and = [
+          vbVisible,
           {
             $or: [
               { billNumber: { $regex: search, $options: 'i' } },
@@ -566,8 +606,6 @@ router.get('/',
             ]
           }
         ];
-        delete vbQuery.status;
-        delete vbQuery.referenceType;
       }
       const vbDocs = await AccountsPayableModel.find(vbQuery)
         .populate('vendor.vendorId', 'name email phone')
@@ -578,7 +616,7 @@ router.get('/',
         .lean();
       for (const doc of vbDocs) {
         let preAuditStatus = 'pending';
-        if (doc.status === 'approved' || doc.status === 'paid' || doc.status === 'partial') preAuditStatus = 'approved';
+        if (['approved', 'paid', 'partial', 'overdue'].includes(doc.status)) preAuditStatus = 'approved';
         else if (doc.status === 'Returned from Audit') preAuditStatus = 'returned_with_observations';
         else if (doc.status === 'Forwarded to Audit Director') preAuditStatus = 'forwarded_to_director';
         else if (doc.status === 'Pending Audit' && doc.preAuditInitialApprovedAt) preAuditStatus = 'under_review';

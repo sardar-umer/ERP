@@ -81,6 +81,7 @@ import YearEndClosing from './pages/Finance/YearEndClosing';
 import CustomerStatement from './pages/Finance/CustomerStatement';
 import AgedReceivables from './pages/Finance/AgedReceivables';
 import CustomerPayments from './pages/Finance/CustomerPayments';
+import LoanReceipts from './pages/Finance/LoanReceipts';
 import CreditNotes from './pages/Finance/CreditNotes';
 import VendorPayments from './pages/Finance/VendorPayments';
 import VendorAdvance from './pages/Finance/VendorAdvance';
@@ -1338,6 +1339,7 @@ function App() {
                     <Route path="/finance/customer-statement" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><CustomerStatement /></ProtectedRoute>} />
                     <Route path="/finance/aged-receivables" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><AgedReceivables /></ProtectedRoute>} />
                     <Route path="/finance/customer-payments" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><CustomerPayments /></ProtectedRoute>} />
+                    <Route path="/finance/loan-receipts" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><LoanReceipts /></ProtectedRoute>} />
                     <Route path="/finance/credit-notes" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><CreditNotes /></ProtectedRoute>} />
                     <Route path="/finance/vendor-advance" element={<ProtectedRoute requiredRole={["super_admin", "admin", "finance_manager"]}><VendorAdvance /></ProtectedRoute>} />
                     <Route

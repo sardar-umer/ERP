@@ -115,6 +115,36 @@ export const generateLoanDetailPdf = (loan) => {
     y = doc.lastAutoTable.finalY + 8;
   }
 
+  if (loan.payments?.length) {
+    if (y > 240) {
+      doc.addPage();
+      y = 20;
+    }
+    addSectionTitle('Direct Payments (outside payroll)');
+    autoTable(doc, {
+      startY: y,
+      head: [['Date', 'Type', 'Amount', 'Method / Ref', 'Balance', 'Installment', 'Months Left']],
+      body: [...loan.payments]
+        .sort((a, b) => new Date(a.paymentDate) - new Date(b.paymentDate))
+        .map((p) => [
+          fmtDate(p.paymentDate),
+          p.paymentType,
+          fmtPKR(p.amount),
+          `${p.paymentMethod || ''}${p.reference ? ` / ${p.reference}` : ''}`,
+          `${fmtPKR(p.principalBefore)} > ${fmtPKR(p.principalAfter)}`,
+          p.paymentType === 'Full Settlement'
+            ? '—'
+            : `${fmtPKR(p.installmentBefore)} > ${fmtPKR(p.installmentAfter)}`,
+          `${p.remainingInstallmentsBefore ?? '—'} > ${p.remainingInstallmentsAfter ?? '—'}`
+        ]),
+      styles: { fontSize: 7, cellPadding: 1.5 },
+      headStyles: { fillColor: [245, 245, 245], textColor: [60, 60, 60], fontStyle: 'bold' },
+      columnStyles: { 2: { halign: 'right' } },
+      margin: { left: margin, right: margin }
+    });
+    y = doc.lastAutoTable.finalY + 8;
+  }
+
   if (loan.loanSchedule?.length) {
     if (y > 240) {
       doc.addPage();
@@ -131,7 +161,7 @@ export const generateLoanDetailPdf = (loan) => {
         fmtPKR(row.principal),
         fmtPKR(row.interest),
         fmtPKR(row.balance),
-        row.status || '—'
+        row.isLumpSum ? `${row.status || 'Paid'} (Lump sum)` : (row.status || '—')
       ]),
       styles: { fontSize: 7, cellPadding: 1.5 },
       headStyles: { fillColor: [245, 245, 245], textColor: [60, 60, 60], fontStyle: 'bold' },

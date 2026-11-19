@@ -1036,6 +1036,96 @@ router.patch('/:id/adjust-installment', authMiddleware, async (req, res) => {
   }
 });
 
+/** Payrolls not yet paid that already carry a loan deduction computed from the old schedule. */
+const findUnpaidPayrollsWithLoanDeduction = async (employeeId) => {
+  const Payroll = require('../models/hr/Payroll');
+  const rows = await Payroll.find({
+    employee: employeeId,
+    status: { $ne: 'Paid' },
+    loanDeductions: { $gt: 0 }
+  }).select('month year status loanDeductions').lean();
+  return rows.map((p) => ({ month: p.month, year: p.year, status: p.status, loanDeductions: p.loanDeductions }));
+};
+
+const lumpSumInput = (req) => ({
+  amount: Number(req.body.amount),
+  mode: req.body.mode || 'reduce_tenure',
+  paymentDate: req.body.paymentDate,
+  paymentMethod: req.body.paymentMethod || 'Cash',
+  reference: req.body.reference ? String(req.body.reference).trim() : undefined,
+  remarks: req.body.remarks ? String(req.body.remarks).trim() : undefined,
+  userId: req.user.id
+});
+
+// Preview a lump-sum payment: before/after balance, installment and new schedule (nothing saved)
+router.post('/:id/lump-sum/preview', authMiddleware, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+
+    const preview = loan.applyLumpSumPayment(lumpSumInput(req), { dryRun: true });
+    const pendingPayrolls = await findUnpaidPayrollsWithLoanDeduction(loan.employee);
+    res.json({ preview, pendingPayrolls });
+  } catch (error) {
+    if (error.statusCode === 400) return res.status(400).json({ message: error.message });
+    console.error('Error previewing lump-sum payment:', error);
+    res.status(500).json({ message: 'Error previewing payment', error: error.message });
+  }
+});
+
+// ── Lump-sum requests (HR → Finance). The loan changes only when Finance posts the voucher. ──
+const lumpSumFlow = () => require('../utils/loanLumpSumFinance');
+const sendFlowError = (res, error, label) => {
+  if (error.statusCode && error.statusCode < 500) {
+    return res.status(error.statusCode).json({ message: error.message });
+  }
+  console.error(`Error ${label}:`, error);
+  return res.status(500).json({ message: `Error ${label}`, error: error.message });
+};
+
+// Send a lump-sum payment to Finance for confirmation
+router.post('/:id/lump-sum-requests', authMiddleware, async (req, res) => {
+  try {
+    const request = await lumpSumFlow().createRequest(req.params.id, req.body, req.user);
+    res.status(201).json({
+      message: `${request.requestNumber} sent to Finance. The loan will update once Finance posts the voucher.`,
+      request
+    });
+  } catch (error) {
+    sendFlowError(res, error, 'sending lump-sum request');
+  }
+});
+
+// Lump-sum requests for one loan (newest first)
+router.get('/:id/lump-sum-requests', authMiddleware, async (req, res) => {
+  try {
+    const requests = await lumpSumFlow().listRequestsForLoan(req.params.id);
+    res.json({ requests });
+  } catch (error) {
+    sendFlowError(res, error, 'loading lump-sum requests');
+  }
+});
+
+// Resubmit a request Finance returned (amount/date/method/ref may be corrected)
+router.put('/lump-sum-requests/:requestId', authMiddleware, async (req, res) => {
+  try {
+    const request = await lumpSumFlow().resubmitRequest(req.params.requestId, req.body, req.user);
+    res.json({ message: `${request.requestNumber} resubmitted to Finance.`, request });
+  } catch (error) {
+    sendFlowError(res, error, 'resubmitting lump-sum request');
+  }
+});
+
+// HR withdraws a pending / returned request
+router.patch('/lump-sum-requests/:requestId/cancel', authMiddleware, async (req, res) => {
+  try {
+    const request = await lumpSumFlow().cancelRequest(req.params.requestId, req.user, req.body?.comments);
+    res.json({ message: `${request.requestNumber} cancelled.`, request });
+  } catch (error) {
+    sendFlowError(res, error, 'cancelling lump-sum request');
+  }
+});
+
 // Add note to loan
 router.post('/:id/notes', authMiddleware, async (req, res) => {
   try {

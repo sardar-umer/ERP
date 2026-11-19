@@ -604,6 +604,15 @@ const PurchaseOrders = () => {
     }
   };
 
+  // Opened from a link such as Procurement Reports → PO Report (?view=<poId>): show that PO's details
+  const viewPoIdFromUrl = new URLSearchParams(location.search).get('view');
+  useEffect(() => {
+    if (!viewPoIdFromUrl) return;
+    handleView({ _id: viewPoIdFromUrl });
+    navigate(location.pathname, { replace: true, state: location.state });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [viewPoIdFromUrl]);
+
   // Number to words converter
   const numberToWords = (num) => {
     if (!num || num === 0) return 'Zero Rupees Only';

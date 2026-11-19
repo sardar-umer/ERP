@@ -625,6 +625,7 @@ export const MODULES = {
           { name: 'AR Invoices',          path: '/finance/accounts-receivable' },
           { name: 'Credit Notes',         path: '/finance/credit-notes'        },
           { name: 'Aged Receivables',     path: '/finance/aged-receivables'    },
+          { name: 'Employee Loan Receipts', path: '/finance/loan-receipts'     },
         ]
       },
 
@@ -1181,6 +1182,7 @@ const CATALOG_PATH_OVERRIDES = {
   '/finance/bill-to-receive': 'accounts_payable',
   '/finance/billed-not-received': 'accounts_payable',
   '/finance/payroll-queue': 'payroll_management',
+  '/finance/loan-receipts': 'customer_payments',
   '/finance/recurring-journals': 'journal_entries',
   '/finance/deferred-entries': 'journal_entries',
   '/finance/bank-statement-import': 'banking',
@@ -1588,6 +1590,7 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
       '/finance/accounts-receivable/new': 'accounts_receivable',
       '/finance/credit-notes': 'credit_notes',
       '/finance/customer-payments': 'customer_payments',
+      '/finance/loan-receipts': 'customer_payments',
       '/finance/vendors': 'accounts_payable',
       '/finance/accounts-payable': 'accounts_payable',
       '/finance/accounts-payable/new': 'accounts_payable',

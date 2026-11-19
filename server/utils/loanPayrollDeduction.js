@@ -91,7 +91,42 @@ async function markLoanCompletedIfPaid(loan) {
   return true;
 }
 
+/**
+ * Why a paid payroll must NOT be applied to this loan again (or null when it should be applied).
+ * - The same payroll was already applied (rows carry paymentReference `Payroll-<id>`).
+ * - The installment due in the payroll's month is already Paid but not by any payroll —
+ *   i.e. it was recorded by the loan import / manually, so that month's deduction is already on the loan.
+ * An installment paid by a *different* payroll (catch-up of an older month) does not block.
+ */
+function payrollAlreadyRecordedOnLoan(loan, payroll) {
+  if (!loan || !payroll) return null;
+  const ref = `Payroll-${payroll._id}`;
+  const rows = Array.isArray(loan.loanSchedule) ? loan.loanSchedule : [];
+
+  const applied = Array.isArray(loan.appliedPayrolls) ? loan.appliedPayrolls : [];
+  if (applied.some((id) => String(id) === String(payroll._id)) || rows.some((r) => r.paymentReference === ref)) {
+    return 'this payroll was already applied to the loan';
+  }
+
+  const m = Number(payroll.month);
+  const y = Number(payroll.year);
+  const monthRow = rows.find((r) => {
+    if (r.isLumpSum || r.isPauseExtension || !r.dueDate) return false;
+    const d = new Date(r.dueDate);
+    return d.getMonth() + 1 === m && d.getFullYear() === y;
+  });
+  if (
+    monthRow &&
+    monthRow.status === 'Paid' &&
+    !String(monthRow.paymentReference || '').startsWith('Payroll-')
+  ) {
+    return `installment #${monthRow.installmentNumber} for ${m}/${y} is already marked Paid (${monthRow.paymentMethod || 'recorded earlier'})`;
+  }
+  return null;
+}
+
 module.exports = {
+  payrollAlreadyRecordedOnLoan,
   ACTIVE_LOAN_STATUSES,
   getLoanRemainingBalance,
   isLoanFullyPaid,

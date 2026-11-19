@@ -18,7 +18,9 @@ import {
   TableContainer,
   Alert,
   CircularProgress,
-  Divider
+  Divider,
+  Tabs,
+  Tab
 } from '@mui/material';
 import {
   Assessment as ReportIcon,
@@ -34,6 +36,13 @@ import procurementService from '../../services/procurementService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 import useClientPagination from '../../hooks/useClientPagination';
+import IndentReport from './Reports/IndentReport';
+import POReport from './Reports/POReport';
+
+const TAB_KEY = 'procurementReports.tab';
+const readSavedTab = () => {
+  try { return Number(localStorage.getItem(TAB_KEY)) || 0; } catch (e) { return 0; }
+};
 
 const STATUS_COLORS = {
   Draft: 'default',
@@ -57,6 +66,7 @@ const toDate = (value) => {
 };
 
 const ProcurementReports = () => {
+  const [tab, setTab] = useState(readSavedTab);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [requisitions, setRequisitions] = useState([]);
@@ -208,13 +218,11 @@ const ProcurementReports = () => {
   };
 
   const pg = useClientPagination(vendorSpend);
-  if (loading) {
-    return (
-      <Box sx={{ p: 3, display: 'flex', justifyContent: 'center', minHeight: 320, alignItems: 'center' }}>
-        <CircularProgress />
-      </Box>
-    );
-  }
+
+  const changeTab = (value) => {
+    setTab(value);
+    try { localStorage.setItem(TAB_KEY, String(value)); } catch (e) { /* ignore */ }
+  };
 
   return (
     <Box sx={{ p: 3 }}>
@@ -227,6 +235,7 @@ const ProcurementReports = () => {
             Analytical view of requisitions, quotations, purchase orders, and vendor performance
           </Typography>
         </Box>
+        {tab === 0 && (
         <Stack direction="row" spacing={1.5}>
           <Button variant="outlined" startIcon={<RefreshIcon />} onClick={loadReportsData}>
             Refresh
@@ -235,9 +244,27 @@ const ProcurementReports = () => {
             Export CSV
           </Button>
         </Stack>
+        )}
       </Stack>
 
-      {error && (
+      <Tabs value={tab} onChange={(e, v) => changeTab(v)} sx={{ mb: 2.5, borderBottom: 1, borderColor: 'divider' }}>
+        <Tab label="Overview" />
+        <Tab label="Indent Report" />
+        <Tab label="PO Report" />
+      </Tabs>
+
+      {tab === 1 && <IndentReport />}
+      {tab === 2 && <POReport />}
+
+      {tab === 0 && loading && (
+        <Box sx={{ display: 'flex', justifyContent: 'center', minHeight: 320, alignItems: 'center' }}>
+          <CircularProgress />
+        </Box>
+      )}
+
+      {tab === 0 && !loading && (<>
+
+      {tab === 0 && error && (
         <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
           {error}
         </Alert>
@@ -434,6 +461,7 @@ const ProcurementReports = () => {
           </Card>
         </Grid>
       </Grid>
+      </>)}
     </Box>
   );
 };

@@ -54,7 +54,8 @@ import {
   Pause as PauseIcon,
   PlayArrow as ResumeIcon,
   EditNote as AdjustIcon,
-  PictureAsPdf as PdfIcon
+  PictureAsPdf as PdfIcon,
+  Payments as PaymentIcon
 } from '@mui/icons-material';
 import { useNavigate, useParams } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
@@ -62,6 +63,7 @@ import { formatPKR } from '../../utils/currency';
 import { downloadLoanDetailPDF } from '../../utils/loanDetailPDF';
 import { useAuth } from '../../contexts/AuthContext';
 import LoanAttachments from '../../components/HR/LoanAttachments';
+import LoanLumpSumDialog from '../../components/HR/LoanLumpSumDialog';
 import {
   ForwardLoanDialog,
   LoanApprovalDialog,
@@ -118,6 +120,9 @@ const LoanDetail = () => {
   const [deleting, setDeleting] = useState(false);
   const [pauseDialog, setPauseDialog] = useState(false);
   const [adjustDialog, setAdjustDialog] = useState(false);
+  const [lumpSumDialog, setLumpSumDialog] = useState(false);
+  const [lumpSumRequests, setLumpSumRequests] = useState([]);
+  const [resubmitRequest, setResubmitRequest] = useState(null);
   const [forwardOpen, setForwardOpen] = useState(false);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const [workflowMe, setWorkflowMe] = useState({ isAdmin: false });
@@ -159,6 +164,9 @@ const LoanDetail = () => {
       setLoading(true);
       const data = await loanService.getLoanById(id);
       setLoan(data);
+      loanService.getLumpSumRequests(id)
+        .then((r) => setLumpSumRequests(r.requests || []))
+        .catch(() => setLumpSumRequests([]));
     } catch (error) {
       setError(error.message || 'Failed to fetch loan details');
     } finally {
@@ -287,6 +295,24 @@ const LoanDetail = () => {
       setError(error.message || 'Failed to adjust installment');
     } finally {
       setAdjustSubmitting(false);
+    }
+  };
+
+  const handleLumpSumDone = (res) => {
+    setLumpSumDialog(false);
+    setResubmitRequest(null);
+    setSuccess(res?.message || 'Sent to Finance');
+    fetchLoan();
+  };
+
+  const handleCancelLumpSum = async (request) => {
+    if (!window.confirm(`Cancel ${request.requestNumber}? Finance will no longer see it.`)) return;
+    try {
+      const res = await loanService.cancelLumpSumRequest(request._id);
+      setSuccess(res.message || 'Request cancelled');
+      fetchLoan();
+    } catch (err) {
+      setError(err?.message || 'Failed to cancel request');
     }
   };
 
@@ -472,7 +498,10 @@ const LoanDetail = () => {
             </TableHead>
             <TableBody>
               {loan.loanSchedule?.map((installment) => (
-                <TableRow key={installment.installmentNumber}>
+                <TableRow
+                  key={installment.installmentNumber}
+                  sx={installment.isLumpSum ? { bgcolor: 'action.hover' } : undefined}
+                >
                   <TableCell>{installment.installmentNumber}</TableCell>
                   <TableCell>{formatDate(installment.dueDate)}</TableCell>
                                       <TableCell>{formatPKR(installment.amount)}</TableCell>
@@ -480,6 +509,9 @@ const LoanDetail = () => {
                     <TableCell>{formatPKR(installment.interest)}</TableCell>
                     <TableCell>{formatPKR(installment.balance)}</TableCell>
                   <TableCell>
+                    {installment.isLumpSum && (
+                      <Chip label="Lump sum" size="small" color="info" variant="outlined" sx={{ mr: 0.5 }} />
+                    )}
                     <Chip
                       label={installment.status}
                       size="small"
@@ -499,6 +531,8 @@ const LoanDetail = () => {
       </CardContent>
     </Card>
   );
+
+  const openLumpSum = lumpSumRequests.find((r) => ['Pending Finance', 'Posting'].includes(r.status));
 
   const renderDeductionManagement = () => {
     const canManageDeductions = DEDUCTION_MANAGE_STATUSES.includes(loan.status);
@@ -532,6 +566,8 @@ const LoanDetail = () => {
                 <strong>Adjust EMI</strong> — permanently change monthly deduction; remaining installments recalculate automatically.
                 <br />
                 <strong>Pause Months</strong> — no payroll deduction that month; loan schedule extends with extra installment(s) at the end.
+                <br />
+                <strong>Send Payment to Finance</strong> — employee pays an amount directly; once Finance posts the voucher the balance drops and remaining installments are rebuilt.
               </Typography>
               <Alert severity="success" sx={{ mt: 1.5 }}>
                 Payroll deducts the current EMI each month (except paused months). When payroll is marked <strong>Paid</strong>, the loan schedule updates automatically.
@@ -544,6 +580,20 @@ const LoanDetail = () => {
             </Box>
             {canManageDeductions && (
               <Box display="flex" flexWrap="wrap" gap={1}>
+                <Tooltip title={openLumpSum ? `${openLumpSum.requestNumber} is already pending with Finance` : ''}>
+                  <span>
+                    <Button
+                      size="small"
+                      variant="contained"
+                      color="success"
+                      startIcon={<PaymentIcon />}
+                      disabled={Boolean(openLumpSum)}
+                      onClick={() => { setResubmitRequest(null); setLumpSumDialog(true); }}
+                    >
+                      Send Payment to Finance
+                    </Button>
+                  </span>
+                </Tooltip>
                 <Button size="small" variant="contained" color="warning" startIcon={<PauseIcon />} onClick={openPauseDialog}>
                   Pause Months
                 </Button>
@@ -607,6 +657,152 @@ const LoanDetail = () => {
               </Table>
             </TableContainer>
           )}
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const LUMP_STATUS_COLORS = {
+    'Pending Finance': 'warning',
+    Posting: 'warning',
+    Posted: 'success',
+    Returned: 'error',
+    Rejected: 'error',
+    Cancelled: 'default',
+    Reversed: 'default'
+  };
+
+  const renderLumpSumRequests = () => {
+    if (!lumpSumRequests.length) return null;
+    return (
+      <Card sx={{ mb: 3, borderLeft: 4, borderColor: openLumpSum ? 'warning.main' : 'grey.400' }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            <PaymentIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            Lump-Sum Requests to Finance
+          </Typography>
+          {openLumpSum && (
+            <Alert severity="warning" sx={{ mb: 2 }}>
+              <strong>{openLumpSum.requestNumber}</strong> ({formatPKR(openLumpSum.amount)}) is pending with Finance.
+              The schedule below will change once Finance posts the voucher.
+            </Alert>
+          )}
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Request</TableCell>
+                  <TableCell>Paid on</TableCell>
+                  <TableCell align="right">Amount</TableCell>
+                  <TableCell>Method / Ref</TableCell>
+                  <TableCell>Option</TableCell>
+                  <TableCell>Status</TableCell>
+                  <TableCell>Voucher</TableCell>
+                  <TableCell>Finance comments</TableCell>
+                  <TableCell align="right">Action</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {lumpSumRequests.map((r) => (
+                  <TableRow key={r._id}>
+                    <TableCell>{r.requestNumber}</TableCell>
+                    <TableCell>{formatDate(r.paymentDate)}</TableCell>
+                    <TableCell align="right"><strong>{formatPKR(r.amount)}</strong></TableCell>
+                    <TableCell>{r.paymentMethod}{r.reference ? ` · ${r.reference}` : ''}</TableCell>
+                    <TableCell>{r.mode === 'reduce_installment' ? 'Lower installment' : 'Fewer months'}</TableCell>
+                    <TableCell>
+                      <Chip size="small" label={r.status === 'Posting' ? 'Pending Finance' : r.status} color={LUMP_STATUS_COLORS[r.status] || 'default'} />
+                    </TableCell>
+                    <TableCell>{r.voucherNumber || '—'}</TableCell>
+                    <TableCell>{r.financeComments || '—'}</TableCell>
+                    <TableCell align="right">
+                      {r.status === 'Returned' && (
+                        <Button size="small" onClick={() => { setResubmitRequest(r); setLumpSumDialog(true); }} disabled={Boolean(openLumpSum)}>
+                          Edit &amp; Resubmit
+                        </Button>
+                      )}
+                      {['Pending Finance', 'Returned'].includes(r.status) && (
+                        <Button size="small" color="error" onClick={() => handleCancelLumpSum(r)}>
+                          Cancel
+                        </Button>
+                      )}
+                    </TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
+        </CardContent>
+      </Card>
+    );
+  };
+
+  const renderPaymentHistory = () => {
+    const payments = [...(loan.payments || [])].sort(
+      (a, b) => new Date(b.paymentDate) - new Date(a.paymentDate)
+    );
+    if (payments.length === 0) return null;
+    const modeLabel = (p) =>
+      p.paymentType === 'Full Settlement'
+        ? 'Loan closed'
+        : p.rescheduleMode === 'reduce_installment'
+          ? 'Kept months, lowered installment'
+          : 'Kept installment, fewer months';
+    return (
+      <Card sx={{ mb: 3, borderLeft: 4, borderColor: 'success.main' }}>
+        <CardContent>
+          <Typography variant="h6" gutterBottom>
+            <PaymentIcon sx={{ mr: 1, verticalAlign: 'middle' }} />
+            Direct Payments (outside payroll)
+          </Typography>
+          <TableContainer>
+            <Table size="small">
+              <TableHead>
+                <TableRow>
+                  <TableCell>Date</TableCell>
+                  <TableCell>Type</TableCell>
+                  <TableCell align="right">Amount</TableCell>
+                  <TableCell>Method / Ref</TableCell>
+                  <TableCell>Voucher</TableCell>
+                  <TableCell align="right">Balance</TableCell>
+                  <TableCell align="right">Installment</TableCell>
+                  <TableCell align="right">Months left</TableCell>
+                  <TableCell>Rescheduled as</TableCell>
+                  <TableCell>Remarks</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {payments.map((p) => (
+                  <TableRow key={p._id || p.recordedAt}>
+                    <TableCell>{formatDate(p.paymentDate)}</TableCell>
+                    <TableCell>
+                      <Chip
+                        size="small"
+                        label={p.paymentType}
+                        color={p.paymentType === 'Full Settlement' ? 'success' : 'info'}
+                      />
+                    </TableCell>
+                    <TableCell align="right"><strong>{formatPKR(p.amount)}</strong></TableCell>
+                    <TableCell>{p.paymentMethod}{p.reference ? ` · ${p.reference}` : ''}</TableCell>
+                    <TableCell>{p.voucherNumber || '—'}</TableCell>
+                    <TableCell align="right">
+                      {formatPKR(p.principalBefore)} → {formatPKR(p.principalAfter)}
+                    </TableCell>
+                    <TableCell align="right">
+                      {p.paymentType === 'Full Settlement'
+                        ? '—'
+                        : `${formatPKR(p.installmentBefore)} → ${formatPKR(p.installmentAfter)}`}
+                    </TableCell>
+                    <TableCell align="right">
+                      {p.remainingInstallmentsBefore} → {p.remainingInstallmentsAfter}
+                    </TableCell>
+                    <TableCell>{modeLabel(p)}</TableCell>
+                    <TableCell>{p.remarks || '—'}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </TableContainer>
         </CardContent>
       </Card>
     );
@@ -888,6 +1084,8 @@ const LoanDetail = () => {
 
       {renderLoanSummary()}
       {renderDeductionManagement()}
+      {renderLumpSumRequests()}
+      {renderPaymentHistory()}
       {renderLoanSchedule()}
       {renderGuarantorInfo()}
       {renderAttachments()}
@@ -1171,6 +1369,13 @@ const LoanDetail = () => {
           </Button>
         </DialogActions>
       </Dialog>
+      <LoanLumpSumDialog
+        open={lumpSumDialog}
+        loan={loan}
+        onClose={() => { setLumpSumDialog(false); setResubmitRequest(null); }}
+        onDone={handleLumpSumDone}
+        resubmitRequest={resubmitRequest}
+      />
       <ForwardLoanDialog loan={forwardOpen ? loan : null} onClose={() => setForwardOpen(false)} onDone={workflowDone} />
       {approvalsOpen && (
         <LoanApprovalDialog loan={loan} onClose={() => setApprovalsOpen(false)} onDone={workflowDone} />

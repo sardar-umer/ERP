@@ -30,7 +30,8 @@ class LoanPayrollService {
         isLoanFullyPaid,
         getLoanRemainingBalance,
         markLoanCompletedIfPaid,
-        effectiveLoanDeductionForPayroll
+        effectiveLoanDeductionForPayroll,
+        payrollAlreadyRecordedOnLoan
       } = require('../utils/loanPayrollDeduction');
 
       // Get all active loans for the employee (exclude fully paid)
@@ -56,6 +57,7 @@ class LoanPayrollService {
       
       let processedLoans = 0;
       const loanUpdates = [];
+      const skippedLoans = [];
 
       const month = payroll.month;
       const year = payroll.year;
@@ -76,19 +78,40 @@ class LoanPayrollService {
         const weight = shareWeights[i];
         const loanShare = (weight / totalInstallments) * payroll.loanDeductions;
         
+        // Never record the same month twice: skip when this payroll was already applied, or when the
+        // import / a manual entry already marked this month's installment Paid. The share is dropped
+        // (not moved to other loans) because that money is already on this loan.
+        const alreadyRecorded = loanShare > 0 ? payrollAlreadyRecordedOnLoan(loan, payroll) : null;
+        if (alreadyRecorded) {
+          console.log(`⏭️ Skipping loan ${loan._id} for payroll ${payroll._id}: ${alreadyRecorded}`);
+          skippedLoans.push({ loanId: loan._id, amount: Math.round(loanShare * 100) / 100, reason: alreadyRecorded });
+          continue;
+        }
+
         if (loanShare > 0) {
           console.log(`💰 Processing Rs ${loanShare.toFixed(2)} payment for ${loan.loanType} loan ${loan._id}`);
           
           try {
+            const openRowIds = new Set(
+              (loan.loanSchedule || [])
+                .filter((inst) => ['Pending', 'Overdue', 'Partial'].includes(inst.status))
+                .map((inst) => String(inst._id))
+            );
+
             // Use the loan's processPayment method
             const paymentResult = loan.processPayment(loanShare, 'Salary Deduction');
             
-            // Update loan totals
-            loan.totalPaid += paymentResult.processedAmount;
+            // processPayment() already marks the schedule rows and adds to totalPaid.
+            // (Previously totalPaid was added a second time here and updateLoanSchedule()
+            // marked the NEXT installment paid as well — one deduction closed two rows.)
             loan.outstandingBalance = paymentResult.newOutstandingBalance;
-            
-            // Update schedule with payment
-            await this.updateLoanSchedule(loan, loanShare, payroll);
+            for (const inst of loan.loanSchedule || []) {
+              // Keep the first payroll that touched a row; later partial top-ups are tracked in appliedPayrolls
+              if (openRowIds.has(String(inst._id)) && ['Paid', 'Partial'].includes(inst.status) && !inst.paymentReference) {
+                inst.paymentReference = `Payroll-${payroll._id}`;
+              }
+            }
+            loan.appliedPayrolls = [...(loan.appliedPayrolls || []), payroll._id];
             
             // Mark loan as Active if it was Disbursed
             if (loan.status === 'Disbursed') {
@@ -133,6 +156,7 @@ class LoanPayrollService {
         message: `Successfully processed ${processedLoans} loans`,
         processedLoans,
         loanUpdates,
+        skippedLoans,
         totalProcessed: payroll.loanDeductions
       };
       

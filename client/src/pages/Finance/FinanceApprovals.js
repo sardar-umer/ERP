@@ -17,6 +17,11 @@ import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
 
 const rowKey = (item) => `${item.type}:${item.id}`;
+// Loan receipts need the receive-in account / cost center, so they are posted from their own dialog
+const needsForm = (item) => Boolean(item.requiresForm);
+// Developer / super admin see everything, but can only sign slots assigned to them
+const canAct = (item) => item.canAct !== false;
+const isSelectable = (item) => canAct(item) && !needsForm(item);
 
 /**
  * Finance → Approvals: everything waiting on the logged-in user's finance authority signature
@@ -27,6 +32,7 @@ const rowKey = (item) => `${item.type}:${item.id}`;
 const FinanceApprovals = () => {
   const navigate = useNavigate();
   const [data, setData] = useState({ items: [], counts: {}, types: [] });
+  const [scope, setScope] = useState('all'); // 'all' | 'mine' — only offered to developer / super admin
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
   const [message, setMessage] = useState(null);
@@ -43,7 +49,7 @@ const FinanceApprovals = () => {
     setLoading(true);
     setError('');
     try {
-      const res = await api.get('/finance/my-approvals');
+      const res = await api.get('/finance/my-approvals', { params: { scope } });
       setData(res?.data?.data || { items: [], counts: {}, types: [] });
       setSelected(new Set());
     } catch (e) {
@@ -51,7 +57,7 @@ const FinanceApprovals = () => {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [scope]);
 
   useEffect(() => { load(); }, [load]);
 
@@ -68,9 +74,10 @@ const FinanceApprovals = () => {
   useEffect(() => { setPage(0); }, [typeFilter, search]);
 
   const pageRows = filtered.slice(page * rowsPerPage, page * rowsPerPage + rowsPerPage);
-  const selectedItems = data.items.filter((item) => selected.has(rowKey(item)));
+  const selectedItems = data.items.filter((item) => selected.has(rowKey(item)) && isSelectable(item));
+  const selectablePageRows = pageRows.filter(isSelectable);
   const selectedTotal = selectedItems.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
-  const allOnPageSelected = pageRows.length > 0 && pageRows.every((item) => selected.has(rowKey(item)));
+  const allOnPageSelected = selectablePageRows.length > 0 && selectablePageRows.every((item) => selected.has(rowKey(item)));
 
   const toggle = (item) => setSelected((prev) => {
     const next = new Set(prev);
@@ -81,7 +88,7 @@ const FinanceApprovals = () => {
 
   const togglePage = () => setSelected((prev) => {
     const next = new Set(prev);
-    pageRows.forEach((item) => (allOnPageSelected ? next.delete(rowKey(item)) : next.add(rowKey(item))));
+    selectablePageRows.forEach((item) => (allOnPageSelected ? next.delete(rowKey(item)) : next.add(rowKey(item))));
     return next;
   });
 
@@ -128,7 +135,9 @@ const FinanceApprovals = () => {
         <Box>
           <Typography variant="h5" fontWeight={600}>Approvals</Typography>
           <Typography variant="body2" color="text.secondary">
-            Documents waiting for your signature as a finance authority. Approving here is the same as approving on the voucher.
+            {data.canSeeAll && scope === 'all'
+              ? 'All documents waiting for a finance authority signature, plus HR loan receipts to post. You can sign only the slots assigned to you.'
+              : 'Documents waiting for your signature as a finance authority, plus HR loan receipts to post. Approving here is the same as approving on the voucher.'}
           </Typography>
         </Box>
         <Button variant="outlined" startIcon={<RefreshIcon />} onClick={load} disabled={loading || busy}>Refresh</Button>
@@ -136,6 +145,24 @@ const FinanceApprovals = () => {
 
       {error && <Alert severity="error" sx={{ mb: 2 }}>{error}</Alert>}
       {message && <Alert severity={message.severity} sx={{ mb: 2 }} onClose={() => setMessage(null)}>{message.text}</Alert>}
+
+      {data.canSeeAll && (
+        <Stack direction="row" spacing={1} mb={1.5} alignItems="center">
+          <Typography variant="body2" color="text.secondary">Show:</Typography>
+          <Chip
+            label="All pending approvals"
+            color={scope === 'all' ? 'secondary' : 'default'}
+            variant={scope === 'all' ? 'filled' : 'outlined'}
+            onClick={() => setScope('all')}
+          />
+          <Chip
+            label="Only mine"
+            color={scope === 'mine' ? 'secondary' : 'default'}
+            variant={scope === 'mine' ? 'filled' : 'outlined'}
+            onClick={() => setScope('mine')}
+          />
+        </Stack>
+      )}
 
       <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap mb={2}>
         <Chip
@@ -209,7 +236,7 @@ const FinanceApprovals = () => {
                     <TableCell align="right">Amount</TableCell>
                     <TableCell>Voucher</TableCell>
                     <TableCell>Signatures</TableCell>
-                    <TableCell>Your role</TableCell>
+                    <TableCell>{data.canSeeAll && scope === 'all' ? 'Your role / Waiting on' : 'Your role'}</TableCell>
                     <TableCell>Updated</TableCell>
                     <TableCell align="right">Actions</TableCell>
                   </TableRow>
@@ -218,7 +245,7 @@ const FinanceApprovals = () => {
                   {pageRows.map((item) => (
                     <TableRow key={rowKey(item)} hover selected={selected.has(rowKey(item))}>
                       <TableCell padding="checkbox">
-                        <Checkbox size="small" checked={selected.has(rowKey(item))} onChange={() => toggle(item)} inputProps={{ 'aria-label': `Select ${item.number || item.voucherNumber}` }} />
+                        <Checkbox size="small" checked={selected.has(rowKey(item))} onChange={() => toggle(item)} disabled={!isSelectable(item)} inputProps={{ 'aria-label': `Select ${item.number || item.voucherNumber}` }} />
                       </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.typeLabel}</TableCell>
                       <TableCell sx={{ maxWidth: 180 }}>
@@ -233,6 +260,9 @@ const FinanceApprovals = () => {
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatPKR(item.amount)}</TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.voucherNumber || '—'}</TableCell>
                       <TableCell>
+                        {item.signaturesRequired == null ? (
+                          <Typography variant="body2" color="text.secondary">—</Typography>
+                        ) : (
                         <Tooltip
                           title={item.signed.length
                             ? item.signed.map((s) => `${s.label}: ${s.by || '—'}${s.at ? ` (${formatDate(s.at)})` : ''}`).join(' · ')
@@ -240,26 +270,45 @@ const FinanceApprovals = () => {
                         >
                           <Chip size="small" variant="outlined" label={`${item.signaturesDone} of ${item.signaturesRequired}`} />
                         </Tooltip>
+                        )}
                       </TableCell>
-                      <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.mySlots.join(', ')}</TableCell>
+                      <TableCell sx={{ maxWidth: 240 }}>
+                        {item.mySlots.length ? (
+                          <Typography variant="body2" noWrap>{item.mySlots.join(', ')}</Typography>
+                        ) : (
+                          <Typography variant="caption" color="text.secondary" component="div" title={(item.waitingOn || []).join(' · ')} sx={{ lineHeight: 1.3 }}>
+                            Waiting on {(item.waitingOn || []).join(' · ') || '—'}
+                          </Typography>
+                        )}
+                      </TableCell>
                       <TableCell sx={{ whiteSpace: 'nowrap' }}>{item.date ? formatDate(item.date) : '—'}</TableCell>
                       <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>
-                        <Tooltip title="Open voucher">
+                        <Tooltip title={needsForm(item) ? 'Open receipt' : 'Open voucher'}>
                           <span>
                             <IconButton size="small" onClick={() => openItem(item)} disabled={!item.voucherId && !item.openUrl} aria-label="Open voucher">
                               <OpenIcon fontSize="small" />
                             </IconButton>
                           </span>
                         </Tooltip>
-                        <Tooltip title="Approve">
-                          <IconButton size="small" color="success" disabled={busy} onClick={() => setConfirm({ mode: 'approve', items: [item] })} aria-label="Approve">
-                            <ApproveIcon fontSize="small" />
-                          </IconButton>
+                        <Tooltip title={!canAct(item) ? 'Only the assigned finance authority can sign' : needsForm(item) ? 'Receive & post voucher' : 'Approve'}>
+                          <span>
+                            <IconButton
+                              size="small"
+                              color="success"
+                              disabled={busy || !canAct(item)}
+                              onClick={() => (needsForm(item) ? openItem(item) : setConfirm({ mode: 'approve', items: [item] }))}
+                              aria-label="Approve"
+                            >
+                              <ApproveIcon fontSize="small" />
+                            </IconButton>
+                          </span>
                         </Tooltip>
-                        <Tooltip title="Return with observation">
-                          <IconButton size="small" color="error" disabled={busy} onClick={() => setConfirm({ mode: 'return', items: [item] })} aria-label="Return">
-                            <ReturnIcon fontSize="small" />
-                          </IconButton>
+                        <Tooltip title={!canAct(item) ? 'Only the assigned finance authority can return' : needsForm(item) ? 'Return to HR' : 'Return with observation'}>
+                          <span>
+                            <IconButton size="small" color="error" disabled={busy || !canAct(item)} onClick={() => setConfirm({ mode: 'return', items: [item] })} aria-label="Return">
+                              <ReturnIcon fontSize="small" />
+                            </IconButton>
+                          </span>
                         </Tooltip>
                       </TableCell>
                     </TableRow>
@@ -297,7 +346,9 @@ const FinanceApprovals = () => {
           )}
           {confirm?.mode === 'return' && (
             <Alert severity="warning" sx={{ mb: 2 }}>
-              Returning rejects the document and cancels its draft voucher, the same as rejecting on the voucher page.
+              {(confirm?.items || []).every(needsForm)
+                ? 'The loan receipt goes back to HR with your observation. HR can correct and resubmit it.'
+                : 'Returning rejects the document and cancels its draft voucher, the same as rejecting on the voucher page.'}
             </Alert>
           )}
           <TextField

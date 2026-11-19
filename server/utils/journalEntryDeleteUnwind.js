@@ -409,6 +409,10 @@ const unwindJournalEntryOnDelete = async (entry) => {
   if (!entry?._id) throw new Error('Journal entry required');
   const entryId = entry._id;
 
+  // 0) Loan lump-sum receipt: restore the loan first — throws (and blocks the delete) if the loan moved on
+  const { undoLumpSumForJournalEntry } = require('./loanLumpSumFinance');
+  await undoLumpSumForJournalEntry(entryId, { note: 'deleted' });
+
   // 1) Operational reverse (before JE/GL gone)
   await unwindApPaymentApplications(entryId);
   await unwindLegacyApPayments(entryId);

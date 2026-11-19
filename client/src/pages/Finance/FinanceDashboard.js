@@ -241,6 +241,7 @@ export default function FinanceDashboard() {
               { label: 'AR Invoices',         path: '/finance/accounts-receivable' },
               { label: 'Credit Notes',         path: '/finance/credit-notes'        },
               { label: 'Aged Receivables',     path: '/finance/aged-receivables'    },
+              { label: 'Employee Loan Receipts', path: '/finance/loan-receipts'     },
             ],
           },
           {

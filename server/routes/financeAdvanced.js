@@ -1171,7 +1171,14 @@ router.delete('/journal-entries/:id',
     }
 
     const { unwindJournalEntryOnDelete } = require('../utils/journalEntryDeleteUnwind');
-    await unwindJournalEntryOnDelete(entry);
+    try {
+      await unwindJournalEntryOnDelete(entry);
+    } catch (unwindErr) {
+      if (unwindErr.statusCode === 400) {
+        return res.status(400).json({ success: false, message: unwindErr.message });
+      }
+      throw unwindErr;
+    }
 
     res.json({
       success: true,
@@ -10291,7 +10298,18 @@ router.post('/journal-entries/:id/reverse',
 
     const { date, reason } = req.body;
     if (!original.companyId && companyId) original.companyId = companyId;
+
+    // Loan lump-sum receipt: check first so a loan that has moved on blocks the reversal
+    const { undoLumpSumForJournalEntry } = require('../utils/loanLumpSumFinance');
+    try {
+      await undoLumpSumForJournalEntry(original._id, { checkOnly: true });
+    } catch (undoErr) {
+      return res.status(undoErr.statusCode || 500).json({ success: false, message: undoErr.message });
+    }
+
     const reversalEntry = await FinanceHelper.reverseJournalEntry(original, { reason, createdBy: req.user.id, date });
+    await undoLumpSumForJournalEntry(original._id, { userId: req.user.id, note: 'reversed' })
+      .catch((e) => console.error('Loan lump-sum undo after reversal failed:', e.message));
 
     res.json({
       success: true,

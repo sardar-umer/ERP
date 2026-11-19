@@ -168,6 +168,54 @@ export const loanService = {
     }
   },
 
+  // Lump-sum (advance) payment: preview the new schedule without saving
+  previewLumpSum: async (id, payload) => {
+    try {
+      const response = await api.post(`${LOAN_API_BASE}/${id}/lump-sum/preview`, payload);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  // Lump-sum payment: send to Finance (loan changes only when Finance posts the voucher)
+  sendLumpSumRequest: async (id, payload) => {
+    try {
+      const response = await api.post(`${LOAN_API_BASE}/${id}/lump-sum-requests`, payload);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  getLumpSumRequests: async (id) => {
+    try {
+      const response = await api.get(`${LOAN_API_BASE}/${id}/lump-sum-requests`);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  // Resubmit a request Finance returned
+  resubmitLumpSumRequest: async (requestId, payload) => {
+    try {
+      const response = await api.put(`${LOAN_API_BASE}/lump-sum-requests/${requestId}`, payload);
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
+  cancelLumpSumRequest: async (requestId, comments = '') => {
+    try {
+      const response = await api.patch(`${LOAN_API_BASE}/lump-sum-requests/${requestId}/cancel`, { comments });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
   // Delete loan (Pending for normal users; developer may delete at any status)
   // Attachments
   uploadDocuments: async (id, files = []) => {

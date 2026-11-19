@@ -156,24 +156,49 @@ const approvedKeys = (doc) => new Set(
     .filter(Boolean)
 );
 
-/** Pending items for one document type that still need this user's signature. */
-const itemsForType = async (cfg, userId) => {
+/**
+ * Pending items for one document type.
+ * Normally only those still needing this user's signature; with `seeAll` (developer / super admin)
+ * every pending document — the user can still only sign slots assigned to them (canAct).
+ */
+const itemsForType = async (cfg, userId, { seeAll = false } = {}) => {
   const assigned = FINANCE_AUTHORITY_SLOT_CONFIG.map((slot) => ({
     [`financeApprovalAuthorities.${slot.key}`]: new mongoose.Types.ObjectId(userId)
   }));
-  let query = cfg.model.find({ ...cfg.pending, $or: assigned })
+  // "All": every pending document; but a draft manual JV with no signers is just a draft, not an approval
+  const anyAssigned = FINANCE_AUTHORITY_SLOT_CONFIG.map((slot) => ({
+    [`financeApprovalAuthorities.${slot.key}`]: { $exists: true, $ne: null }
+  }));
+  let filter = { ...cfg.pending, $or: assigned };
+  if (seeAll) filter = cfg.type === 'journal_entry' ? { ...cfg.pending, $or: anyAssigned } : { ...cfg.pending };
+  let query = cfg.model.find(filter)
     .populate('financeAuthorityApprovals.approver', 'firstName lastName email')
     .populate('createdBy', 'firstName lastName email')
     .sort({ updatedAt: -1 });
   cfg.populate.forEach((p) => { query = query.populate(p); });
   const docs = await query.lean();
 
+  // Names of the assigned signers (shown as "Waiting on …" for documents that aren't this user's)
+  const signerNames = new Map();
+  if (seeAll) {
+    const ids = [...new Set(docs.flatMap((d) => FINANCE_AUTHORITY_SLOT_CONFIG
+      .map((slot) => idOf(d.financeApprovalAuthorities?.[slot.key]))
+      .filter((id) => mongoose.Types.ObjectId.isValid(id))))];
+    if (ids.length) {
+      const users = await mongoose.model('User').find({ _id: { $in: ids } }).select('firstName lastName email').lean();
+      users.forEach((u) => signerNames.set(String(u._id), userName(u)));
+    }
+  }
+
   return docs.flatMap((doc) => {
     const authorities = doc.financeApprovalAuthorities || {};
     const done = approvedKeys(doc);
     const slots = FINANCE_AUTHORITY_SLOT_CONFIG.filter((slot) => authorities[slot.key]);
     const mine = slots.filter((slot) => idOf(authorities[slot.key]) === userId && !done.has(slot.key));
-    if (!mine.length) return [];
+    if (!mine.length && !seeAll) return [];
+    const waitingOn = slots
+      .filter((slot) => !done.has(slot.key))
+      .map((slot) => `${slot.label}: ${signerNames.get(idOf(authorities[slot.key])) || 'assigned user'}`);
     const id = String(doc._id);
     return [{
       type: cfg.type,
@@ -183,6 +208,8 @@ const itemsForType = async (cfg, userId) => {
       date: doc.updatedAt || doc.createdAt,
       createdBy: userName(doc.createdBy),
       mySlots: mine.map((s) => s.label),
+      canAct: mine.length > 0,
+      waitingOn: slots.length ? waitingOn : ['finance authorities to be assigned'],
       signed: (doc.financeAuthorityApprovals || [])
         .filter((a) => String(a?.decision || 'approved') !== 'rejected')
         .map((a) => ({ label: a.authorityLabel, by: userName(a.approver), at: a.approvedAt })),
@@ -194,6 +221,54 @@ const itemsForType = async (cfg, userId) => {
   });
 };
 
+/**
+ * HR lump-sum loan payments waiting for Finance to confirm receipt and post the RV.
+ * No signature slots: any finance user can post. Posting needs the receive-in account / cost center,
+ * so "approve" opens the receipt dialog (requiresForm) instead of a one-click approval.
+ */
+const FINANCE_ROLES = ['finance_manager', 'admin', 'super_admin', 'developer', 'higher_management'];
+const isFinanceUser = (user) => {
+  const roles = [user?.role, ...(Array.isArray(user?.roles) ? user.roles : [])].filter(Boolean);
+  return roles.some((r) => FINANCE_ROLES.includes(String(r)));
+};
+const loanReceiptItems = async (user) => {
+  if (!isFinanceUser(user)) return [];
+  const LoanLumpSumRequest = require('../models/hr/LoanLumpSumRequest');
+  require('../models/hr/Employee');
+  const docs = await LoanLumpSumRequest.find({ status: 'Pending Finance' })
+    .populate('employee', 'firstName lastName employeeId')
+    .populate('requestedBy', 'firstName lastName email')
+    .sort({ requestedAt: -1 })
+    .lean();
+  return docs.map((d) => {
+    const id = String(d._id);
+    const emp = d.employee || {};
+    return {
+      type: 'loan_receipt',
+      typeLabel: 'Loan receipt',
+      id,
+      number: d.requestNumber,
+      party: [emp.firstName, emp.lastName].filter(Boolean).join(' ') || emp.employeeId || '',
+      detail: `${emp.employeeId ? `${emp.employeeId} · ` : ''}${d.paymentMethod}${d.reference ? ` · ${d.reference}` : ''}`,
+      amount: d.amount,
+      voucherId: '',
+      voucherNumber: '',
+      openUrl: `/finance/loan-receipts?open=${id}`,
+      date: d.requestedAt || d.updatedAt,
+      createdBy: userName(d.requestedBy),
+      mySlots: ['Finance'],
+      canAct: true,
+      waitingOn: ['Finance'],
+      signed: [],
+      signaturesRequired: null,
+      signaturesDone: null,
+      requiresForm: true,
+      approveUrl: null,
+      rejectUrl: `/finance/loan-receipts/${id}/finance-reject`
+    };
+  });
+};
+
 // @route   GET /api/finance/my-approvals
 // @desc    Documents waiting on the current user's finance authority signature
 // @access  Private (any user; only documents where they are an assigned authority)
@@ -202,15 +277,29 @@ router.get('/', asyncHandler(async (req, res) => {
   if (!mongoose.Types.ObjectId.isValid(userId)) {
     return res.json({ success: true, data: { items: [], counts: {}, types: [] } });
   }
-  const results = await Promise.all(TYPES.map((cfg) => itemsForType(cfg, userId)));
-  const items = results.flat().sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
+  // Developer and super admin see every pending approval (scope=mine narrows to their own)
+  const roles = [req.user?.role, ...(Array.isArray(req.user?.roles) ? req.user.roles : [])].map(String);
+  const canSeeAll = roles.includes('developer') || roles.includes('super_admin');
+  const seeAll = canSeeAll && req.query.scope !== 'mine';
+
+  const [results, loanReceipts] = await Promise.all([
+    Promise.all(TYPES.map((cfg) => itemsForType(cfg, userId, { seeAll }))),
+    loanReceiptItems(req.user).catch((e) => {
+      console.error('my-approvals loan receipts:', e.message);
+      return [];
+    })
+  ]);
+  const items = [...results.flat(), ...loanReceipts].sort((a, b) => new Date(b.date || 0) - new Date(a.date || 0));
   const counts = Object.fromEntries(TYPES.map((cfg, i) => [cfg.type, results[i].length]));
+  counts.loan_receipt = loanReceipts.length;
   res.json({
     success: true,
     data: {
       items,
       counts,
-      types: TYPES.map((cfg) => ({ type: cfg.type, label: cfg.label }))
+      canSeeAll,
+      scope: seeAll ? 'all' : 'mine',
+      types: [...TYPES.map((cfg) => ({ type: cfg.type, label: cfg.label })), { type: 'loan_receipt', label: 'Loan receipt' }]
     }
   });
 }));
