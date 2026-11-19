@@ -1,7 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useState } from 'react';
-import { useNavigate } from 'react-router-dom';
+import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
+  Collapse,
+  IconButton,
+  Link,
+  Tooltip,
   Box,
   Button,
   Card,
@@ -20,7 +24,14 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { Download as DownloadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import {
+  Download as DownloadIcon,
+  Refresh as RefreshIcon,
+  KeyboardArrowDown as ExpandIcon,
+  KeyboardArrowUp as CollapseIcon,
+  UnfoldMore as ExpandAllIcon,
+  UnfoldLess as CollapseAllIcon
+} from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 import api from '../../../services/api';
@@ -63,8 +74,60 @@ const presetRange = (preset) => {
   return null;
 };
 
+/** Item lines of one indent, shown when its row is expanded */
+const IndentItemsTable = ({ items }) => (
+  <Table size="small" sx={{ '& td, & th': { fontSize: 12.5 } }}>
+    <TableHead>
+      <TableRow>
+        <TableCell><strong>#</strong></TableCell>
+        <TableCell><strong>Item</strong></TableCell>
+        <TableCell><strong>Description / Brand</strong></TableCell>
+        <TableCell align="right"><strong>Qty</strong></TableCell>
+        <TableCell><strong>Unit</strong></TableCell>
+        <TableCell align="right"><strong>Est. Rate</strong></TableCell>
+        <TableCell align="right"><strong>Est. Amount</strong></TableCell>
+        <TableCell><strong>Purpose</strong></TableCell>
+        <TableCell><strong>On PO</strong></TableCell>
+        <TableCell align="right"><strong>PO Qty</strong></TableCell>
+        <TableCell align="right"><strong>PO Amount</strong></TableCell>
+      </TableRow>
+    </TableHead>
+    <TableBody>
+      {(items || []).length === 0 ? (
+        <TableRow><TableCell colSpan={11} align="center">No items</TableCell></TableRow>
+      ) : items.map((it) => (
+        <TableRow key={it.line}>
+          <TableCell>{it.line}</TableCell>
+          <TableCell sx={{ fontWeight: 600 }}>
+            {it.itemName}
+            {it.itemCode && <Typography variant="caption" color="text.secondary" display="block">{it.itemCode}</Typography>}
+          </TableCell>
+          <TableCell>
+            {it.description}
+            {it.brand && <Typography variant="caption" color="text.secondary" display="block">Brand: {it.brand}</Typography>}
+          </TableCell>
+          <TableCell align="right">{it.quantity}</TableCell>
+          <TableCell>{it.unit}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{it.estimatedRate ? formatPKR(it.estimatedRate) : '-'}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{it.estimatedAmount ? formatPKR(it.estimatedAmount) : '-'}</TableCell>
+          <TableCell>{it.purpose || '-'}</TableCell>
+          <TableCell sx={{ whiteSpace: 'nowrap' }}>{it.poNumbers || <Typography variant="caption" color="text.secondary">Not on a PO</Typography>}</TableCell>
+          <TableCell align="right">{it.poQuantity || '-'}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{it.poAmount ? formatPKR(it.poAmount) : '-'}</TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  </Table>
+);
+
+/** Marks Excel rows that are item lines under an indent (removed before writing) */
+const ITEM_ROW = '__item__';
+
 const IndentReport = () => {
-  const navigate = useNavigate();
+  const [expanded, setExpanded] = useState({});
+  const [expandAll, setExpandAll] = useState(false);
+  const toggleRow = (id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  const isOpen = (id) => (expandAll ? expanded[id] !== false : Boolean(expanded[id]));
   const [rangePreset, setRangePreset] = useState('month');
   const [fromDate, setFromDate] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
   const [toDate, setToDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -151,10 +214,19 @@ const IndentReport = () => {
       ...header,
       ['#', 'Indent No', 'Date', 'Title', 'Department', 'Project', 'Cost Center', 'Requested By', 'Items',
         'Estimated Amount', 'Status', 'Where It Is Now', 'Detail', 'Quotations', 'PO Count', 'PO Numbers', 'PO Amount'],
-      ...rows.map((r, i) => [
-        i + 1, r.indentNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.title, r.department, r.project,
-        r.costCenter, r.requestedBy, r.itemCount, r.estimatedAmount, r.status, r.stage, r.stageDetail,
-        r.quotations, r.poCount, r.poNumbers, r.poAmount
+      ...rows.flatMap((r, i) => [
+        [
+          i + 1, r.indentNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.title, r.department, r.project,
+          r.costCenter, r.requestedBy, r.itemCount, r.estimatedAmount, r.status, r.stage, r.stageDetail,
+          r.quotations, r.poCount, r.poNumbers, r.poAmount
+        ],
+        // Item lines sit under their indent (grouped, so Excel can collapse them with the +/- buttons)
+        ...((r.items || []).length ? [
+          [ITEM_ROW, '', 'Items:', 'Item', 'Description', 'Brand', 'Qty', 'Unit', 'Est. Rate', 'Est. Amount',
+            'Purpose', 'On PO', 'PO Qty', 'PO Amount'],
+          ...r.items.map((it) => [ITEM_ROW, '', it.line, it.itemName, it.description, it.brand, it.quantity, it.unit,
+            it.estimatedRate, it.estimatedAmount, it.purpose, it.poNumbers || 'Not on a PO', it.poQuantity, it.poAmount])
+        ] : [])
       ]),
       [],
       ['', 'Total', '', '', '', '', '', '', '', summary?.totalAmount || 0, '', '', '', '', '', '', summary?.totalPoAmount || 0]
@@ -171,13 +243,30 @@ const IndentReport = () => {
       ['Where It Is Now', 'Count', 'Estimated Amount'],
       ...stageCounts.map((s) => [s.stage, s.count, s.amount])
     ];
+    const itemSheet = [
+      ...header,
+      ['Indent No', 'Indent Date', 'Department', 'Indent Status', 'Where It Is Now', 'Line', 'Item', 'Item Code',
+        'Description', 'Brand', 'Qty', 'Unit', 'Est. Rate', 'Est. Amount', 'Purpose', 'On PO', 'PO Qty', 'PO Amount'],
+      ...rows.flatMap((r) => (r.items || []).map((it) => [
+        r.indentNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.department, r.status, r.stage,
+        it.line, it.itemName, it.itemCode, it.description, it.brand, it.quantity, it.unit, it.estimatedRate,
+        it.estimatedAmount, it.purpose, it.poNumbers, it.poQuantity, it.poAmount
+      ]))
+    ];
+    const wsItems = XLSX.utils.aoa_to_sheet(itemSheet);
+    wsItems['!cols'] = [12, 12, 18, 16, 22, 5, 28, 12, 32, 14, 8, 8, 12, 14, 24, 22, 8, 14].map((wch) => ({ wch }));
+    const detailRowLevels = detail.map((row) => (row[0] === ITEM_ROW ? { level: 1 } : {}));
+    detail.forEach((row) => { if (row[0] === ITEM_ROW) row[0] = ''; });
     const wsDetail = XLSX.utils.aoa_to_sheet(detail);
+    wsDetail['!rows'] = detailRowLevels;
+    wsDetail['!outline'] = { above: true };
     wsDetail['!cols'] = [4, 16, 12, 32, 20, 24, 20, 20, 7, 16, 18, 22, 40, 10, 9, 24, 16].map((wch) => ({ wch }));
     const wsSummary = XLSX.utils.aoa_to_sheet(summarySheet);
     wsSummary['!cols'] = [{ wch: 28 }, { wch: 14 }, { wch: 18 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
     XLSX.utils.book_append_sheet(wb, wsDetail, 'Indents');
+    XLSX.utils.book_append_sheet(wb, wsItems, 'Indent Items');
     XLSX.writeFile(wb, `Indent-Report-${dayjs().format('YYYYMMDD-HHmm')}.xlsx`);
   };
 
@@ -216,7 +305,9 @@ const IndentReport = () => {
               onChange={(e) => setSearchInput(e.target.value)} sx={{ minWidth: 240 }} />
             <Box sx={{ flexGrow: 1 }} />
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={load}>Refresh</Button>
-            <Button variant="contained" startIcon={<DownloadIcon />} onClick={exportExcel} disabled={!rows.length}>Export Excel</Button>
+            <Button variant="contained" startIcon={<DownloadIcon />} onClick={exportExcel} disabled={!rows.length}>
+              {`Export Excel${rows.length ? ` (all ${rows.length})` : ''}`}
+            </Button>
           </Stack>
         </CardContent>
       </Card>
@@ -297,11 +388,18 @@ const IndentReport = () => {
       <Card>
         {loading && <LinearProgress />}
         <CardContent>
-          <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5 }}>Indents ({rows.length})</Typography>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+            <Typography variant="h6" fontWeight={700}>Indents ({rows.length})</Typography>
+            <Button size="small" startIcon={expandAll ? <CollapseAllIcon /> : <ExpandAllIcon />}
+              onClick={() => { setExpandAll((v) => !v); setExpanded({}); }}>
+              {expandAll ? 'Hide All Items' : 'Show All Items'}
+            </Button>
+          </Stack>
           <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
+                  <TableCell padding="checkbox" />
                   <TableCell><strong>#</strong></TableCell>
                   <TableCell><strong>Indent No</strong></TableCell>
                   <TableCell><strong>Date</strong></TableCell>
@@ -317,11 +415,19 @@ const IndentReport = () => {
               </TableHead>
               <TableBody>
                 {!loading && rows.length === 0 ? (
-                  <TableRow><TableCell colSpan={11} align="center"><Typography variant="body2" color="text.secondary">No indents for these filters</Typography></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={12} align="center"><Typography variant="body2" color="text.secondary">No indents for these filters</Typography></TableCell></TableRow>
                 ) : pg.rows.map((r, i) => (
-                  <TableRow key={r._id} hover sx={{ cursor: 'pointer' }} onClick={() => navigate(`/general/indents/${r._id}`)}>
+                  <React.Fragment key={r._id}>
+                  <TableRow hover sx={{ cursor: 'pointer', '& > td': isOpen(r._id) ? { borderBottom: 'none' } : undefined }} onClick={() => toggleRow(r._id)}>
+                    <TableCell padding="checkbox">
+                      <Tooltip title={isOpen(r._id) ? 'Hide items' : 'Show items'}>
+                        <IconButton size="small">{isOpen(r._id) ? <CollapseIcon fontSize="small" /> : <ExpandIcon fontSize="small" />}</IconButton>
+                      </Tooltip>
+                    </TableCell>
                     <TableCell>{pg.offset + i + 1}</TableCell>
-                    <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{r.indentNumber || '-'}</TableCell>
+                    <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>
+                      <Link component={RouterLink} to={`/general/indents/${r._id}`} underline="hover" onClick={(e) => e.stopPropagation()}>{r.indentNumber || 'View'}</Link>
+                    </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(r.date)}</TableCell>
                     <TableCell>{r.title}</TableCell>
                     <TableCell>
@@ -338,10 +444,20 @@ const IndentReport = () => {
                     </TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{r.poCount ? formatPKR(r.poAmount) : '-'}</TableCell>
                   </TableRow>
+                  <TableRow>
+                    <TableCell colSpan={12} sx={{ py: 0, ...(isOpen(r._id) ? {} : { borderBottom: 'none' }) }}>
+                      <Collapse in={isOpen(r._id)} timeout="auto" unmountOnExit>
+                        <Box sx={{ my: 1.5, ml: 6, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                          <IndentItemsTable items={r.items} />
+                        </Box>
+                      </Collapse>
+                    </TableCell>
+                  </TableRow>
+                  </React.Fragment>
                 ))}
                 {rows.length > 0 && (
                   <TableRow>
-                    <TableCell colSpan={7}><strong>Total ({rows.length} indents)</strong></TableCell>
+                    <TableCell colSpan={8}><strong>Total ({rows.length} indents)</strong></TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}><strong>{formatPKR(summary?.totalAmount || 0)}</strong></TableCell>
                     <TableCell colSpan={2} />
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}><strong>{formatPKR(summary?.totalPoAmount || 0)}</strong></TableCell>

@@ -139,7 +139,7 @@ router.get('/indents', requireReportAccess, asyncHandler(async (req, res) => {
   if (and.length) filter.$and = and;
 
   const indents = await Indent.find(filter)
-    .select('indentNumber title status storeRoutingStatus department requestedBy requestedDate requiredDate createdAt totalEstimatedCost items.quantity chargeTo costCenter approvalChain comparativeApproval.status procurementAssignment.assignedTo procurementRejection.observation rejectionReason lastRejectionReason priority')
+    .select('indentNumber title status storeRoutingStatus department requestedBy requestedDate requiredDate createdAt totalEstimatedCost items.itemName items.itemCode items.description items.brand items.quantity items.unit items.estimatedCost items.purpose items.budgetCategory chargeTo costCenter approvalChain comparativeApproval.status procurementAssignment.assignedTo procurementRejection.observation rejectionReason lastRejectionReason priority')
     .populate('department', 'name')
     .populate('requestedBy', 'firstName lastName')
     .populate('approvalChain.approver', 'firstName lastName')
@@ -155,7 +155,7 @@ router.get('/indents', requireReportAccess, asyncHandler(async (req, res) => {
       { $group: { _id: '$indent', count: { $sum: 1 } } }
     ]) : [],
     ids.length ? PurchaseOrder.find({ indent: { $in: ids }, status: { $nin: DEAD_PO_STATUSES }, supersededBy: null })
-      .select('indent orderNumber status totalAmount')
+      .select('indent orderNumber status totalAmount items.description items.quantity items.unitPrice items.amount')
       .sort({ createdAt: 1 })
       .lean() : []
   ]);
@@ -167,8 +167,43 @@ router.get('/indents', requireReportAccess, asyncHandler(async (req, res) => {
     posByIndent.get(key).push(po);
   });
 
+  const normName = (v) => String(v || '').trim().toLowerCase();
+
   let rows = indents.map((ind) => {
     const pos = posByIndent.get(String(ind._id)) || [];
+    // PO lines carry the indent item's name as their description, so match each indent line by name
+    const items = (ind.items || []).map((it, idx) => {
+      const qty = Number(it.quantity) || 0;
+      const rate = Number(it.estimatedCost) || 0;
+      const onPos = [];
+      let poQty = 0;
+      let poAmount = 0;
+      pos.forEach((po) => {
+        (po.items || []).forEach((line) => {
+          if (normName(line.description) && normName(line.description) === normName(it.itemName)) {
+            if (!onPos.includes(po.orderNumber)) onPos.push(po.orderNumber);
+            poQty += Number(line.quantity) || 0;
+            poAmount += Number(line.amount) || ((Number(line.quantity) || 0) * (Number(line.unitPrice) || 0));
+          }
+        });
+      });
+      return {
+        line: idx + 1,
+        itemName: it.itemName || '',
+        itemCode: it.itemCode || '',
+        description: it.description || '',
+        brand: it.brand || '',
+        quantity: qty,
+        unit: it.unit || '',
+        estimatedRate: round2(rate),
+        estimatedAmount: round2(qty * rate),
+        purpose: it.purpose || '',
+        budgetCategory: it.budgetCategory || '',
+        poNumbers: onPos.join(', '),
+        poQuantity: round2(poQty),
+        poAmount: round2(poAmount)
+      };
+    });
     const { stage: stageName, detail } = indentStage(ind, quoteCount.get(String(ind._id)) || 0, pos);
     return {
       _id: ind._id,
@@ -180,7 +215,8 @@ router.get('/indents', requireReportAccess, asyncHandler(async (req, res) => {
       project: [ind.chargeTo?.projectName, ind.chargeTo?.subProjectName].filter(Boolean).join(' / '),
       costCenter: ind.costCenter ? [ind.costCenter.code, ind.costCenter.name].filter(Boolean).join(' - ') : '',
       requestedBy: personName(ind.requestedBy),
-      itemCount: (ind.items || []).length,
+      itemCount: items.length,
+      items,
       estimatedAmount: round2(ind.totalEstimatedCost),
       status: ind.status,
       stage: stageName,
@@ -344,7 +380,7 @@ router.get('/purchase-orders', requireReportAccess, asyncHandler(async (req, res
   if (and.length) filter.$and = and;
 
   const pos = await PurchaseOrder.find(filter)
-    .select('orderNumber orderDate createdAt expectedDeliveryDate status vendor indent costCenter chargeTo items.quantity items.unitPrice items.receivedQuantity subtotal taxAmount totalAmount supersededBy priority')
+    .select('orderNumber orderDate createdAt expectedDeliveryDate status vendor indent costCenter chargeTo items.description items.specification items.brand items.productCode items.quantity items.unit items.unitPrice items.taxRate items.discount items.amount items.receivedQuantity items.budgetCategory subtotal taxAmount totalAmount supersededBy priority')
     .populate('vendor', 'name')
     .populate({ path: 'indent', select: 'indentNumber department', populate: { path: 'department', select: 'name' } })
     .populate('costCenter', 'name code')
@@ -415,6 +451,26 @@ router.get('/purchase-orders', requireReportAccess, asyncHandler(async (req, res
       project: [po.chargeTo?.projectName, po.chargeTo?.subProjectName].filter(Boolean).join(' / '),
       costCenter: po.costCenter ? [po.costCenter.code, po.costCenter.name].filter(Boolean).join(' - ') : '',
       itemCount: items.length,
+      items: items.map((it, idx) => {
+        const qty = Number(it.quantity) || 0;
+        const got = Number(it.receivedQuantity) || 0;
+        return {
+          line: idx + 1,
+          description: it.description || '',
+          specification: it.specification || '',
+          brand: it.brand || '',
+          productCode: it.productCode || '',
+          quantity: qty,
+          unit: it.unit || '',
+          unitPrice: round2(it.unitPrice),
+          taxRate: Number(it.taxRate) || 0,
+          discount: round2(it.discount),
+          amount: round2(it.amount),
+          receivedQuantity: round2(got),
+          pendingQuantity: round2(Math.max(0, qty - got)),
+          budgetCategory: it.budgetCategory || ''
+        };
+      }),
       subtotal: round2(po.subtotal),
       taxAmount: round2(po.taxAmount),
       totalAmount: round2(po.totalAmount),

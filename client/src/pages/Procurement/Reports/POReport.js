@@ -2,6 +2,9 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import { Link as RouterLink } from 'react-router-dom';
 import {
   Alert,
+  Collapse,
+  IconButton,
+  Tooltip,
   Box,
   Button,
   Card,
@@ -21,7 +24,14 @@ import {
   TextField,
   Typography
 } from '@mui/material';
-import { Download as DownloadIcon, Refresh as RefreshIcon } from '@mui/icons-material';
+import {
+  Download as DownloadIcon,
+  Refresh as RefreshIcon,
+  KeyboardArrowDown as ExpandIcon,
+  KeyboardArrowUp as CollapseIcon,
+  UnfoldMore as ExpandAllIcon,
+  UnfoldLess as CollapseAllIcon
+} from '@mui/icons-material';
 import * as XLSX from 'xlsx';
 import dayjs from 'dayjs';
 import api from '../../../services/api';
@@ -73,7 +83,62 @@ const presetRange = (preset) => {
   return null;
 };
 
+/** Item lines of one PO, shown when its row is expanded */
+const POItemsTable = ({ items }) => (
+  <Table size="small" sx={{ '& td, & th': { fontSize: 12.5 } }}>
+    <TableHead>
+      <TableRow>
+        <TableCell><strong>#</strong></TableCell>
+        <TableCell><strong>Item</strong></TableCell>
+        <TableCell><strong>Specification / Brand</strong></TableCell>
+        <TableCell align="right"><strong>Qty</strong></TableCell>
+        <TableCell><strong>Unit</strong></TableCell>
+        <TableCell align="right"><strong>Rate</strong></TableCell>
+        <TableCell align="right"><strong>Tax %</strong></TableCell>
+        <TableCell align="right"><strong>Discount</strong></TableCell>
+        <TableCell align="right"><strong>Amount</strong></TableCell>
+        <TableCell align="right"><strong>Received</strong></TableCell>
+        <TableCell align="right"><strong>Pending</strong></TableCell>
+      </TableRow>
+    </TableHead>
+    <TableBody>
+      {(items || []).length === 0 ? (
+        <TableRow><TableCell colSpan={11} align="center">No items</TableCell></TableRow>
+      ) : items.map((it) => (
+        <TableRow key={it.line}>
+          <TableCell>{it.line}</TableCell>
+          <TableCell sx={{ fontWeight: 600 }}>
+            {it.description}
+            {it.productCode && <Typography variant="caption" color="text.secondary" display="block">{it.productCode}</Typography>}
+          </TableCell>
+          <TableCell>
+            {it.specification || '-'}
+            {it.brand && <Typography variant="caption" color="text.secondary" display="block">Brand: {it.brand}</Typography>}
+          </TableCell>
+          <TableCell align="right">{it.quantity}</TableCell>
+          <TableCell>{it.unit}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{formatPKR(it.unitPrice)}</TableCell>
+          <TableCell align="right">{it.taxRate ? `${it.taxRate}%` : '-'}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}>{it.discount ? formatPKR(it.discount) : '-'}</TableCell>
+          <TableCell align="right" sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>{formatPKR(it.amount)}</TableCell>
+          <TableCell align="right">{it.receivedQuantity || '-'}</TableCell>
+          <TableCell align="right">
+            {it.pendingQuantity ? <Typography variant="body2" color="warning.main" sx={{ fontSize: 12.5 }}>{it.pendingQuantity}</Typography> : '-'}
+          </TableCell>
+        </TableRow>
+      ))}
+    </TableBody>
+  </Table>
+);
+
+/** Marks Excel rows that are item lines under a PO (removed before writing) */
+const ITEM_ROW = '__item__';
+
 const POReport = () => {
+  const [expanded, setExpanded] = useState({});
+  const [expandAll, setExpandAll] = useState(false);
+  const toggleRow = (id) => setExpanded((prev) => ({ ...prev, [id]: !prev[id] }));
+  const isOpen = (id) => (expandAll ? expanded[id] !== false : Boolean(expanded[id]));
   const [rangePreset, setRangePreset] = useState('month');
   const [fromDate, setFromDate] = useState(dayjs().startOf('month').format('YYYY-MM-DD'));
   const [toDate, setToDate] = useState(dayjs().format('YYYY-MM-DD'));
@@ -161,12 +226,21 @@ const POReport = () => {
       ['#', 'PO No', 'Date', 'Vendor', 'Indent No', 'Department', 'Project', 'Cost Center', 'Items',
         'Subtotal', 'Tax', 'PO Amount', 'Received %', 'Received Value', 'GRN Numbers', 'Billed', 'Paid',
         'Bill Numbers', 'Status', 'Where It Is Now', 'Detail', 'Expected Delivery'],
-      ...rows.map((r, i) => [
-        i + 1, r.orderNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.vendor, r.indentNumber,
-        r.department, r.project, r.costCenter, r.itemCount, r.subtotal, r.taxAmount, r.totalAmount,
-        r.receivedPercent, r.receivedValue, r.grnNumbers, r.billedAmount, r.paidAmount, r.billNumbers,
-        r.status, r.stage, r.stageDetail,
-        r.expectedDeliveryDate ? dayjs(r.expectedDeliveryDate).format('DD-MMM-YYYY') : ''
+      ...rows.flatMap((r, i) => [
+        [
+          i + 1, r.orderNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.vendor, r.indentNumber,
+          r.department, r.project, r.costCenter, r.itemCount, r.subtotal, r.taxAmount, r.totalAmount,
+          r.receivedPercent, r.receivedValue, r.grnNumbers, r.billedAmount, r.paidAmount, r.billNumbers,
+          r.status, r.stage, r.stageDetail,
+          r.expectedDeliveryDate ? dayjs(r.expectedDeliveryDate).format('DD-MMM-YYYY') : ''
+        ],
+        // Item lines sit under their PO (grouped, so Excel can collapse them with the +/- buttons)
+        ...((r.items || []).length ? [
+          [ITEM_ROW, '', 'Items:', 'Item', 'Specification', 'Brand', 'Qty', 'Unit', 'Rate', 'Tax %', 'Discount',
+            'Amount', 'Received Qty', 'Pending Qty'],
+          ...r.items.map((it) => [ITEM_ROW, '', it.line, it.description, it.specification, it.brand, it.quantity, it.unit,
+            it.unitPrice, it.taxRate, it.discount, it.amount, it.receivedQuantity, it.pendingQuantity])
+        ] : [])
       ]),
       [],
       ['', 'Total', '', '', '', '', '', '', '', '', '', summary?.totalAmount || 0, '',
@@ -188,13 +262,30 @@ const POReport = () => {
       ['Where It Is Now', 'Count', 'PO Amount'],
       ...stageCounts.map((s) => [s.stage, s.count, s.amount])
     ];
+    const itemSheet = [
+      ...header,
+      ['PO No', 'PO Date', 'Vendor', 'Indent No', 'PO Status', 'Where It Is Now', 'Line', 'Item', 'Product Code',
+        'Specification', 'Brand', 'Qty', 'Unit', 'Rate', 'Tax %', 'Discount', 'Amount', 'Received Qty', 'Pending Qty'],
+      ...rows.flatMap((r) => (r.items || []).map((it) => [
+        r.orderNumber, r.date ? dayjs(r.date).format('DD-MMM-YYYY') : '', r.vendor, r.indentNumber, r.status, r.stage,
+        it.line, it.description, it.productCode, it.specification, it.brand, it.quantity, it.unit, it.unitPrice,
+        it.taxRate, it.discount, it.amount, it.receivedQuantity, it.pendingQuantity
+      ]))
+    ];
+    const wsItems = XLSX.utils.aoa_to_sheet(itemSheet);
+    wsItems['!cols'] = [16, 12, 26, 10, 18, 24, 5, 30, 12, 28, 14, 8, 8, 12, 7, 11, 14, 11, 11].map((wch) => ({ wch }));
+    const detailRowLevels = detail.map((row) => (row[0] === ITEM_ROW ? { level: 1 } : {}));
+    detail.forEach((row) => { if (row[0] === ITEM_ROW) row[0] = ''; });
     const wsDetail = XLSX.utils.aoa_to_sheet(detail);
+    wsDetail['!rows'] = detailRowLevels;
+    wsDetail['!outline'] = { above: true };
     wsDetail['!cols'] = [4, 16, 12, 28, 10, 18, 22, 20, 7, 14, 12, 15, 10, 15, 20, 14, 14, 20, 20, 24, 44, 14].map((wch) => ({ wch }));
     const wsSummary = XLSX.utils.aoa_to_sheet(summarySheet);
     wsSummary['!cols'] = [{ wch: 36 }, { wch: 14 }, { wch: 18 }];
     const wb = XLSX.utils.book_new();
     XLSX.utils.book_append_sheet(wb, wsSummary, 'Summary');
     XLSX.utils.book_append_sheet(wb, wsDetail, 'Purchase Orders');
+    XLSX.utils.book_append_sheet(wb, wsItems, 'PO Items');
     XLSX.writeFile(wb, `PO-Report-${dayjs().format('YYYYMMDD-HHmm')}.xlsx`);
   };
 
@@ -266,7 +357,9 @@ const POReport = () => {
               onChange={(e) => setSearchInput(e.target.value)} sx={{ minWidth: 260 }} />
             <Box sx={{ flexGrow: 1 }} />
             <Button variant="outlined" startIcon={<RefreshIcon />} onClick={load}>Refresh</Button>
-            <Button variant="contained" startIcon={<DownloadIcon />} onClick={exportExcel} disabled={!rows.length}>Export Excel</Button>
+            <Button variant="contained" startIcon={<DownloadIcon />} onClick={exportExcel} disabled={!rows.length}>
+              {`Export Excel${rows.length ? ` (all ${rows.length})` : ''}`}
+            </Button>
           </Stack>
         </CardContent>
       </Card>
@@ -296,11 +389,18 @@ const POReport = () => {
       <Card>
         {loading && <LinearProgress />}
         <CardContent>
-          <Typography variant="h6" fontWeight={700} sx={{ mb: 1.5 }}>Purchase Orders ({rows.length})</Typography>
+          <Stack direction="row" alignItems="center" justifyContent="space-between" sx={{ mb: 1.5 }}>
+            <Typography variant="h6" fontWeight={700}>Purchase Orders ({rows.length})</Typography>
+            <Button size="small" startIcon={expandAll ? <CollapseAllIcon /> : <ExpandAllIcon />}
+              onClick={() => { setExpandAll((v) => !v); setExpanded({}); }}>
+              {expandAll ? 'Hide All Items' : 'Show All Items'}
+            </Button>
+          </Stack>
           <TableContainer>
             <Table size="small">
               <TableHead>
                 <TableRow>
+                  <TableCell padding="checkbox" />
                   <TableCell><strong>#</strong></TableCell>
                   <TableCell><strong>PO No</strong></TableCell>
                   <TableCell><strong>Date</strong></TableCell>
@@ -317,18 +417,25 @@ const POReport = () => {
               </TableHead>
               <TableBody>
                 {!loading && rows.length === 0 ? (
-                  <TableRow><TableCell colSpan={12} align="center"><Typography variant="body2" color="text.secondary">No purchase orders for these filters</Typography></TableCell></TableRow>
+                  <TableRow><TableCell colSpan={13} align="center"><Typography variant="body2" color="text.secondary">No purchase orders for these filters</Typography></TableCell></TableRow>
                 ) : pg.rows.map((r, i) => (
-                  <TableRow key={r._id} hover sx={r.live ? undefined : { opacity: 0.6 }}>
+                  <React.Fragment key={r._id}>
+                  <TableRow hover onClick={() => toggleRow(r._id)}
+                    sx={{ cursor: 'pointer', ...(r.live ? {} : { opacity: 0.6 }), '& > td': isOpen(r._id) ? { borderBottom: 'none' } : undefined }}>
+                    <TableCell padding="checkbox">
+                      <Tooltip title={isOpen(r._id) ? 'Hide items' : 'Show items'}>
+                        <IconButton size="small">{isOpen(r._id) ? <CollapseIcon fontSize="small" /> : <ExpandIcon fontSize="small" />}</IconButton>
+                      </Tooltip>
+                    </TableCell>
                     <TableCell>{pg.offset + i + 1}</TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap', fontWeight: 600 }}>
-                      <Link component={RouterLink} to={`/procurement/purchase-orders?view=${r._id}`} underline="hover">{r.orderNumber || 'View PO'}</Link>
+                      <Link component={RouterLink} to={`/procurement/purchase-orders?view=${r._id}`} underline="hover" onClick={(e) => e.stopPropagation()}>{r.orderNumber || 'View PO'}</Link>
                     </TableCell>
                     <TableCell sx={{ whiteSpace: 'nowrap' }}>{formatDate(r.date)}</TableCell>
                     <TableCell>{r.vendor || '-'}</TableCell>
                     <TableCell>
                       {r.indentId ? (
-                        <Link component={RouterLink} to={`/general/indents/${r.indentId}`} underline="hover">{r.indentNumber || 'Indent'}</Link>
+                        <Link component={RouterLink} to={`/general/indents/${r.indentId}`} underline="hover" onClick={(e) => e.stopPropagation()}>{r.indentNumber || 'Indent'}</Link>
                       ) : '-'}
                       {(r.department || r.project) && (
                         <Typography variant="caption" color="text.secondary" display="block">{[r.department, r.project].filter(Boolean).join(' · ')}</Typography>
@@ -348,10 +455,20 @@ const POReport = () => {
                       <Typography variant="caption" color="text.secondary" display="block" sx={{ mt: 0.5 }}>{r.stageDetail}</Typography>
                     </TableCell>
                   </TableRow>
+                  <TableRow>
+                    <TableCell colSpan={13} sx={{ py: 0, ...(isOpen(r._id) ? {} : { borderBottom: 'none' }) }}>
+                      <Collapse in={isOpen(r._id)} timeout="auto" unmountOnExit>
+                        <Box sx={{ my: 1.5, ml: 6, p: 1.5, bgcolor: 'action.hover', borderRadius: 1 }}>
+                          <POItemsTable items={r.items} />
+                        </Box>
+                      </Collapse>
+                    </TableCell>
+                  </TableRow>
+                  </React.Fragment>
                 ))}
                 {rows.length > 0 && (
                   <TableRow>
-                    <TableCell colSpan={6}><strong>Total ({rows.length} POs)</strong></TableCell>
+                    <TableCell colSpan={7}><strong>Total ({rows.length} POs)</strong></TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}><strong>{formatPKR(summary?.totalAmount || 0)}</strong></TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}><strong>{formatPKR(summary?.receivedValue || 0)}</strong></TableCell>
                     <TableCell align="right" sx={{ whiteSpace: 'nowrap' }}><strong>{formatPKR(summary?.billedAmount || 0)}</strong></TableCell>
