@@ -422,6 +422,7 @@ router.get('/',
           workflowHistory: doc.workflowHistory || [],
           auditObservations: doc.auditObservations || [],
           preAuditInitialApprovedAt: doc.preAuditInitialApprovedAt || null,
+          preAuditInitialComments: doc.preAuditInitialComments || '',
           initialAuditApproved: Boolean(doc.preAuditInitialApprovedAt)
         });
       }
@@ -486,6 +487,7 @@ router.get('/',
           workflowHistory: doc.workflowHistory || [],
           auditObservations: doc.auditObservations || [],
           preAuditInitialApprovedAt: doc.preAuditInitialApprovedAt || null,
+          preAuditInitialComments: doc.preAuditInitialComments || '',
           initialAuditApproved: Boolean(doc.preAuditInitialApprovedAt),
           auditApprovedAt: doc.auditApprovedAt || null
         });
@@ -562,6 +564,7 @@ router.get('/',
           workflowHistory: doc.workflowHistory || [],
           auditObservations: (doc.observations || []).map((o) => ({ ...o, addedBy: o.addedBy })),
           preAuditInitialApprovedAt: doc.preAuditInitialApprovedAt || null,
+          preAuditInitialComments: doc.preAuditInitialComments || '',
           initialAuditApproved: Boolean(doc.preAuditInitialApprovedAt),
           auditApprovedAt: doc.auditApprovedAt || null
         });
@@ -650,6 +653,7 @@ router.get('/',
           workflowHistory: doc.workflowHistory || [],
           observations: doc.observations || [],
           preAuditInitialApprovedAt: doc.preAuditInitialApprovedAt || null,
+          preAuditInitialComments: doc.preAuditInitialComments || '',
           initialAuditApproved: Boolean(doc.preAuditInitialApprovedAt)
         });
       }
@@ -1054,6 +1058,7 @@ router.get('/:id',
             originalDocument: ca,
             auditObservations: ca.auditObservations || [],
             preAuditInitialApprovedAt: ca.preAuditInitialApprovedAt || null,
+            preAuditInitialComments: ca.preAuditInitialComments || '',
             initialAuditApproved: Boolean(ca.preAuditInitialApprovedAt),
             auditApprovedAt: ca.auditApprovedAt || null
           }
@@ -1099,6 +1104,7 @@ router.get('/:id',
             originalDocument: vb,
             observations: vb.observations || [],
             preAuditInitialApprovedAt: vb.preAuditInitialApprovedAt || null,
+            preAuditInitialComments: vb.preAuditInitialComments || '',
             initialAuditApproved: Boolean(vb.preAuditInitialApprovedAt)
           }
         });

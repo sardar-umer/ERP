@@ -314,6 +314,44 @@ const PreAudit = () => {
       doc?.reviewedAt
     );
 
+  const personName = (u) => (u && typeof u === 'object'
+    ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.name || u.email || ''
+    : '');
+  // Notes left by the first (initial) pre-audit reviewer, for the Audit Director to see before final approval.
+  const getInitialAuditNotes = (doc) => {
+    if (!doc) return { entries: [], observations: [] };
+    const DEFAULT_TEXT = /^(initial pre-audit approval recorded|forwarded to audit director for approval)/i;
+    const history = Array.isArray(doc.workflowHistory) ? doc.workflowHistory : [];
+    const initialAt = doc.preAuditInitialApprovedAt || doc.initialAuditApprovedAt || doc.originalDocument?.preAuditInitialApprovedAt;
+    const initialMs = initialAt ? new Date(initialAt).getTime() : null;
+    const entries = [];
+    history.forEach((h) => {
+      const to = String(h?.toStatus || '').toLowerCase();
+      const from = String(h?.fromStatus || '').toLowerCase();
+      const isInitial = to === 'initial audit approval' || to === 'initial pre-audit approved'
+        || (from === 'pending audit' && to === 'pending audit' && String(h?.module || '') === 'Pre-Audit'
+          && initialMs && Math.abs(new Date(h.changedAt).getTime() - initialMs) < 60000);
+      const isForward = to === 'forwarded to audit director' || to === 'forwarded_to_director';
+      if (!isInitial && !isForward) return;
+      const text = String(h?.comments || '').trim();
+      if (!text || DEFAULT_TEXT.test(text) || entries.some((e) => e.text === text)) return;
+      entries.push({ label: isInitial ? 'Initial approval' : 'Forwarded', text, by: personName(h.changedBy), at: h.changedAt });
+    });
+    // Fall back to stored initial comments when the history entry is missing
+    const stored = String(doc.preAuditInitialComments || doc.originalDocument?.preAuditInitialComments || doc.reviewComments || '').trim();
+    if (stored && !DEFAULT_TEXT.test(stored) && !entries.some((e) => e.text === stored)) {
+      entries.unshift({ label: 'Initial approval', text: stored, by: personName(doc.reviewedBy), at: initialAt || doc.reviewedAt });
+    }
+    const rawObs = [
+      ...(Array.isArray(doc.auditObservations) ? doc.auditObservations : []),
+      ...(Array.isArray(doc.observations) ? doc.observations : [])
+    ];
+    const observations = rawObs
+      .map((o) => (typeof o === 'object' ? o : { observation: o }))
+      .filter((o) => o?.observation && !o.resolved);
+    return { entries, observations };
+  };
+
   const fetchDocuments = useCallback(async () => {
     try {
       setLoading(true);
@@ -3366,6 +3404,26 @@ const PreAudit = () => {
           )}
         </DialogTitle>
         <DialogContent sx={{ p: 0, background: '#ffffff', overflow: 'auto', '@media print': { p: 0, overflow: 'visible' } }}>
+          {!viewDialog.loading && (viewDialog.document?.status === 'forwarded_to_director' ||
+            viewDialog.document?.workflowStatus === 'Forwarded to Audit Director') && (() => {
+            const { entries } = getInitialAuditNotes(viewDialog.document);
+            if (entries.length === 0) return null;
+            return (
+              <Alert severity="warning" icon={false} sx={{ m: 2, '@media print': { display: 'none' } }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+                  Observation from initial pre-audit
+                </Typography>
+                {entries.map((e, i) => (
+                  <Box key={i} sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{e.text}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {e.label}{e.by ? ` — ${e.by}` : ''}{e.at ? `, ${formatDateTime(e.at)}` : ''}
+                    </Typography>
+                  </Box>
+                ))}
+              </Alert>
+            );
+          })()}
           {viewDialog.loading ? (
             <Box sx={{ p: 3, textAlign: 'center' }}>
               <CircularProgress />
@@ -5450,6 +5508,42 @@ const PreAudit = () => {
             : 'Initial Approve (Pre-Audit)'}
         </DialogTitle>
         <DialogContent>
+          {(approveDialog.document?.status === 'forwarded_to_director' ||
+            approveDialog.document?.workflowStatus === 'Forwarded to Audit Director') && (() => {
+            const { entries, observations } = getInitialAuditNotes(approveDialog.document);
+            if (entries.length === 0 && observations.length === 0) {
+              return (
+                <Alert severity="info" sx={{ mt: 1 }}>
+                  The initial pre-audit reviewer did not record any observation.
+                </Alert>
+              );
+            }
+            return (
+              <Alert severity="warning" icon={false} sx={{ mt: 1, maxWidth: 560 }}>
+                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+                  Observation from initial pre-audit
+                </Typography>
+                {entries.map((e, i) => (
+                  <Box key={`n-${i}`} sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{e.text}</Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      {e.label}{e.by ? ` — ${e.by}` : ''}{e.at ? `, ${formatDateTime(e.at)}` : ''}
+                    </Typography>
+                  </Box>
+                ))}
+                {observations.map((o, i) => (
+                  <Box key={`o-${i}`} sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {o.severity ? `[${String(o.severity).toUpperCase()}] ` : ''}{o.observation}
+                    </Typography>
+                    {personName(o.addedBy) && (
+                      <Typography variant="caption" color="text.secondary">Observation — {personName(o.addedBy)}</Typography>
+                    )}
+                  </Box>
+                ))}
+              </Alert>
+            );
+          })()}
           <TextField
             fullWidth
             multiline
