@@ -116,12 +116,12 @@ const NonEmployeeForm = ({
     ? editData.returnObservations.filter((o) => String(o?.observation || '').trim())
     : [];
   const inferredResubmitStatus =
-    editData?.returnedFromStatus
+    (editData?.returnedFromStatus === 'Pending AVP' ? 'Pending Chairman' : editData?.returnedFromStatus)
     || (editData?.workflowStatus === 'Rejected by CEO' ? 'Forwarded to CEO' : '')
     || (editData?.srDirectorApprovedBy ? 'Forwarded to CEO' : '')
     || (editData?.chairmanApprovedBy ? 'Pending Sr Director' : '')
     || (editData?.avpApprovedBy ? 'Pending Chairman' : '')
-    || (editData?.hodApprovedBy ? 'Pending AVP' : '')
+    || (editData?.hodApprovedBy ? 'Pending Chairman' : '')
     || '';
   const resubmitTargetLabel = {
     'Pending HOD HR': 'HOD HR',
@@ -177,9 +177,6 @@ const NonEmployeeForm = ({
             return full === 'hamza tanveer'
               || (full.includes('hamza') && full.includes('tanveer'));
           });
-          const avp = fetchedUsers.find(u =>
-            u.position?.toLowerCase() === 'assistant vice president'
-          );
           const chairman = fetchedUsers.find(u =>
             u.position?.toLowerCase() === 'chairman steering committee'
           );
@@ -188,7 +185,7 @@ const NonEmployeeForm = ({
             ...prev,
             assignedHod: prev.assignedHod || (hod ? hod.id || hod._id : ''),
             assignedSrDirector: prev.assignedSrDirector || (srDirector ? srDirector.id || srDirector._id : ''),
-            assignedAvp: prev.assignedAvp || (avp ? avp.id || avp._id : ''),
+            assignedAvp: '', // AVP removed from New-Hiring approval chain
             assignedChairman: prev.assignedChairman || (chairman ? chairman.id || chairman._id : '')
           }));
         }
@@ -582,7 +579,7 @@ const NonEmployeeForm = ({
           <Box mt={2}>
             <Typography variant="h6" gutterBottom>Approval Authorities</Typography>
             <Grid container spacing={2}>
-              <Grid item xs={12} sm={6} md={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <TextField
                   label="HOD HR"
                   fullWidth
@@ -600,25 +597,7 @@ const NonEmployeeForm = ({
                   ))}
                 </TextField>
               </Grid>
-              <Grid item xs={12} sm={6} md={3}>
-                <TextField
-                  label="AVP Taj Fahad Farid"
-                  fullWidth
-                  select
-                  value={approvers.assignedAvp}
-                  onChange={(e) => setApprovers({ ...approvers, assignedAvp: e.target.value })}
-                >
-                  <MenuItem value="">
-                    <em>None</em>
-                  </MenuItem>
-                  {users.map(u => (
-                    <MenuItem key={u.id || u._id} value={u.id || u._id}>
-                      {u.firstName} {u.lastName} ({u.email})
-                    </MenuItem>
-                  ))}
-                </TextField>
-              </Grid>
-              <Grid item xs={12} sm={6} md={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <TextField
                   label="Chairman Steering Committee"
                   fullWidth
@@ -636,7 +615,7 @@ const NonEmployeeForm = ({
                   ))}
                 </TextField>
               </Grid>
-              <Grid item xs={12} sm={6} md={3}>
+              <Grid item xs={12} sm={6} md={4}>
                 <TextField
                   label="Sr Director Hamza Tanveer"
                   fullWidth

@@ -157,7 +157,9 @@ export function getNewHiringAuthorityCards(record) {
     }
   ];
 
+  // AVP was removed from the chain (Nov 2026) — only show it on records the AVP actually signed
   const cards = stages
+    .filter((st) => st.key !== 'avp' || st.user || st.at)
     .map((stage) => {
       if (stage.user) {
         return {

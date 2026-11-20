@@ -274,11 +274,13 @@ const markReturnedToInitiator = (record, comments, fromStatus, { observations, u
  * (covers older returns that never persisted returnedFromStatus).
  */
 const resolveResubmitTarget = (record, currentStatus, bodyHint) => {
+  // AVP stage no longer exists — anything returned from it resumes at Chairman
+  const skipAvp = (st) => (st === 'Pending AVP' ? 'Pending Chairman' : st);
   if (RESUBMIT_TARGET_STATUSES.has(record.returnedFromStatus)) {
-    return record.returnedFromStatus;
+    return skipAvp(record.returnedFromStatus);
   }
   if (RESUBMIT_TARGET_STATUSES.has(bodyHint)) {
-    return bodyHint;
+    return skipAvp(bodyHint);
   }
   if (currentStatus === 'Rejected by CEO') {
     return 'Forwarded to CEO';
@@ -287,7 +289,7 @@ const resolveResubmitTarget = (record, currentStatus, bodyHint) => {
   if (record.srDirectorApprovedBy) return 'Forwarded to CEO';
   if (record.chairmanApprovedBy) return 'Pending Sr Director';
   if (record.avpApprovedBy) return 'Pending Chairman';
-  if (record.hodApprovedBy) return 'Pending AVP';
+  if (record.hodApprovedBy) return 'Pending Chairman';
   return 'Pending HOD HR';
 };
 
@@ -561,7 +563,8 @@ exports.approveByHOD = async (req, res) => {
       }
     }
 
-    record.workflowStatus = 'Pending AVP';
+    // AVP (Taj Fahad Farid) removed from the New-Hiring chain (Nov 2026): HOD HR → Chairman
+    record.workflowStatus = 'Pending Chairman';
     record.hodApprovedBy = req.user.id;
     record.hodApprovedAt = Date.now();
     record.hodComments = req.body.comments || '';

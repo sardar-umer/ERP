@@ -103,12 +103,12 @@ const NonEmployeeOnboarding = () => {
       remark: String(e.remark || e.justification || '').trim()
     }));
     const inferredResubmitStatus =
-      record.returnedFromStatus
+      (record.returnedFromStatus === 'Pending AVP' ? 'Pending Chairman' : record.returnedFromStatus)
       || (record.workflowStatus === 'Rejected by CEO' ? 'Forwarded to CEO' : '')
       || (record.srDirectorApprovedBy ? 'Forwarded to CEO' : '')
       || (record.chairmanApprovedBy ? 'Pending Sr Director' : '')
       || (record.avpApprovedBy ? 'Pending Chairman' : '')
-      || (record.hodApprovedBy ? 'Pending AVP' : '')
+      || (record.hodApprovedBy ? 'Pending Chairman' : '')
       || '';
 
     setDetailsResubmitting(true);
