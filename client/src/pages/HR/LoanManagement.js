@@ -43,7 +43,8 @@ import {
   Refresh as RefreshIcon,
   TrendingUp as StatsIcon,
   Send as ForwardIcon,
-  FactCheck as WorkflowIcon
+  FactCheck as WorkflowIcon,
+  PlayCircleFilled as ActivateIcon
 } from '@mui/icons-material';
 import { useNavigate } from 'react-router-dom';
 import { loanService } from '../../services/loanService';
@@ -52,6 +53,8 @@ import LoanProgressIndicator from '../../components/LoanProgressIndicator';
 import { useAuth } from '../../contexts/AuthContext';
 import {
   ForwardLoanDialog,
+  ActivateDirectLoanDialog,
+  canActivateDirectLoan,
   LoanApprovalDialog,
   LOAN_WORKFLOW_COLORS,
   LOAN_IN_APPROVAL,
@@ -67,6 +70,8 @@ const LoanManagement = () => {
     (Array.isArray(user?.roles) && user.roles.includes('developer'));
   const [loans, setLoans] = useState([]);
   const [forwardFor, setForwardFor] = useState(null);
+  const [activateFor, setActivateFor] = useState(null);
+  const [canDirectApprove, setCanDirectApprove] = useState(false);
   const [approvalFor, setApprovalFor] = useState(null);
   const [workflowNote, setWorkflowNote] = useState('');
   const [loading, setLoading] = useState(true);
@@ -84,6 +89,12 @@ const LoanManagement = () => {
   const [showFilters, setShowFilters] = useState(false);
   const [stats, setStats] = useState(null);
   const [deleteDialog, setDeleteDialog] = useState({ open: false, loanId: null, status: null });
+  useEffect(() => {
+    loanService.getWorkflowMe()
+      .then((res) => setCanDirectApprove(Boolean(res?.data?.canDirectApprove)))
+      .catch(() => setCanDirectApprove(false));
+  }, []);
+
   useEffect(() => {
     fetchLoans();
     fetchStats();
@@ -513,6 +524,14 @@ const LoanManagement = () => {
                           </Tooltip>
                         )}
 
+                        {canDirectApprove && canActivateDirectLoan(loan) && (
+                          <Tooltip title="Activate (Loan – Direct Approval)">
+                            <IconButton size="small" color="success" onClick={() => setActivateFor(loan)}>
+                              <ActivateIcon />
+                            </IconButton>
+                          </Tooltip>
+                        )}
+
                         {canForwardLoan(loan) && (
                           <Tooltip title="Forward for approval (GM HR → AVP → CEO)">
                             <IconButton size="small" color="primary" onClick={() => setForwardFor(loan)}>
@@ -580,6 +599,11 @@ const LoanManagement = () => {
         />
       </Paper>
 
+      <ActivateDirectLoanDialog
+        loan={activateFor}
+        onClose={() => setActivateFor(null)}
+        onDone={(msg) => { setActivateFor(null); setWorkflowNote(msg); fetchLoans(); fetchStats(); }}
+      />
       <ForwardLoanDialog
         loan={forwardFor}
         onClose={() => setForwardFor(null)}

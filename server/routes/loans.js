@@ -9,6 +9,7 @@ const Employee = require('../models/hr/Employee');
 const { authMiddleware } = require('../middleware/auth');
 const { checkPermission } = require('../middleware/permissions');
 const { isDesignatedCeoApprover } = require('../utils/executiveAccess');
+const { canDirectApproveLoan } = require('../utils/loanDirectApproval');
 
 // ─── Attachments (PDF / image / Word / Excel, 10 MB each, up to 10 at a time) ───
 const loanUploadDir = path.join(__dirname, '../uploads/loans');
@@ -50,7 +51,7 @@ const ADMIN_ROLES = ['super_admin', 'admin', 'developer'];
 const isAdminUser = (user) => ADMIN_ROLES.includes(user?.role);
 const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
 const FORWARDABLE = ['Draft', 'Returned', undefined, null, ''];
-const APPROVER_FIELDS = ['forwardedBy', 'assignedHod', 'hodApprovedBy', 'assignedAvp', 'avpApprovedBy', 'ceoApprovedBy', 'returnedBy'];
+const APPROVER_FIELDS = ['forwardedBy', 'assignedHod', 'hodApprovedBy', 'assignedAvp', 'avpApprovedBy', 'ceoApprovedBy', 'returnedBy', 'directApprovedBy'];
 const approverPopulate = APPROVER_FIELDS.map((path) => ({ path, select: 'firstName lastName email digitalSignature' }));
 const sameUser = (a, b) => Boolean(a && b) && String(a._id || a) === String(b._id || b);
 
@@ -261,7 +262,14 @@ router.delete('/:id/documents/:docId', authMiddleware, async (req, res) => {
 
 // @route   GET /api/loans/workflow/me — what the current user may do in the approval chain
 router.get('/workflow/me', authMiddleware, (req, res) => {
-  res.json({ success: true, data: { isCeoApprover: isDesignatedCeoApprover(req.user), isAdmin: isAdminUser(req.user) } });
+  res.json({
+    success: true,
+    data: {
+      isCeoApprover: isDesignatedCeoApprover(req.user),
+      isAdmin: isAdminUser(req.user),
+      canDirectApprove: canDirectApproveLoan(req.user)
+    }
+  });
 });
 
 // @route   PUT /api/loans/:id/forward — HR forwards to GM HR → AVP → CEO
@@ -271,6 +279,9 @@ router.put('/:id/forward', authMiddleware, async (req, res) => {
     if (!loan) return res.status(404).json({ message: 'Loan not found' });
     if (loan.status !== 'Pending' || !FORWARDABLE.includes(loan.workflowStatus)) {
       return res.status(400).json({ message: `Cannot forward while the loan is ${loan.workflowStatus || loan.status}` });
+    }
+    if (loan.directApproval) {
+      return res.status(400).json({ message: 'This is a Direct Approval loan — activate it instead, or edit it and turn Direct Approval off to send it for approval.' });
     }
     const { assignedHod, assignedAvp } = req.body || {};
     if (!assignedHod || !assignedAvp) {
@@ -292,6 +303,61 @@ router.put('/:id/forward', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error forwarding loan:', error);
     res.status(500).json({ message: 'Error forwarding loan', error: error.message });
+  }
+});
+
+// @route   PUT /api/loans/:id/activate-direct — Loan – Direct Approval: Draft → Active (no GM HR / AVP / CEO).
+//          From here the loan runs exactly like a CEO-approved, disbursed loan (payroll deductions etc.).
+router.put('/:id/activate-direct', authMiddleware, async (req, res) => {
+  try {
+    if (!canDirectApproveLoan(req.user)) {
+      return res.status(403).json({ message: 'You do not have the Loan – Direct Approval permission.' });
+    }
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+    if (!loan.directApproval || loan.isOngoingLoan) {
+      return res.status(400).json({ message: 'Only Direct Approval loans can be activated this way.' });
+    }
+    if (loan.status !== 'Pending' || !FORWARDABLE.includes(loan.workflowStatus)) {
+      return res.status(400).json({ message: `Cannot activate while the loan is ${loan.workflowStatus || loan.status}` });
+    }
+    // Same rule as a new application: one running loan per employee
+    const running = await Loan.countDocuments({
+      _id: { $ne: loan._id },
+      employee: loan.employee,
+      status: { $in: ['Active', 'Disbursed'] }
+    });
+    if (running > 0) {
+      return res.status(400).json({ message: 'Employee has an active loan. Cannot activate a new loan until the existing loan is completed.' });
+    }
+
+    const uid = req.user.id;
+    const now = new Date();
+    const { disbursementMethod, comments } = req.body || {};
+    Object.assign(loan, {
+      status: 'Active',
+      workflowStatus: 'Direct Approved',
+      directApprovedBy: uid,
+      directApprovedAt: now,
+      approvedBy: uid,
+      approvalDate: now,
+      disbursedBy: uid,
+      disbursementDate: now,
+      updatedBy: uid
+    });
+    if (disbursementMethod) loan.disbursementMethod = disbursementMethod;
+    const who = [req.user.firstName, req.user.lastName].filter(Boolean).join(' ') || req.user.email || 'user';
+    loan.notes.push({
+      content: `Loan – Direct Approval: activated by ${who} without GM HR / AVP / CEO approval.${comments ? ` Comments: ${String(comments).trim()}` : ''}`,
+      addedBy: uid
+    });
+    await loan.save();
+    const data = await Loan.findById(loan._id).populate(approverPopulate)
+      .populate('employee', 'employeeId firstName lastName').lean();
+    res.json({ message: 'Loan activated — installments will be deducted from payroll', loan: data });
+  } catch (error) {
+    console.error('Error activating direct-approval loan:', error);
+    res.status(500).json({ message: 'Error activating loan', error: error.message });
   }
 });
 
@@ -412,7 +478,8 @@ router.post('/', authMiddleware, async (req, res) => {
       emiManuallyAdjusted,
       isOngoingLoan,
       loanStartDate,
-      installmentsAlreadyPaid
+      installmentsAlreadyPaid,
+      directApproval
     } = req.body;
 
     // Validate employee exists
@@ -422,6 +489,10 @@ router.post('/', authMiddleware, async (req, res) => {
     }
 
     const ongoing = Boolean(isOngoingLoan);
+    const direct = !ongoing && Boolean(directApproval);
+    if (direct && !canDirectApproveLoan(req.user)) {
+      return res.status(403).json({ message: 'You do not have the Loan – Direct Approval permission.' });
+    }
 
     if (ongoing && !loanStartDate) {
       return res.status(400).json({ message: 'Loan start date is required for ongoing loans' });
@@ -503,8 +574,10 @@ router.post('/', authMiddleware, async (req, res) => {
       loanData.disbursedBy = req.user.id;
       loanData.status = 'Active';
     } else {
-      // New applications are forwarded for approval: GM HR → AVP → CEO
+      // New applications are forwarded for approval: GM HR → AVP → CEO.
+      // Direct Approval loans also wait in Draft, but are activated by the permission holder instead.
       loanData.workflowStatus = 'Draft';
+      loanData.directApproval = direct;
     }
 
     const loan = new Loan(loanData);
@@ -537,7 +610,9 @@ router.post('/', authMiddleware, async (req, res) => {
     res.status(201).json({
       message: ongoing
         ? 'Ongoing loan imported successfully'
-        : 'Loan application submitted successfully',
+        : direct
+          ? 'Direct Approval loan saved in Draft — activate it to start payroll deductions'
+          : 'Loan application submitted successfully',
       loan
     });
   } catch (error) {
@@ -594,6 +669,17 @@ router.put('/:id', authMiddleware, async (req, res) => {
     editable.forEach((k) => {
       if (updateData[k] !== undefined) loan[k] = updateData[k];
     });
+
+    // Turn Direct Approval on/off while the loan is still a draft (not out for approval)
+    if (updateData.directApproval !== undefined && !loan.isOngoingLoan && FORWARDABLE.includes(loan.workflowStatus)) {
+      const wantDirect = Boolean(updateData.directApproval);
+      if (wantDirect !== Boolean(loan.directApproval)) {
+        if (!canDirectApproveLoan(req.user)) {
+          return res.status(403).json({ message: 'You do not have the Loan – Direct Approval permission.' });
+        }
+        loan.directApproval = wantDirect;
+      }
+    }
 
     if (manualEmi) {
       loan.monthlyInstallment = Math.round(Number(updateData.monthlyInstallment) * 100) / 100;

@@ -101,8 +101,13 @@ const loanSchema = new mongoose.Schema({
   // (status → Approved); nothing goes to Finance. Loans created before the chain have no workflowStatus.
   workflowStatus: {
     type: String,
-    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Returned', 'Rejected by CEO']
+    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Returned', 'Rejected by CEO', 'Direct Approved']
   },
+  // Loan – Direct Approval: created by a user holding the HR "loan_direct_approval" permission. It skips
+  // GM HR → AVP → CEO, waits in Draft, and that user activates it (→ Active, payroll deductions start).
+  directApproval: { type: Boolean, default: false },
+  directApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  directApprovedAt: { type: Date },
   forwardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   forwardedAt: { type: Date },
   assignedHod: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },

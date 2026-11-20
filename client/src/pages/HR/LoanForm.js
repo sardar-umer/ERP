@@ -52,6 +52,12 @@ const LoanForm = () => {
   const [pendingFiles, setPendingFiles] = useState([]);
   const [existingDocs, setExistingDocs] = useState([]);
   const [existingWorkflow, setExistingWorkflow] = useState('');
+  const [canDirectApprove, setCanDirectApprove] = useState(false);
+  useEffect(() => {
+    loanService.getWorkflowMe()
+      .then((res) => setCanDirectApprove(Boolean(res?.data?.canDirectApprove)))
+      .catch(() => setCanDirectApprove(false));
+  }, []);
   const [error, setError] = useState('');
   const [success, setSuccess] = useState('');
   const [activeStep, setActiveStep] = useState(0);
@@ -68,6 +74,7 @@ const LoanForm = () => {
     collateral: '',
     collateralValue: '',
     isOngoingLoan: false,
+    directApproval: false,
     loanStartDate: '',
     installmentsAlreadyPaid: '',
     guarantor: {
@@ -148,6 +155,7 @@ const LoanForm = () => {
         purpose: loan.purpose,
         collateral: loan.collateral || '',
         collateralValue: loan.collateralValue || '',
+        directApproval: Boolean(loan.directApproval),
         guarantor: {
           name: loan.guarantor?.name || '',
           relationship: loan.guarantor?.relationship || '',
@@ -369,6 +377,7 @@ const LoanForm = () => {
         totalPayable: calculatedValues.totalPayable,
         emiManuallyAdjusted: emiManual,
         isOngoingLoan: Boolean(formData.isOngoingLoan),
+        directApproval: !formData.isOngoingLoan && Boolean(formData.directApproval),
         loanStartDate: formData.isOngoingLoan ? formData.loanStartDate : undefined,
         installmentsAlreadyPaid: formData.isOngoingLoan
           ? (parseInt(formData.installmentsAlreadyPaid, 10) || 0)
@@ -385,7 +394,9 @@ const LoanForm = () => {
         setSuccess(
           formData.isOngoingLoan
             ? 'Ongoing loan imported successfully'
-            : 'Loan application submitted successfully'
+            : formData.directApproval
+              ? 'Direct Approval loan saved in Draft — open it and click Activate Loan'
+              : 'Loan application submitted successfully'
         );
       }
 
@@ -699,6 +710,48 @@ const LoanForm = () => {
                 </CardContent>
               </Card>
             </Grid>
+
+            {canDirectApprove && !formData.isOngoingLoan
+              && (!isEdit || ['', 'Draft', 'Returned'].includes(existingWorkflow)) && (
+              <Grid item xs={12}>
+                <Card
+                  variant="outlined"
+                  sx={{
+                    borderColor: formData.directApproval ? 'success.main' : 'divider',
+                    bgcolor: formData.directApproval ? 'success.50' : 'background.paper'
+                  }}
+                >
+                  <CardContent>
+                    <Stack direction="row" justifyContent="space-between" alignItems="center" flexWrap="wrap" gap={1}>
+                      <Box>
+                        <Typography variant="h6" fontWeight={700}>
+                          Loan – Direct Approval
+                        </Typography>
+                        <Typography variant="body2" color="text.secondary">
+                          Skip the approval authority (GM HR → AVP → CEO). The loan is saved in Draft and you activate it from there.
+                        </Typography>
+                      </Box>
+                      <FormControlLabel
+                        control={
+                          <Switch
+                            checked={Boolean(formData.directApproval)}
+                            onChange={(e) => handleInputChange('directApproval', e.target.checked)}
+                            color="success"
+                          />
+                        }
+                        label={formData.directApproval ? 'Direct Approval' : 'Normal approval'}
+                      />
+                    </Stack>
+                    {formData.directApproval && (
+                      <Alert severity="success" sx={{ mt: 2 }}>
+                        After saving, open the loan and click <strong>Activate Loan</strong>. It then becomes Active and its
+                        installments are deducted from payroll like any approved loan.
+                      </Alert>
+                    )}
+                  </CardContent>
+                </Card>
+              </Grid>
+            )}
 
             <Grid item xs={12} md={6}>
               <TextField

@@ -236,6 +236,7 @@ export const SUBMODULES = {
     'payroll_management',
     'leave_management',
     'loan_management',
+    'loan_direct_approval', // Loan – Direct Approval: skip GM HR → AVP → CEO
     'settlement_management',
     'talent_acquisition',
     'learning_development',

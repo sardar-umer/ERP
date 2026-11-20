@@ -250,6 +250,16 @@ export const loanService = {
     }
   },
 
+  // Loan – Direct Approval: Draft → Active without GM HR / AVP / CEO
+  activateDirectLoan: async (id, { comments = '', disbursementMethod } = {}) => {
+    try {
+      const response = await api.put(`${LOAN_API_BASE}/${id}/activate-direct`, { comments, disbursementMethod });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
   workflowAction: async (id, action, comments = '') => {
     try {
       const response = await api.put(`${LOAN_API_BASE}/${id}/workflow`, { action, comments });

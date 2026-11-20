@@ -66,6 +66,8 @@ import LoanAttachments from '../../components/HR/LoanAttachments';
 import LoanLumpSumDialog from '../../components/HR/LoanLumpSumDialog';
 import {
   ForwardLoanDialog,
+  ActivateDirectLoanDialog,
+  canActivateDirectLoan,
   LoanApprovalDialog,
   LOAN_WORKFLOW_COLORS,
   LOAN_IN_APPROVAL,
@@ -124,6 +126,7 @@ const LoanDetail = () => {
   const [lumpSumRequests, setLumpSumRequests] = useState([]);
   const [resubmitRequest, setResubmitRequest] = useState(null);
   const [forwardOpen, setForwardOpen] = useState(false);
+  const [activateOpen, setActivateOpen] = useState(false);
   const [approvalsOpen, setApprovalsOpen] = useState(false);
   const [workflowMe, setWorkflowMe] = useState({ isAdmin: false });
   useEffect(() => {
@@ -131,6 +134,7 @@ const LoanDetail = () => {
   }, []);
   const workflowDone = (message) => {
     setForwardOpen(false);
+    setActivateOpen(false);
     setApprovalsOpen(false);
     setSuccess(message);
     fetchLoan();
@@ -922,6 +926,13 @@ const LoanDetail = () => {
       buttons.push(
         <Chip key="wf" label={loanWorkflowLabel(loan)} color={LOAN_WORKFLOW_COLORS[loan.workflowStatus || 'Draft']} sx={{ mr: 1 }} />
       );
+      if (workflowMe.canDirectApprove && canActivateDirectLoan(loan)) {
+        buttons.push(
+          <Button key="activate" variant="contained" color="success" startIcon={<ApproveIcon />} onClick={() => setActivateOpen(true)} sx={{ mr: 1 }}>
+            Activate Loan
+          </Button>
+        );
+      }
       if (canForwardLoan(loan)) {
         buttons.push(
           <Button key="forward" variant="contained" startIcon={<ApproveIcon />} onClick={() => setForwardOpen(true)} sx={{ mr: 1 }}>
@@ -1376,6 +1387,7 @@ const LoanDetail = () => {
         onDone={handleLumpSumDone}
         resubmitRequest={resubmitRequest}
       />
+      <ActivateDirectLoanDialog loan={activateOpen ? loan : null} onClose={() => setActivateOpen(false)} onDone={workflowDone} />
       <ForwardLoanDialog loan={forwardOpen ? loan : null} onClose={() => setForwardOpen(false)} onDone={workflowDone} />
       {approvalsOpen && (
         <LoanApprovalDialog loan={loan} onClose={() => setApprovalsOpen(false)} onDone={workflowDone} />

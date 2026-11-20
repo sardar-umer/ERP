@@ -26,15 +26,21 @@ export const LOAN_WORKFLOW_COLORS = {
   'Forwarded to CEO': 'secondary',
   'Approved by CEO': 'success',
   Returned: 'error',
-  'Rejected by CEO': 'error'
+  'Rejected by CEO': 'error',
+  'Direct Approved': 'success'
 };
 
 export const loanWorkflowLabel = (l) => {
   const ws = l?.workflowStatus || 'Draft';
+  if (l?.directApproval && ['Draft', 'Returned'].includes(ws)) return 'Direct Approval — ready to activate';
+  if (ws === 'Direct Approved') return 'Direct Approval — activated';
   return ws === 'Pending HOD HR' ? 'Pending GM HR' : ws === 'Draft' ? 'Not forwarded' : ws;
 };
 export const LOAN_IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
-export const canForwardLoan = (l) => l?.status === 'Pending' && !l?.isOngoingLoan
+export const canForwardLoan = (l) => l?.status === 'Pending' && !l?.isOngoingLoan && !l?.directApproval
+  && ['Draft', 'Returned', undefined, null, ''].includes(l?.workflowStatus);
+/** Loan – Direct Approval draft that a permission holder can activate (server re-checks the permission). */
+export const canActivateDirectLoan = (l) => l?.status === 'Pending' && !l?.isOngoingLoan && Boolean(l?.directApproval)
   && ['Draft', 'Returned', undefined, null, ''].includes(l?.workflowStatus);
 
 const personName = (u) => (u && typeof u === 'object'
@@ -47,6 +53,15 @@ const fmtDateTime = (d) => (d ? new Date(d).toLocaleString('en-GB', {
 
 const approvalSteps = (l) => {
   const ws = l.workflowStatus || 'Draft';
+  if (l.directApproval) {
+    return [{
+      label: 'Loan – Direct Approval (no GM HR / AVP / CEO)',
+      by: personName(l.directApprovedBy),
+      at: l.directApprovedAt,
+      done: ws === 'Direct Approved',
+      current: ws !== 'Direct Approved'
+    }];
+  }
   return [
     { label: 'Forwarded by HR', by: personName(l.forwardedBy), at: l.forwardedAt, done: Boolean(l.forwardedAt), current: ['Draft', 'Returned'].includes(ws) },
     { label: 'GM HR', by: personName(l.hodApprovedBy) || personName(l.assignedHod), at: l.hodApprovedAt, done: Boolean(l.hodApprovedAt), current: ws === 'Pending HOD HR', note: l.hodComments },
@@ -60,6 +75,62 @@ const approvalSteps = (l) => {
       note: l.ceoComments
     }
   ];
+};
+
+/** Activate a Loan – Direct Approval draft: loan becomes Active and payroll deductions start. */
+export const ActivateDirectLoanDialog = ({ loan, onClose, onDone }) => {
+  const [comments, setComments] = useState('');
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState('');
+  useEffect(() => { setComments(''); setError(''); }, [loan]);
+
+  const submit = async () => {
+    try {
+      setSaving(true);
+      const res = await loanService.activateDirectLoan(loan._id, { comments });
+      onDone(res.message || 'Loan activated');
+    } catch (e) {
+      setError(e.message || 'Could not activate the loan');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const emp = loan?.employee || {};
+  return (
+    <Dialog open={Boolean(loan)} onClose={onClose} maxWidth="sm" fullWidth>
+      <DialogTitle>Activate loan — {[emp.firstName, emp.lastName].filter(Boolean).join(' ')}</DialogTitle>
+      <DialogContent>
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
+          Loan – Direct Approval: this loan skips GM HR → AVP → CEO. Once activated it becomes <strong>Active</strong> and
+          its installments are deducted from payroll like any approved loan.
+        </Typography>
+        <Grid container spacing={1.5} sx={{ mb: 2 }}>
+          {[
+            ['Loan Amount', formatPKR(loan?.loanAmount || 0)],
+            ['Term', `${loan?.loanTerm || 0} months`],
+            ['Monthly EMI', formatPKR(loan?.monthlyInstallment || 0)]
+          ].map(([label, v]) => (
+            <Grid item xs={4} key={label}>
+              <Paper variant="outlined" sx={{ p: 1.25 }}>
+                <Typography variant="caption" color="text.secondary">{label}</Typography>
+                <Typography variant="body1" fontWeight={600}>{v}</Typography>
+              </Paper>
+            </Grid>
+          ))}
+        </Grid>
+        <TextField fullWidth multiline minRows={2} label="Comments (optional)" value={comments}
+          onChange={(e) => setComments(e.target.value)} />
+        {error ? <Typography color="error" variant="body2" sx={{ mt: 1.5 }}>{error}</Typography> : null}
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose}>Cancel</Button>
+        <Button variant="contained" color="success" startIcon={saving ? <CircularProgress size={16} /> : <ApproveIcon />} disabled={saving} onClick={submit}>
+          Activate Loan
+        </Button>
+      </DialogActions>
+    </Dialog>
+  );
 };
 
 /** Forward dialog: choose the GM HR and AVP (defaults found like Manual Salary / Final Settlement). */
