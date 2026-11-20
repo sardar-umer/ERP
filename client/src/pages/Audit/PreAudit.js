@@ -2014,7 +2014,7 @@ const PreAudit = () => {
                 answeredAt: null,
                 resolved: false
               }));
-          const showSection = (poData.status === 'Pending Audit' || poData.status === 'Returned from Audit') && observations.length > 0;
+          const showSection = ['Pending Audit', 'Forwarded to Audit Director', 'Returned from Audit'].includes(poData.status) && observations.length > 0;
           const hasChangeSummary = poData.resubmissionChangeSummary && String(poData.resubmissionChangeSummary).trim().length > 0;
           if (!showSection) return null;
           return (
@@ -3406,8 +3406,10 @@ const PreAudit = () => {
         <DialogContent sx={{ p: 0, background: '#ffffff', overflow: 'auto', '@media print': { p: 0, overflow: 'visible' } }}>
           {!viewDialog.loading && (viewDialog.document?.status === 'forwarded_to_director' ||
             viewDialog.document?.workflowStatus === 'Forwarded to Audit Director') && (() => {
-            const { entries } = getInitialAuditNotes(viewDialog.document);
-            if (entries.length === 0) return null;
+            const { entries, observations: allObs } = getInitialAuditNotes(viewDialog.document);
+            // POs list their observations in their own section of the view
+            const observations = viewDialog.document?.isPurchaseOrder ? [] : allObs;
+            if (entries.length === 0 && observations.length === 0) return null;
             return (
               <Alert severity="warning" icon={false} sx={{ m: 2, '@media print': { display: 'none' } }}>
                 <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
@@ -3418,6 +3420,16 @@ const PreAudit = () => {
                     <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{e.text}</Typography>
                     <Typography variant="caption" color="text.secondary">
                       {e.label}{e.by ? ` — ${e.by}` : ''}{e.at ? `, ${formatDateTime(e.at)}` : ''}
+                    </Typography>
+                  </Box>
+                ))}
+                {observations.map((o, i) => (
+                  <Box key={`o-${i}`} sx={{ mb: 1 }}>
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>
+                      {o.severity ? `[${String(o.severity).toUpperCase()}] ` : ''}{o.observation}
+                    </Typography>
+                    <Typography variant="caption" color="text.secondary">
+                      Observation{personName(o.addedBy) ? ` — ${personName(o.addedBy)}` : ''}{o.addedAt ? `, ${formatDateTime(o.addedAt)}` : ''}
                     </Typography>
                   </Box>
                 ))}
