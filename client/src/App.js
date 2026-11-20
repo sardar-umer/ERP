@@ -1,4 +1,5 @@
-import React, { lazy, Suspense } from 'react';
+import React, { Suspense } from 'react';
+import lazyWithReload from './utils/lazyWithReload';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Button } from '@mui/material';
 import { useAuth } from './contexts/AuthContext';
@@ -334,43 +335,43 @@ import LeaveReports from './pages/HR/Leaves/LeaveReports';
 import EmployeeLeaveHistory from './pages/HR/Leaves/EmployeeLeaveHistory';
 
 // Recovery module - lazy loaded for faster initial load (must be after all imports for eslint import/first)
-const RecoveryAssignments = lazy(() => import('./pages/Finance/Recovery/RecoveryAssignments'));
-const RecoveryMembers = lazy(() => import('./pages/Finance/Recovery/RecoveryMembers'));
-const RecoveryTaskAssignment = lazy(() => import('./pages/Finance/Recovery/RecoveryTaskAssignment'));
-const CompletedTasks = lazy(() => import('./pages/Finance/Recovery/CompletedTasks'));
-const RecoveryCampaigns = lazy(() => import('./pages/Finance/Recovery/RecoveryCampaigns'));
-const MyTasks = lazy(() => import('./pages/Finance/Recovery/MyTasks'));
-const CashApprovals = lazy(() => import('./pages/Procurement/CashApprovals'));
-const CashApprovalDocumentView = lazy(() => import('./pages/Procurement/CashApprovalDocumentView'));
+const RecoveryAssignments = lazyWithReload(() => import('./pages/Finance/Recovery/RecoveryAssignments'));
+const RecoveryMembers = lazyWithReload(() => import('./pages/Finance/Recovery/RecoveryMembers'));
+const RecoveryTaskAssignment = lazyWithReload(() => import('./pages/Finance/Recovery/RecoveryTaskAssignment'));
+const CompletedTasks = lazyWithReload(() => import('./pages/Finance/Recovery/CompletedTasks'));
+const RecoveryCampaigns = lazyWithReload(() => import('./pages/Finance/Recovery/RecoveryCampaigns'));
+const MyTasks = lazyWithReload(() => import('./pages/Finance/Recovery/MyTasks'));
+const CashApprovals = lazyWithReload(() => import('./pages/Procurement/CashApprovals'));
+const CashApprovalDocumentView = lazyWithReload(() => import('./pages/Procurement/CashApprovalDocumentView'));
 
 // Taj Utilities Lazy Loaded Pages
-const RentalAgreementsFinance = lazy(() => import('./pages/Finance/TajUtilities/RentalAgreements'));
-const RentalAgreementDetailFinance = lazy(() => import('./pages/Finance/TajUtilities/RentalAgreementDetail'));
-const RentalManagementFinance = lazy(() => import('./pages/Finance/TajUtilities/RentalManagement'));
-const TajProperties = lazy(() => import('./pages/Finance/TajUtilities/TajProperties'));
-const TajPropertyDetail = lazy(() => import('./pages/Finance/TajUtilities/TajPropertyDetail'));
-const RentalManagementDetailFinance = lazy(() => import('./pages/Finance/TajUtilities/RentalManagementDetail'));
-const TajUtilitiesDashboard = lazy(() => import('./pages/Finance/TajUtilities/Dashboard'));
-const CAMCharges = lazy(() => import('./pages/Finance/TajUtilities/CAMCharges'));
-const WaterBills = lazy(() => import('./pages/Finance/TajUtilities/WaterBills'));
-const Electricity = lazy(() => import('./pages/Finance/TajUtilities/Electricity'));
-const Invoices = lazy(() => import('./pages/Finance/TajUtilities/Invoices'));
-const OpenInvoices = lazy(() => import('./pages/Finance/TajUtilities/OpenInvoices'));
-const TajResidents = lazy(() => import('./pages/Finance/TajUtilities/TajResidents'));
-const Deposits = lazy(() => import('./pages/Finance/TajUtilities/Deposits'));
-const TajUtilityBanks = lazy(() => import('./pages/Finance/TajUtilities/Banks'));
-const SuspenseAccount = lazy(() => import('./pages/Finance/TajUtilities/SuspenseAccount'));
-const TajResidentDetail = lazy(() => import('./pages/Finance/TajUtilities/TajResidentDetail'));
-const TajUtilitiesReports = lazy(() => import('./pages/Finance/TajUtilities/Reports'));
-const TajUtilitiesReconciliation = lazy(() => import('./pages/Finance/TajUtilities/Reconciliation'));
+const RentalAgreementsFinance = lazyWithReload(() => import('./pages/Finance/TajUtilities/RentalAgreements'));
+const RentalAgreementDetailFinance = lazyWithReload(() => import('./pages/Finance/TajUtilities/RentalAgreementDetail'));
+const RentalManagementFinance = lazyWithReload(() => import('./pages/Finance/TajUtilities/RentalManagement'));
+const TajProperties = lazyWithReload(() => import('./pages/Finance/TajUtilities/TajProperties'));
+const TajPropertyDetail = lazyWithReload(() => import('./pages/Finance/TajUtilities/TajPropertyDetail'));
+const RentalManagementDetailFinance = lazyWithReload(() => import('./pages/Finance/TajUtilities/RentalManagementDetail'));
+const TajUtilitiesDashboard = lazyWithReload(() => import('./pages/Finance/TajUtilities/Dashboard'));
+const CAMCharges = lazyWithReload(() => import('./pages/Finance/TajUtilities/CAMCharges'));
+const WaterBills = lazyWithReload(() => import('./pages/Finance/TajUtilities/WaterBills'));
+const Electricity = lazyWithReload(() => import('./pages/Finance/TajUtilities/Electricity'));
+const Invoices = lazyWithReload(() => import('./pages/Finance/TajUtilities/Invoices'));
+const OpenInvoices = lazyWithReload(() => import('./pages/Finance/TajUtilities/OpenInvoices'));
+const TajResidents = lazyWithReload(() => import('./pages/Finance/TajUtilities/TajResidents'));
+const Deposits = lazyWithReload(() => import('./pages/Finance/TajUtilities/Deposits'));
+const TajUtilityBanks = lazyWithReload(() => import('./pages/Finance/TajUtilities/Banks'));
+const SuspenseAccount = lazyWithReload(() => import('./pages/Finance/TajUtilities/SuspenseAccount'));
+const TajResidentDetail = lazyWithReload(() => import('./pages/Finance/TajUtilities/TajResidentDetail'));
+const TajUtilitiesReports = lazyWithReload(() => import('./pages/Finance/TajUtilities/Reports'));
+const TajUtilitiesReconciliation = lazyWithReload(() => import('./pages/Finance/TajUtilities/Reconciliation'));
 
 // Printing / PDF & Excel Export Heavy Pages
-const InvoicePrint = lazy(() => import('./pages/Finance/InvoicePrint'));
-const BillPrint = lazy(() => import('./pages/Finance/BillPrint'));
-const PayablesDocument = lazy(() => import('./pages/Finance/payables/PayablesDocument'));
-const PayablesPayment = lazy(() => import('./pages/Finance/payables/PayablesPayment'));
-const ComparativePL = lazy(() => import('./pages/Finance/ComparativePL'));
-const CostCenterPL = lazy(() => import('./pages/Finance/CostCenterPL'));
+const InvoicePrint = lazyWithReload(() => import('./pages/Finance/InvoicePrint'));
+const BillPrint = lazyWithReload(() => import('./pages/Finance/BillPrint'));
+const PayablesDocument = lazyWithReload(() => import('./pages/Finance/payables/PayablesDocument'));
+const PayablesPayment = lazyWithReload(() => import('./pages/Finance/payables/PayablesPayment'));
+const ComparativePL = lazyWithReload(() => import('./pages/Finance/ComparativePL'));
+const CostCenterPL = lazyWithReload(() => import('./pages/Finance/CostCenterPL'));
 
 const lazyPageFallback = (
   <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 200 }}>
