@@ -10,7 +10,6 @@ async function loadFullGrns(ids) {
   const docs = await GoodsReceive.find({ _id: { $in: list } })
     .populate('supplier', 'name contactPerson email phone supplierId address')
     .populate('costCenter', 'code name path')
-    .populate('companyId', 'name code symbol')
     .populate({
       path: 'purchaseOrder',
       select: 'orderNumber companyId indent',
