@@ -1,17 +1,17 @@
 const Payroll = require('../models/hr/Payroll');
 const PayrollMonthlyComparisonReport = require('../models/hr/PayrollMonthlyComparisonReport');
-const { PAYROLL_AUTHORITY_SLOT_CONFIG, getApprovedAuthorityKeys } = require('./payrollMonthlyApproval');
+const { PAYROLL_AUTHORITY_SLOT_CONFIG, getApprovedAuthorityKeys, isFinalPayrollAuthoritySlot } = require('./payrollMonthlyApproval');
 const { markEmployeeArrearsPaidForPeriod } = require('./employeeArrearsUpdate');
 
 const PAYROLL_STATUS_BY_AUTHORITY_SLOT = {
   accountsOfficerUser: 'Approved by Deputy Manager Payroll HR',
-  financeControllerUser: 'Approved by GM HR',
-  accountsManagerUser: 'Approved by AVP'
+  financeControllerUser: 'Approved by GM HR'
 };
 
 const PAYROLL_AUTHORITY_APPROVAL_STATUSES = Object.values(PAYROLL_STATUS_BY_AUTHORITY_SLOT);
 
-const PAYROLL_FINAL_APPROVED_STATUSES = ['Approved', 'Approved by AVP'];
+// 'Approved by GM HR' is final since AVP left the chain; 'Approved by AVP' stays for older months.
+const PAYROLL_FINAL_APPROVED_STATUSES = ['Approved', 'Approved by GM HR', 'Approved by AVP'];
 
 const isPayrollFinalApprovedStatus = (status) =>
   PAYROLL_FINAL_APPROVED_STATUSES.includes(String(status || '').trim());
@@ -47,7 +47,7 @@ const applyBulkPayrollStatusForAuthoritySlot = async (month, year, slotKey, acto
 
   const payrollIds = payrolls.map((p) => p._id);
   const update = { status: newStatus };
-  if (slotKey === 'accountsManagerUser') {
+  if (isFinalPayrollAuthoritySlot(slotKey)) {
     update.approvedBy = actorId;
     update.approvedAt = new Date();
   }
@@ -57,7 +57,7 @@ const applyBulkPayrollStatusForAuthoritySlot = async (month, year, slotKey, acto
     { $set: update }
   );
 
-  if (slotKey === 'accountsManagerUser') {
+  if (isFinalPayrollAuthoritySlot(slotKey)) {
     for (const payroll of payrolls) {
       if (Number(payroll.arrears) > 0) {
         await markEmployeeArrearsPaidForPeriod(payroll.employee, month, year);
@@ -89,7 +89,7 @@ const applyComparisonReportStatusForAuthoritySlot = async (month, year, slotKey,
   }
 
   const update = { status: newStatus };
-  if (slotKey === 'accountsManagerUser') {
+  if (isFinalPayrollAuthoritySlot(slotKey)) {
     update.approvedBy = actorId;
     update.approvedAt = new Date();
   }
@@ -124,7 +124,7 @@ const syncComparisonReportStatusFromApproval = async (month, year) => {
   PAYROLL_AUTHORITY_SLOT_CONFIG.forEach((slot) => {
     if (approvedKeys.has(slot.key)) {
       status = PAYROLL_STATUS_BY_AUTHORITY_SLOT[slot.key];
-      if (slot.key === 'accountsManagerUser') {
+      if (isFinalPayrollAuthoritySlot(slot.key)) {
         const record = (approval.financeAuthorityApprovals || []).find(
           (row) => row.authorityKey === slot.key && String(row?.decision || 'approved') !== 'rejected'
         );

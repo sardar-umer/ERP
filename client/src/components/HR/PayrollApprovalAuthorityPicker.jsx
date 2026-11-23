@@ -48,9 +48,7 @@ const userAutocompleteProps = ({
 
 const PayrollApprovalAuthorityPicker = ({
   gmHrUser,
-  avpUser,
   onGmHrChange,
-  onAvpChange,
   candidateUsers = [],
   approverLoading = false,
   onOpenApproverSearch,
@@ -66,7 +64,7 @@ const PayrollApprovalAuthorityPicker = ({
       </Typography>
       <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
         Deputy Manager Payroll HR: <strong>{preparerName || 'You (preparer)'}</strong> — assigned automatically when you save.
-        Approvals run in order: Deputy Manager Payroll HR → GM HR → AVP. Type in GM HR / AVP fields to search all active users.
+        Approvals run in order: Deputy Manager Payroll HR → GM HR. GM HR's approval sends the month to Finance. Type in the GM HR field to search all active users.
       </Typography>
     </Grid>
     <Grid item xs={12} md={4}>
@@ -90,21 +88,6 @@ const PayrollApprovalAuthorityPicker = ({
           value: gmHrUser,
           onChange: onGmHrChange,
           label: 'GM HR *',
-          helperText: 'Second approval authority — search all users'
-        })}
-      />
-    </Grid>
-    <Grid item xs={12} md={4}>
-      <Autocomplete
-        {...userAutocompleteProps({
-          disabled,
-          candidateUsers,
-          approverLoading,
-          onOpenApproverSearch,
-          onApproverSearchInput,
-          value: avpUser,
-          onChange: onAvpChange,
-          label: 'AVP *',
           helperText: 'Final approval authority — search all users'
         })}
       />

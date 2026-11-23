@@ -19,6 +19,7 @@ const {
   getNextPendingPayrollAuthoritySlot,
   matchUserToFinanceSlots,
   PAYROLL_AUTHORITY_SLOT_CONFIG,
+  isFinalPayrollAuthoritySlot,
   getApprovedAuthorityKeys
 } = require('../utils/payrollMonthlyApproval');
 const FinanceHelper = require('../utils/financeHelper');
@@ -847,7 +848,7 @@ router.get('/monthly',
 );
 
 // @route   GET /api/payroll/hr-authority-candidates
-// @desc    Active users for payroll approval authority pickers (GM HR, AVP)
+// @desc    Active users for payroll approval authority pickers (GM HR)
 // @access  Private (HR and Admin)
 router.get('/hr-authority-candidates',
   authorize('super_admin', 'admin', 'hr_manager'),
@@ -954,20 +955,21 @@ router.put('/monthly-approval/:month/:year/authorities',
     const fa = req.body?.financeApprovalAuthorities || {};
     const authorities = {
       accountsOfficerUser: req.user.id,
-      accountsManagerUser: fa.accountsManagerUser || fa.avpUser || null,
-      financeControllerUser: fa.financeControllerUser || fa.gmHrUser || null
+      financeControllerUser: fa.financeControllerUser || fa.gmHrUser || null,
+      // AVP no longer approves payroll (removed 2026-11-23)
+      accountsManagerUser: null
     };
     const ids = Object.values(authorities).map((id) => String(id || '')).filter(Boolean);
     if (ids.length < PAYROLL_AUTHORITY_SLOT_CONFIG.length) {
       return res.status(400).json({
         success: false,
-        message: 'Select GM HR and AVP. You are assigned as Deputy Manager Payroll HR.'
+        message: 'Select GM HR. You are assigned as Deputy Manager Payroll HR.'
       });
     }
     if (new Set(ids).size !== ids.length) {
       return res.status(400).json({
         success: false,
-        message: 'Each approval authority must be a different user'
+        message: 'GM HR must be a different user from you (Deputy Manager Payroll HR)'
       });
     }
 
@@ -1075,7 +1077,7 @@ router.patch('/monthly-approval/:month/:year/authority-approve',
 
     const remaining = slots.filter((slot) => !getApprovedAuthorityKeys(doc).has(slot.key)).length;
 
-    if (actedSlot?.key === 'accountsManagerUser' && bulkResult.payrollIds?.length) {
+    if (isFinalPayrollAuthoritySlot(actedSlot?.key) && bulkResult.payrollIds?.length) {
       const finalizedPayrolls = await Payroll.find({ _id: { $in: bulkResult.payrollIds } });
       for (const payroll of finalizedPayrolls) {
         try {
@@ -1086,7 +1088,7 @@ router.patch('/monthly-approval/:month/:year/authority-approve',
       }
     }
 
-    if (actedSlot?.key === 'accountsManagerUser' && remaining === 0) {
+    if (isFinalPayrollAuthoritySlot(actedSlot?.key) && remaining === 0) {
       const financeUsers = await User.find({ role: { $in: ['finance_manager', 'admin', 'super_admin'] }, isActive: true })
         .select('_id')
         .lean();
@@ -1096,7 +1098,7 @@ router.patch('/monthly-approval/:month/:year/authority-approve',
           recipientIds,
           actorId: req.user.id,
           title: 'Monthly payroll ready for Finance',
-          message: `${PAYROLL_MONTH_NAMES[month]} ${year} payroll and comparison report are AVP-approved. Process salary payment and bank letter.`,
+          message: `${PAYROLL_MONTH_NAMES[month]} ${year} payroll and comparison report are approved by GM HR. Process salary payment and bank letter.`,
           type: 'info',
           category: 'approval',
           priority: 'high',
@@ -2988,7 +2990,7 @@ router.patch('/:id/mark-paid', [
   if (!isPayrollFinalApprovedStatus(payroll.status)) {
     return res.status(400).json({
       success: false,
-      message: 'Only AVP-approved payrolls can be marked as paid'
+      message: 'Only fully approved (GM HR) payrolls can be marked as paid'
     });
   }
 

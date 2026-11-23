@@ -1,12 +1,19 @@
 const PayrollMonthlyApproval = require('../models/hr/PayrollMonthlyApproval');
 const { matchUserToFinanceSlots } = require('./financeAuthoritySlots');
 
-/** Payroll monthly summary uses HR titles; keys match stored financeApprovalAuthorities fields (sequential order). */
+/**
+ * Payroll monthly summary uses HR titles; keys match stored financeApprovalAuthorities fields (sequential order).
+ * AVP (accountsManagerUser) was removed from the chain on 2026-11-23 — GM HR is now the final approver and
+ * their sign-off sends the month to Finance. Old months keep their stored AVP fields for history only.
+ */
 const PAYROLL_AUTHORITY_SLOT_CONFIG = [
   { key: 'accountsOfficerUser', label: 'Deputy Manager Payroll HR' },
-  { key: 'financeControllerUser', label: 'GM HR' },
-  { key: 'accountsManagerUser', label: 'AVP' }
+  { key: 'financeControllerUser', label: 'GM HR' }
 ];
+
+/** Last authority in the chain — their approval finalises the month and hands it to Finance. */
+const FINAL_PAYROLL_AUTHORITY_KEY = PAYROLL_AUTHORITY_SLOT_CONFIG[PAYROLL_AUTHORITY_SLOT_CONFIG.length - 1].key;
+const isFinalPayrollAuthoritySlot = (slotKey) => slotKey === FINAL_PAYROLL_AUTHORITY_KEY;
 
 const getRequiredPayrollAuthoritySlots = (doc) => {
   const authorities = doc?.financeApprovalAuthorities || {};
@@ -76,6 +83,8 @@ const assertMonthlyPayrollAuthoritiesApproved = async (month, year) => {
 
 module.exports = {
   PAYROLL_AUTHORITY_SLOT_CONFIG,
+  FINAL_PAYROLL_AUTHORITY_KEY,
+  isFinalPayrollAuthoritySlot,
   populateMonthlyApproval,
   getApprovedAuthorityKeys,
   allPayrollAuthoritiesApproved,

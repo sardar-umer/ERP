@@ -8,15 +8,15 @@ export const PAYROLL_AUTHORITY_STATUS_VALUES = [
 
 export const isPayrollFinalApprovedStatus = (status) => {
   const s = String(status || '').trim();
-  return s === 'Approved' || s === 'Approved by AVP';
+  // GM HR is the final approver since 2026-11-23; 'Approved by AVP' kept for older months.
+  return s === 'Approved' || s === 'Approved by GM HR' || s === 'Approved by AVP';
 };
 
 export const getPayrollStatusColor = (status) => {
   const s = String(status || '').toLowerCase();
   if (s === 'draft') return 'default';
   if (s === 'approved by deputy manager payroll hr') return 'info';
-  if (s === 'approved by gm hr') return 'primary';
-  if (s === 'approved by avp' || s === 'approved') return 'success';
+  if (s === 'approved by gm hr' || s === 'approved by avp' || s === 'approved') return 'success';
   if (s === 'paid') return 'success';
   if (s === 'cancelled') return 'error';
   return 'warning';

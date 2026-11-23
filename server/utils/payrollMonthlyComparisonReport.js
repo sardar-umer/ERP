@@ -398,7 +398,7 @@ const buildPayrollMonthlyComparisonReport = async (month, year) => {
   };
 };
 
-const LOCKED_STATUSES = ['Approved', 'Approved by AVP'];
+const LOCKED_STATUSES = ['Approved', 'Approved by GM HR', 'Approved by AVP'];
 
 const savePayrollMonthlyComparisonReport = async (month, year, actorId, { force = false } = {}) => {
   const existingDoc = await PayrollMonthlyComparisonReport.findOne({ month, year });

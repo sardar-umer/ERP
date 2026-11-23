@@ -42,7 +42,6 @@ const MonthlyPayrollApprovalSection = ({
   const [approverOptions, setApproverOptions] = useState([]);
   const [approverLoading, setApproverLoading] = useState(false);
   const [gmHrUser, setGmHrUser] = useState(null);
-  const [avpUser, setAvpUser] = useState(null);
   const [saving, setSaving] = useState(false);
   const [approving, setApproving] = useState(false);
   const [localError, setLocalError] = useState('');
@@ -66,14 +65,13 @@ const MonthlyPayrollApprovalSection = ({
   }, []);
 
   const candidateUsers = useMemo(
-    () => mergeApproverOptionList(approverOptions, gmHrUser, avpUser),
-    [approverOptions, gmHrUser, avpUser]
+    () => mergeApproverOptionList(approverOptions, gmHrUser),
+    [approverOptions, gmHrUser]
   );
 
   useEffect(() => {
     const authorities = approvalDoc?.financeApprovalAuthorities || {};
     setGmHrUser(authorities.financeControllerUser || null);
-    setAvpUser(authorities.accountsManagerUser || null);
   }, [approvalDoc]);
 
   const approvedKeys = useMemo(() => new Set(
@@ -99,14 +97,14 @@ const MonthlyPayrollApprovalSection = ({
     });
 
   const handleSaveAuthorities = async () => {
-    const validationError = validatePayrollAuthoritySelection(gmHrUser, avpUser);
+    const validationError = validatePayrollAuthoritySelection(gmHrUser, myUserId);
     if (validationError) {
       setLocalError(validationError);
       return;
     }
-    const payload = buildPayrollApprovalAuthoritiesPayload(gmHrUser, avpUser, myUserId);
+    const payload = buildPayrollApprovalAuthoritiesPayload(gmHrUser, myUserId);
     if (!payload) {
-      setLocalError('Select GM HR and AVP before saving.');
+      setLocalError('Select GM HR before saving.');
       return;
     }
 
@@ -160,7 +158,7 @@ const MonthlyPayrollApprovalSection = ({
 
       {draftCount > 0 && !allApproved && (
         <Alert severity="warning" sx={{ mb: 2 }}>
-          {draftCount} draft payroll(s) for this month will move forward when each approval authority records their sign-off (Deputy Manager Payroll HR → GM HR → AVP).
+          {draftCount} draft payroll(s) for this month will move forward when each approval authority records their sign-off (Deputy Manager Payroll HR → GM HR). GM HR's approval sends the month to Finance.
           {coversComparisonReport ? ' The monthly payroll comparison report is approved through the same authority chain.' : ''}
         </Alert>
       )}
@@ -182,9 +180,7 @@ const MonthlyPayrollApprovalSection = ({
           <Grid container spacing={2}>
             <PayrollApprovalAuthorityPicker
               gmHrUser={gmHrUser}
-              avpUser={avpUser}
               onGmHrChange={setGmHrUser}
-              onAvpChange={setAvpUser}
               candidateUsers={candidateUsers}
               approverLoading={approverLoading}
               onOpenApproverSearch={() => loadApproverOptions('')}
@@ -223,8 +219,7 @@ const MonthlyPayrollApprovalSection = ({
           </Stack>
 
           {assignedAuthorities.accountsOfficerUser ||
-          assignedAuthorities.financeControllerUser ||
-          assignedAuthorities.accountsManagerUser ? (
+          assignedAuthorities.financeControllerUser ? (
             <Box sx={{ mt: 2 }}>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
                 Approval progress

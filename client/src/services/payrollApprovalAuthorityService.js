@@ -3,9 +3,9 @@ import { userOptionLabel } from './financeApprovalAuthorityService';
 
 export const PAYROLL_AUTHORITY_SLOTS = [
   { key: 'accountsOfficerUser', label: 'Deputy Manager Payroll HR' },
-  { key: 'financeControllerUser', label: 'GM HR' },
-  { key: 'accountsManagerUser', label: 'AVP' }
+  { key: 'financeControllerUser', label: 'GM HR' }
 ];
+// AVP removed from the payroll chain (2026-11-23): GM HR is the final approver.
 
 export async function fetchPayrollAuthorityCandidates(search = '') {
   try {
@@ -24,24 +24,20 @@ export async function fetchPayrollAuthorityCandidates(search = '') {
   }
 }
 
-export function buildPayrollApprovalAuthoritiesPayload(gmHrUser, avpUser, preparerUserId) {
+export function buildPayrollApprovalAuthoritiesPayload(gmHrUser, preparerUserId) {
   const gmHrId = gmHrUser?._id || gmHrUser;
-  const avpId = avpUser?._id || avpUser;
-  if (!gmHrId || !avpId || !preparerUserId) return null;
+  if (!gmHrId || !preparerUserId) return null;
   return {
     accountsOfficerUser: String(preparerUserId),
-    financeControllerUser: String(gmHrId),
-    accountsManagerUser: String(avpId)
+    financeControllerUser: String(gmHrId)
   };
 }
 
-export function validatePayrollAuthoritySelection(gmHrUser, avpUser) {
+export function validatePayrollAuthoritySelection(gmHrUser, preparerUserId) {
   if (!gmHrUser) return 'Select GM HR before saving.';
-  if (!avpUser) return 'Select AVP before saving.';
   const gmHrId = String(gmHrUser?._id || gmHrUser || '');
-  const avpId = String(avpUser?._id || avpUser || '');
-  if (gmHrId && avpId && gmHrId === avpId) {
-    return 'GM HR and AVP must be different users.';
+  if (gmHrId && preparerUserId && gmHrId === String(preparerUserId)) {
+    return 'GM HR must be a different user from you (Deputy Manager Payroll HR).';
   }
   return null;
 }

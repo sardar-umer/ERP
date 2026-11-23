@@ -1455,8 +1455,7 @@ Do you want to:
     const set = normalizeMonthStatuses(statuses);
     if (set.size === 0) return 'default';
     if (set.size === 1) return getPayrollStatusColor([...set][0]);
-    if (set.has('Approved by AVP') && !set.has('Draft')) return 'success';
-    if (set.has('Approved by GM HR')) return 'primary';
+    if ((set.has('Approved by AVP') || set.has('Approved by GM HR')) && !set.has('Draft')) return 'success';
     if (set.has('Approved by Deputy Manager Payroll HR')) return 'info';
     if (set.has('Draft') && set.has('Approved')) return 'warning';
     if (set.has('Approved') && set.has('Paid')) return 'info';

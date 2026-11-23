@@ -684,7 +684,7 @@ export default function FinancePayroll() {
               <TableBody>
                 {queue.length === 0 ? (
                   <TableRow>
-                    <TableCell colSpan={8} align="center">No AVP-approved payroll periods in finance queue.</TableCell>
+                    <TableCell colSpan={8} align="center">No GM HR-approved payroll periods in finance queue.</TableCell>
                   </TableRow>
                 ) : queue.map((row) => (
                   <TableRow
@@ -1176,7 +1176,7 @@ export default function FinancePayroll() {
         onClose={() => setComparisonOpen(false)}
         report={detail?.comparisonReport}
         generatedAt={detail?.comparisonMeta?.generatedAt}
-        reportStatus={detail?.comparisonMeta?.status || 'Approved by AVP'}
+        reportStatus={detail?.comparisonMeta?.status || 'Approved by GM HR'}
         month={selected?.month}
         year={selected?.year}
         periodLabel={selected?.periodLabel}

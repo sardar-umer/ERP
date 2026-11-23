@@ -251,7 +251,7 @@ const getFinancePayrollPeriodDetail = async (month, year) => {
     .lean();
 
   if (!payrolls.length) {
-    const err = new Error('No AVP-approved payroll found for this period');
+    const err = new Error('No GM HR-approved payroll found for this period');
     err.statusCode = 404;
     throw err;
   }
@@ -377,7 +377,7 @@ const markFinancePayrollPeriodPaid = async (month, year, { paymentMethod = 'bank
   });
 
   if (!payrolls.length) {
-    const err = new Error('No pending AVP-approved payrolls to mark as paid');
+    const err = new Error('No pending GM HR-approved payrolls to mark as paid');
     err.statusCode = 400;
     throw err;
   }
