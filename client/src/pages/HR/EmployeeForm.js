@@ -808,6 +808,7 @@ const EmployeeForm = () => {
           isActive: employeeData.manualTax?.isActive || false,
           fixedAmount: employeeData.manualTax?.fixedAmount || 0
         },
+        taxArrearsInFull: Boolean(employeeData.taxArrearsInFull),
         providentFund: {
           isActive: employeeData.providentFund?.isActive || false,
           amount: employeeData.providentFund?.amount || 0,
@@ -1088,6 +1089,7 @@ const EmployeeForm = () => {
         isActive: false,
         fixedAmount: 0
       },
+      taxArrearsInFull: false,
       providentFund: {
         isActive: false,
         amount: 0
@@ -4539,6 +4541,26 @@ const EmployeeForm = () => {
                 />
               </Grid>
             )}
+
+            {/* Arrears fully taxable (no medical exemption on arrears) */}
+            <Grid item xs={12} md={6}>
+              <FormControl fullWidth>
+                <FormControlLabel
+                  control={
+                    <Switch
+                      checked={Boolean(formik.values.taxArrearsInFull)}
+                      onChange={(e) => formik.setFieldValue('taxArrearsInFull', e.target.checked)}
+                      name="taxArrearsInFull"
+                      color="warning"
+                    />
+                  }
+                  label="Arrears Fully Taxable"
+                />
+                <FormHelperText>
+                  Tax this employee's arrears in full, with no 10% medical exemption. Use only when Sidat does so for this employee.
+                </FormHelperText>
+              </FormControl>
+            </Grid>
 
             {/* Employee Security Deduction */}
             <Grid item xs={12}>

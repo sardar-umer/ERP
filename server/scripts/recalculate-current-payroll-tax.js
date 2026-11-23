@@ -105,7 +105,7 @@ const statuses = includeApproved ? ['Draft', 'Approved by AVP'] : ['Draft'];
 
     const payrolls = await Payroll.find({ month, year, status: { $in: statuses } }).populate(
       'employee',
-      'firstName lastName employeeId hireDate appointmentDate taxExemption manualTax allowances'
+      'firstName lastName employeeId hireDate appointmentDate taxExemption manualTax taxArrearsInFull allowances'
     );
     const taxYearContextByEmployee = await loadTaxYearContextByEmployee({ payrollMonth: month, payrollYear: year });
 

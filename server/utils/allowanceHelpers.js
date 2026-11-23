@@ -263,7 +263,7 @@ const syncDraftPayrollsAllowancesFromEmployee = async (employee) => {
  * Approved payrolls are not modified.
  * Uses DOJ-based FY months: taxable = (gross−medical%) + taxable allowances + arrears, then × FY months.
  */
-const syncDraftPayrollsTaxFromSettings = async (settings) => {
+const syncDraftPayrollsTaxFromSettings = async (settings, { employeeId: onlyEmployeeId = null } = {}) => {
   const Payroll = require('../models/hr/Payroll');
   const Employee = require('../models/hr/Employee');
   const {
@@ -274,7 +274,8 @@ const syncDraftPayrollsTaxFromSettings = async (settings) => {
   } = require('./allowanceTaxCalculator');
   const config = normalizeSettings(settings);
 
-  const payrolls = await Payroll.find({ status: 'Draft' });
+  // onlyEmployeeId: one employee's drafts (e.g. after "arrears fully taxable" changes on the employee)
+  const payrolls = await Payroll.find({ status: 'Draft', ...(onlyEmployeeId ? { employee: onlyEmployeeId } : {}) });
   let updated = 0;
   // Months already paid this FY and their arrears, per payroll period (drafts can span months)
   const contextByPeriod = new Map();
@@ -282,7 +283,7 @@ const syncDraftPayrollsTaxFromSettings = async (settings) => {
   for (const payroll of payrolls) {
     const employeeId = payroll.employee;
     const emp = employeeId
-      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax monthlyAllowanceOverrides').lean()
+      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax taxArrearsInFull monthlyAllowanceOverrides').lean()
       : null;
 
     const periodKey = `${payroll.year}-${payroll.month}`;

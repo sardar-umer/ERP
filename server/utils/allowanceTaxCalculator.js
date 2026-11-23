@@ -88,13 +88,16 @@ const buildTaxResult = ({
   hireDate,
   payrollMonth,
   payrollYear,
-  arrearsExemptPercent = 10
+  arrearsExemptPercent = 10,
+  arrearsFullyTaxable = false
 }) => {
   // Arrears are taxed in full (Sidat), except when they pay for a salary month that was never paid —
   // a month of this FY with no payroll after joining this FY (joining month counts when joined by the
   // 15th) or after an earlier paid month this FY;
   // that is a salary month, so the medical % is exempt on it
   const paysMissedMonth = (() => {
+    // Employee set to "arrears fully taxable": never exempt
+    if (arrearsFullyTaxable) return false;
     if (!hireDate || !payrollMonth || !payrollYear) return false;
     const pkt = new Date(new Date(hireDate).getTime() + 5 * 60 * 60 * 1000);
     if (Number.isNaN(pkt.getTime())) return false;
@@ -105,12 +108,19 @@ const buildTaxResult = ({
     const firstCounted = joinedThisFy
       ? fyIndex(pkt.getUTCMonth() + 1) + (pkt.getUTCDate() > 15 ? 1 : 0)
       : (paid.size ? Math.min(...paid) : 12);
-    // Arrears topping up an earlier month paid below the current salary are that month's salary
-    // (Sidat) — e.g. July paid 50,000, August 100,000 + 50,000 arrears for July → medical % exempt
+    // Arrears topping up an earlier month paid at a lower salary are that month's salary (Sidat) —
+    // e.g. July paid 50,000, August 100,000 + 50,000 arrears for July → medical % exempt. Only a full
+    // month at the lower salary whose very next payroll paid arrears counts: arrears paying back unpaid or
+    // withheld days (a partial month, e.g. Iqra 5841 July; Rasheed 5963 October) are taxed in full, and
+    // a month at an old salary with no top-up (Rasheed 5963 July, raise from August) does not exempt later arrears
     const normalTaxable = normalSalaryBase == null ? salaryBase : normalSalaryBase;
-    if ((Array.isArray(priorMonths) ? priorMonths : []).some((m) => Number(m.taxable) < normalTaxable - 1)) {
-      return true;
-    }
+    const pm = Array.isArray(priorMonths) ? priorMonths : [];
+    const nextMonthOf = (m) => (Number(m) % 12) + 1;
+    const toppedUp = pm.some((m, i) => !m.partial && Number(m.taxable) < normalTaxable - 1 && (
+      Number(pm[i + 1]?.arrears) > 0
+      || (i === pm.length - 1 && Number(arrearsAmt) > 0 && nextMonthOf(m.month) === Number(payrollMonth))
+    ));
+    if (toppedUp) return true;
     for (let i = firstCounted; i < fyIndex(payrollMonth); i += 1) {
       if (!paid.has(i)) return true;
     }
@@ -248,7 +258,8 @@ const calculatePayrollTaxWithSettings = ({
   priorPaidMonths = null,
   priorMonths = null,
   normalGrossSalary = null,
-  normalAllowances = null
+  normalAllowances = null,
+  arrearsFullyTaxable = false
 }) => {
   const config = normalizeSettings(settings);
   const gross = Math.max(0, Number(grossSalary) || 0);
@@ -317,6 +328,7 @@ const calculatePayrollTaxWithSettings = ({
     allowanceBreakdown,
     usesAllowanceTaxPolicy: true,
     arrearsExemptPercent: salaryExemptPercent,
+    arrearsFullyTaxable: Boolean(arrearsFullyTaxable),
     hireDate,
     payrollMonth,
     payrollYear
@@ -481,6 +493,7 @@ const calculateTaxForExistingPayroll = async ({ payroll, employee, settings, tax
     hireDate: employee?.hireDate || employee?.appointmentDate,
     payrollMonth: payroll.month,
     payrollYear: payroll.year,
+    arrearsFullyTaxable: Boolean(employee?.taxArrearsInFull),
     ...context,
     ...normalPay
   });
