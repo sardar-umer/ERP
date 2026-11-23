@@ -89,19 +89,29 @@ const buildTaxResult = ({
   payrollMonth,
   payrollYear,
   arrearsExemptPercent = 10,
-  arrearsFullyTaxable = false
+  arrearsFullyTaxable = false,
+  cancelledMonths = null,
+  normalSalaryExempt = null
 }) => {
   // Arrears are taxed in full (Sidat), except when they pay for a salary month that was never paid —
   // a month of this FY with no payroll after joining this FY (joining month counts when joined by the
   // 15th) or after an earlier paid month this FY;
   // that is a salary month, so the medical % is exempt on it
+  const fyIndex = (m) => (Number(m) + 5) % 12; // Jul = 0 … Jun = 11
+  const fyMonthOf = (i) => ((i + 6) % 12) + 1; // 0 → Jul (7) … 11 → Jun (6)
+  // Joining month never paid (its days paid later as arrears): exempt only up to that month's salary as its
+  // own payroll recorded it (now Cancelled) — Sidat: Chohan 6630 / Ibrahim 6629 exempt, Arslan 6626 exempt on
+  // the old July salary 138,387 and the raise top-up 16,774 taxed in full, Ahmed Khan 6635 (no July payroll) in full
+  let joiningCap = null;
+  // Months with no pay inside the year (left and reinstated) and no later arrears paying them: Sidat still
+  // gives that month's medical exemption (Muhammad Naveed 5691 August, Ibrahim 6629 September)
+  const gapExemptions = [];
   const paysMissedMonth = (() => {
     // Employee set to "arrears fully taxable": never exempt
     if (arrearsFullyTaxable) return false;
     if (!hireDate || !payrollMonth || !payrollYear) return false;
     const pkt = new Date(new Date(hireDate).getTime() + 5 * 60 * 60 * 1000);
     if (Number.isNaN(pkt.getTime())) return false;
-    const fyIndex = (m) => (Number(m) + 5) % 12; // Jul = 0 … Jun = 11
     const fyStartYear = Number(payrollMonth) >= 7 ? Number(payrollYear) : Number(payrollYear) - 1;
     const joinedThisFy = pkt >= new Date(Date.UTC(fyStartYear, 6, 1));
     const paid = new Set((Array.isArray(priorMonths) ? priorMonths : []).map((m) => fyIndex(m.month)));
@@ -120,9 +130,26 @@ const buildTaxResult = ({
       Number(pm[i + 1]?.arrears) > 0
       || (i === pm.length - 1 && Number(arrearsAmt) > 0 && nextMonthOf(m.month) === Number(payrollMonth))
     ));
-    if (toppedUp) return true;
+    const missed = [];
     for (let i = firstCounted; i < fyIndex(payrollMonth); i += 1) {
-      if (!paid.has(i)) return true;
+      if (!paid.has(i)) missed.push(i);
+    }
+    // a missed month is paid by arrears in a later month (or this month); otherwise it is a no-pay month
+    const coveredByArrears = (i) => Number(arrearsAmt) > 0
+      || pm.some((m) => fyIndex(m.month) > i && Number(m.arrears) > 0);
+    const joinIndex = joinedThisFy ? fyIndex(pkt.getUTCMonth() + 1) : null;
+    if (Array.isArray(priorMonths) && normalSalaryExempt != null) {
+      missed.filter((i) => i !== joinIndex && !coveredByArrears(i))
+        .forEach((i) => gapExemptions.push({ month: fyMonthOf(i), amount: Number(normalSalaryExempt) || 0 }));
+    }
+    if (toppedUp) return true;
+    if (missed.some((i) => i !== joinIndex)) return true;
+    if (missed.includes(joinIndex)) {
+      if (Array.isArray(cancelledMonths)) {
+        const rec = cancelledMonths.find((c) => fyIndex(c.month) === joinIndex);
+        joiningCap = Math.max(0, Number(rec?.gross) || 0);
+      }
+      return true;
     }
     return false;
   })();
@@ -130,10 +157,27 @@ const buildTaxResult = ({
     const a = Math.max(0, Number(amt) || 0);
     return paysMissedMonth ? a - Math.round((a * arrearsExemptPercent) / 100) : a;
   };
-  const taxPriorMonths = Array.isArray(priorMonths)
+  let taxPriorMonths = Array.isArray(priorMonths)
     ? priorMonths.map((p) => ({ ...p, arrears: arrearsTaxable(p.arrears) }))
     : priorMonths;
-  const taxArrears = arrearsTaxable(arrearsAmt) + arrearsTaxable(priorFyArrears);
+  let taxArrears = arrearsTaxable(arrearsAmt) + arrearsTaxable(priorFyArrears);
+  let currentArrearsTaxable = arrearsTaxable(arrearsAmt);
+  if (paysMissedMonth && joiningCap != null) {
+    // exempt share shared out in pay order, never above the joining month's recorded salary
+    let capLeft = joiningCap;
+    const capped = (amt) => {
+      const a = Math.max(0, Number(amt) || 0);
+      const base = Math.min(a, capLeft);
+      capLeft -= base;
+      return a - Math.round((base * arrearsExemptPercent) / 100);
+    };
+    taxPriorMonths = Array.isArray(priorMonths) ? priorMonths.map((p) => ({ ...p, arrears: capped(p.arrears) })) : priorMonths;
+    const priorTaxable = Array.isArray(taxPriorMonths)
+      ? taxPriorMonths.reduce((sum, p) => sum + (Number(p.arrears) || 0), 0)
+      : capped(priorFyArrears);
+    currentArrearsTaxable = capped(arrearsAmt);
+    taxArrears = currentArrearsTaxable + priorTaxable;
+  }
   const {
     monthlyTax,
     fyMonths,
@@ -141,7 +185,8 @@ const buildTaxResult = ({
     annualTax
   } = priorPaidMonths != null && payrollMonth
     // Tax-year context known: the year is the months actually paid + months to come (Sidat method)
-    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, taxArrears, priorPaidMonths, payrollMonth, taxPriorMonths)
+    ? calculateMonthlyTaxPaidMonths(salaryBase, normalSalaryBase, taxArrears, priorPaidMonths, payrollMonth, taxPriorMonths,
+      gapExemptions.length ? gapExemptions : null)
     : calculateMonthlyTaxFYAwareWithOneTimeArrears(
       salaryBase,
       taxArrears,
@@ -159,7 +204,7 @@ const buildTaxResult = ({
     // Recurring monthly taxable (gross−medical + taxable allowances) — NOT including arrears
     mainTaxableIncome: Math.round(salaryBase),
     // One-time arrears added to annual only (not × FY months)
-    arrearsTaxableIncome: arrearsTaxable(arrearsAmt),
+    arrearsTaxableIncome: currentArrearsTaxable,
     // Arrears paid in earlier months of this FY — stay in the annual figure until June
     priorFyArrears: Math.round(priorFyArrears),
     // Full-month taxable used for the rest of the FY when this month's pay is reduced
@@ -259,7 +304,8 @@ const calculatePayrollTaxWithSettings = ({
   priorMonths = null,
   normalGrossSalary = null,
   normalAllowances = null,
-  arrearsFullyTaxable = false
+  arrearsFullyTaxable = false,
+  cancelledMonths = null
 }) => {
   const config = normalizeSettings(settings);
   const gross = Math.max(0, Number(grossSalary) || 0);
@@ -329,6 +375,8 @@ const calculatePayrollTaxWithSettings = ({
     usesAllowanceTaxPolicy: true,
     arrearsExemptPercent: salaryExemptPercent,
     arrearsFullyTaxable: Boolean(arrearsFullyTaxable),
+    cancelledMonths,
+    normalSalaryExempt: (normalGross * salaryExemptPercent) / 100,
     hireDate,
     payrollMonth,
     payrollYear
@@ -418,6 +466,19 @@ const loadTaxYearContextByEmployee = async ({ payrollMonth, payrollYear, employe
     byEmployee.get(id).push(p);
   });
 
+  // Cancelled payrolls of months never paid (e.g. a joining month paid later as arrears): the salary
+  // that month's payroll recorded caps the arrears' medical exemption (see buildTaxResult)
+  const cancelledMatch = { ...monthsFilter, status: 'Cancelled' };
+  if (employeeIds) cancelledMatch.employee = { $in: employeeIds };
+  const cancelled = await Payroll.find(cancelledMatch).select('employee month year grossSalary').lean();
+  const cancelledByEmployee = new Map();
+  cancelled.forEach((p) => {
+    if (byMonth.has(`${p.employee}|${p.year}|${p.month}`)) return; // month paid by another payroll
+    const id = String(p.employee);
+    if (!cancelledByEmployee.has(id)) cancelledByEmployee.set(id, []);
+    cancelledByEmployee.get(id).push({ month: p.month, gross: Math.round(Number(p.grossSalary) || 0) });
+  });
+
   const map = new Map();
   byEmployee.forEach((rows, id) => {
     rows.sort((a, b) => (a.year - b.year) || (a.month - b.month));
@@ -425,15 +486,19 @@ const loadTaxYearContextByEmployee = async ({ payrollMonth, payrollYear, employe
     map.set(id, {
       priorFyArrears: Math.round(priorMonths.reduce((sum, m) => sum + m.arrears, 0)),
       priorPaidMonths: priorMonths.length,
-      priorMonths
+      priorMonths,
+      cancelledMonths: cancelledByEmployee.get(id) || []
     });
+  });
+  cancelledByEmployee.forEach((list, id) => {
+    if (!map.has(id)) map.set(id, { priorFyArrears: 0, priorPaidMonths: 0, priorMonths: [], cancelledMonths: list });
   });
   return map;
 };
 
 /** Context for one employee from a loaded map; no earlier payroll this FY = nothing paid yet */
 const taxYearContextFor = (contextByEmployee, employeeId) =>
-  contextByEmployee.get(String(employeeId)) || { priorFyArrears: 0, priorPaidMonths: 0, priorMonths: [] };
+  contextByEmployee.get(String(employeeId)) || { priorFyArrears: 0, priorPaidMonths: 0, priorMonths: [], cancelledMonths: [] };
 
 /**
  * Normal full-month pay for the rest of the FY — only when this month is reduced (partial-pay days,

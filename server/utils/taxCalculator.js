@@ -349,7 +349,12 @@ function calculateMonthlyTaxFYAwareWithOneTimeArrears(
  * @param {number} payrollMonth       - 1–12
  * @param {Array<{ month: number, taxable: number, partial: boolean, arrears: number }>} [priorMonths]
  */
-function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arrears, priorPaidMonths, payrollMonth, priorMonths = null) {
+function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arrears, priorPaidMonths, payrollMonth, priorMonths = null, gapExemptions = null) {
+  // gapExemptions: [{ month, amount }] — no-pay months inside the year still get their medical exemption
+  // (Sidat); taken off the annual taxable of every month after that one
+  const fyIdx = (m) => (Number(m) + 5) % 12;
+  const gaps = Array.isArray(gapExemptions) ? gapExemptions : [];
+  const gapBefore = (m) => gaps.reduce((sum, g) => sum + (fyIdx(g.month) < fyIdx(m) ? Number(g.amount) || 0 : 0), 0);
   const base = Math.max(0, Number(monthlySalaryBase) || 0);
   const normal = normalMonthlyBase == null ? base : Math.max(0, Number(normalMonthlyBase) || 0);
   const arrearsAmt = Math.max(0, Number(arrears) || 0);
@@ -363,7 +368,7 @@ function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arr
   if (Array.isArray(priorMonths) && priorMonths.length) {
     const last = priorMonths[priorMonths.length - 1];
     if (!last.partial && Number(last.taxable) > normal + 1 && Math.abs(base - normal) < 1) {
-      return calculateMonthlyTaxPaidMonths(last.taxable, last.taxable, arrears, priorPaidMonths, payrollMonth, priorMonths);
+      return calculateMonthlyTaxPaidMonths(last.taxable, last.taxable, arrears, priorPaidMonths, payrollMonth, priorMonths, gapExemptions);
     }
   }
   if (Array.isArray(priorMonths)) {
@@ -376,14 +381,14 @@ function calculateMonthlyTaxPaidMonths(monthlySalaryBase, normalMonthlyBase, arr
       const left = monthsLeftFrom(p.month);
       const taxable = p.partial ? Math.max(0, Number(p.taxable) || 0) : normal;
       arrearsSoFar += Math.max(0, Number(p.arrears) || 0);
-      const annual = paidTaxable + taxable + normal * (left - 1) + arrearsSoFar;
+      const annual = paidTaxable + taxable + normal * (left - 1) + arrearsSoFar - gapBefore(p.month);
       const ruleTax = Math.max(0, Math.round((yearTax(annual) - taxSoFar) / left));
       // A month paid at an earlier (lower) salary keeps the tax actually deducted on that salary (Sidat)
       taxSoFar += p.earlierSalary && p.tax != null ? p.tax : ruleTax;
       paidTaxable += taxable;
     });
     // this month's arrears = FY arrears not already counted in the earlier months
-    const annualTaxableIncome = paidTaxable + base + normal * monthsToCome + Math.max(arrearsSoFar, arrearsAmt);
+    const annualTaxableIncome = paidTaxable + base + normal * monthsToCome + Math.max(arrearsSoFar, arrearsAmt) - gapBefore(pm);
     const annualTax = yearTax(annualTaxableIncome);
     return {
       monthlyTax: Math.max(0, Math.round((annualTax - taxSoFar) / (monthsToCome + 1))),
