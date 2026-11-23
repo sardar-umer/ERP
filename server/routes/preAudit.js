@@ -573,7 +573,7 @@ router.get('/',
       console.error('Error fetching project IPCs for pre-audit:', ipcErr);
     }
 
-    // HR Manual Salary: after AVP Taj, before Finance (same lifecycle as IPCs)
+    // HR Manual Salary: only older records still in the Audit queue (new ones go GM HR → Finance) (same lifecycle as IPCs)
     try {
       const { listManualSalariesForPreAudit } = require('../utils/manualSalaryAudit');
       workflowDocs.push(...await listManualSalariesForPreAudit(search));

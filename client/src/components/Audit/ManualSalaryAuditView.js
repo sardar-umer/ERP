@@ -28,7 +28,7 @@ export default function ManualSalaryAuditView({ record: r }) {
   const steps = [
     ['Initiated by HR', r.initiator, r.initiatedAt || r.createdAt, ''],
     ['GM HR', r.hodApprovedBy, r.hodApprovedAt, r.hodComments],
-    ['AVP Taj', r.avpApprovedBy, r.avpApprovedAt, r.avpComments],
+    ...(r.avpApprovedAt ? [['AVP Taj (old flow)', r.avpApprovedBy, r.avpApprovedAt, r.avpComments]] : []),
     ...(r.ceoApprovedAt ? [['CEO (old flow)', r.ceoApprovedBy, r.ceoApprovedAt, r.ceoComments]] : []),
     ['Pre-Audit (initial)', r.preAuditInitialApprovedBy, r.preAuditInitialApprovedAt, r.preAuditInitialComments],
     ['Audit Director', r.auditApprovedBy, r.auditApprovedAt, r.auditComments]

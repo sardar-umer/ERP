@@ -80,7 +80,6 @@ router.post('/', [
   body('month').isInt({ min: 1, max: 12 }).withMessage('Valid month is required'),
   body('year').isInt({ min: 2000, max: 2100 }).withMessage('Valid year is required'),
   body('assignedHod').notEmpty().withMessage('GM HR (HOD) is required'),
-  body('assignedAvp').notEmpty().withMessage('AVP is required'),
   body('companyId').notEmpty().withMessage('Company is required')
 ], asyncHandler(async (req, res) => {
   const errors = validationResult(req);
@@ -98,7 +97,8 @@ router.post('/', [
     initiatedAt: new Date(),
     requesterSignature: actorSignature(req.user, req.body.requesterSignature),
     assignedHod: optionalUserId(req.body.assignedHod),
-    assignedAvp: optionalUserId(req.body.assignedAvp),
+    // AVP Taj removed from the Manual Salary chain (2026-11-23): GM HR → Audit → Finance
+    assignedAvp: undefined,
     ...company,
     workflowStatus: 'Pending HOD HR'
   };
@@ -156,7 +156,7 @@ router.put('/:id', [
     Object.assign(update, company);
   }
   if (req.body.assignedHod !== undefined) update.assignedHod = optionalUserId(req.body.assignedHod);
-  if (req.body.assignedAvp !== undefined) update.assignedAvp = optionalUserId(req.body.assignedAvp);
+  delete update.assignedAvp; // AVP no longer part of the Manual Salary chain
 
   // Resubmit returned/draft back into HOD queue
   if (['Returned', 'Draft', 'Rejected by CEO'].includes(existing.workflowStatus)) {
@@ -206,14 +206,14 @@ router.put('/:id/approve-hod', asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: deny });
   }
 
-  record.workflowStatus = 'Pending AVP';
+  // GM HR → Finance (AVP Taj and Audit removed 2026-11-23); sendToFinance saves the record and notifies Finance
   record.hodApprovedBy = req.user.id;
   record.hodApprovedAt = new Date();
   record.hodComments = req.body.comments || '';
   record.hodSignature = actorSignature(req.user, req.body.signature);
-  await record.save();
+  await manualSalaryAudit.sendToFinance(record, req.user.id, req.body.comments ? `GM HR: ${req.body.comments}` : 'GM HR approved — sent to Finance');
 
-  res.json({ success: true, data: await populateApprovers(ManualSalary.findById(record._id)) });
+  res.json({ success: true, message: 'GM HR approved — sent to Finance', data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
 
 router.put('/:id/reject-hod', asyncHandler(async (req, res) => {
@@ -238,6 +238,7 @@ router.put('/:id/reject-hod', asyncHandler(async (req, res) => {
   res.json({ success: true, data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
 
+// AVP actions stay only for older records still at 'Pending AVP' (new records skip AVP)
 router.put('/:id/approve-avp', asyncHandler(async (req, res) => {
   const record = await ManualSalary.findById(req.params.id);
   if (!record) return res.status(404).json({ success: false, message: 'Record not found' });
@@ -249,14 +250,14 @@ router.put('/:id/approve-avp', asyncHandler(async (req, res) => {
     return res.status(403).json({ success: false, message: deny });
   }
 
-  // GM HR → AVP Taj → Audit → Finance (no CEO step)
+  // Older record still at AVP: after AVP it now goes straight to Finance too (no Audit step)
   record.avpApprovedBy = req.user.id;
   record.avpApprovedAt = new Date();
   record.avpComments = req.body.comments || '';
   record.avpSignature = actorSignature(req.user, req.body.signature);
-  await manualSalaryAudit.sendToAudit(record, req.user.id, req.body.comments ? `AVP: ${req.body.comments}` : 'AVP approved — sent to Audit');
+  await manualSalaryAudit.sendToFinance(record, req.user.id, req.body.comments ? `AVP: ${req.body.comments}` : 'AVP approved — sent to Finance');
 
-  res.json({ success: true, message: 'AVP approved — sent to Audit', data: await populateApprovers(ManualSalary.findById(record._id)) });
+  res.json({ success: true, message: 'AVP approved — sent to Finance', data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
 
 router.put('/:id/reject-avp', asyncHandler(async (req, res) => {
@@ -342,7 +343,7 @@ router.put('/:id/return-ceo', asyncHandler(async (req, res) => {
   res.json({ success: true, data: await populateApprovers(ManualSalary.findById(record._id)) });
 }));
 
-// ─── Audit (after AVP) — also driven from the Pre-Audit screen ────────────────
+// ─── Audit — only for older records already in the Audit queue (new records skip Audit) ────────────────
 
 // @route   PUT /api/hr/manual-salary/:id/audit-approve — initial pre-audit approval, then Audit Director final → Finance
 router.put('/:id/audit-approve', auditAction((req) =>

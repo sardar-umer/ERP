@@ -22,7 +22,7 @@ const MONTH_NAMES = [
   'July', 'August', 'September', 'October', 'November', 'December'
 ];
 
-// Records reach Finance when the Audit Director approves them (GM HR → AVP Taj → Audit → Finance)
+// Records reach Finance when GM HR approves them (AVP Taj and Audit removed 2026-11-23; older records came via Audit)
 const PENDING_FINANCE_STATUSES = ['Pending Finance'];
 const PAYABLE_STATUSES = [...PENDING_FINANCE_STATUSES];
 

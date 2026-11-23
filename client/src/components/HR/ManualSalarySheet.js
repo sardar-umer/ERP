@@ -75,7 +75,7 @@ const AMOUNT_FIELDS = [
   ['Net Payable', 'netPayable']
 ];
 
-/** Approval trail: Initiated → GM HR → AVP Taj → Audit → Audit Director → Finance */
+/** Approval trail: Initiated → GM HR → Finance (AVP / Audit shown only on older records that went through them) */
 const approvalSteps = (r) => {
   const status = r.workflowStatus || 'Pending HOD HR';
   const steps = [
@@ -88,14 +88,14 @@ const approvalSteps = (r) => {
       current: status === 'Pending HOD HR',
       note: r.hodComments
     },
-    {
+    ...(r.avpApprovedAt || status === 'Pending AVP' ? [{
       label: 'AVP',
       by: personName(r.avpApprovedBy) || personName(r.assignedAvp),
       at: r.avpApprovedAt,
       done: Boolean(r.avpApprovedAt),
       current: status === 'Pending AVP',
       note: r.avpComments
-    },
+    }] : []),
     // Records approved under the old flow keep their CEO step in the trail
     ...(r.ceoApprovedAt || status === 'Forwarded to CEO' ? [{
       label: 'CEO (old flow)',
@@ -105,22 +105,25 @@ const approvalSteps = (r) => {
       current: status === 'Forwarded to CEO',
       note: r.ceoComments
     }] : []),
-    {
-      label: 'Pre-Audit',
-      by: personName(r.preAuditInitialApprovedBy),
-      at: r.preAuditInitialApprovedAt,
-      done: Boolean(r.preAuditInitialApprovedAt) || Boolean(r.auditApprovedAt),
-      current: ['Pending Audit', 'Approved by CEO'].includes(status),
-      note: r.preAuditInitialComments
-    },
-    {
-      label: 'Audit Director',
-      by: personName(r.auditApprovedBy),
-      at: r.auditApprovedAt,
-      done: Boolean(r.auditApprovedAt),
-      current: status === 'Forwarded to Audit Director',
-      note: r.auditComments
-    },
+    // Audit is no longer in the chain (2026-11-23); older records that went through it keep these steps
+    ...(r.preAuditInitialApprovedAt || r.auditApprovedAt || ['Pending Audit', 'Approved by CEO', 'Forwarded to Audit Director'].includes(status) ? [
+      {
+        label: 'Pre-Audit',
+        by: personName(r.preAuditInitialApprovedBy),
+        at: r.preAuditInitialApprovedAt,
+        done: Boolean(r.preAuditInitialApprovedAt) || Boolean(r.auditApprovedAt),
+        current: ['Pending Audit', 'Approved by CEO'].includes(status),
+        note: r.preAuditInitialComments
+      },
+      {
+        label: 'Audit Director',
+        by: personName(r.auditApprovedBy),
+        at: r.auditApprovedAt,
+        done: Boolean(r.auditApprovedAt),
+        current: status === 'Forwarded to Audit Director',
+        note: r.auditComments
+      }
+    ] : []),
     {
       label: 'Finance Payment',
       by: personName(r.paidBy),
@@ -325,7 +328,7 @@ const ManualSalarySheet = ({ manualSalaries, loading, onRefresh }) => {
                 Manual Salary Processing
               </Typography>
               <Typography variant="caption" color="text.secondary">
-                Approval: GM HR → AVP Taj Fahad Farid → Audit → Finance
+                Approval: GM HR → Finance
               </Typography>
             </Box>
             <Button

@@ -1,5 +1,7 @@
 /**
- * Manual Salary audit step (after AVP Taj, before Finance) — same lifecycle as Project IPCs in Pre-Audit:
+ * Manual Salary — since 2026-11-23 GM HR's approval goes straight to Finance (sendToFinance); AVP Taj and Audit
+ * are no longer in the chain. The audit functions below stay only for older records already in the Audit queue.
+ * Old audit lifecycle (same as Project IPCs in Pre-Audit):
  *   Pending Audit → (pre-audit staff) initial approval → forward → Forwarded to Audit Director
  *   → (Audit Director) final approval → Pending Finance (Finance → Payroll → Manual Salary pays it)
  * Audit can return it to HR at either level (→ Returned; HR edits and resubmits from GM HR).
@@ -43,7 +45,18 @@ const notifyRoles = async (roles, actorId, title, message, record, actionUrl) =>
 
 const label = (r) => `${r.name}${r.empId ? ` (${r.empId})` : ''} — ${r.month}/${r.year}`;
 
-/** AVP (or legacy CEO) approval hands the record to Audit */
+/** GM HR approval hands the record straight to Finance (Finance → Payroll → Manual Salary pays it) */
+const sendToFinance = async (record, userId, comments = '') => {
+  const from = record.workflowStatus;
+  record.workflowStatus = 'Pending Finance';
+  pushHistory(record, from, 'Pending Finance', userId, comments || 'Sent to Finance', 'HR');
+  await record.save();
+  await notifyRoles(['finance_manager', 'admin', 'super_admin'], userId, 'Manual salary ready for payment',
+    `Manual salary ${label(record)} — PKR ${Number(record.netPayable || 0).toLocaleString()} is approved by GM HR and waiting in Finance → Payroll → Manual Salary.`,
+    record, '/finance/payroll');
+};
+
+/** Older flow: AVP (or legacy CEO) approval handed the record to Audit */
 const sendToAudit = async (record, userId, comments = '') => {
   const from = record.workflowStatus;
   record.workflowStatus = 'Pending Audit';
@@ -239,6 +252,7 @@ const listManualSalariesForPreAudit = async (search = '') => {
 module.exports = {
   AUDIT_QUEUE_STATUSES,
   sendToAudit,
+  sendToFinance,
   auditApprove,
   forwardToAuditDirector,
   auditReturn,

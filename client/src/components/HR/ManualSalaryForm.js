@@ -39,7 +39,6 @@ const emptyForm = () => ({
   netPayable: 0,
   remarks: '',
   assignedHod: '',
-  assignedAvp: ''
 });
 
 const userLabel = (u) => {
@@ -61,7 +60,6 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
         ...emptyForm(),
         ...editData,
         assignedHod: editData.assignedHod?._id || editData.assignedHod || '',
-        assignedAvp: editData.assignedAvp?._id || editData.assignedAvp || '',
         companyId: editData.companyId?._id || editData.companyId || ''
       });
     } else {
@@ -89,15 +87,9 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
             String(u.department || '').toLowerCase() === 'human resource'
             && String(u.position || '').toLowerCase() === 'general manager'
           );
-          const avp = fetchedUsers.find((u) => {
-            const full = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
-            return String(u.position || '').toLowerCase() === 'assistant vice president'
-              || (full.includes('fahad') && full.includes('farid'));
-          });
           setFormData((prev) => ({
             ...prev,
-            assignedHod: prev.assignedHod || (hod ? hod.id || hod._id : ''),
-            assignedAvp: prev.assignedAvp || (avp ? avp.id || avp._id : '')
+            assignedHod: prev.assignedHod || (hod ? hod.id || hod._id : '')
           }));
         }
       } catch (err) {
@@ -143,8 +135,8 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
       alert('Please select the company.');
       return;
     }
-    if (!formData.assignedHod || !formData.assignedAvp) {
-      alert('Please select GM HR and AVP Taj Fahad Farid.');
+    if (!formData.assignedHod) {
+      alert('Please select GM HR.');
       return;
     }
     try {
@@ -154,7 +146,6 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
       const payload = {
         ...formData,
         assignedHod: formData.assignedHod,
-        assignedAvp: formData.assignedAvp,
         requesterSignature
       };
       if (editData) {
@@ -251,7 +242,7 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
               <Divider sx={{ my: 1 }} />
               <Typography variant="subtitle2" sx={{ mb: 1 }}>Approval authorities</Typography>
               <Typography variant="caption" color="text.secondary" display="block" sx={{ mb: 1 }}>
-                Flow: GM HR → AVP Taj Fahad Farid → Audit (Pre-Audit → Audit Director) → Finance
+                Flow: GM HR → Finance
               </Typography>
             </Grid>
             <Grid item xs={12} sm={6}>
@@ -265,22 +256,6 @@ const ManualSalaryForm = ({ open, onClose, onRefresh, editData }) => {
                 onChange={handleChange}
               >
                 <MenuItem value=""><em>Select GM HR</em></MenuItem>
-                {users.map((u) => (
-                  <MenuItem key={u._id || u.id} value={u._id || u.id}>{userLabel(u)}</MenuItem>
-                ))}
-              </TextField>
-            </Grid>
-            <Grid item xs={12} sm={6}>
-              <TextField
-                select
-                fullWidth
-                required
-                label="AVP Taj Fahad Farid"
-                name="assignedAvp"
-                value={formData.assignedAvp}
-                onChange={handleChange}
-              >
-                <MenuItem value=""><em>Select AVP</em></MenuItem>
                 {users.map((u) => (
                   <MenuItem key={u._id || u.id} value={u._id || u.id}>{userLabel(u)}</MenuItem>
                 ))}
