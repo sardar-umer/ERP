@@ -109,6 +109,14 @@ const QuotationDetailView = ({
             <Typography component="span" fontWeight={600}>Department:</Typography>
             <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>{data.indent?.department?.name || '___________'}</Typography>
           </Box>
+          <Box sx={{ minWidth: '200px' }}>
+            <Typography component="span" fontWeight={600}>Cost Center:</Typography>
+            <Typography component="span" sx={{ ml: 1, textTransform: 'uppercase' }}>
+              {data.indent?.costCenter && typeof data.indent.costCenter === 'object'
+                ? [data.indent.costCenter.code, data.indent.costCenter.name].filter(Boolean).join(' — ')
+                : '___________'}
+            </Typography>
+          </Box>
         </Box>
       </Box>
 

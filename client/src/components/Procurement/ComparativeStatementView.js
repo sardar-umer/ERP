@@ -223,6 +223,11 @@ const ComparativeStatementView = ({
         <Box sx={{ position: 'absolute', top: 0, right: 0, textAlign: 'right', fontSize: { xs: '0.9rem', print: '0.75rem' } }}>
           <Typography sx={{ mb: 0.5 }}>POR {selectedRequisition?.erpRef?.split('#').pop() || selectedRequisition?.indentNumber || 'N/A'}</Typography>
           <Typography>Indent {selectedRequisition?.indentNumber || 'N/A'}</Typography>
+          {selectedRequisition?.costCenter && typeof selectedRequisition.costCenter === 'object' && (
+            <Typography sx={{ mt: 0.5 }}>
+              Cost Center {[selectedRequisition.costCenter.code, selectedRequisition.costCenter.name].filter(Boolean).join(' — ')}
+            </Typography>
+          )}
         </Box>
       </Box>
 

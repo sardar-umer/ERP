@@ -362,7 +362,8 @@ const PurchaseOrders = () => {
           paymentTerms: q.paymentTerms || '',
           notes: q.notes ? `From quotation ${q.quotationNumber || ''}. ${q.notes}` : `Created from quotation ${q.quotationNumber || ''}`,
           internalNotes: q.indent?.indentNumber ? `Source: Quotation ${q.quotationNumber || ''}, Indent: ${q.indent.indentNumber}` : '',
-          costCenter: q.indent?.costCenter?._id || q.indent?.costCenter || ''
+          costCenter: q.indent?.costCenter?._id || q.indent?.costCenter || '',
+          company: q.indent?.companyId?._id || q.indent?.companyId || ''
         });
         setApprovalAuthority({
           preparedBy: approvals.preparedBy || approverLabel(user) || '',
@@ -523,7 +524,8 @@ const PurchaseOrders = () => {
         expectedDeliveryDate: fullOrder.expectedDeliveryDate ? new Date(fullOrder.expectedDeliveryDate).toISOString().split('T')[0] : '',
         deliveryAddress: fullOrder.deliveryAddress || '',
         orderDiscount: fullOrder.orderDiscount || 0,
-        costCenter: fullOrder.costCenter?._id || fullOrder.costCenter || ''
+        costCenter: fullOrder.costCenter?._id || fullOrder.costCenter || '',
+        company: fullOrder.companyId?._id || fullOrder.companyId || ''
       });
       const approvals = fullOrder.approvalAuthorities || {};
       setApprovalAuthority({
@@ -726,7 +728,12 @@ const PurchaseOrders = () => {
       }
       payload.items = validItems;
 
-      if (formDialog.mode === 'create' && !poCostCenterLock && !payload.costCenter && isCostCenterRequiredNow(costCenterPolicy)) {
+      // The form's Company field is `company`; the PO stores it as `companyId`
+      payload.companyId = payload.company || null;
+      delete payload.company;
+
+      // A PO from a quotation follows its indent (cost center copied, old indents exempt) — the server decides
+      if (formDialog.mode === 'create' && !formDialog.quotationId && !poCostCenterLock && !payload.costCenter && isCostCenterRequiredNow(costCenterPolicy)) {
         setError('Cost center is required');
         setLoading(false);
         return;

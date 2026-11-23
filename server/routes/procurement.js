@@ -1041,7 +1041,7 @@ const quotationAttachmentStorage = multer.diskStorage({
 });
 const uploadQuotationAttachment = multer({
   storage: quotationAttachmentStorage,
-  limits: { fileSize: 10 * 1024 * 1024 },
+  limits: { fileSize: 25 * 1024 * 1024 },
   fileFilter: (req, file, cb) => {
     const allowed = /\.(pdf|doc|docx|xls|xlsx|jpg|jpeg|png|gif)$/i.test(file.originalname) ||
       file.mimetype.startsWith('image/') || file.mimetype === 'application/pdf' ||
@@ -5760,6 +5760,13 @@ router.get('/vendor-bills/:id',
       .select('receiveNumber receiveDate poNumber status netAmount total returnedAmount billedAmount items')
       .lean();
     const grnById = new Map(grnDocs.map((g) => [String(g._id), g]));
+    // Full GRN documents for the bill's GRN(s) tab (same copy Finance and Pre-Audit see)
+    const fullGrns = await GoodsReceive.find({ _id: { $in: links.map((l) => l.grnId).filter(Boolean) } })
+      .populate('supplier', 'name supplierId address')
+      .populate('receivedBy', 'firstName lastName')
+      .lean();
+    const fullGrnById = new Map(fullGrns.map((g) => [String(g._id), g]));
+    const grnDocuments = links.map((l) => fullGrnById.get(String(l.grnId))).filter(Boolean);
     const paid = r2(b.amountPaid ?? b.paidAmount ?? 0);
     const advanceApplied = r2(b.advanceApplied);
     res.json({
@@ -5784,6 +5791,7 @@ router.get('/vendor-bills/:id',
         amountPaid: paid,
         advanceApplied,
         balanceDue: r2((Number(b.totalAmount) || 0) - paid - advanceApplied),
+        grnDocuments,
         grns: links.map((l) => {
           const g = grnById.get(String(l.grnId));
           return {
@@ -9219,9 +9227,10 @@ router.get('/quotations/by-indent/:indentId',
     const quotations = await Quotation.find({ indent: indentId })
       .populate({
         path: 'indent',
-        select: 'indentNumber title items erpRef requestedDate requiredDate department requestedBy',
+        select: 'indentNumber title items erpRef requestedDate requiredDate department costCenter requestedBy',
         populate: [
           { path: 'department', select: 'name code' },
+          { path: 'costCenter', select: 'code name path' },
           { path: 'requestedBy', select: 'firstName lastName email' }
         ]
       })
@@ -9324,9 +9333,10 @@ router.get('/quotations/:id',
     const quotation = await Quotation.findById(req.params.id)
       .populate({
         path: 'indent',
-        select: 'indentNumber title items erpRef requestedDate requiredDate department costCenter requestedBy justification signatures comparativeStatementApprovals comparativeApproval',
+        select: 'indentNumber title items erpRef requestedDate requiredDate department costCenter companyId requestedBy justification signatures comparativeStatementApprovals comparativeApproval',
         populate: [
           { path: 'department', select: 'name code' },
+          { path: 'companyId', select: 'name code' },
           { path: 'costCenter', select: 'code name path' },
           { path: 'requestedBy', select: 'firstName lastName email' },
           { path: 'comparativeApproval.rejectionObservations.rejectedBy', select: 'firstName lastName email' }

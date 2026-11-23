@@ -136,6 +136,13 @@ const RequisitionPrintView = () => {
             { label: 'Required Date', value: requisition.requiredDate ? formatDate(requisition.requiredDate) : '' },
             { label: 'Department', value: requisition.department?.name, upper: true },
             {
+              label: 'Cost Center',
+              value: requisition.costCenter
+                ? [requisition.costCenter.code, requisition.costCenter.name].filter(Boolean).join(' — ')
+                : '',
+              upper: true
+            },
+            {
               label: 'Originator',
               value: requisition.requestedBy?.firstName && requisition.requestedBy?.lastName
                 ? `${requisition.requestedBy.firstName} ${requisition.requestedBy.lastName}`

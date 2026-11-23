@@ -2,7 +2,7 @@ import React, { useEffect, useMemo, useState } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import {
   Box, Paper, Typography, Button, Alert, CircularProgress, Chip, Stack,
-  Table, TableBody, TableCell, TableContainer, TableHead, TableRow
+  Table, TableBody, TableCell, TableContainer, TableHead, TableRow, Tabs, Tab
 } from '@mui/material';
 import {
   ArrowBack as BackIcon, Print as PrintIcon, AttachFile as AttachFileIcon
@@ -10,6 +10,7 @@ import {
 import api from '../../services/api';
 import { getImageUrl } from '../../utils/imageService';
 import { brandPrintHtml, preloadTovusLogo } from '../../utils/tovusPrintBrand';
+import GrnCopyView from '../../components/Procurement/GrnCopyView';
 
 /**
  * Document-style view of a vendor bill raised from GRN(s), laid out like the Centralized Store
@@ -71,6 +72,7 @@ const GrnVendorBillView = () => {
   const [bill, setBill] = useState(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState('');
+  const [tab, setTab] = useState(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -260,8 +262,30 @@ const GrnVendorBillView = () => {
           <Button startIcon={<BackIcon />} onClick={backToList}>Back to GRN's &amp; Bills</Button>
           <Chip label={statusLabel(bill)} color={statusColor(bill)} size="small" />
         </Stack>
-        <Button variant="outlined" startIcon={<PrintIcon />} onClick={handlePrint}>Print</Button>
+        {tab === 0 && <Button variant="outlined" startIcon={<PrintIcon />} onClick={handlePrint}>Print</Button>}
       </Stack>
+
+      <Tabs value={tab} onChange={(_, v) => setTab(v)} sx={{ mb: 2, borderBottom: 1, borderColor: 'divider' }} variant="scrollable" scrollButtons="auto">
+        <Tab value={0} label="Vendor Bill" />
+        <Tab value={1} label={`GRN(s) (${(bill.grnDocuments || []).length || grns.length})`} />
+      </Tabs>
+
+      {tab === 1 && (
+        <Box sx={{ overflowX: 'auto' }}>
+          {(bill.grnDocuments || []).length === 0 ? (
+            <Typography color="textSecondary" sx={{ py: 4, textAlign: 'center' }}>No GRN found for this bill.</Typography>
+          ) : bill.grnDocuments.map((g) => (
+            <GrnCopyView
+              key={g._id}
+              grn={g}
+              companyName={bill.companyName}
+              poNumber={grns.find((x) => String(x.grnId) === String(g._id))?.poNumber}
+            />
+          ))}
+        </Box>
+      )}
+
+      {tab === 0 && (<>
 
       {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
       {bill.status === 'cancelled' && (
@@ -470,6 +494,7 @@ const GrnVendorBillView = () => {
           </Paper>
         )}
       </Box>
+      </>)}
     </Box>
   );
 };

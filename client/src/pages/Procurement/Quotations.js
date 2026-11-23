@@ -60,6 +60,9 @@ import {
 } from '../../utils/comparativeQuoteItemMatch';
 import { printTovusElement } from '../../utils/tovusPrintBrand';
 
+/** Same limit as uploadQuotationAttachment on the server */
+const MAX_ATTACHMENT_BYTES = 25 * 1024 * 1024;
+
 const Quotations = () => {
   const navigate = useNavigate();
   // State management
@@ -358,6 +361,11 @@ const Quotations = () => {
 
       // Upload any new attachment files
       let attachments = [...(formData.attachments || [])];
+      const tooBig = attachmentFiles.find((f) => f.size > MAX_ATTACHMENT_BYTES);
+      if (tooBig) {
+        setError(`Attachment "${tooBig.name}" is ${(tooBig.size / 1024 / 1024).toFixed(1)} MB. Each file must be 25 MB or smaller — compress or split the file and try again.`);
+        return;
+      }
       if (attachmentFiles.length > 0) {
         for (const file of attachmentFiles) {
           const res = await procurementService.uploadQuotationAttachment(file);
@@ -452,7 +460,9 @@ const Quotations = () => {
       loadQuotations();
     } catch (err) {
       const res = err.response?.data;
-      const msg = res?.message || (Array.isArray(res?.errors) && res.errors[0]?.msg) || err.message || 'Failed to save quotation';
+      const msg = err.response?.status === 413
+        ? 'Attachment is too large to upload. Each file must be 25 MB or smaller — compress or split the file and try again.'
+        : (res?.message || (Array.isArray(res?.errors) && res.errors[0]?.msg) || err.message || 'Failed to save quotation');
       setError(msg);
     } finally {
       setLoading(false);
