@@ -1400,7 +1400,7 @@ router.put('/employees/:id', [
     }
 
     const existingEmployee = await Employee.findOne({ _id: req.params.id, isDeleted: false })
-      .select('employmentStatus terminationDate taxArrearsInFull')
+      .select('employmentStatus terminationDate')
       .lean();
 
     if (!existingEmployee) {
@@ -1495,17 +1495,6 @@ router.put('/employees/:id', [
         payrollsSynced = syncResult.updated || 0;
       } catch (syncError) {
         console.error('Error syncing payroll allowances after employee update:', syncError);
-      }
-    }
-
-    // only when the setting actually changed (the employee form always sends it)
-    if ('taxArrearsInFull' in req.body && Boolean(req.body.taxArrearsInFull) !== Boolean(existingEmployee?.taxArrearsInFull)) {
-      try {
-        const { syncDraftPayrollsTaxFromSettings } = require('../utils/allowanceHelpers');
-        const { loadPayrollTaxSettings } = require('../utils/allowanceTaxCalculator');
-        await syncDraftPayrollsTaxFromSettings(await loadPayrollTaxSettings(), { employeeId: employee._id });
-      } catch (syncError) {
-        console.error('Error re-syncing draft payroll tax after arrears tax change:', syncError);
       }
     }
 

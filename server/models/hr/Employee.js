@@ -769,11 +769,6 @@ const employeeSchema = new mongoose.Schema({
     default: 0,
     min: [0, 'Tax exemption amount cannot be negative']
   },
-  // Arrears taxed in full (no medical % exemption), as Sidat does for some joiners (e.g. Ahmed Khan 6635)
-  taxArrearsInFull: {
-    type: Boolean,
-    default: false
-  },
   // Manual tax override: when isActive, payroll uses fixedAmount instead of auto-calculated tax
   manualTax: {
     isActive: {

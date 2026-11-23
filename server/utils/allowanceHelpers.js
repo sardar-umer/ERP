@@ -283,7 +283,7 @@ const syncDraftPayrollsTaxFromSettings = async (settings, { employeeId: onlyEmpl
   for (const payroll of payrolls) {
     const employeeId = payroll.employee;
     const emp = employeeId
-      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax taxArrearsInFull monthlyAllowanceOverrides').lean()
+      ? await Employee.findById(employeeId).select('hireDate appointmentDate allowances manualTax monthlyAllowanceOverrides').lean()
       : null;
 
     const periodKey = `${payroll.year}-${payroll.month}`;

@@ -89,7 +89,6 @@ const buildTaxResult = ({
   payrollMonth,
   payrollYear,
   arrearsExemptPercent = 10,
-  arrearsFullyTaxable = false,
   cancelledMonths = null,
   normalSalaryExempt = null
 }) => {
@@ -107,8 +106,6 @@ const buildTaxResult = ({
   // gives that month's medical exemption (Muhammad Naveed 5691 August, Ibrahim 6629 September)
   const gapExemptions = [];
   const paysMissedMonth = (() => {
-    // Employee set to "arrears fully taxable": never exempt
-    if (arrearsFullyTaxable) return false;
     if (!hireDate || !payrollMonth || !payrollYear) return false;
     const pkt = new Date(new Date(hireDate).getTime() + 5 * 60 * 60 * 1000);
     if (Number.isNaN(pkt.getTime())) return false;
@@ -304,7 +301,6 @@ const calculatePayrollTaxWithSettings = ({
   priorMonths = null,
   normalGrossSalary = null,
   normalAllowances = null,
-  arrearsFullyTaxable = false,
   cancelledMonths = null
 }) => {
   const config = normalizeSettings(settings);
@@ -374,7 +370,6 @@ const calculatePayrollTaxWithSettings = ({
     allowanceBreakdown,
     usesAllowanceTaxPolicy: true,
     arrearsExemptPercent: salaryExemptPercent,
-    arrearsFullyTaxable: Boolean(arrearsFullyTaxable),
     cancelledMonths,
     normalSalaryExempt: (normalGross * salaryExemptPercent) / 100,
     hireDate,
@@ -558,7 +553,6 @@ const calculateTaxForExistingPayroll = async ({ payroll, employee, settings, tax
     hireDate: employee?.hireDate || employee?.appointmentDate,
     payrollMonth: payroll.month,
     payrollYear: payroll.year,
-    arrearsFullyTaxable: Boolean(employee?.taxArrearsInFull),
     ...context,
     ...normalPay
   });

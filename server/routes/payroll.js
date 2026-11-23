@@ -67,7 +67,7 @@ const router = express.Router();
 
 /** Fields required for payroll proration (joining + partial monthly pay) and salary math. */
 const PAYROLL_EMPLOYEE_SELECT =
-  'firstName lastName employeeId salary allowances arrears eobi employeeSecurity manualTax taxArrearsInFull hireDate appointmentDate partialSalaryPay monthlyAllowanceOverrides placementDepartment placementProject placementDesignation department position providentFund cashSalary';
+  'firstName lastName employeeId salary allowances arrears eobi employeeSecurity manualTax hireDate appointmentDate partialSalaryPay monthlyAllowanceOverrides placementDepartment placementProject placementDesignation department position providentFund cashSalary';
 
 const isProvidentFundEnabledForEmployee = (employee) =>
   employee?.providentFund?.isActive === true;
@@ -149,7 +149,6 @@ const computeEmployeeCurrentPayrollFigures = (employee, gross, taxSettings = nul
     hireDate: employee.hireDate || employee.appointmentDate,
     payrollMonth: payrollMonth,
     payrollYear: payrollYear,
-    arrearsFullyTaxable: Boolean(employee.taxArrearsInFull),
     ...(taxYearContext || {}),
     ...normalPayForTax({ proration, monthlyGross: gross, employee })
   });
@@ -1920,7 +1919,6 @@ router.post('/', [
             hireDate: employee.hireDate || employee.appointmentDate,
             payrollMonth: month,
             payrollYear: year,
-            arrearsFullyTaxable: Boolean(employee.taxArrearsInFull),
             ...taxYearContextFor(taxYearContextByEmployee, employee._id),
             ...normalPayForTax({ proration, monthlyGross, employee })
           });
@@ -2588,7 +2586,7 @@ router.put('/:id', [
     (payroll.medicalAllowance || 0);
   const taxSettings = await loadPayrollTaxSettings();
   const employeeForTax = await Employee.findById(payroll.employee)
-    .select('manualTax taxArrearsInFull eobi hireDate appointmentDate allowances monthlyAllowanceOverrides')
+    .select('manualTax eobi hireDate appointmentDate allowances monthlyAllowanceOverrides')
     .lean();
   // Same rules as generation: salary cut doesn't cut tax, prorated month isn't annualized, FY arrears kept
   const taxCalculation = await calculateTaxForExistingPayroll({
