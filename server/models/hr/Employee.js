@@ -656,6 +656,13 @@ const employeeSchema = new mongoose.Schema({
       min: [0, 'Payable days cannot be negative'],
       max: [31, 'Payable days cannot exceed 31']
     },
+    // Pay a fixed salary amount instead of days (e.g. 65,800 of 66,000) — used when set (> 0).
+    // Tax keeps the full master salary for the months to come, as Sidat's "Standard Gross Salary"
+    payableAmount: {
+      type: Number,
+      default: 0,
+      min: [0, 'Payable amount cannot be negative']
+    },
     periods: [{
       month: { type: Number, min: 1, max: 12, required: true },
       year: { type: Number, min: 2020, required: true }

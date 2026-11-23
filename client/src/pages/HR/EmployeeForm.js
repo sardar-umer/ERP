@@ -881,6 +881,7 @@ const EmployeeForm = () => {
         partialSalaryPay: {
           isActive: employeeData.partialSalaryPay?.isActive || false,
           payableDaysPerMonth: employeeData.partialSalaryPay?.payableDaysPerMonth || '',
+          payableAmount: employeeData.partialSalaryPay?.payableAmount || '',
           periods: (employeeData.partialSalaryPay?.periods || []).map((p) => ({
             month: p.month,
             year: p.year
@@ -1052,6 +1053,7 @@ const EmployeeForm = () => {
       partialSalaryPay: {
         isActive: false,
         payableDaysPerMonth: '',
+        payableAmount: '',
         periods: []
       },
       monthlyAllowanceOverrides: [],
@@ -1163,6 +1165,7 @@ const EmployeeForm = () => {
           const psp = cleanedValues.partialSalaryPay;
           psp.isActive = Boolean(psp.isActive);
           psp.payableDaysPerMonth = parseInt(psp.payableDaysPerMonth, 10) || 0;
+          psp.payableAmount = Math.max(0, Math.round(Number(psp.payableAmount) || 0));
           psp.periods = (psp.periods || [])
             .map((p) => ({
               month: parseInt(p.month, 10),
@@ -1171,6 +1174,7 @@ const EmployeeForm = () => {
             .filter((p) => p.month >= 1 && p.month <= 12 && p.year >= 2020);
           if (!psp.isActive) {
             psp.payableDaysPerMonth = 0;
+            psp.payableAmount = 0;
             psp.periods = [];
           }
         }
@@ -3901,8 +3905,22 @@ const EmployeeForm = () => {
                     value={formik.values.partialSalaryPay?.payableDaysPerMonth || ''}
                     onChange={(e) => formik.setFieldValue('partialSalaryPay.payableDaysPerMonth', e.target.value)}
                     inputProps={{ min: 1, max: 31 }}
-                    helperText="e.g. 8 days salary only; allowances remain full"
-                    required
+                    helperText={Number(formik.values.partialSalaryPay?.payableAmount) > 0
+                      ? 'Not used — the salary amount below is paid'
+                      : 'e.g. 8 days salary only; allowances remain full'}
+                    disabled={Number(formik.values.partialSalaryPay?.payableAmount) > 0}
+                    required={!(Number(formik.values.partialSalaryPay?.payableAmount) > 0)}
+                  />
+                </Grid>
+                <Grid item xs={12} md={4}>
+                  <TextField
+                    fullWidth
+                    label="Or salary amount to pay"
+                    type="number"
+                    value={formik.values.partialSalaryPay?.payableAmount || ''}
+                    onChange={(e) => formik.setFieldValue('partialSalaryPay.payableAmount', e.target.value)}
+                    inputProps={{ min: 0, step: 1 }}
+                    helperText="e.g. 65800 of a 66000 salary. Tax keeps the full salary for months to come (Sidat's Standard Gross)."
                   />
                 </Grid>
                 <Grid item xs={6} md={3}>

@@ -18,19 +18,39 @@ const normalizePeriods = (periods = []) =>
     }))
     .filter((p) => p.month >= 1 && p.month <= 12 && p.year >= 2020);
 
+const partialPayableAmount = (employee) => Math.max(0, Number(employee?.partialSalaryPay?.payableAmount) || 0);
+
 const matchesPartialSalaryPeriod = (employee, month, year) => {
   const config = employee?.partialSalaryPay;
   if (!config?.isActive) return false;
   const payableDays = Number(config.payableDaysPerMonth);
-  if (!payableDays || payableDays < 1) return false;
+  if (!partialPayableAmount(employee) && (!payableDays || payableDays < 1)) return false;
 
   return normalizePeriods(config.periods).some(
     (p) => p.month === Number(month) && p.year === Number(year)
   );
 };
 
-const getPartialSalaryProration = (employee, month, year) => {
+const getPartialSalaryProration = (employee, month, year, monthlyGross = null) => {
   if (!matchesPartialSalaryPeriod(employee, month, year)) return null;
+
+  // Pay by amount: salary paid = the amount (never above the master salary)
+  const amount = partialPayableAmount(employee);
+  const gross = Number(monthlyGross ?? employee?.salary?.gross) || 0;
+  if (amount > 0 && gross > 0) {
+    const factor = Math.min(1, amount / gross);
+    const monthLabel = MONTH_NAMES[month] || `Month ${month}`;
+    return {
+      factor,
+      isProrated: factor < 1,
+      skipPayroll: false,
+      payableAmount: Math.round(Math.min(amount, gross)),
+      daysInMonth: new Date(year, month, 0).getDate(),
+      type: 'partial_salary',
+      salaryOnly: true,
+      reason: `Partial pay: salary ${Math.round(Math.min(amount, gross)).toLocaleString('en-PK')} of ${Math.round(gross).toLocaleString('en-PK')} (allowances & other components full) for ${monthLabel} ${year}`
+    };
+  }
 
   const payableDaysPerMonth = Number(employee.partialSalaryPay.payableDaysPerMonth);
   const daysInMonth = new Date(year, month, 0).getDate();
@@ -53,6 +73,7 @@ const getPartialSalaryProration = (employee, month, year) => {
 
 const buildPartialSalaryRemarksSuffix = (proration) => {
   if (!proration?.isProrated || proration.type !== 'partial_salary') return '';
+  if (proration.payableAmount) return ` (Partial pay: salary ${Number(proration.payableAmount).toLocaleString('en-PK')} only)`;
   return ` (Partial pay ${proration.payableDays}/${proration.daysInMonth} days on salary only)`;
 };
 
@@ -106,7 +127,7 @@ const applyPayrollProration = (employee, month, year, monthlyGross) => {
   const joiningResult = applyJoiningProration(monthEmployee, month, year, monthlyGross);
   if (joiningResult.skipPayroll) return joiningResult;
 
-  const partialProration = getPartialSalaryProration(employee, month, year);
+  const partialProration = getPartialSalaryProration(employee, month, year, monthlyGross);
   if (!partialProration) return withOverride(joiningResult);
 
   const factor = partialProration.factor;

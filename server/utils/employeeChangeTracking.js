@@ -108,7 +108,7 @@ const display = async (path, raw) => {
     const p = JSON.parse(raw);
     if (!p.isActive) return 'Off';
     const months = (p.periods || []).map((x) => `${String(x.month).padStart(2, '0')}/${x.year}`).join(', ');
-    return `${p.payableDaysPerMonth} days/month${months ? ` (${months})` : ''}`;
+    return `${Number(p.payableAmount) > 0 ? `Salary ${money(p.payableAmount)}` : `${p.payableDaysPerMonth} days`}/month${months ? ` (${months})` : ''}`;
   }
   if (path === 'monthlyAllowanceOverrides' && raw) {
     const list = JSON.parse(raw) || [];
