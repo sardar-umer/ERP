@@ -4,9 +4,12 @@
  *   node server/scripts/skip-disabled-approvers.js                     dry run: list what would move
  *   node server/scripts/skip-disabled-approvers.js --apply --backup=FILE   write (old values saved to FILE first)
  *   --disable=<userId>:<Name>[,<userId>:<Name>]   add approvers to SystemSettings.disabledApprovers first
+ *   --enable=<userId>[,<userId>] --apply          take approvers off the list (documents already moved stay moved)
  *
- * Uses MONGODB_URI (and MONGODB_DB, default sgc_erp). Covers purchase orders (authority slots), indents and
- * utility bills (approval chains). The server must already run the code that knows the 'skipped' step state.
+ * Uses MONGODB_URI (and MONGODB_DB, default sgc_erp). Covers purchase orders and cash approvals (authority
+ * slots / chain), indents and utility bills (chains), and the AVP step of manual salary, final settlement and loan.
+ * The server must already run the code that knows the 'skipped' step state. New documents are skipped
+ * automatically by the model save hooks; this script is for documents already waiting.
  */
 const fs = require('fs');
 const path = require('path');
@@ -22,12 +25,22 @@ const SystemSettings = require('../models/general/SystemSettings');
 const PurchaseOrder = require('../models/procurement/PurchaseOrder');
 const Indent = require('../models/general/Indent');
 const UtilityBill = require('../models/hr/UtilityBill');
-const { getDisabledApprovers, skipOnPurchaseOrder, skipOnIndent, skipOnUtilityBill } = require('../utils/disabledApprovers');
+const CashApproval = require('../models/procurement/CashApproval');
+const ManualSalary = require('../models/hr/ManualSalary');
+const FinalSettlement = require('../models/hr/FinalSettlement');
+const Loan = require('../models/hr/Loan');
+const {
+  getDisabledApprovers, skipOnPurchaseOrder, skipOnIndent, skipOnUtilityBill, skipOnCashApproval, skipOnHrAvp
+} = require('../utils/disabledApprovers');
 
 const FIELDS = {
   PurchaseOrder: ['status', 'authorityApprovals', 'workflowHistory'],
   Indent: ['status', 'approvalChain', 'workflowHistory', 'approvedDate', 'storeRoutingStatus'],
-  UtilityBill: ['approvalStatus', 'approvalChain', 'workflowHistory', 'approvedAt', 'auditStatus']
+  UtilityBill: ['approvalStatus', 'approvalChain', 'workflowHistory', 'approvedAt', 'auditStatus'],
+  CashApproval: ['status', 'authorityApprovals', 'departmentApprovalChain', 'departmentApprovalStatus', 'departmentApprovedAt', 'workflowHistory'],
+  ManualSalary: ['workflowStatus', 'avpComments', 'workflowHistory'],
+  FinalSettlement: ['workflowStatus', 'avpComments'],
+  Loan: ['workflowStatus', 'avpComments']
 };
 
 (async () => {
@@ -36,6 +49,14 @@ const FIELDS = {
     directConnection: true,
     serverSelectionTimeoutMS: 10000
   });
+
+  const toEnable = value('enable');
+  if (toEnable) {
+    const ids = toEnable.split(',').map((id) => new mongoose.Types.ObjectId(id.trim()));
+    if (APPLY) await SystemSettings.updateOne({ key: 'default' }, { $pull: { disabledApprovers: { user: { $in: ids } } } });
+    console.log(`${APPLY ? 'Enabled' : 'Would enable'}: ${toEnable}`);
+    process.exit(0);
+  }
 
   const toDisable = value('disable');
   if (toDisable) {
@@ -69,7 +90,11 @@ const FIELDS = {
   const jobs = [
     { model: PurchaseOrder, label: 'PurchaseOrder', number: 'orderNumber', query: { status: 'Pending Approval' }, skip: skipOnPurchaseOrder },
     { model: Indent, label: 'Indent', number: 'indentNumber', query: { status: { $in: ['Submitted', 'Under Review'] }, 'approvalChain.status': 'pending' }, skip: skipOnIndent },
-    { model: UtilityBill, label: 'UtilityBill', number: 'billId', query: { approvalStatus: 'Submitted', 'approvalChain.status': 'pending' }, skip: skipOnUtilityBill }
+    { model: UtilityBill, label: 'UtilityBill', number: 'billId', query: { approvalStatus: 'Submitted', 'approvalChain.status': 'pending' }, skip: skipOnUtilityBill },
+    { model: CashApproval, label: 'CashApproval', number: 'caNumber', query: { status: 'Pending Approval' }, skip: skipOnCashApproval },
+    { model: ManualSalary, label: 'ManualSalary', number: 'name', query: { workflowStatus: 'Pending AVP' }, skip: (d, x) => skipOnHrAvp(d, x, 'ManualSalary') },
+    { model: FinalSettlement, label: 'FinalSettlement', number: '_id', query: { workflowStatus: 'Pending AVP' }, skip: (d, x) => skipOnHrAvp(d, x, 'FinalSettlement') },
+    { model: Loan, label: 'Loan', number: 'loanNumber', query: { workflowStatus: 'Pending AVP' }, skip: (d, x) => skipOnHrAvp(d, x, 'Loan') }
   ];
 
   const backup = [];
@@ -87,7 +112,7 @@ const FIELDS = {
       const old = {};
       FIELDS[job.label].concat('updatedAt').forEach((f) => { old[f] = before[f] === undefined ? null : before[f]; });
       backup.push({ model: job.label, _id: String(doc._id), number: doc[job.number], old });
-      changes.push({ job, doc, set, r, statusBefore: before.status || before.approvalStatus, statusAfter: after.status || after.approvalStatus });
+      changes.push({ job, doc, set, r, statusBefore: before.workflowStatus || before.status || before.approvalStatus, statusAfter: after.workflowStatus || after.status || after.approvalStatus });
     }
   }
 

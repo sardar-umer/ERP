@@ -520,4 +520,13 @@ finalSettlementSchema.statics.getSettlementStats = async function() {
   };
 };
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnHrAvp } = require('../../utils/disabledApprovers');
+  attachAutoSkip(finalSettlementSchema, {
+    isWaiting: (doc) => doc.workflowStatus === 'Pending AVP',
+    skip: (doc, disabled) => skipOnHrAvp(doc, disabled, 'FinalSettlement')
+  });
+}
+
 module.exports = mongoose.model('FinalSettlement', finalSettlementSchema); 

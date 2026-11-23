@@ -5,7 +5,11 @@
  * recorded as having approved, and a workflow note saying why. The document then moves on exactly as if the step
  * had been approved (next step, or the next stage when it was the last one).
  *
- * Covered: purchase order authority slots, indent approval chain, utility bill approval chain.
+ * Covered: purchase order and cash approval authority slots; indent, utility bill and general cash approval
+ * chains; the AVP step of manual salary, final settlement and loan.
+ *
+ * New documents are handled automatically by a pre-save hook (attachAutoSkip) on each model; documents already
+ * waiting are moved with server/scripts/skip-disabled-approvers.js.
  * Enable an approver again by removing their entry from the list — documents already moved stay where they are.
  */
 
@@ -16,6 +20,21 @@ const normalize = (v) => String(v || '').trim().toLowerCase().replace(/\s+/g, ' 
 
 /** @returns {Promise<Array<{id: string, name: string, tokens: string[]}>>} */
 async function getDisabledApprovers() {
+  return loadDisabledApprovers();
+}
+
+// Save hooks read the list on every save of a waiting document — keep it for a minute
+let cache = { at: 0, data: null };
+const CACHE_MS = 60 * 1000;
+async function getDisabledApproversCached() {
+  if (cache.data && Date.now() - cache.at < CACHE_MS) return cache.data;
+  const data = await loadDisabledApprovers();
+  cache = { at: Date.now(), data };
+  return data;
+}
+const clearDisabledApproversCache = () => { cache = { at: 0, data: null }; };
+
+async function loadDisabledApprovers() {
   const SystemSettings = require('../models/general/SystemSettings');
   const User = require('../models/User');
   const settings = await SystemSettings.findOne({ key: 'default' }).select('disabledApprovers').lean();
@@ -169,10 +188,121 @@ async function skipOnUtilityBill(bill, disabled) {
   return result;
 }
 
+/**
+ * Cash approval in 'Pending Approval'. General cash approvals use the Manager / HOD chain; procurement ones use
+ * authority slots like a PO. When nothing is left the cash approval goes to Pre-Audit.
+ */
+async function skipOnCashApproval(ca, disabled) {
+  const result = { skipped: [], advanced: false };
+  if (!ca || ca.status !== 'Pending Approval' || !disabled.length) return result;
+  const now = new Date();
+  let allDone = false;
+  let module = 'Procurement';
+  if ((ca.departmentApprovalChain || []).length) {
+    module = 'General';
+    result.skipped = skipChainSteps(ca.departmentApprovalChain, disabled);
+    if (!result.skipped.length) return result;
+    if (typeof ca.markModified === 'function') ca.markModified('departmentApprovalChain');
+    allDone = chainComplete(ca.departmentApprovalChain);
+    if (allDone) {
+      ca.departmentApprovalStatus = 'Approved';
+      ca.departmentApprovedAt = now;
+    }
+  } else {
+    const { getRequiredAuthoritySlots, getApprovedAuthorityKeys } = require('./purchaseOrderAuthority');
+    const slots = await getRequiredAuthoritySlots(ca.indent?._id || ca.indent, ca.approvalAuthorities);
+    if (!slots.length) return result;
+    const done = getApprovedAuthorityKeys(ca.authorityApprovals);
+    ca.authorityApprovals = Array.isArray(ca.authorityApprovals) ? ca.authorityApprovals : [];
+    slots.forEach((slot) => {
+      if (done.has(slot.key)) return;
+      const who = (slot.userId && disabledForId(disabled, slot.userId)) || disabledForText(disabled, slot.textToken);
+      if (!who) return;
+      ca.authorityApprovals.push({
+        authorityKey: slot.key, authorityLabel: slot.label, approver: null, approvedAt: now,
+        comments: `${SKIP_NOTE} (${who.name})`, skipped: true
+      });
+      done.add(slot.key);
+      result.skipped.push(`${slot.label}: ${who.name}`);
+    });
+    if (!result.skipped.length) return result;
+    allDone = slots.every((s) => done.has(s.key));
+  }
+  ca.workflowHistory = ca.workflowHistory || [];
+  ca.workflowHistory.push({
+    fromStatus: 'Pending Approval',
+    toStatus: allDone ? 'Pending Audit' : 'Pending Approval',
+    changedBy: null,
+    changedAt: now,
+    comments: `${SKIP_NOTE}: ${result.skipped.join('; ')}${allDone ? ' — sent to Pre-Audit' : ''}`,
+    module
+  });
+  if (allDone) {
+    ca.status = 'Pending Audit';
+    result.advanced = true;
+  }
+  return result;
+}
+
+/** Where each HR workflow goes after its AVP step */
+const HR_AFTER_AVP = {
+  ManualSalary: 'Pending Audit',
+  FinalSettlement: 'Forwarded to CEO',
+  Loan: 'Forwarded to CEO'
+};
+
+/** HR record at 'Pending AVP' whose assigned AVP is disabled: skip to the step after AVP (no AVP signature) */
+async function skipOnHrAvp(record, disabled, modelName) {
+  const result = { skipped: [], advanced: false };
+  const next = HR_AFTER_AVP[modelName];
+  if (!record || !next || record.workflowStatus !== 'Pending AVP' || !disabled.length) return result;
+  const who = disabledForId(disabled, record.assignedAvp?._id || record.assignedAvp);
+  if (!who) return result;
+  record.workflowStatus = next;
+  record.avpComments = `${SKIP_NOTE} (${who.name})`;
+  if (modelName === 'ManualSalary') {
+    // Same clean start in Pre-Audit as manualSalaryAudit.sendToAudit
+    ['preAuditInitialApprovedBy', 'preAuditInitialApprovedAt', 'preAuditInitialComments',
+      'auditForwardedBy', 'auditForwardedAt', 'auditApprovedBy', 'auditApprovedAt', 'auditComments']
+      .forEach((k) => { record[k] = undefined; });
+  }
+  if (record.schema?.path('workflowHistory')) {
+    record.workflowHistory = record.workflowHistory || [];
+    record.workflowHistory.push({
+      fromStatus: 'Pending AVP', toStatus: next, changedBy: null, changedAt: new Date(),
+      comments: `${SKIP_NOTE}: AVP ${who.name}`, module: 'System'
+    });
+  }
+  result.skipped = [`AVP: ${who.name}`];
+  result.advanced = true;
+  return result;
+}
+
+/**
+ * Pre-save hook: skip disabled approvers on a document waiting for approval. `isWaiting(doc)` is a cheap check so
+ * other saves never touch the settings. Never blocks the save — on any error the document saves unchanged.
+ */
+function attachAutoSkip(schema, { isWaiting, skip }) {
+  schema.pre('save', async function autoSkipDisabledApprovers(next) {
+    try {
+      if (!isWaiting(this)) return next();
+      const disabled = await getDisabledApproversCached();
+      if (disabled.length) await skip(this, disabled);
+    } catch (err) {
+      console.warn('[disabledApprovers] auto-skip failed:', err.message);
+    }
+    return next();
+  });
+}
+
 module.exports = {
   SKIP_NOTE,
   getDisabledApprovers,
+  clearDisabledApproversCache,
   skipOnPurchaseOrder,
   skipOnIndent,
-  skipOnUtilityBill
+  skipOnUtilityBill,
+  skipOnCashApproval,
+  skipOnHrAvp,
+  attachAutoSkip
 };

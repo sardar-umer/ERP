@@ -179,4 +179,13 @@ const manualSalarySchema = new mongoose.Schema({
   timestamps: true
 });
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnHrAvp } = require('../../utils/disabledApprovers');
+  attachAutoSkip(manualSalarySchema, {
+    isWaiting: (doc) => doc.workflowStatus === 'Pending AVP',
+    skip: (doc, disabled) => skipOnHrAvp(doc, disabled, 'ManualSalary')
+  });
+}
+
 module.exports = mongoose.model('ManualSalary', manualSalarySchema);

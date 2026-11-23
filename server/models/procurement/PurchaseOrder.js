@@ -491,6 +491,15 @@ purchaseOrderSchema.statics.getStatistics = async function() {
   };
 };
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnPurchaseOrder } = require('../../utils/disabledApprovers');
+  attachAutoSkip(purchaseOrderSchema, {
+    isWaiting: (doc) => doc.status === 'Pending Approval',
+    skip: (doc, disabled) => skipOnPurchaseOrder(doc, disabled)
+  });
+}
+
 const PurchaseOrder = mongoose.model('PurchaseOrder', purchaseOrderSchema);
 
 module.exports = PurchaseOrder;

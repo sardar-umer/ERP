@@ -1641,7 +1641,7 @@ router.put('/:id/approve', authMiddleware, asyncHandler(async (req, res) => {
     ca.departmentApprovalChain[pendingIndex].status = 'approved';
     ca.departmentApprovalChain[pendingIndex].actedAt = new Date();
     if (req.body?.comments) ca.departmentApprovalChain[pendingIndex].comment = req.body.comments;
-    const allApproved = (ca.departmentApprovalChain || []).every((step) => step.status === 'approved');
+    const allApproved = (ca.departmentApprovalChain || []).every((step) => step.status === 'approved' || step.status === 'skipped');
     if (allApproved) {
       ca.departmentApprovalStatus = 'Approved';
       ca.departmentApprovedBy = req.user.id;

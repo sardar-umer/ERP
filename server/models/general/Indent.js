@@ -769,5 +769,14 @@ indentSchema.statics.updateFulfillment = async function (indentId) {
   return indent;
 };
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnIndent } = require('../../utils/disabledApprovers');
+  attachAutoSkip(indentSchema, {
+    isWaiting: (doc) => ['Submitted', 'Under Review'].includes(doc.status) && (doc.approvalChain || []).some((s) => s.status === 'pending'),
+    skip: (doc, disabled) => skipOnIndent(doc, disabled)
+  });
+}
+
 module.exports = mongoose.model('Indent', indentSchema);
 

@@ -537,4 +537,13 @@ utilityBillSchema.methods.getBillDetails = function() {
   };
 };
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnUtilityBill } = require('../../utils/disabledApprovers');
+  attachAutoSkip(utilityBillSchema, {
+    isWaiting: (doc) => doc.approvalStatus === 'Submitted' && (doc.approvalChain || []).some((s) => s.status === 'pending'),
+    skip: (doc, disabled) => skipOnUtilityBill(doc, disabled)
+  });
+}
+
 module.exports = mongoose.model('UtilityBill', utilityBillSchema);

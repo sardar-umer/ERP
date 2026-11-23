@@ -746,4 +746,13 @@ loanSchema.statics.getLoanStatistics = async function () {
 
 loanSchema.plugin(mongoosePaginate);
 
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnHrAvp } = require('../../utils/disabledApprovers');
+  attachAutoSkip(loanSchema, {
+    isWaiting: (doc) => doc.workflowStatus === 'Pending AVP',
+    skip: (doc, disabled) => skipOnHrAvp(doc, disabled, 'Loan')
+  });
+}
+
 module.exports = mongoose.model('Loan', loanSchema); 

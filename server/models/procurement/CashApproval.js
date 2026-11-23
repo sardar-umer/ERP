@@ -131,7 +131,7 @@ const cashApprovalSchema = new mongoose.Schema({
     },
     status: {
       type: String,
-      enum: ['pending', 'approved', 'rejected'],
+      enum: ['pending', 'approved', 'rejected', 'skipped'],
       default: 'pending'
     },
     actedAt: { type: Date },
@@ -429,6 +429,15 @@ cashApprovalSchema.statics.getStatistics = async function () {
     byStatus: stats
   };
 };
+
+// Disabled approvers (utils/disabledApprovers): skip their pending step without a signature
+{
+  const { attachAutoSkip, skipOnCashApproval } = require('../../utils/disabledApprovers');
+  attachAutoSkip(cashApprovalSchema, {
+    isWaiting: (doc) => doc.status === 'Pending Approval',
+    skip: (doc, disabled) => skipOnCashApproval(doc, disabled)
+  });
+}
 
 const CashApproval = mongoose.model('CashApproval', cashApprovalSchema);
 module.exports = CashApproval;
