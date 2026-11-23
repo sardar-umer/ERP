@@ -97,7 +97,8 @@ const SYSTEM_ACCOUNT_RULES = {
   REVENUE_RENT: { type: 'Revenue', check: /rent/i, find: /rent(al)? (revenue|income)/i },
   COGS: { type: 'Expense', check: /cost of|cogs|goods sold/i, find: /cost of (goods|sales)|cogs/i },
   EXPENSE_GENERAL: { type: 'Expense', check: /.*/, find: /general expense/i },
-  EXPENSE_SALARIES: { type: 'Expense', check: /salar|wage/i, find: /salar(y|ies) expense|wages expense/i },
+  // "Payroll Expense" (e.g. Royal Crete's 5002) is the same account as Salaries Expense
+  EXPENSE_SALARIES: { type: 'Expense', check: /salar|wage|payroll/i, find: /salar(y|ies) expense|wages expense|payroll expense/i },
   UTILITIES: { type: 'Expense', check: /utilit|electric/i, find: /utilit|electricity (and|&) gas|electricity expense/i }
 };
 
