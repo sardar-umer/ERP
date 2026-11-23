@@ -3,6 +3,7 @@ import { useNavigate } from 'react-router-dom';
 import { authService } from '../services/authService';
 import toast from 'react-hot-toast';
 import { isPresidentUser } from '../utils/presidentAccess';
+import { setHigherManagementRestricted } from '../utils/permissions';
 
 // Constants
 const MAX_RETRIES = 3;
@@ -86,6 +87,11 @@ const initialState = {
   error: null
 };
 
+/** higher_management whose role was restricted in Role Management: only its ticked permissions apply. */
+const syncHigherManagementRestriction = (user) => {
+  setHigherManagementRestricted(user?.role === 'higher_management' && Boolean(user?.hmPermissionsEnforced));
+};
+
 const authReducer = (state, action) => {
   switch (action.type) {
     case 'LOGIN_START':
@@ -95,6 +101,7 @@ const authReducer = (state, action) => {
         error: null
       };
     case 'LOGIN_SUCCESS':
+      syncHigherManagementRestriction(action.payload.user);
       return {
         ...state,
         user: action.payload.user,
@@ -111,6 +118,7 @@ const authReducer = (state, action) => {
         error: action.payload
       };
     case 'LOGOUT':
+      syncHigherManagementRestriction(null);
       return {
         ...state,
         user: null,
@@ -119,6 +127,7 @@ const authReducer = (state, action) => {
         error: null
       };
     case 'UPDATE_USER':
+      syncHigherManagementRestriction(action.payload);
       return {
         ...state,
         user: action.payload

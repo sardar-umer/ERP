@@ -40,6 +40,14 @@ export const MODULE_KEYS = {
 };
 
 // Role-based Module Access (matching server config)
+/**
+ * higher_management has full access until its role is saved in Role Management; then the server sends
+ * hmPermissionsEnforced and the role on user.roles, and only its ticked permissions apply (set by AuthContext).
+ */
+let hmRestricted = false;
+export const setHigherManagementRestricted = (value) => { hmRestricted = Boolean(value); };
+export const isHigherManagementRestricted = () => hmRestricted;
+
 export const PERMISSIONS = {
   // Super Admin has access to everything
   [ROLES.SUPER_ADMIN]: {
@@ -50,9 +58,9 @@ export const PERMISSIONS = {
   
   // Higher Management has access to all departments
   [ROLES.HIGHER_MANAGEMENT]: {
-    canAccessAll: true,
-    modules: Object.values(MODULE_KEYS),
-    description: 'Access to all departments and modules'
+    get canAccessAll() { return !hmRestricted; },
+    get modules() { return hmRestricted ? [] : Object.values(MODULE_KEYS); },
+    description: 'Access to all departments and modules (until restricted in Role Management)'
   },
 
   [ROLES.DEVELOPER]: {
@@ -1449,8 +1457,8 @@ export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef
   if (path === '/procurement/store/cost-center'
     && ['admin', 'finance_manager', 'procurement_manager', 'hr_manager'].includes(userRole)) return true;
   
-  // Super Admin, Higher Management, and Developer have access to everything
-  if (userRole === 'super_admin' || userRole === 'higher_management' || userRole === 'developer') {
+  // Super Admin, Developer, and Higher Management (until its role is restricted) have access to everything
+  if (userRole === 'super_admin' || userRole === 'developer' || (userRole === 'higher_management' && !hmRestricted)) {
     if (path === '/hr/evaluation-appraisal/authorities' || path.startsWith('/hr/evaluation-appraisal/authorities/')) {
       return userRole === 'super_admin' || userRole === 'developer';
     }

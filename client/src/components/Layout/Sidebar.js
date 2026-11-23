@@ -51,7 +51,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { canSeePresidentDashboard } from '../../utils/presidentAccess';
-import { getModuleMenuItems, MODULES } from '../../utils/permissions';
+import { getModuleMenuItems, MODULES, isHigherManagementRestricted } from '../../utils/permissions';
 import NotificationService from '../../services/notificationService';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { getImageUrl, handleImageError } from '../../utils/imageService';
@@ -520,8 +520,9 @@ const Sidebar = () => {
       // We'll filter based on actual permissions, not the legacy role field
       let baseMenuItems = getMenuItems('super_admin') || [];
 
-      // Super admin, higher management, and developer: full menu
-      if (['super_admin', 'higher_management', 'developer'].includes(userRole)) {
+      // Super admin, developer, and higher management (until its role is restricted): full menu
+      if (['super_admin', 'developer'].includes(userRole)
+        || (userRole === 'higher_management' && !isHigherManagementRestricted())) {
         return baseMenuItems;
       }
     

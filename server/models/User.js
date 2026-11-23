@@ -262,6 +262,7 @@ userSchema.methods.getProfile = function() {
     approvalStamp: this.approvalStamp,
     lastLogin: this.lastLogin,
     permissions: this.permissions,
+    hmPermissionsEnforced: Boolean(this.$locals && this.$locals.hmPermissionsEnforced),
     createdAt: this.createdAt,
     updatedAt: this.updatedAt
   };

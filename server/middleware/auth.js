@@ -1,7 +1,8 @@
 const jwt = require('jsonwebtoken');
 const User = require('../models/User');
 const { runWithUser } = require('../utils/requestContext');
-const { ROLE_MODULE_ACCESS } = require('../config/permissions');
+const { ROLE_MODULE_ACCESS, higherManagementHasFullAccess } = require('../config/permissions');
+const { attachHigherManagementRole } = require('../utils/higherManagementRole');
 
 // Helper functions
 const sendError = (res, status, message) => res.status(status).json({ success: false, message });
@@ -128,6 +129,9 @@ const authMiddleware = async (req, res, next) => {
     if (!user) return sendError(res, 401, 'Invalid token. User not found.');
     if (!user.isActive) return sendError(res, 401, 'Account is deactivated. Please contact administrator.');
 
+    // higher_management whose role is restricted in Role Management: its role's permissions apply
+    if (user.role === 'higher_management') await attachHigherManagementRole(user);
+
     req.user = user;
     // Keep the acting user for the rest of the request (e.g. Employee change log)
     runWithUser(user, () => next());
@@ -252,8 +256,9 @@ const authorize = (...roles) => {
 
     const userRole = req.user.role;
     
-    // Super Admin, Higher Management, and Developer have access to everything
-    if (userRole === 'super_admin' || userRole === 'higher_management' || userRole === 'developer') {
+    // Super Admin, Developer, and Higher Management (until its role is restricted) have access to everything
+    if (userRole === 'super_admin' || userRole === 'developer'
+      || (userRole === 'higher_management' && higherManagementHasFullAccess())) {
       return next();
     }
 

@@ -5,6 +5,7 @@ const User = require('../models/User');
 const { authMiddleware } = require('../middleware/auth');
 const permissions = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { clearHigherManagementRoleCache } = require('../utils/higherManagementRole');
 
 // Parse JSON or JS-style (single-quoted, unquoted keys) string to array; production proxies sometimes send the latter
 function parseJsonOrJsArray(val) {
@@ -230,8 +231,9 @@ router.put('/:id',
       });
     }
     
-    // Prevent updating system roles
-    if (role.isSystemRole) {
+    // System roles are locked, except higher_management (its permissions can be edited)
+    const isHigherManagement = role.name === 'higher_management';
+    if (role.isSystemRole && !isHigherManagement) {
       return res.status(400).json({
         success: false,
         message: 'Cannot update system role'
@@ -287,10 +289,12 @@ router.put('/:id',
     // Update fields
     if (displayName !== undefined) role.displayName = displayName;
     if (description !== undefined) role.description = description;
-    if (isActive !== undefined) role.isActive = isActive;
+    if (isActive !== undefined && !isHigherManagement) role.isActive = isActive;
+    if (isHigherManagement && rolePermissions !== undefined) role.enforcePermissions = true;
     role.updatedBy = req.user.id;
     
     await role.save();
+    if (isHigherManagement) clearHigherManagementRoleCache();
     
     // Populate the updated role
     const populatedRole = await Role.findById(role._id)

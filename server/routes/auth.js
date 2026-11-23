@@ -27,6 +27,7 @@ const {
   optionalDepartmentAuthValidator
 } = require('../utils/departmentResolver');
 
+const { attachHigherManagementRole } = require('../utils/higherManagementRole');
 const router = express.Router();
 
 const USER_ROLE_POPULATE = [
@@ -43,9 +44,11 @@ async function loadUserWithRoles(userIdOrDoc) {
   return user;
 }
 
-async function buildAuthProfilePayload(userIdOrDoc) {
+async function buildAuthProfilePayload(userIdOrDoc, { forSelf = true } = {}) {
   const user = await loadUserWithRoles(userIdOrDoc);
   if (!user) return null;
+  // The logged-in user's own profile: a restricted higher_management role's permissions apply (not saved)
+  if (forSelf) await attachHigherManagementRole(user);
   const userProfile = user.getProfile();
   userProfile.linkedEmployee = user.linkedEmployee;
   await attachEmployeeProfileFields(userProfile, user);
@@ -344,6 +347,7 @@ router.post('/login', [
     await user.populate('roleRef', 'name displayName description permissions isActive');
     await user.populate('roles', 'name displayName description permissions isActive');
     await user.populate('subRoles', 'name module permissions description');
+    await attachHigherManagementRole(user);
     
     // Generate JWT token
     const token = user.generateAuthToken();
@@ -406,6 +410,7 @@ router.post('/refresh-token', refreshAuthMiddleware, asyncHandler(async (req, re
     await req.user.populate('roleRef', 'name displayName description permissions isActive');
     await req.user.populate('roles', 'name displayName description permissions isActive');
     await req.user.populate('subRoles', 'name module permissions description');
+    await attachHigherManagementRole(req.user);
     
     // Generate new token
     const newToken = req.user.generateAuthToken();
@@ -908,7 +913,7 @@ router.post('/users', [
     await linkUserToEmployee(user._id, employeeDoc._id);
   }
 
-  const userProfile = await buildAuthProfilePayload(user._id);
+  const userProfile = await buildAuthProfilePayload(user._id, { forSelf: false });
 
   res.status(201).json({
     success: true,
@@ -1110,7 +1115,7 @@ router.patch(
       return res.status(400).json({ success: false, message: e.message || 'Link failed' });
     }
 
-    const userProfile = await buildAuthProfilePayload(req.params.id);
+    const userProfile = await buildAuthProfilePayload(req.params.id, { forSelf: false });
     res.json({
       success: true,
       message: unlink ? 'Employee link removed' : 'Employee linked successfully',
@@ -1200,7 +1205,7 @@ router.put('/users/:id', [
     });
   }
 
-  const userProfile = await buildAuthProfilePayload(user._id);
+  const userProfile = await buildAuthProfilePayload(user._id, { forSelf: false });
 
   res.json({
     success: true,

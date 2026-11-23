@@ -39,6 +39,19 @@ import {
 import RolePermissionMatrix from '../../components/Admin/RolePermissionMatrix';
 import RoleTemplates from '../../components/Admin/RoleTemplates';
 import api from '../../services/api';
+import { MODULES, getCatalogSubmodules } from '../../utils/permissions';
+
+const HIGHER_MANAGEMENT = 'higher_management';
+const ALL_ACTIONS = ['read', 'create', 'update', 'delete', 'approve'];
+
+/** Every module and page ticked — what higher_management has until its role is first saved. */
+const buildFullPermissions = () => Object.keys(MODULES)
+  .filter((key) => MODULES[key] && typeof MODULES[key] === 'object' && key !== 'dashboard')
+  .map((module) => ({
+    module,
+    actions: [...ALL_ACTIONS],
+    submodules: getCatalogSubmodules(module).map((submodule) => ({ submodule, actions: [...ALL_ACTIONS] }))
+  }));
 
 const RoleManagement = () => {
   const [roles, setRoles] = useState([]);
@@ -128,9 +141,11 @@ const RoleManagement = () => {
 
   const handleEditRole = (role) => {
     setEditingRole(role);
+    // higher_management not yet restricted has full access: start with everything ticked
+    const startFull = role.name === HIGHER_MANAGEMENT && !role.enforcePermissions;
     setFormData({
       name: role.name,
-      permissions: role.permissions || [],
+      permissions: startFull ? buildFullPermissions() : (role.permissions || []),
       isActive: role.isActive
     });
     setDialogOpen(true);
@@ -151,7 +166,7 @@ const RoleManagement = () => {
     try {
       const payload = {
         ...formData,
-        displayName: formData.name,
+        displayName: editingRole?.name === HIGHER_MANAGEMENT ? (editingRole.displayName || formData.name) : formData.name,
         description: ''
       };
       console.log('[RoleManagement] Saving role payload (types):', {
@@ -347,7 +362,7 @@ const RoleManagement = () => {
                         <IconButton 
                           size="small" 
                           onClick={() => handleEditRole(role)}
-                          disabled={role.isSystemRole}
+                          disabled={role.isSystemRole && role.name !== HIGHER_MANAGEMENT}
                         >
                           <EditIcon />
                         </IconButton>
@@ -405,6 +420,13 @@ const RoleManagement = () => {
               required
               helperText="This name will be shown in the sidebar and profile"
             />
+            {editingRole?.name === HIGHER_MANAGEMENT ? (
+              <Alert severity="info">
+                {editingRole.enforcePermissions
+                  ? 'Higher Management users get only what is ticked here (plus any other roles they have).'
+                  : 'Higher Management users have full access today. Once you save, they get only what is ticked here (plus any other roles they have).'}
+              </Alert>
+            ) : (
             <FormControlLabel
               control={
                 <Switch
@@ -414,6 +436,7 @@ const RoleManagement = () => {
               }
               label="Active"
             />
+            )}
             
             <Divider />
             

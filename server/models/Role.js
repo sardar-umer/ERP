@@ -42,6 +42,11 @@ const roleSchema = new mongoose.Schema({
     type: Boolean,
     default: false // System roles cannot be deleted
   },
+  /** higher_management only: once saved from Role Management, its ticked permissions apply instead of full access */
+  enforcePermissions: {
+    type: Boolean,
+    default: false
+  },
   createdBy: {
     type: mongoose.Schema.Types.ObjectId,
     ref: 'User'

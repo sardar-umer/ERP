@@ -163,6 +163,27 @@ const SUBMODULES = {
   ]
 };
 
+/**
+ * higher_management has full access until its role is saved in Role Management (Role.enforcePermissions).
+ * After that only its ticked permissions apply. Kept current by utils/higherManagementRole on each request.
+ */
+const HM_STATE = { enforced: false, modules: [], role: null };
+const setHigherManagementState = (role) => {
+  HM_STATE.enforced = Boolean(role && role.enforcePermissions);
+  HM_STATE.role = HM_STATE.enforced ? role : null;
+  HM_STATE.modules = HM_STATE.enforced && role.isActive !== false
+    ? (role.permissions || []).filter((p) => permissionHasAnyAction(p)).map((p) => p.module)
+    : [];
+};
+const permissionHasAnyAction = (p) => Boolean(p) && (
+  (Array.isArray(p.actions) && p.actions.length > 0) ||
+  (Array.isArray(p.submodules) && p.submodules.some((sm) => sm && typeof sm === 'object' && Array.isArray(sm.actions) && sm.actions.length > 0))
+);
+/** True while higher_management still has full access (its role has not been restricted). */
+const higherManagementHasFullAccess = () => !HM_STATE.enforced;
+const isFullAccessRole = (role) => role === ROLES.SUPER_ADMIN || role === ROLES.DEVELOPER
+  || (role === ROLES.HIGHER_MANAGEMENT && !HM_STATE.enforced);
+
 // Role-based Module Access
 const ROLE_MODULE_ACCESS = {
   [ROLES.SUPER_ADMIN]: {
@@ -172,9 +193,9 @@ const ROLE_MODULE_ACCESS = {
   },
   
   [ROLES.HIGHER_MANAGEMENT]: {
-    canAccessAll: true,
-    modules: Object.values(MODULES),
-    description: 'Access to all departments and modules'
+    get canAccessAll() { return !HM_STATE.enforced; },
+    get modules() { return HM_STATE.enforced ? HM_STATE.modules : Object.values(MODULES); },
+    description: 'Access to all departments and modules (until restricted in Role Management)'
   },
 
   [ROLES.DEVELOPER]: {
@@ -503,12 +524,8 @@ const hasPermission = (userRole, permission) => {
   if (!userRole) return false;
   const normalized = String(userRole).toLowerCase().replace(/\s+/g, '_');
   
-  // Super admin, higher management, and developer have all permissions
-  if (
-    normalized === ROLES.SUPER_ADMIN ||
-    normalized === ROLES.HIGHER_MANAGEMENT ||
-    normalized === ROLES.DEVELOPER
-  ) {
+  // Super admin, developer, and (unless restricted) higher management have all permissions
+  if (isFullAccessRole(normalized)) {
     return true;
   }
   
@@ -598,13 +615,15 @@ const getUserAllowedSubmodules = async (userId, module) => {
   const user = await User.findById(userId);
   if (!user) return [];
   
-  // Super admin, higher management, and developer have access to everything
-  if (
-    user.role === ROLES.SUPER_ADMIN ||
-    user.role === ROLES.HIGHER_MANAGEMENT ||
-    user.role === ROLES.DEVELOPER
-  ) {
+  // Super admin, developer, and (unless restricted) higher management have access to everything
+  if (isFullAccessRole(user.role)) {
     return SUBMODULES[module] || [];
+  }
+  // Restricted higher management: only the submodules ticked on its role
+  if (user.role === ROLES.HIGHER_MANAGEMENT) {
+    const perm = (HM_STATE.role?.isActive !== false) && (HM_STATE.role?.permissions || []).find((p) => p.module === module);
+    if (!perm) return [];
+    return (SUBMODULES[module] || []).filter((sm) => modulePermissionAllowsAction(perm, sm, 'read'));
   }
   
   // Get user's active sub-role assignments
@@ -706,13 +725,15 @@ const checkSubRoleAccess = async (userId, module, submodule, action) => {
   const user = await User.findById(userId).populate('roleRef').populate('roles');
   if (!user) return false;
   
-  // Super admin, higher management, and developer have access to everything
-  if (
-    user.role === ROLES.SUPER_ADMIN ||
-    user.role === ROLES.HIGHER_MANAGEMENT ||
-    user.role === ROLES.DEVELOPER
-  ) {
+  // Super admin, developer, and (unless restricted) higher management have access to everything
+  if (isFullAccessRole(user.role)) {
     return true;
+  }
+  // Restricted higher management: its role's ticked permissions, then any other roles the user has
+  const restrictedHm = user.role === ROLES.HIGHER_MANAGEMENT;
+  if (restrictedHm && HM_STATE.role?.isActive !== false) {
+    const perm = (HM_STATE.role?.permissions || []).find((p) => p.module === module);
+    if (modulePermissionAllowsAction(perm, submodule, action)) return true;
   }
   
   // Grant access for Centralized Store & Utility Bills Management if user belongs to Finance department or has Finance role
@@ -771,8 +792,9 @@ const checkSubRoleAccess = async (userId, module, submodule, action) => {
     return false;
   }
   
-  // If user has NO sub-roles, check if they have module access
-  if (hasModuleAccess(user.role, module)) {
+  // If user has NO sub-roles, check if they have module access (not for restricted higher management:
+  // its role's ticks were already checked above)
+  if (!restrictedHm && hasModuleAccess(user.role, module)) {
     // Special handling for TCM_MANAGER - restrict to specific submodules
     if (user.role === ROLES.TCM_MANAGER && module === MODULES.FINANCE) {
       const allowedSubmodules = [
@@ -810,6 +832,8 @@ module.exports = {
   SUBMODULES,
   ROLE_MODULE_ACCESS,
   PERMISSION_MAPPINGS,
+  setHigherManagementState,
+  higherManagementHasFullAccess,
   hasPermission,
   hasModuleAccess,
   hasModuleAccessWithRole,
