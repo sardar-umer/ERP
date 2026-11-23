@@ -870,8 +870,11 @@ router.get('/finance-vendors/bills/:id',
         const grnIds = (bill.linkedGRNs && bill.linkedGRNs.length > 0)
           ? bill.linkedGRNs.map(g => g.grnId).filter(Boolean)
           : [];
-        const grnQuery = grnIds.length > 0 ? { _id: { $in: grnIds } } : { purchaseOrder: po._id };
-        const grns = await GoodsReceive.find(grnQuery).populate('supplier', 'name').populate('receivedBy', 'firstName lastName email').lean();
+        const { loadFullGrns } = require('../utils/billSupportingDocuments');
+        const grnQueryIds = grnIds.length > 0
+          ? grnIds
+          : (await GoodsReceive.find({ purchaseOrder: po._id }).select('_id').lean()).map((g) => g._id);
+        const grns = await loadFullGrns(grnQueryIds);
         poDetail = { po, indent, quotations, grns };
       }
     }

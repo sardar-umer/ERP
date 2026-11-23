@@ -118,6 +118,7 @@ import StoreVettingNotice from '../../components/Procurement/StoreVettingNotice'
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
+import GrnCopyView from '../../components/Procurement/GrnCopyView';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
 import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
@@ -3956,39 +3957,12 @@ const PreAudit = () => {
                         <Typography color="text.secondary" sx={{ py: 4, textAlign: 'center' }}>No Goods Receive Notes linked.</Typography>
                       ) : (
                         (viewDialog.fullDocument?.poDetail?.grns || viewDialog.grns || []).map((grn, gIdx) => (
-                          <Paper key={grn._id || gIdx} sx={{ p: 3, mb: 3, maxWidth: '210mm', mx: 'auto', border: '1px solid', borderColor: 'divider' }}>
-                            <Typography variant="h6" fontWeight={700} align="center" sx={{ mb: 2 }}>
-                              GOODS RECEIVE NOTE #{grn.receiveNumber || '—'}
-                            </Typography>
-                            <Grid container spacing={2} sx={{ mb: 2 }}>
-                              <Grid item xs={6}><Typography variant="caption" color="text.secondary" display="block">Supplier</Typography><Typography variant="body2">{grn.supplierName || grn.supplier?.name || '—'}</Typography></Grid>
-                              <Grid item xs={6}><Typography variant="caption" color="text.secondary" display="block">Receive Date</Typography><Typography variant="body2">{formatDate(grn.receiveDate)}</Typography></Grid>
-                            </Grid>
-                            <TableContainer sx={{ mb: 2 }}>
-                              <Table size="small">
-                                <TableHead>
-                                  <TableRow sx={{ bgcolor: 'grey.100' }}>
-                                    <TableCell sx={{ fontWeight: 'bold' }}>Product Code</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold' }}>Description</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>Qty</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>Rate</TableCell>
-                                    <TableCell align="right" sx={{ fontWeight: 'bold' }}>Total Value</TableCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {(grn.items || []).map((item, idx) => (
-                                    <TableRow key={idx}>
-                                      <TableCell>{item.itemCode || '—'}</TableCell>
-                                      <TableCell>{item.itemName || '—'}</TableCell>
-                                      <TableCell align="right">{formatNumber(item.quantity)} {item.unit || ''}</TableCell>
-                                      <TableCell align="right">{formatNumber(item.unitPrice)}</TableCell>
-                                      <TableCell align="right">{formatNumber((item.quantity || 0) * (item.unitPrice || 0))}</TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </TableContainer>
-                          </Paper>
+                          <GrnCopyView
+                            key={grn._id || gIdx}
+                            grn={grn}
+                            companyName={viewDialog.fullDocument?.poDetail?.po?.companyId?.name || viewDialog.fullDocument?.poDetail?.po?.indent?.companyId?.name || ''}
+                            poNumber={viewDialog.fullDocument?.poDetail?.po?.orderNumber}
+                          />
                         ))
                       )}
                     </Box>

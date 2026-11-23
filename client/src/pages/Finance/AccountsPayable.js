@@ -109,6 +109,7 @@ import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionA
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { PurchaseOrderAttachmentsPanel } from '../../components/Procurement/PurchaseOrderAttachments';
 import BillSupportingDocuments from '../../components/Finance/BillSupportingDocuments';
+import GrnCopyView from '../../components/Procurement/GrnCopyView';
 import WhtField, { computeWht, whtPayload } from '../../components/Finance/WhtField';
 import { ChargedToPanel } from '../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCheck';
@@ -1895,14 +1896,6 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
     return 'error';
   };
 
-  const formatGRNDate = (d) => {
-    if (!d) return '';
-    const x = new Date(d);
-    const days = String(x.getDate()).padStart(2, '0');
-    const months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return `${days}-${months[x.getMonth()]}-${x.getFullYear()}`;
-  };
-  const formatGRNNumber = (n) => (n == null || n === '') ? '' : Number(n).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
   const formatDateForPrint = (date) => {
     if (!date) return '';
     const d = new Date(date);
@@ -3446,104 +3439,21 @@ const AccountsPayable = ({ embedPayBillId = null, embedViewBillId = null, onEmbe
                   )}
                 {/* Tab 5: GRNs */}
                 {billViewTab === 5 && (
-                    <Box sx={{ p: 2, overflowX: 'auto' }} className="print-content">
+                  <Box sx={{ p: 2, overflowX: 'auto' }} className="print-content">
                     {(!selectedBill?.poDetail?.grns || selectedBill.poDetail.grns.length === 0) ? (
-                        <Typography color="textSecondary" sx={{ py: 4, textAlign: 'center' }}>No GRN(s) attached to this Purchase Order.</Typography>
-                      ) : (
-                        selectedBill.poDetail.grns.map((grn) => (
-                          <Paper key={grn._id} sx={{ p: 4, mb: 4, maxWidth: '210mm', mx: 'auto', backgroundColor: '#fff', boxShadow: 'none', border: '1px solid', borderColor: 'divider' }}>
-                            <Typography variant="overline" color="textSecondary" sx={{ display: 'block', mb: 1 }}>Attached GRN (copy)</Typography>
-                            <Grid container sx={{ mb: 2, borderBottom: 1, borderColor: 'divider', pb: 2 }} alignItems="center">
-                              <Grid item xs={4}>
-                                <Typography variant="h6" fontWeight="bold">
-                                  {selectedBill.poDetail?.po?.companyId?.name || selectedBill.poDetail?.po?.indent?.companyId?.name || '—'}
-                                </Typography>
-                                <Typography variant="body2" color="textSecondary">Head Office</Typography>
-                              </Grid>
-                              <Grid item xs={4} sx={{ textAlign: 'center' }}><Typography variant="h5" fontWeight="bold">Goods Received Note</Typography></Grid>
-                              <Grid item xs={4} />
-                            </Grid>
-                            <Grid container spacing={3} sx={{ mb: 2 }}>
-                              <Grid item xs={12} md={6}>
-                                <Typography variant="caption" color="textSecondary">No.</Typography>
-                                <Typography variant="body1" fontWeight="bold">{grn.receiveNumber || grn._id}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Supplier</Typography>
-                                <Typography variant="body2">{[grn.supplier?.supplierId, grn.supplierName || grn.supplier?.name].filter(Boolean).join(' ') || '—'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Address</Typography>
-                                <Typography variant="body2">{grn.supplierAddress || grn.supplier?.address || '—'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Narration</Typography>
-                                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{grn.narration || '—'}</Typography>
-                              </Grid>
-                              <Grid item xs={12} md={6}>
-                                <Typography variant="caption" color="textSecondary">Date</Typography>
-                                <Typography variant="body2">{formatGRNDate(grn.receiveDate)}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Currency</Typography>
-                                <Typography variant="body2">{grn.currency || 'Rupees'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>P.R No.</Typography>
-                                <Typography variant="body2">{grn.prNumber || '—'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>P.O No.</Typography>
-                                <Typography variant="body2">{grn.poNumber || selectedBill.poDetail.po?.orderNumber || '—'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Store</Typography>
-                                <Typography variant="body2">{grn.store || '—'}</Typography>
-                                <Typography variant="caption" color="textSecondary" sx={{ display: 'block', mt: 1 }}>Gate Pass No.</Typography>
-                                <Typography variant="body2">{grn.gatePassNo || '—'}</Typography>
-                              </Grid>
-                            </Grid>
-                            <TableContainer sx={{ mb: 2, border: 1, borderColor: 'divider', borderRadius: 1 }}>
-                              <Table size="small">
-                                <TableHead>
-                                  <TableRow sx={{ bgcolor: 'grey.100' }}>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }}>S. No</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }}>Product Code</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }}>Description</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }}>Unit</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }} align="right">Quantity</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }} align="right">Rate</TableCell>
-                                    <TableCell sx={{ fontWeight: 'bold', border: '1px solid', borderColor: 'divider' }} align="right">Value Excl. ST</TableCell>
-                                  </TableRow>
-                                </TableHead>
-                                <TableBody>
-                                  {(grn.items || []).map((item, idx) => (
-                                    <TableRow key={idx}>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }}>{idx + 1}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }}>{item.itemCode || '—'}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }}>{item.itemName || '—'}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }}>{item.unit || '—'}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }} align="right">{formatGRNNumber(item.quantity)}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }} align="right">{formatGRNNumber(item.unitPrice)}</TableCell>
-                                      <TableCell sx={{ border: '1px solid', borderColor: 'divider' }} align="right">{formatGRNNumber(item.valueExcludingSalesTax ?? (item.quantity * item.unitPrice))}</TableCell>
-                                    </TableRow>
-                                  ))}
-                                </TableBody>
-                              </Table>
-                            </TableContainer>
-                            <Box sx={{ display: 'flex', justifyContent: 'flex-end', mb: 2 }}>
-                              <Grid container spacing={1} sx={{ maxWidth: 320 }}>
-                                <Grid item xs={6}><Typography variant="body2">Discount</Typography></Grid>
-                                <Grid item xs={6} sx={{ textAlign: 'right' }}><Typography variant="body2">{formatGRNNumber(grn.discount)}</Typography></Grid>
-                                <Grid item xs={6}><Typography variant="body2">Other Charges</Typography></Grid>
-                                <Grid item xs={6} sx={{ textAlign: 'right' }}><Typography variant="body2">{formatGRNNumber(grn.otherCharges)}</Typography></Grid>
-                                <Grid item xs={6}><Typography variant="body2" fontWeight="bold">Net Amount</Typography></Grid>
-                                <Grid item xs={6} sx={{ textAlign: 'right' }}><Typography variant="body2" fontWeight="bold">{formatGRNNumber(grn.netAmount)}</Typography></Grid>
-                                <Grid item xs={6}><Typography variant="body2" fontWeight="bold">Total</Typography></Grid>
-                                <Grid item xs={6} sx={{ textAlign: 'right' }}><Typography variant="body2" fontWeight="bold">{formatGRNNumber(grn.total ?? grn.netAmount)}</Typography></Grid>
-                              </Grid>
-                            </Box>
-                            <Divider sx={{ my: 2 }} />
-                            <Typography variant="caption" color="textSecondary">Observation</Typography>
-                            <Typography variant="body2" sx={{ minHeight: 24 }}>{grn.observation || ' '}</Typography>
-                            <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-end', mt: 3 }}>
-                              <Box>
-                                <Typography variant="caption" color="textSecondary">Prepared By</Typography>
-                                <Typography variant="body2" fontWeight="medium">{grn.preparedByName || (grn.receivedBy?.firstName && grn.receivedBy?.lastName ? `${grn.receivedBy.firstName} ${grn.receivedBy.lastName}` : '—')}</Typography>
-                              </Box>
-                              <Box sx={{ width: 120, height: 40, border: '1px dashed', borderColor: 'divider' }} />
-                            </Box>
-                          </Paper>
-                        ))
-                      )}
-                    </Box>
-                  )}
+                      <Typography color="textSecondary" sx={{ py: 4, textAlign: 'center' }}>No GRN(s) linked to this bill.</Typography>
+                    ) : (
+                      selectedBill.poDetail.grns.map((grn) => (
+                        <GrnCopyView
+                          key={grn._id}
+                          grn={grn}
+                          companyName={selectedBill.poDetail?.po?.companyId?.name || selectedBill.poDetail?.po?.indent?.companyId?.name || ''}
+                          poNumber={selectedBill.poDetail?.po?.orderNumber}
+                        />
+                      ))
+                    )}
+                  </Box>
+                )}
 
                 {/* Tab 8: every file behind the bill — bill, GRN, PO, indent, quotations */}
                 {billViewTab === 8 && (

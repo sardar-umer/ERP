@@ -5761,12 +5761,8 @@ router.get('/vendor-bills/:id',
       .lean();
     const grnById = new Map(grnDocs.map((g) => [String(g._id), g]));
     // Full GRN documents for the bill's GRN(s) tab (same copy Finance and Pre-Audit see)
-    const fullGrns = await GoodsReceive.find({ _id: { $in: links.map((l) => l.grnId).filter(Boolean) } })
-      .populate('supplier', 'name supplierId address')
-      .populate('receivedBy', 'firstName lastName')
-      .lean();
-    const fullGrnById = new Map(fullGrns.map((g) => [String(g._id), g]));
-    const grnDocuments = links.map((l) => fullGrnById.get(String(l.grnId))).filter(Boolean);
+    const { loadFullGrns } = require('../utils/billSupportingDocuments');
+    const grnDocuments = await loadFullGrns(links.map((l) => l.grnId));
     const paid = r2(b.amountPaid ?? b.paidAmount ?? 0);
     const advanceApplied = r2(b.advanceApplied);
     res.json({

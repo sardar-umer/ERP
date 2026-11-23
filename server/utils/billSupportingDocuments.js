@@ -1,6 +1,32 @@
 const GoodsReceive = require('../models/procurement/GoodsReceive');
 
 /**
+ * Full GRN documents for a bill's GRN(s) tab — same fields the GRN's own view shows
+ * (company, cost center, PO, delivery challan, items, attachments), in the order of `ids`.
+ */
+async function loadFullGrns(ids) {
+  const list = (ids || []).filter(Boolean).map(String);
+  if (!list.length) return [];
+  const docs = await GoodsReceive.find({ _id: { $in: list } })
+    .populate('supplier', 'name contactPerson email phone supplierId address')
+    .populate('costCenter', 'code name path')
+    .populate('companyId', 'name code symbol')
+    .populate({
+      path: 'purchaseOrder',
+      select: 'orderNumber companyId indent',
+      populate: [
+        { path: 'companyId', select: 'name code symbol' },
+        { path: 'indent', select: 'companyId indentNumber', populate: { path: 'companyId', select: 'name code symbol' } }
+      ]
+    })
+    .populate('deliveryChallan', 'dcNumber gatePassNo status qaStatus')
+    .populate('receivedBy', 'firstName lastName email')
+    .lean();
+  const byId = new Map(docs.map((d) => [String(d._id), d]));
+  return [...new Set(list)].map((id) => byId.get(id)).filter(Boolean);
+}
+
+/**
  * A vendor bill's linked GRNs when the GRN was not made against a purchase order
  * (the PO lookup finds nothing, so the bill would otherwise show no linked documents).
  */
@@ -8,10 +34,7 @@ async function loadLinkedGrnsWithoutPo(bill) {
   const ids = (bill?.linkedGRNs || []).map((g) => g.grnId).filter(Boolean);
   if (!ids.length && bill?.referenceType === 'grn' && bill.referenceId) ids.push(bill.referenceId);
   if (!ids.length) return null;
-  const grns = await GoodsReceive.find({ _id: { $in: ids } })
-    .populate('supplier', 'name')
-    .populate('receivedBy', 'firstName lastName email')
-    .lean();
+  const grns = await loadFullGrns(ids);
   return grns.length ? { po: null, indent: null, quotations: [], grns } : null;
 }
 
@@ -48,4 +71,4 @@ function buildBillSupportingDocuments(bill, poDetail) {
   return docs;
 }
 
-module.exports = { buildBillSupportingDocuments, loadLinkedGrnsWithoutPo };
+module.exports = { loadFullGrns, buildBillSupportingDocuments, loadLinkedGrnsWithoutPo };
