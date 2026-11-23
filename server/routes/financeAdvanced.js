@@ -5507,7 +5507,7 @@ router.post('/accounts-payable/:id/department-approve',
 
     const roleLabel = bill.approvalChain[pendingIndex].roleLabel || COA_DEPT_APPROVAL_ROLE_LABELS[pendingIndex] || 'Department Approver';
     const previousStatus = bill.approvalStatus;
-    const allApproved = (bill.approvalChain || []).every((step) => step.status === 'approved');
+    const allApproved = (bill.approvalChain || []).every((step) => step.status === 'approved' || step.status === 'skipped');
     // GRN bills (Procurement) share this chain: one Procurement approval authority, then Pre-Audit
     const historyModule = (bill.linkedGRNs || []).length ? 'Procurement' : 'Finance';
     const chainLabels = (bill.approvalChain || []).map((step) => step.roleLabel).filter(Boolean).join(' / ')

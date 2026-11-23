@@ -1463,7 +1463,7 @@ router.post('/:id/approve', requireBillPermission('update'), async (req, res) =>
     bill.approvalChain[pendingIndex].actedAt = new Date();
 
     const previousStatus = bill.approvalStatus;
-    const allApproved = (bill.approvalChain || []).every((step) => step.status === 'approved');
+    const allApproved = (bill.approvalChain || []).every((step) => step.status === 'approved' || step.status === 'skipped');
     if (allApproved) {
       bill.approvalStatus = 'Approved';
       bill.approvedBy = userId;

@@ -260,7 +260,8 @@ const UtilityBillDetails = ({
       rows.push({
         authority: getApprovalRoleLabel(step?.role, idx),
         name: userDisplayName(step?.approver),
-        signature: approved ? userDisplayName(step?.approver) : '',
+        // A skipped step (approver disabled) shows the note, never a signature
+        signature: approved ? userDisplayName(step?.approver) : (step?.status === 'skipped' ? 'Skipped — approver disabled' : ''),
         signatureUser: approved ? step?.approver : null,
         dateTime: approved ? formatDateTime(step?.actedAt) : ''
       });

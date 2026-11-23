@@ -797,7 +797,9 @@ const IndentDetail = ({
                                   ? 'Approved'
                                   : st === 'rejected'
                                     ? 'Rejected'
-                                    : st,
+                                    : st === 'skipped'
+                                      ? 'Skipped — approver disabled'
+                                      : st,
                             statusColor:
                               st === 'approved' ? 'success' : st === 'rejected' ? 'error' : 'default',
                             signatureUser: step?.approver || null,

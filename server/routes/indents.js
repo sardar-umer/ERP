@@ -1631,7 +1631,7 @@ router.post('/:id/approve',
       indent.approvalChain[stepIndex].actedAt = new Date();
       syncSignatureSlotFromApprover(indent, stepIndex, actingUser);
 
-      const allApproved = indent.approvalChain.every((s) => s.status === 'approved');
+      const allApproved = indent.approvalChain.every((s) => s.status === 'approved' || s.status === 'skipped');
       if (allApproved) {
         indent.status = 'Approved';
         indent.approvedBy = req.user._id;

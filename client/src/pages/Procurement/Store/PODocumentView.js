@@ -467,7 +467,9 @@ const PODocumentView = ({ data }) => {
                   const authorityUser = authorityApproval?.approver || row.user;
                   const isLegacyApproved = !authorityApproval && !legacyAuthorityApplied && matchesAuthority(row.fallback);
                   if (isLegacyApproved) legacyAuthorityApplied = true;
-                  const signatureUser = authorityApproval?.approver || row.user || (isLegacyApproved ? authorityApprovedBy : null);
+                  // Step closed because the approver is disabled: no signature, marked as skipped
+                  const isSkippedRow = Boolean(authorityApproval?.skipped);
+                  const signatureUser = isSkippedRow ? null : (authorityApproval?.approver || row.user || (isLegacyApproved ? authorityApprovedBy : null));
                   const isApprovedRow = Boolean(authorityApproval || isLegacyApproved);
                   const actedAt = authorityApproval?.approvedAt || (isLegacyApproved ? authorityApprovedAt : null);
                   return (
@@ -475,7 +477,11 @@ const PODocumentView = ({ data }) => {
                       <TableCell sx={{ fontWeight: 800 }}>{row.label}</TableCell>
                       <TableCell>{authorityApproval?.approver && typeof authorityApproval.approver === 'object' ? (approverLabel(authorityApproval.approver) || row.fallback || '—') : (row.fallback || (authorityUser ? approverLabel(authorityUser) : '—'))}</TableCell>
                       <TableCell align="center">
-                        {isApprovedRow && signatureUser?.digitalSignature ? (
+                        {isSkippedRow ? (
+                          <Typography variant="caption" color="text.secondary" sx={{ fontSize: '0.65rem', fontStyle: 'italic', '@media print': { fontSize: '8px' } }}>
+                            Skipped — approver disabled
+                          </Typography>
+                        ) : isApprovedRow && signatureUser?.digitalSignature ? (
                           <Box
                             sx={{
                               maxHeight: 28,

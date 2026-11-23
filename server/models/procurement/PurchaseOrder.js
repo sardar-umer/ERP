@@ -274,7 +274,9 @@ const purchaseOrderSchema = new mongoose.Schema({
     authorityLabel: { type: String, trim: true },
     approver: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
     approvedAt: { type: Date, default: Date.now },
-    comments: { type: String, trim: true }
+    comments: { type: String, trim: true },
+    /** Step closed without a signature because the approver is disabled (utils/disabledApprovers) */
+    skipped: { type: Boolean, default: false }
   }],
   attachments: [{
     filename: String,

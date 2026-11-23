@@ -59,6 +59,17 @@ const systemSettingsSchema = new mongoose.Schema(
     costCenterMandatoryFrom: { type: Date, default: null },
     costCenterMandatoryUpdatedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null },
     costCenterMandatoryUpdatedAt: { type: Date, default: null },
+    /**
+     * Approvers switched off for now: their pending approval steps are skipped (no signature) and the
+     * document moves to the next step. See utils/disabledApprovers. Remove an entry to enable them again.
+     */
+    disabledApprovers: [{
+      user: { type: mongoose.Schema.Types.ObjectId, ref: 'User', required: true },
+      name: { type: String, trim: true, default: '' },
+      reason: { type: String, trim: true, default: '' },
+      disabledAt: { type: Date, default: Date.now },
+      disabledBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User', default: null }
+    }],
     updatedBy:      { type: mongoose.Schema.Types.ObjectId, ref: 'User' }
   },
   { timestamps: true }
