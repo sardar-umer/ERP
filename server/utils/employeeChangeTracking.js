@@ -31,6 +31,7 @@ const TRACKED = {
   employmentType: { label: 'Employment Type' },
   employeeCategory: { label: 'Employee Category' },
   isActive: { label: 'Active', kind: 'bool' },
+  approvalNotGiven: { label: 'Approval not given', kind: 'bool' },
   placementCompany: { label: 'Company', ref: 'PlacementCompany' },
   placementSector: { label: 'Sector', ref: 'Sector' },
   placementProject: { label: 'Project', ref: 'Project' },

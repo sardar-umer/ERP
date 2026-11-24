@@ -258,9 +258,21 @@ const EmployeeList = () => {
 
   // No need for useEffect - data is provided by DataContext
 
+  // "Approval not given" employees are hidden from the shared list; the Status filter loads them on demand
+  const [unapprovedEmployees, setUnapprovedEmployees] = useState([]);
+  useEffect(() => {
+    if (statusFilter !== 'approval_not_given') return;
+    let cancelled = false;
+    api.get('/hr/employees', { params: { getAll: true, approval: 'not_given' } })
+      .then((res) => { if (!cancelled) setUnapprovedEmployees(res.data?.data || []); })
+      .catch(() => { if (!cancelled) setUnapprovedEmployees([]); });
+    return () => { cancelled = true; };
+  }, [statusFilter]);
+
   // Filter employees
   const filteredEmployees = useMemo(() => {
-    return employees.filter(employee => {
+    const source = statusFilter === 'approval_not_given' && !categoryFilter ? unapprovedEmployees : employees;
+    return source.filter(employee => {
       // Simple search - only search in name and employee ID
       const searchLower = searchTerm.toLowerCase();
       const matchesSearch = 
@@ -284,7 +296,7 @@ const EmployeeList = () => {
       // Category filter always uses active employees only
       const effectiveStatus = categoryFilter ? 'active' : statusFilter;
       let matchesStatus = true;
-      if (effectiveStatus) {
+      if (effectiveStatus && effectiveStatus !== 'approval_not_given') {
         if (effectiveStatus === 'active') {
           matchesStatus = isEmployedEmployee(employee);
         } else if (effectiveStatus === 'draft') {
@@ -300,7 +312,7 @@ const EmployeeList = () => {
 
       return matchesSearch && matchesDepartment && matchesProject && matchesCompany && matchesStatus && matchesCategory;
     });
-  }, [employees, searchTerm, departmentFilter, projectFilter, companyFilter, statusFilter, categoryFilter]);
+  }, [employees, unapprovedEmployees, searchTerm, departmentFilter, projectFilter, companyFilter, statusFilter, categoryFilter]);
 
   // Sort filtered employees by status first (active at top, inactive at end), then by Employee ID
   const sortedEmployees = useMemo(() => {
@@ -805,6 +817,7 @@ const EmployeeList = () => {
                 <MenuItem value="active">Active</MenuItem>
                 <MenuItem value="draft">Draft</MenuItem>
                 <MenuItem value="inactive">Inactive</MenuItem>
+                <MenuItem value="approval_not_given">Approval not given</MenuItem>
               </Select>
             </FormControl>
           </Grid>
@@ -858,7 +871,7 @@ const EmployeeList = () => {
               {companyFilter && ` • Company: ${companyFilter}`}
               {categoryFilter
                 ? ' • Status: Active'
-                : (statusFilter && ` • Status: ${statusFilter === 'active' ? 'Active' : statusFilter === 'draft' ? 'Draft' : 'Inactive'}`)}
+                : (statusFilter && ` • Status: ${statusFilter === 'active' ? 'Active' : statusFilter === 'draft' ? 'Draft' : statusFilter === 'approval_not_given' ? 'Approval not given' : 'Inactive'}`)}
               {categoryFilter && ` • Category: ${getEmployeeCategoryLabel(categoryFilter)} (active only)`}
             </Typography>
           </Box>

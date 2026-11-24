@@ -339,6 +339,24 @@ const EmployeeView = () => {
     setStatusDialog({ open: true, newStatus });
   };
 
+  // "Approval not given" toggle: on = left out of payroll, attendance, reports and every employee list
+  const [approvalDialog, setApprovalDialog] = useState({ open: false, value: false });
+  const [savingApproval, setSavingApproval] = useState(false);
+  const handleConfirmApprovalToggle = async () => {
+    try {
+      setSavingApproval(true);
+      const res = await api.patch(`/hr/employees/${id}/approval-not-given`, { approvalNotGiven: approvalDialog.value });
+      setEmployee((prev) => ({ ...prev, ...(res.data?.data || {}) }));
+      setSnackbar({ open: true, message: res.data?.message || 'Saved', severity: 'success' });
+      setApprovalDialog({ open: false, value: false });
+      await fetchEmployees(true);
+    } catch (error) {
+      setSnackbar({ open: true, message: error.response?.data?.message || 'Could not save', severity: 'error' });
+    } finally {
+      setSavingApproval(false);
+    }
+  };
+
   const handleConfirmStatusChange = async () => {
     try {
       setUpdatingStatus(true);
@@ -1778,6 +1796,47 @@ const EmployeeView = () => {
           )}
         </CardContent>
       </Card>
+
+      {/* Approval not given: while on, the employee is left out of payroll, attendance, reports and lists */}
+      <Card sx={{ mt: 3, borderLeft: 4, borderLeftColor: employee.approvalNotGiven ? 'error.main' : 'divider' }}>
+        <CardContent sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 2, flexWrap: 'wrap' }}>
+          <Box>
+            <Typography variant="h6">Approval not given</Typography>
+            <Typography variant="body2" color="text.secondary">
+              {employee.approvalNotGiven
+                ? `On${employee.approvalNotGivenAt ? ` since ${new Date(employee.approvalNotGivenAt).toLocaleDateString('en-GB')}` : ''}: this employee is not included in payroll, attendance, reports or any employee list.`
+                : 'Off: the employee is included everywhere as normal. Turn on if the employee\'s approval is not given yet.'}
+            </Typography>
+          </Box>
+          <FormControlLabel
+            label={employee.approvalNotGiven ? 'On' : 'Off'}
+            control={(
+              <Switch
+                color="error"
+                checked={Boolean(employee.approvalNotGiven)}
+                onChange={(e) => setApprovalDialog({ open: true, value: e.target.checked })}
+              />
+            )}
+          />
+        </CardContent>
+      </Card>
+
+      <Dialog open={approvalDialog.open} onClose={() => !savingApproval && setApprovalDialog({ open: false, value: false })} maxWidth="xs" fullWidth>
+        <DialogTitle>{approvalDialog.value ? 'Turn on "Approval not given"?' : 'Turn off "Approval not given"?'}</DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            {approvalDialog.value
+              ? `${employee.firstName || ''} ${employee.lastName || ''} will be left out of payroll, attendance, reports and every employee list until this is turned off. Documents already made (old payrolls, loans, settlements) stay as they are.`
+              : `${employee.firstName || ''} ${employee.lastName || ''} will be included again in payroll, attendance, reports and lists.`}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setApprovalDialog({ open: false, value: false })} disabled={savingApproval}>Cancel</Button>
+          <Button variant="contained" color={approvalDialog.value ? 'error' : 'primary'} onClick={handleConfirmApprovalToggle} disabled={savingApproval}>
+            {savingApproval ? 'Saving…' : 'Confirm'}
+          </Button>
+        </DialogActions>
+      </Dialog>
 
       {/* Snackbar */}
       <Snackbar

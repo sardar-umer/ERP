@@ -6,6 +6,7 @@ const Department = require('../models/hr/Department');
 const mongoose = require('mongoose');
 const { authorize } = require('../middleware/auth');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { excludeApprovalNotGiven } = require('../utils/employeeApprovalScope');
 
 console.log('🔧 AttendanceReports routes loaded successfully');
 
@@ -50,6 +51,7 @@ router.get('/monthly',
         {
           $match: {
             ...baseFilter,
+            ...(await excludeApprovalNotGiven()),
             $expr: {
               $and: [
                 { $eq: [{ $month: '$date' }, parseInt(month)] },
@@ -207,6 +209,7 @@ router.get('/department',
       const attendanceData = await Attendance.aggregate([
         {
           $match: {
+            ...(await excludeApprovalNotGiven()),
             $expr: {
               $and: [
                 { $eq: [{ $month: '$date' }, parseInt(month)] },
@@ -327,6 +330,7 @@ router.get('/summary',
       const summaryData = await Attendance.aggregate([
         {
           $match: {
+            ...(await excludeApprovalNotGiven()),
             $expr: {
               $and: [
                 { $eq: [{ $month: '$date' }, parseInt(month)] },

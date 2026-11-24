@@ -9,6 +9,7 @@ const zktecoService = require('../services/zktecoService');
 const zkbioTimeService = require('../services/zkbioTimeService');
 const { processZKTecoTimestamp, formatLocalDateTime } = require('../utils/timezoneHelper');
 const mongoose = require('mongoose');
+const { excludeApprovalNotGiven } = require('../utils/employeeApprovalScope');
 const PayrollUpdateService = require('../services/payrollUpdateService');
 
 // Get all attendance records with pagination and filters
@@ -83,6 +84,9 @@ router.get('/report', authMiddleware, async (req, res) => {
     if (employee) {
       query.employee = employee;
     }
+
+    // Leave out "approval not given" employees
+    Object.assign(query, await excludeApprovalNotGiven());
 
     // Fetch attendance data with employee details
     const attendanceData = await Attendance.find(query)

@@ -434,7 +434,7 @@ class EmployeeOnboardingService {
    */
   async getNextEmployeeId() {
     try {
-      const lastEmployee = await Employee.findOne().sort({ employeeId: -1 });
+      const lastEmployee = await Employee.findOne().setOptions({ includeUnapproved: true }).sort({ employeeId: -1 });
       
       if (!lastEmployee || !lastEmployee.employeeId) {
         return '1001'; // Start with 1001 if no employees exist

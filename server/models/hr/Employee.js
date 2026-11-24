@@ -1218,6 +1218,14 @@ const employeeSchema = new mongoose.Schema({
     type: Boolean,
     default: false
   },
+  // "Approval not given" (toggle on the employee page): while on, the employee is left out of every list,
+  // count and report (payroll, attendance, leaves, loans, KPI, HR reports) — see utils/employeeApprovalScope
+  approvalNotGiven: {
+    type: Boolean,
+    default: false
+  },
+  approvalNotGivenBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  approvalNotGivenAt: Date,
   terminationDate: Date,
   terminationReason: String,
   notes: String,
@@ -1399,6 +1407,7 @@ employeeSchema.index({ isDeleted: 1 });
 employeeSchema.index({ isActive: 1 });
 employeeSchema.index({ candidateId: 1 });
 employeeSchema.index({ onboardingId: 1 });
+employeeSchema.index({ approvalNotGiven: 1 });
 
 // Virtual for full name
 employeeSchema.virtual('fullName').get(function () {
@@ -1897,5 +1906,6 @@ employeeSchema.methods.getActiveLicenses = function () {
 // Employee change log (old → new, who, when) for the History section of the employee page
 require('./EmployeeChangeLog');
 employeeSchema.plugin(require('../../utils/employeeChangeTracking').employeeChangeTracking);
+employeeSchema.plugin(require('../../utils/employeeApprovalScope').employeeApprovalScope);
 
 module.exports = mongoose.model('Employee', employeeSchema); 

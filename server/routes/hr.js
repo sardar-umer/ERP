@@ -126,7 +126,7 @@ router.get('/employees/next-id',
     try {
       // Find ALL employees (including deleted ones) to get the highest ID ever created
       // This ensures no ID is ever reused, even if employee is deleted
-      const allEmployees = await Employee.find({}, { employeeId: 1 }).lean();
+      const allEmployees = await Employee.find({}, { employeeId: 1 }).setOptions({ includeUnapproved: true }).lean();
       
       let highestId = 0;
       
@@ -177,10 +177,13 @@ router.get('/employees',
       employeeCategory,
       getAll = false, // New parameter to get all employees without pagination
       withoutUser = false, // Filter employees without user accounts
-      includeDeleted = false // Option to include soft-deleted employees (e.g. for turnover metrics)
+      includeDeleted = false, // Option to include soft-deleted employees (e.g. for turnover metrics)
+      approval // 'not_given' = only "Approval not given" employees; 'all' = everyone; default hides them
     } = req.query;
 
     const query = {};
+    if (approval === 'not_given') query.approvalNotGiven = true;
+    else if (approval === 'all') query.approvalNotGiven = { $in: [true, false, null] };
     if (includeDeleted !== 'true' && includeDeleted !== true) {
       query.isDeleted = false;
     }
@@ -1146,6 +1149,41 @@ router.get('/employees/:id',
     res.json({
       success: true,
       data: employee
+    });
+  })
+);
+
+// @route   PATCH /api/hr/employees/:id/approval-not-given
+// @desc    "Approval not given" toggle: on = employee is left out of payroll, attendance, reports and every list
+// @access  Private (HR and Admin)
+router.patch('/employees/:id/approval-not-given',
+  authorize('super_admin', 'admin', 'hr_manager'),
+  asyncHandler(async (req, res) => {
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.status(400).json({ success: false, message: 'Invalid employee ID' });
+    }
+    if (typeof req.body?.approvalNotGiven !== 'boolean') {
+      return res.status(400).json({ success: false, message: 'approvalNotGiven must be true or false' });
+    }
+    const employee = await Employee.findOne({ _id: req.params.id, isDeleted: false });
+    if (!employee) {
+      return res.status(404).json({ success: false, message: 'Employee not found' });
+    }
+    const on = req.body.approvalNotGiven;
+    employee.approvalNotGiven = on;
+    employee.approvalNotGivenBy = on ? req.user._id : undefined;
+    employee.approvalNotGivenAt = on ? new Date() : undefined;
+    await employee.save();
+    res.json({
+      success: true,
+      message: on
+        ? 'Approval not given: the employee is now left out of payroll, attendance and reports'
+        : 'The employee is included again',
+      data: {
+        approvalNotGiven: employee.approvalNotGiven,
+        approvalNotGivenBy: employee.approvalNotGivenBy,
+        approvalNotGivenAt: employee.approvalNotGivenAt
+      }
     });
   })
 );
