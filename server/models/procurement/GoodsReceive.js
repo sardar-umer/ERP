@@ -209,9 +209,40 @@ const goodsReceiveSchema = new mongoose.Schema({
   },
   status: {
     type: String,
-    enum: ['Draft', 'Received', 'Complete', 'Partial'],
+    // Returned = rejected from GRN's & Bills: postings undone, Store edits and resubmits
+    enum: ['Draft', 'Returned', 'Received', 'Complete', 'Partial'],
     default: 'Partial'
   },
+  procurementReturn: {
+    active: { type: Boolean, default: false },
+    observation: { type: String, trim: true },
+    returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    returnedAt: Date,
+    reference: String,
+    resubmittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    resubmittedAt: Date
+  },
+  rejectionHistory: [{
+    observation: String,
+    returnedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    returnedAt: Date,
+    fromStatus: String,
+    reference: String,
+    reversalEntries: [{ type: mongoose.Schema.Types.ObjectId, ref: 'JournalEntry' }],
+    resubmittedAt: Date
+  }],
+  /** Stock posted before this moment was reversed by a rejection — resubmit posts again. */
+  lastRejectedAt: { type: Date },
+  // Draft → Submit: stock, journal and PO quantities are posted only on submit
+  submittedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  submittedAt: { type: Date },
+  workflowHistory: [{
+    fromStatus: String,
+    toStatus: String,
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now },
+    comments: String
+  }],
   // Finance / billing integration
   billingStatus: {
     type: String,
@@ -394,11 +425,15 @@ goodsReceiveSchema.statics.syncItemsToInventory = async function(grnDoc) {
     }
   };
 
+  // After a rejection the earlier IN rows were reversed; only rows since then count as posted
+  const sinceReject = grnDoc.lastRejectedAt ? { createdAt: { $gt: new Date(grnDoc.lastRejectedAt) } } : {};
+
   const alreadyPostedForLine = async (inventoryId, lineIndex) => {
     const q = {
       referenceType: 'GRN',
       referenceId: grnDoc._id,
-      transactionType: 'IN'
+      transactionType: 'IN',
+      ...sinceReject
     };
     if (inventoryId) q.item = inventoryId;
     const existing = await StockTransaction.findOne(q).select('_id item').lean();
@@ -409,7 +444,8 @@ goodsReceiveSchema.statics.syncItemsToInventory = async function(grnDoc) {
       referenceType: 'GRN',
       referenceId: grnDoc._id,
       referenceNumber: receiveNumber,
-      transactionType: 'IN'
+      transactionType: 'IN',
+      ...sinceReject
     });
     return count > lineIndex;
   };
@@ -544,7 +580,7 @@ goodsReceiveSchema.statics.syncItemsToInventory = async function(grnDoc) {
         const sameEarlier = (grnDoc.items || []).slice(0, idx)
           .filter((l) => String(l?.inventoryItem?._id || l?.inventoryItem || '') === String(card._id)).length;
         const postedForItem = await StockTransaction.countDocuments({
-          referenceType: 'GRN', referenceId: grnDoc._id, transactionType: 'IN', item: card._id
+          referenceType: 'GRN', referenceId: grnDoc._id, transactionType: 'IN', item: card._id, ...sinceReject
         });
         if (postedForItem > sameEarlier) {
           await linkInventoryOnGrnLine(idx, card._id);

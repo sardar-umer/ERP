@@ -4946,6 +4946,7 @@ router.get('/goods-receive/:id',
   asyncHandler(async (req, res) => {
     const receive = await GoodsReceive.findById(req.params.id)
       .populate('supplier', 'name contactPerson email phone supplierId address')
+      .populate('project', 'name projectId')
       .populate('costCenter', 'code name path')
       .populate({ path: 'purchaseOrder', populate: [{ path: 'companyId', select: 'name code symbol' }, { path: 'indent', select: 'companyId', populate: { path: 'companyId', select: 'name code symbol' } }] })
       .populate('deliveryChallan', 'dcNumber gatePassNo status qaStatus')
@@ -6115,354 +6116,503 @@ router.put('/goods-receive/:id/sync-inventory',
   })
 );
 
+// ── GRN: Draft → Submit ─────────────────────────────────────────────────────
+// A GRN is saved as Draft first (no stock, no journal, PO untouched). Submit validates it
+// against the PO / delivery challan again and only then posts stock, the GRN journal and the
+// PO received quantities.
+class GrnFlowError extends Error {
+  constructor(message, statusCode = 400) { super(message); this.statusCode = statusCode; }
+}
+const GRN_EDITABLE_STATUSES = ['Draft', 'Returned']; // Returned = rejected from GRN's & Bills
+
+/** Request lines → GRN lines (fills code / name / unit / rate from the stock item). */
+const buildGrnLines = async (items = []) => Promise.all(
+  (items || []).map(async (item) => {
+    const qty = Number(item.quantity) || 0;
+    let inventoryItem = null;
+    let itemCode = (item.itemCode != null && String(item.itemCode).trim() !== '') ? String(item.itemCode).trim() : '';
+    let itemName = (item.itemName != null && String(item.itemName).trim() !== '') ? String(item.itemName).trim() : '';
+    let unit = (item.unit != null && String(item.unit).trim() !== '') ? String(item.unit).trim() : '';
+    let rate = (typeof item.unitPrice === 'number' ? item.unitPrice : (item.unitPrice !== '' && item.unitPrice != null ? Number(item.unitPrice) : 0));
+    const invRef = item.inventoryItem?._id || item.inventoryItem;
+    if (invRef && mongoose.Types.ObjectId.isValid(String(invRef))) {
+      const inventory = await Inventory.findById(invRef);
+      if (inventory) {
+        inventoryItem = inventory._id;
+        if (!itemCode) itemCode = inventory.itemCode || '';
+        if (!itemName) itemName = inventory.name || '';
+        if (!unit) unit = inventory.unit || '';
+        if (!rate) rate = inventory.unitPrice || 0;
+      }
+    }
+    return {
+      productCode: (item.productCode != null && String(item.productCode).trim() !== '') ? String(item.productCode).trim() : '',
+      inventoryItem,
+      itemCode: itemCode || '—',
+      itemName: itemName || '—',
+      quantity: qty,
+      unit: unit || '—',
+      unitPrice: rate,
+      valueExcludingSalesTax: qty * rate,
+      subStore: (item.subStore?._id || item.subStore) || undefined,
+      location: {
+        rack: item.location?.rack || '',
+        shelf: item.location?.shelf || '',
+        bin: item.location?.bin || ''
+      },
+      notes: item.notes
+    };
+  })
+);
+
+/**
+ * Check GRN lines against the PO's remaining quantity (and, for full-advance POs, the
+ * QA-passed delivery challan). Returns the delivery challan id to link, or null.
+ */
+const validateGrnAgainstPo = async ({ purchaseOrder, deliveryChallan, lines }) => {
+  if (!purchaseOrder) return null;
+  const po = await PurchaseOrder.findById(purchaseOrder);
+  if (!po) throw new GrnFlowError('Linked purchase order not found');
+  if (!['Sent to Store', 'GRN Created', 'Partially Received', 'Approved', 'Ordered'].includes(po.status)) {
+    throw new GrnFlowError(`PO ${po.orderNumber || ''} is not open for GRN creation`);
+  }
+  const isFullAdvanceFlow = requiresDeliveryChallanFlow(po);
+  let dcId = null;
+  if (deliveryChallan && !isFullAdvanceFlow) {
+    throw new GrnFlowError('deliveryChallan is only for full-advance POs (by payment terms).');
+  }
+  if (isFullAdvanceFlow) {
+    if (!deliveryChallan) {
+      throw new GrnFlowError('This PO is on full advance: select a QA-passed delivery challan to post the GRN.');
+    }
+    const dcDoc = await DeliveryChallan.findById(deliveryChallan);
+    if (!dcDoc || String(dcDoc.purchaseOrder) !== String(purchaseOrder)) {
+      throw new GrnFlowError('Invalid delivery challan for this purchase order');
+    }
+    if (dcDoc.status !== 'qa_passed') {
+      throw new GrnFlowError(`Delivery challan must be QA passed before GRN. Current status: ${dcDoc.status}`);
+    }
+    const dcOpenByLine = {};
+    for (const it of dcDoc.items || []) {
+      const j = Number(it.poLineIndex);
+      const open = Math.round(((Number(it.quantity) || 0) - (Number(it.quantityReceived) || 0)) * 100) / 100;
+      if (open <= 0) continue;
+      dcOpenByLine[j] = (dcOpenByLine[j] || 0) + open;
+    }
+    const requestedByPoLine = {};
+    for (let i = 0; i < lines.length; i++) {
+      const j = matchPurchaseOrderLineIndex(po.items || [], lines[i], i);
+      if (j < 0) throw new GrnFlowError(`GRN item "${lines[i].itemName || lines[i].itemCode || i + 1}" is not matched to PO line`);
+      requestedByPoLine[j] = (requestedByPoLine[j] || 0) + (Number(lines[i].quantity) || 0);
+    }
+    for (const jStr of Object.keys(requestedByPoLine)) {
+      const allowed = dcOpenByLine[Number(jStr)] || 0;
+      const reqQ = requestedByPoLine[jStr];
+      if (reqQ - allowed > 0.0001) {
+        throw new GrnFlowError(`GRN qty exceeds remaining quantity on the selected delivery challan for PO line ${Number(jStr) + 1}. Allowed: ${allowed}, requested: ${reqQ}`);
+      }
+    }
+    dcId = dcDoc._id;
+  }
+  for (let i = 0; i < lines.length; i++) {
+    const j = matchPurchaseOrderLineIndex(po.items || [], lines[i], i);
+    if (j < 0) throw new GrnFlowError(`GRN item "${lines[i].itemName || lines[i].itemCode || i + 1}" is not matched to PO line`);
+    const poLine = po.items[j];
+    const remaining = Math.max(0, Math.round(((Number(poLine.quantity) || 0) - (Number(poLine.receivedQuantity) || 0)) * 100) / 100);
+    const requested = Number(lines[i].quantity) || 0;
+    if (requested - remaining > 0.0001) {
+      throw new GrnFlowError(`GRN qty exceeds remaining PO qty for line ${j + 1}. Remaining: ${remaining}, requested: ${requested}`);
+    }
+  }
+  return dcId;
+};
+
+/** Store name snapshot + gate pass number (from the delivery challan when there is one). */
+const resolveGrnStoreAndGatePass = async ({ store, gatePassNo, deliveryChallanId }) => {
+  let storeSnapshot = 'Main Store';
+  if (store) {
+    const Store = require('../models/procurement/Store');
+    const storeDoc = await Store.findById(store).select('name').lean();
+    if (storeDoc) storeSnapshot = storeDoc.name;
+  }
+  let resolvedGatePassNo = (gatePassNo != null && String(gatePassNo).trim() !== '') ? String(gatePassNo).trim() : '';
+  if (deliveryChallanId) {
+    const dcGp = await DeliveryChallan.findById(deliveryChallanId);
+    if (!dcGp) throw new GrnFlowError('Delivery challan not found');
+    if (!dcGp.gatePassNo) await dcGp.save();
+    resolvedGatePassNo = dcGp.gatePassNo || resolvedGatePassNo;
+  }
+  return { storeSnapshot, gatePassNo: resolvedGatePassNo };
+};
+
+/** Apply request header + lines onto a GRN document (create or draft edit). */
+const applyGrnForm = async (receive, body, { userId, preparedByName }) => {
+  const {
+    receiveDate, supplier, supplierName, purchaseOrder, poNumber, items, notes,
+    narration, supplierAddress, prNumber, store, gatePassNo, currency,
+    discount, otherCharges, observation, project, deliveryChallan
+  } = body;
+
+  const projectDoc = await Project.findById(project);
+  if (!projectDoc) throw new GrnFlowError('Invalid project ID');
+
+  let resolvedSupplierAddress = supplierAddress;
+  if (supplier && !resolvedSupplierAddress) {
+    const sup = await Supplier.findById(supplier).select('address').lean();
+    if (sup) resolvedSupplierAddress = sup.address;
+  }
+
+  const lines = await buildGrnLines(items);
+  const deliveryChallanId = await validateGrnAgainstPo({ purchaseOrder, deliveryChallan, lines });
+  const { storeSnapshot, gatePassNo: resolvedGatePassNo } = await resolveGrnStoreAndGatePass({ store, gatePassNo, deliveryChallanId });
+
+  receive.set({
+    receiveDate: receiveDate || receive.receiveDate || new Date(),
+    supplier: supplier || undefined,
+    supplierName,
+    supplierAddress: resolvedSupplierAddress,
+    purchaseOrder: purchaseOrder || undefined,
+    deliveryChallan: deliveryChallanId || undefined,
+    poNumber,
+    narration: narration || undefined,
+    prNumber: prNumber || undefined,
+    store: store || undefined,
+    storeSnapshot,
+    project,
+    gatePassNo: resolvedGatePassNo || undefined,
+    currency: currency || 'Rupees',
+    discount: Number(discount) || 0,
+    otherCharges: Number(otherCharges) || 0,
+    observation: observation || undefined,
+    items: lines,
+    notes
+  });
+  if (preparedByName && !receive.preparedByName) receive.preparedByName = preparedByName;
+  if (!receive.receivedBy) receive.receivedBy = userId;
+  return receive;
+};
+
+/** Save with a retry on the rare duplicate GR number race (unique index). */
+const saveGrnWithNumberRetry = async (receive) => {
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      if (attempt > 0) receive.receiveNumber = await GoodsReceive.allocateNextReceiveNumber();
+      await receive.save();
+      return receive;
+    } catch (saveErr) {
+      const isDup = saveErr?.code === 11000 || /duplicate key|E11000/i.test(String(saveErr?.message || ''));
+      if (!isDup || attempt === 4) throw saveErr;
+    }
+  }
+  return receive;
+};
+
+const GRN_POPULATE = [
+  { path: 'project', select: 'name projectId' },
+  { path: 'supplier', select: 'name contactPerson supplierId address' },
+  { path: 'purchaseOrder', select: 'orderNumber' },
+  { path: 'deliveryChallan', select: 'dcNumber gatePassNo status qaStatus' },
+  { path: 'receivedBy', select: 'firstName lastName' },
+  {
+    path: 'items.inventoryItem',
+    populate: [
+      { path: 'inventoryCategory', select: 'name stockValuationAccount stockInputAccount stockOutputAccount purchaseAccount salesAccount' },
+      { path: 'inventoryAccount grniAccount cogsAccount purchaseAccount salesAccount', select: 'accountNumber name type' }
+    ]
+  }
+];
+
+/**
+ * Submit a Draft GRN: re-check it against the PO, then post stock (post-save sync),
+ * the GRN journal, PO received quantities and the delivery challan.
+ */
+const submitGrn = async (grnId, user) => {
+  const receive = await GoodsReceive.findById(grnId);
+  if (!receive) throw new GrnFlowError('GRN not found', 404);
+  if (!GRN_EDITABLE_STATUSES.includes(receive.status)) {
+    throw new GrnFlowError(`GRN ${receive.receiveNumber} is already ${receive.status} — only a Draft or a rejected GRN can be submitted`);
+  }
+  if (!receive.project) throw new GrnFlowError('Select a project on the GRN before submitting');
+  if (!receive.store) throw new GrnFlowError('Select the receiving store on the GRN before submitting');
+  const lines = (receive.items || []).filter((l) => (Number(l.quantity) || 0) > 0);
+  if (!lines.length) throw new GrnFlowError('The GRN has no items with a quantity');
+
+  const purchaseOrder = receive.purchaseOrder?._id || receive.purchaseOrder;
+  const deliveryChallanIdForPostSave = await validateGrnAgainstPo({
+    purchaseOrder,
+    deliveryChallan: receive.deliveryChallan?._id || receive.deliveryChallan,
+    lines: receive.items
+  });
+
+  // Complete when every PO line this GRN touches is fully received after it; no PO → Complete
+  let grnStatus = 'Complete';
+  if (purchaseOrder) {
+    const po = await PurchaseOrder.findById(purchaseOrder).select('items').lean();
+    const after = {};
+    (receive.items || []).forEach((l, i) => {
+      const j = matchPurchaseOrderLineIndex(po?.items || [], l, i);
+      if (j >= 0) after[j] = (after[j] ?? (Number(po.items[j].receivedQuantity) || 0)) + (Number(l.quantity) || 0);
+    });
+    const short = Object.keys(after).some((j) => after[j] + 0.0001 < (Number(po.items[j].quantity) || 0));
+    if (short) grnStatus = 'Partial';
+  }
+
+  const prevStatus = receive.status;
+  receive.status = grnStatus;
+  receive.billingStatus = 'waiting_bills';
+  receive.billedAmount = receive.billedAmount || 0;
+  receive.submittedBy = user.id;
+  receive.submittedAt = new Date();
+  receive.workflowHistory = receive.workflowHistory || [];
+  receive.workflowHistory.push({
+    fromStatus: prevStatus,
+    toStatus: grnStatus,
+    changedBy: user.id,
+    changedAt: new Date(),
+    comments: prevStatus === 'Returned' ? 'Corrected and resubmitted after rejection — stock, journal and PO posted again' : 'Submitted — stock, journal and PO posted'
+  });
+  if (prevStatus === 'Returned') {
+    receive.procurementReturn = { ...(receive.procurementReturn?.toObject ? receive.procurementReturn.toObject() : receive.procurementReturn || {}), active: false, resubmittedBy: user.id, resubmittedAt: new Date() };
+    const last = receive.rejectionHistory?.[receive.rejectionHistory.length - 1];
+    if (last && !last.resubmittedAt) last.resubmittedAt = new Date();
+  }
+  await receive.save(); // post-save hook puts the stock in
+  await receive.populate(GRN_POPULATE);
+
+  // GRN journal (DR Inventory / CR GRNI) per line — resolveInventoryAccounts handles fallbacks
+  const FinanceHelper = require('../utils/financeHelper');
+  for (const grnItem of receive.items) {
+    let inv = grnItem.inventoryItem;
+    if (!inv) {
+      const code = String(grnItem.itemCode || grnItem.productCode || '').trim();
+      const name = String(grnItem.itemName || '').trim();
+      if (code && code !== '—') inv = await Inventory.findOne({ itemCode: code });
+      if (!inv && name && name !== '—') inv = await Inventory.findOne({ name }).sort({ createdAt: -1 });
+    }
+    if (!inv) continue;
+    await FinanceHelper.postGRNJournal({
+      inventoryItem: inv.toObject ? inv.toObject() : inv,
+      grnDoc: receive,
+      qty: grnItem.quantity,
+      unitPrice: grnItem.unitPrice,
+      createdBy: user.id
+    });
+  }
+
+  // Received quantities onto the PO (accumulates across GRNs) and the delivery challan
+  if (purchaseOrder) {
+    const poDoc = await PurchaseOrder.findById(purchaseOrder);
+    if (poDoc?.items?.length) {
+      const poPrevStatus = poDoc.status;
+      const qtyByPoLine = {};
+      receive.items.forEach((grnLine, i) => {
+        const qty = Number(grnLine.quantity) || 0;
+        if (qty <= 0) return;
+        const j = matchPurchaseOrderLineIndex(poDoc.items, grnLine, i);
+        if (j < 0) return;
+        const prev = Number(poDoc.items[j].receivedQuantity) || 0;
+        poDoc.items[j].receivedQuantity = Math.round((prev + qty) * 100) / 100;
+        qtyByPoLine[j] = Math.round(((qtyByPoLine[j] || 0) + qty) * 100) / 100;
+      });
+      poDoc.updatedBy = user.id;
+      poDoc.updateReceivingStatus();
+      poDoc.workflowHistory = poDoc.workflowHistory || [];
+      poDoc.workflowHistory.push({
+        fromStatus: poPrevStatus,
+        toStatus: poDoc.status,
+        changedBy: user.id,
+        changedAt: new Date(),
+        comments: `GRN ${receive.receiveNumber || ''} — quantities applied to PO`,
+        module: 'Store'
+      });
+      await poDoc.save();
+
+      await notifyStoreUsers({
+        actorId: user.id,
+        title: 'GRN submitted in Store',
+        message: `GRN ${receive.receiveNumber || ''} has been submitted for PO ${poDoc.poNumber || poDoc.orderNumber || ''}.`,
+        actionUrl: STORE_SUBMODULE_ROUTES.goodsReceive,
+        entityId: poDoc._id,
+        entityType: 'PurchaseOrder'
+      });
+
+      if (deliveryChallanIdForPostSave) {
+        const dcMutable = await DeliveryChallan.findById(deliveryChallanIdForPostSave);
+        if (dcMutable) {
+          applyGrnQuantitiesToDeliveryChallan(dcMutable, qtyByPoLine);
+          dcMutable.grnIds = dcMutable.grnIds || [];
+          if (!dcMutable.grnIds.some((x) => String(x) === String(receive._id))) dcMutable.grnIds.push(receive._id);
+          dcMutable.updatedBy = user.id;
+          await dcMutable.save();
+        }
+      }
+    }
+  }
+  return receive;
+};
+
+const grnPreparedByName = (user) => (user.firstName && user.lastName
+  ? `${user.firstName} ${user.lastName}`.trim()
+  : (user.email || 'Prepared By'));
+
+const sendGrnFlowError = (res, err) => {
+  if (err instanceof GrnFlowError) return res.status(err.statusCode).json({ success: false, message: err.message });
+  throw err;
+};
+
+const grnBodyValidators = [
+  body('receiveDate').optional().isISO8601(),
+  body('project').isMongoId().withMessage('Valid project ID is required'),
+  body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
+  body('items.*.productCode').optional().trim(),
+  body('items.*.inventoryItem').optional({ checkFalsy: true }).isMongoId().withMessage('Valid inventory item ID when provided'),
+  body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
+  body('items.*.itemCode').optional().trim(),
+  body('items.*.itemName').optional().trim(),
+  body('items.*.unit').optional().trim(),
+  body('items.*.unitPrice').optional().isFloat({ min: 0 }),
+  body('deliveryChallan').optional({ checkFalsy: true }).isMongoId().withMessage('Valid delivery challan ID when provided')
+];
+
 // @route   POST /api/procurement/goods-receive
-// @desc    Create GRN (Goods Received Note) record
+// @desc    Create a GRN as Draft (no stock / journal until it is submitted)
 // @access  Private
 router.post('/goods-receive',
   authorize('super_admin', 'admin', 'procurement_manager'),
   handleGrnUpload,
   parseGrnRequestBody,
-  [
-    body('receiveDate').optional().isISO8601(),
-    body('project').isMongoId().withMessage('Valid project ID is required'),
-    body('items').isArray({ min: 1 }).withMessage('At least one item is required'),
-    body('items.*.productCode').optional().trim(),
-    body('items.*.inventoryItem').optional().isMongoId().withMessage('Valid inventory item ID when provided'),
-    body('items.*.quantity').isFloat({ min: 0.01 }).withMessage('Quantity must be greater than 0'),
-    body('items.*.itemCode').optional().trim(),
-    body('items.*.itemName').optional().trim(),
-    body('items.*.unit').optional().trim(),
-    body('items.*.unitPrice').optional().isFloat({ min: 0 }),
-    body('deliveryChallan').optional().isMongoId().withMessage('Valid delivery challan ID when provided')
-  ],
+  grnBodyValidators,
   asyncHandler(async (req, res) => {
     const errors = validationResult(req);
     if (!errors.isEmpty()) {
-      return res.status(400).json({ success: false, errors: errors.array() });
+      return res.status(400).json({ success: false, errors: errors.array(), message: errors.array()[0]?.msg });
     }
-
-    const {
-      receiveDate, supplier, supplierName, purchaseOrder, poNumber, items, notes,
-      narration, supplierAddress, prNumber, store, gatePassNo, currency,
-      discount, otherCharges, observation, status: bodyStatus, project,
-      deliveryChallan
-    } = req.body;
-
-    // Validate project exists
-    const projectDoc = await Project.findById(project);
-    if (!projectDoc) {
-      return res.status(400).json({ success: false, message: 'Invalid project ID' });
-    }
-
-    let resolvedSupplierAddress = supplierAddress;
-    if (supplier && !resolvedSupplierAddress) {
-      const sup = await Supplier.findById(supplier).select('address').lean();
-      if (sup) resolvedSupplierAddress = sup.address;
-    }
-
-    const itemsWithDetails = await Promise.all(
-      items.map(async (item) => {
-        const qty = Number(item.quantity) || 0;
-        let inventoryItem = null;
-        let itemCode = (item.itemCode != null && String(item.itemCode).trim() !== '') ? String(item.itemCode).trim() : '';
-        let itemName = (item.itemName != null && String(item.itemName).trim() !== '') ? String(item.itemName).trim() : '';
-        let unit = (item.unit != null && String(item.unit).trim() !== '') ? String(item.unit).trim() : '';
-        let rate = (typeof item.unitPrice === 'number' ? item.unitPrice : (item.unitPrice !== '' && item.unitPrice != null ? Number(item.unitPrice) : 0));
-        if (item.inventoryItem) {
-          const inventory = await Inventory.findById(item.inventoryItem);
-          if (inventory) {
-            inventoryItem = inventory._id;
-            if (!itemCode) itemCode = inventory.itemCode || '';
-            if (!itemName) itemName = inventory.name || '';
-            if (!unit) unit = inventory.unit || '';
-            if (!rate) rate = inventory.unitPrice || 0;
-          }
-        }
-        return {
-          productCode: (item.productCode != null && String(item.productCode).trim() !== '') ? String(item.productCode).trim() : '',
-          inventoryItem,
-          itemCode: itemCode || '—',
-          itemName: itemName || '—',
-          quantity: qty,
-          unit: unit || '—',
-          unitPrice: rate,
-          valueExcludingSalesTax: qty * rate,
-          subStore: item.subStore || undefined,
-          location: {
-            rack: item.location?.rack || '',
-            shelf: item.location?.shelf || '',
-            bin: item.location?.bin || ''
-          },
-          notes: item.notes
-        };
-      })
-    );
-
-    // Validate GRN quantity against remaining PO quantity so multiple GRNs are allowed
-    // until PO is fulfilled, but over-receipt is blocked.
-    /** When full-advance flow, GRN must reference a QA-passed DC; we update this after save. */
-    let deliveryChallanIdForPostSave = null;
-    if (purchaseOrder) {
-      const poForValidation = await PurchaseOrder.findById(purchaseOrder);
-      if (!poForValidation) {
-        return res.status(400).json({ success: false, message: 'Linked purchase order not found' });
-      }
-      if (!['Sent to Store', 'GRN Created', 'Partially Received', 'Approved', 'Ordered'].includes(poForValidation.status)) {
-        return res.status(400).json({ success: false, message: `PO ${poForValidation.orderNumber || ''} is not open for GRN creation` });
-      }
-      const isFullAdvanceFlow = requiresDeliveryChallanFlow(poForValidation);
-
-      if (deliveryChallan && !isFullAdvanceFlow) {
-        return res.status(400).json({
-          success: false,
-          message: 'deliveryChallan is only for full-advance POs (by payment terms).'
-        });
-      }
-
-      if (isFullAdvanceFlow) {
-        if (!deliveryChallan) {
-          return res.status(400).json({
-            success: false,
-            message: 'This PO is on full advance: select a QA-passed delivery challan to post the GRN.'
-          });
-        }
-        const dcDoc = await DeliveryChallan.findById(deliveryChallan);
-        if (!dcDoc || String(dcDoc.purchaseOrder) !== String(purchaseOrder)) {
-          return res.status(400).json({ success: false, message: 'Invalid delivery challan for this purchase order' });
-        }
-        if (dcDoc.status !== 'qa_passed') {
-          return res.status(400).json({
-            success: false,
-            message: `Delivery challan must be QA passed before GRN. Current status: ${dcDoc.status}`
-          });
-        }
-        const dcOpenByLine = {};
-        for (const it of dcDoc.items || []) {
-          const j = Number(it.poLineIndex);
-          const open = Math.round(((Number(it.quantity) || 0) - (Number(it.quantityReceived) || 0)) * 100) / 100;
-          if (open <= 0) continue;
-          dcOpenByLine[j] = (dcOpenByLine[j] || 0) + open;
-        }
-        const requestedByPoLine = {};
-        for (let i = 0; i < itemsWithDetails.length; i++) {
-          const grnLine = itemsWithDetails[i];
-          const j = matchPurchaseOrderLineIndex(poForValidation.items || [], grnLine, i);
-          if (j < 0) {
-            return res.status(400).json({ success: false, message: `GRN item "${grnLine.itemName || grnLine.itemCode || i + 1}" is not matched to PO line` });
-          }
-          const q = Number(grnLine.quantity) || 0;
-          requestedByPoLine[j] = (requestedByPoLine[j] || 0) + q;
-        }
-        for (const jStr of Object.keys(requestedByPoLine)) {
-          const j = Number(jStr);
-          const reqQ = requestedByPoLine[jStr];
-          const allowed = dcOpenByLine[j] || 0;
-          if (reqQ - allowed > 0.0001) {
-            return res.status(400).json({
-              success: false,
-              message: `GRN qty exceeds remaining quantity on the selected delivery challan for PO line ${j + 1}. Allowed: ${allowed}, requested: ${reqQ}`
-            });
-          }
-        }
-        deliveryChallanIdForPostSave = dcDoc._id;
-      }
-
-      for (let i = 0; i < itemsWithDetails.length; i++) {
-        const grnLine = itemsWithDetails[i];
-        const j = matchPurchaseOrderLineIndex(poForValidation.items || [], grnLine, i);
-        if (j < 0) {
-          return res.status(400).json({ success: false, message: `GRN item "${grnLine.itemName || grnLine.itemCode || i + 1}" is not matched to PO line` });
-        }
-        const poLine = poForValidation.items[j];
-        const ordered = Number(poLine.quantity) || 0;
-        const received = Number(poLine.receivedQuantity) || 0;
-        const remaining = Math.max(0, Math.round((ordered - received) * 100) / 100);
-        const requested = Number(grnLine.quantity) || 0;
-        if (requested - remaining > 0.0001) {
-          return res.status(400).json({
-            success: false,
-            message: `GRN qty exceeds remaining PO qty for line ${j + 1}. Remaining: ${remaining}, requested: ${requested}`
-          });
-        }
-      }
-    }
-
-    const preparedByName = req.user.firstName && req.user.lastName
-      ? `${req.user.firstName} ${req.user.lastName}`.trim()
-      : (req.user.email || 'Prepared By');
-
-    // Resolve store name snapshot for denormalization
-    let storeSnapshot = 'Main Store';
-    if (store) {
-      const Store = require('../models/procurement/Store');
-      const storeDoc = await Store.findById(store).select('name').lean();
-      if (storeDoc) storeSnapshot = storeDoc.name;
-    }
-
-    const grnStatus = (bodyStatus === 'Complete' || bodyStatus === 'Partial') ? bodyStatus : 'Partial';
-
-    let resolvedGatePassNo = (gatePassNo != null && String(gatePassNo).trim() !== '') ? String(gatePassNo).trim() : '';
-    if (deliveryChallanIdForPostSave) {
-      const dcGp = await DeliveryChallan.findById(deliveryChallanIdForPostSave);
-      if (!dcGp) {
-        return res.status(400).json({ success: false, message: 'Delivery challan not found' });
-      }
-      if (!dcGp.gatePassNo) {
-        await dcGp.save();
-      }
-      resolvedGatePassNo = dcGp.gatePassNo || resolvedGatePassNo;
-    }
-
-    const uploadedAttachments = mapUploadedGrnAttachments(req.files || []);
-
-    const receive = new GoodsReceive({
-      receiveDate: receiveDate || new Date(),
-      supplier,
-      supplierName,
-      supplierAddress: resolvedSupplierAddress,
-      purchaseOrder,
-      deliveryChallan: deliveryChallanIdForPostSave || undefined,
-      poNumber,
-      narration: narration || undefined,
-      prNumber: prNumber || undefined,
-      store: store || undefined,
-      storeSnapshot,
-      project: project,
-      gatePassNo: resolvedGatePassNo || undefined,
-      currency: currency || 'Rupees',
-      discount: Number(discount) || 0,
-      otherCharges: Number(otherCharges) || 0,
-      observation: observation || undefined,
-      preparedByName,
-      items: itemsWithDetails,
-      notes,
-      attachments: uploadedAttachments,
-      receivedBy: req.user.id,
-      status: grnStatus,
-      billingStatus: 'waiting_bills',
-      billedAmount: 0
-    });
-
-    // Retry on rare duplicate receiveNumber race (unique index)
-    for (let attempt = 0; attempt < 5; attempt += 1) {
-      try {
-        if (attempt > 0) {
-          receive.receiveNumber = await GoodsReceive.allocateNextReceiveNumber();
-        }
-        await receive.save();
-        break;
-      } catch (saveErr) {
-        const isDup =
-          saveErr?.code === 11000 ||
-          /duplicate key|E11000/i.test(String(saveErr?.message || ''));
-        if (!isDup || attempt === 4) throw saveErr;
-      }
-    }
-    await receive.populate([
-      { path: 'project', select: 'name projectId' },
-      { path: 'supplier', select: 'name contactPerson supplierId address' },
-      { path: 'purchaseOrder', select: 'orderNumber' },
-      { path: 'deliveryChallan', select: 'dcNumber gatePassNo status qaStatus' },
-      { path: 'receivedBy', select: 'firstName lastName' },
-      {
-        path: 'items.inventoryItem',
-        populate: [
-          { path: 'inventoryCategory', select: 'name stockValuationAccount stockInputAccount stockOutputAccount purchaseAccount salesAccount' },
-          { path: 'inventoryAccount grniAccount cogsAccount purchaseAccount salesAccount', select: 'accountNumber name type' }
-        ]
-      }
-    ]);
-
-    // Auto-post GRN journal entries — resolveInventoryAccounts handles the full
-    // fallback chain: item-level account → inventoryCategory → global account number.
-    // We call it for every received item; skipping is done inside postGRNJournal.
-    const FinanceHelper = require('../utils/financeHelper');
-    for (const grnItem of receive.items) {
-      let inv = grnItem.inventoryItem;
-      // Manual GRN can arrive without explicit inventoryItem link.
-      // In that case, resolve by item code/product code/name so finance posting
-      // still happens for the exact inventory row that stock sync updated.
-      if (!inv) {
-        const code = String(grnItem.itemCode || grnItem.productCode || '').trim();
-        const name = String(grnItem.itemName || '').trim();
-        if (code && code !== '—') {
-          inv = await Inventory.findOne({ itemCode: code });
-        }
-        if (!inv && name && name !== '—') {
-          inv = await Inventory.findOne({ name }).sort({ createdAt: -1 });
-        }
-      }
-      if (!inv) continue;
-      await FinanceHelper.postGRNJournal({
-        inventoryItem: inv.toObject ? inv.toObject() : inv,
-        grnDoc: receive,
-        qty: grnItem.quantity,
-        unitPrice: grnItem.unitPrice,
-        createdBy: req.user.id
+    try {
+      const receive = new GoodsReceive({
+        status: 'Draft',
+        billingStatus: 'nothing_to_bill',
+        billedAmount: 0,
+        attachments: mapUploadedGrnAttachments(req.files || []),
+        receivedBy: req.user.id
       });
+      await applyGrnForm(receive, req.body, { userId: req.user.id, preparedByName: grnPreparedByName(req.user) });
+      receive.workflowHistory = [{ fromStatus: '—', toStatus: 'Draft', changedBy: req.user.id, changedAt: new Date(), comments: 'GRN saved as draft' }];
+      await saveGrnWithNumberRetry(receive);
+      await receive.populate(GRN_POPULATE);
+      res.status(201).json({
+        success: true,
+        message: `GRN ${receive.receiveNumber} saved as draft — submit it to post stock`,
+        data: receive
+      });
+    } catch (err) {
+      return sendGrnFlowError(res, err);
     }
+  })
+);
 
-    // Apply received quantities to the linked PO (accumulates across multiple GRNs)
-    if (purchaseOrder) {
-      const poDoc = await PurchaseOrder.findById(purchaseOrder);
-      if (poDoc?.items?.length) {
-        const prevStatus = poDoc.status;
-        itemsWithDetails.forEach((grnLine, i) => {
-          const qty = Number(grnLine.quantity) || 0;
-          if (qty <= 0) return;
-          const j = matchPurchaseOrderLineIndex(poDoc.items, grnLine, i);
-          if (j < 0) return;
-          const prev = Number(poDoc.items[j].receivedQuantity) || 0;
-          poDoc.items[j].receivedQuantity = Math.round((prev + qty) * 100) / 100;
-        });
-        poDoc.updatedBy = req.user.id;
-        poDoc.updateReceivingStatus();
-        poDoc.workflowHistory = poDoc.workflowHistory || [];
-        poDoc.workflowHistory.push({
-          fromStatus: prevStatus,
-          toStatus: poDoc.status,
-          changedBy: req.user.id,
-          changedAt: new Date(),
-          comments: `GRN ${receive.receiveNumber || ''} — quantities applied to PO`,
-          module: 'Store'
-        });
-        await poDoc.save();
+// @route   PUT /api/procurement/goods-receive/:id
+// @desc    Edit a Draft GRN
+// @access  Private
+router.put('/goods-receive/:id',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  handleGrnUpload,
+  parseGrnRequestBody,
+  grnBodyValidators,
+  asyncHandler(async (req, res) => {
+    const errors = validationResult(req);
+    if (!errors.isEmpty()) {
+      return res.status(400).json({ success: false, errors: errors.array(), message: errors.array()[0]?.msg });
+    }
+    try {
+      const receive = await GoodsReceive.findById(req.params.id);
+      if (!receive) return res.status(404).json({ success: false, message: 'GRN not found' });
+      if (!GRN_EDITABLE_STATUSES.includes(receive.status)) {
+        return res.status(400).json({ success: false, message: `GRN ${receive.receiveNumber} is ${receive.status} — only a Draft or a rejected GRN can be edited` });
+      }
+      await applyGrnForm(receive, req.body, { userId: req.user.id });
+      const removeIds = new Set((Array.isArray(req.body.removeAttachmentIds) ? req.body.removeAttachmentIds : []).map(String));
+      receive.attachments = (receive.attachments || [])
+        .filter((a) => !removeIds.has(String(a._id)))
+        .concat(mapUploadedGrnAttachments(req.files || []));
+      await receive.save();
+      await receive.populate(GRN_POPULATE);
+      res.json({ success: true, message: `GRN ${receive.receiveNumber} ${receive.status === 'Returned' ? 'corrected — resubmit it to post stock' : 'draft updated'}`, data: receive });
+    } catch (err) {
+      return sendGrnFlowError(res, err);
+    }
+  })
+);
 
+// @route   POST /api/procurement/goods-receive/:id/submit
+// @desc    Submit a Draft GRN — posts stock, journal and PO quantities
+// @access  Private
+router.post('/goods-receive/:id/submit',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    try {
+      const receive = await submitGrn(req.params.id, req.user);
+      res.json({
+        success: true,
+        message: `GRN ${receive.receiveNumber} submitted — inventory updated`,
+        data: receive
+      });
+    } catch (err) {
+      return sendGrnFlowError(res, err);
+    }
+  })
+);
+
+// @route   POST /api/procurement/goods-receive/:id/reject
+// @desc    Reject an unbilled GRN with an observation (GRN's & Bills) — postings undone, back to Store
+// @access  Private
+router.post('/goods-receive/:id/reject',
+  authorize('super_admin', 'admin', 'procurement_manager', 'finance_manager'),
+  asyncHandler(async (req, res) => {
+    const { rejectGrn, GrnRejectError } = require('../utils/grnReject');
+    try {
+      const result = await rejectGrn({
+        grnId: req.params.id,
+        observation: req.body?.observation,
+        userId: req.user.id,
+        matchPoLine: matchPurchaseOrderLineIndex
+      });
+      try {
         await notifyStoreUsers({
           actorId: req.user.id,
-          title: 'GRN created in Store',
-          message: `GRN ${receive.receiveNumber || ''} has been created for PO ${poDoc.poNumber || poDoc.orderNumber || ''}.`,
+          title: 'GRN rejected — correct and resubmit',
+          message: `GRN ${result.receiveNumber} was rejected from GRN's & Bills: ${String(req.body?.observation || '').trim()}`.slice(0, 500),
           actionUrl: STORE_SUBMODULE_ROUTES.goodsReceive,
-          entityId: poDoc._id,
-          entityType: 'PurchaseOrder'
+          entityId: req.params.id,
+          entityType: 'GoodsReceive'
         });
-
-        if (deliveryChallanIdForPostSave) {
-          const qtyByPoLine = {};
-          itemsWithDetails.forEach((grnLine, i) => {
-            const qty = Number(grnLine.quantity) || 0;
-            if (qty <= 0) return;
-            const j = matchPurchaseOrderLineIndex(poDoc.items, grnLine, i);
-            if (j < 0) return;
-            qtyByPoLine[j] = Math.round(((qtyByPoLine[j] || 0) + qty) * 100) / 100;
-          });
-          const dcMutable = await DeliveryChallan.findById(deliveryChallanIdForPostSave);
-          if (dcMutable) {
-            applyGrnQuantitiesToDeliveryChallan(dcMutable, qtyByPoLine);
-            dcMutable.grnIds = dcMutable.grnIds || [];
-            dcMutable.grnIds.push(receive._id);
-            dcMutable.updatedBy = req.user.id;
-            await dcMutable.save();
-          }
-        }
+      } catch (nErr) {
+        console.warn('GRN reject notification failed:', nErr.message);
       }
+      res.json({
+        success: true,
+        message: `GRN ${result.receiveNumber} rejected and sent back to Store — stock, journal${result.journalsReversed === 1 ? '' : 's'} and PO quantities reversed`,
+        data: result
+      });
+    } catch (err) {
+      if (err instanceof GrnRejectError) return res.status(err.statusCode).json({ success: false, message: err.message });
+      throw err;
     }
+  })
+);
 
-    res.status(201).json({
-      success: true,
-      message: 'GRN created successfully and inventory updated',
-      data: receive
-    });
+// @route   DELETE /api/procurement/goods-receive/:id
+// @desc    Delete a Draft GRN (nothing was posted yet)
+// @access  Private
+router.delete('/goods-receive/:id',
+  authorize('super_admin', 'admin', 'procurement_manager'),
+  asyncHandler(async (req, res) => {
+    const receive = await GoodsReceive.findById(req.params.id).select('status receiveNumber').lean();
+    if (!receive) return res.status(404).json({ success: false, message: 'GRN not found' });
+    if (receive.status !== 'Draft') {
+      return res.status(400).json({ success: false, message: `GRN ${receive.receiveNumber} is ${receive.status} — only a Draft can be deleted` });
+    }
+    await GoodsReceive.deleteOne({ _id: receive._id, status: 'Draft' });
+    res.json({ success: true, message: `Draft GRN ${receive.receiveNumber} deleted` });
   })
 );
 

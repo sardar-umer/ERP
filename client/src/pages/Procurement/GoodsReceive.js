@@ -11,7 +11,7 @@ import {
   LocalShipping as ReceiveIcon, Add as AddIcon, Visibility as ViewIcon,
   Search as SearchIcon, Refresh as RefreshIcon, Close as CloseIcon, Print as PrintIcon,
   Inventory as InventoryIcon, QrCode as QrCodeIcon, AttachFile as AttachFileIcon,
-  Delete as DeleteIcon, Undo as ReturnIcon, Edit as EditIcon
+  Delete as DeleteIcon, Undo as ReturnIcon, Edit as EditIcon, Send as SendIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
 import { getDocCompanyName } from '../../utils/documentCompany';
@@ -106,6 +106,44 @@ const buildItemsFromDeliveryChallan = (dcDoc, invList) => {
   return out.length ? out : [makeEmptyItem()];
 };
 
+/**
+ * Form rows for a saved Draft GRN. A PO / DC draft is laid over the fresh PO (or DC) rows so
+ * lines the user left out show again unticked; saved lines keep their qty, rate and location.
+ */
+const buildItemsFromDraft = (grn, sourceRows) => {
+  const saved = (grn.items || []).map((l) => ({
+    inventoryItem: l.inventoryItem?._id || l.inventoryItem || '',
+    productCode: l.productCode || '',
+    itemCode: l.itemCode && l.itemCode !== '—' ? l.itemCode : '',
+    itemName: l.itemName && l.itemName !== '—' ? l.itemName : '',
+    unit: l.unit && l.unit !== '—' ? l.unit : '',
+    quantity: Number(l.quantity) || 0,
+    unitPrice: l.unitPrice ?? '',
+    notes: l.notes || '',
+    subStore: l.subStore?._id || l.subStore || '',
+    location: { rack: l.location?.rack || '', shelf: l.location?.shelf || '', bin: l.location?.bin || '' }
+  }));
+  if (!sourceRows?.length) {
+    return saved.length ? saved.map((s) => ({ ...makeEmptyItem(), ...s, selected: true })) : [makeEmptyItem()];
+  }
+  const used = new Set();
+  const key = (x) => String(x || '').trim().toLowerCase();
+  const rows = sourceRows.map((row) => {
+    const idx = saved.findIndex((s, i) => !used.has(i) && (
+      (s.inventoryItem && row.inventoryItem && String(s.inventoryItem) === String(row.inventoryItem))
+      || (key(s.itemName) && key(s.itemName) === key(row.itemName))
+      || (key(s.itemCode) && key(s.itemCode) === key(row.itemCode))
+    ));
+    if (idx < 0) return { ...row, selected: false };
+    used.add(idx);
+    const s = saved[idx];
+    return { ...row, inventoryItem: s.inventoryItem || row.inventoryItem, quantity: s.quantity, unitPrice: s.unitPrice, notes: s.notes, subStore: s.subStore, location: s.location, selected: true };
+  });
+  // Saved lines that no longer match a PO / DC row are kept so nothing silently disappears
+  saved.forEach((s, i) => { if (!used.has(i)) rows.push({ ...makeEmptyItem(), ...s, selected: true }); });
+  return rows;
+};
+
 const formatGRNDate = (d) => {
   if (!d) return '';
   const x = new Date(d);
@@ -183,6 +221,11 @@ const GoodsReceive = () => {
   /** Latest PO lines (quantity / receivedQuantity) while Create GRN dialog is open — for PO Qty / Left on PO columns. */
   const [grnPoDetail, setGrnPoDetail] = useState(null);
   const [attachmentFiles, setAttachmentFiles] = useState([]);
+  // Draft edit: files already on the GRN, and the ones the user removed
+  const [savedAttachments, setSavedAttachments] = useState([]);
+  const [removedAttachmentIds, setRemovedAttachmentIds] = useState([]);
+  const [confirmAction, setConfirmAction] = useState(null); // { type: 'submit' | 'delete', grn }
+  const [confirmBusy, setConfirmBusy] = useState(false);
   const attachmentInputRef = useRef(null);
   const [formData, setFormData] = useState({
     receiveDate: new Date().toISOString().split('T')[0],
@@ -485,7 +528,120 @@ const GoodsReceive = () => {
       deliveryChallan: ''
     });
     setAttachmentFiles([]);
+    setSavedAttachments([]);
+    setRemovedAttachmentIds([]);
     setFormDialog({ open: true });
+  };
+
+  /** Open a Draft GRN in the form for editing. */
+  const handleEditDraft = async (grnId) => {
+    try {
+      setLoading(true);
+      const res = await api.get(`/procurement/goods-receive/${grnId}`);
+      const grn = res.data?.data;
+      if (!grn) throw new Error('GRN not found');
+      const poId = grn.purchaseOrder?._id || grn.purchaseOrder || '';
+      const dcId = grn.deliveryChallan?._id || grn.deliveryChallan || '';
+      let sourceRows = null;
+      let requiresDc = false;
+      let dcOptions = [];
+      if (poId) {
+        const poRes = await api.get(`/procurement/purchase-orders/${poId}`);
+        const po = poRes.data?.data;
+        requiresDc = po?.grnRequiresDeliveryChallan === true;
+        if (requiresDc) {
+          const dcRes = await api.get('/procurement/delivery-challans', { params: { purchaseOrder: poId, status: 'qa_passed', limit: 50 } });
+          dcOptions = dcRes.data?.data?.items || [];
+          let dcFull = dcOptions.find((o) => String(o._id) === String(dcId));
+          if (dcId && !dcFull?.items?.length) {
+            const one = await api.get(`/procurement/delivery-challans/${dcId}`).catch(() => null);
+            dcFull = one?.data?.data || dcFull;
+          }
+          if (dcFull?.items?.length) sourceRows = buildItemsFromDeliveryChallan(dcFull, inventoryRef.current);
+        } else if (po) {
+          sourceRows = buildItemsFromPurchaseOrder(po, inventoryRef.current);
+        }
+      }
+      setGrnRequiresDeliveryChallan(requiresDc);
+      setGrnDcStatusNote('');
+      setDeliveryChallanOptions(dcOptions);
+      setFormData({
+        receiveDate: grn.receiveDate ? new Date(grn.receiveDate).toISOString().split('T')[0] : new Date().toISOString().split('T')[0],
+        supplier: grn.supplier?._id || grn.supplier || '',
+        supplierName: grn.supplierName || grn.supplier?.name || '',
+        supplierAddress: grn.supplierAddress || '',
+        purchaseOrder: poId ? String(poId) : '',
+        poNumber: grn.poNumber || '',
+        narration: grn.narration || '',
+        store: grn.store?._id || grn.store || '',
+        project: grn.project?._id || grn.project || '',
+        gatePassNo: grn.gatePassNo || '',
+        currency: grn.currency || 'Rupees',
+        discount: grn.discount || 0,
+        otherCharges: 0,
+        observation: grn.observation || '',
+        distributionBasis: 'Quantity',
+        serviceCharges: grn.otherCharges || 0,
+        packingCharges: 0,
+        loadingCharges: 0,
+        items: buildItemsFromDraft(grn, sourceRows),
+        notes: grn.notes || '',
+        deliveryChallan: dcId ? String(dcId) : ''
+      });
+      setAttachmentFiles([]);
+      setSavedAttachments(grn.attachments || []);
+      setRemovedAttachmentIds([]);
+      setViewDialog({ open: false, data: null });
+      setFormDialog({
+        open: true,
+        editId: grn._id,
+        receiveNumber: grn.receiveNumber,
+        status: grn.status,
+        rejection: grn.status === 'Returned' ? grn.procurementReturn : null
+      });
+    } catch (err) {
+      setError(err.response?.data?.message || err.message || 'Failed to open draft GRN');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  /** Submit or delete a Draft GRN after the user confirms. */
+  const runConfirmAction = async () => {
+    if (!confirmAction?.grn) return;
+    const { type, grn } = confirmAction;
+    try {
+      setConfirmBusy(true);
+      if (type === 'submit') {
+        const res = await api.post(`/procurement/goods-receive/${grn._id}/submit`);
+        setSuccess(res.data?.message || `GRN ${grn.receiveNumber} submitted`);
+        const savedGrn = res.data?.data;
+        setViewDialog({ open: false, data: null });
+        loadInventory();
+        if (savedGrn?.items?.length) {
+          setBarcodePrintItems(savedGrn.items.map((it) => ({
+            itemCode: it.itemCode,
+            name: it.itemName,
+            unit: it.unit,
+            barcode: it.inventoryItem?.barcode || '',
+            barcodeType: 'CODE128',
+            location: it.location || {}
+          })));
+          setBarcodePrintOpen(true);
+        }
+      } else {
+        const res = await api.delete(`/procurement/goods-receive/${grn._id}`);
+        setSuccess(res.data?.message || `Draft GRN ${grn.receiveNumber} deleted`);
+        setViewDialog({ open: false, data: null });
+      }
+      setConfirmAction(null);
+      loadReceives();
+    } catch (err) {
+      setError(err.response?.data?.message || `Failed to ${type} GRN`);
+      setConfirmAction(null);
+    } finally {
+      setConfirmBusy(false);
+    }
   };
 
   const preparedByName = user?.firstName && user?.lastName ? `${user.firstName} ${user.lastName}`.trim() : (user?.email || '');
@@ -543,39 +699,31 @@ const GoodsReceive = () => {
     } else {
       delete payload.deliveryChallan;
     }
+    delete payload.status; // server keeps it Draft; status is decided on submit
+    const editId = formDialog.editId;
+    if (editId) payload.removeAttachmentIds = removedAttachmentIds;
     try {
       setLoading(true);
+      const url = editId ? `/procurement/goods-receive/${editId}` : '/procurement/goods-receive';
+      const send = editId ? api.put : api.post;
       let res;
       if (attachmentFiles.length > 0) {
         const fd = new FormData();
         fd.append('data', JSON.stringify(payload));
         attachmentFiles.forEach((file) => fd.append('attachments', file));
         // Let the browser set multipart boundary (do not force Content-Type)
-        res = await api.post('/procurement/goods-receive', fd);
+        res = await send(url, fd);
       } else {
-        res = await api.post('/procurement/goods-receive', payload);
+        res = await send(url, payload);
       }
-      const savedGrn = res.data?.data;
-      setSuccess('GRN created successfully and inventory updated');
+      setSuccess(res.data?.message || 'GRN saved as draft');
       setAttachmentFiles([]);
+      setSavedAttachments([]);
+      setRemovedAttachmentIds([]);
       setFormDialog({ open: false });
       loadReceives();
-      loadInventory();
-      // Prompt for barcode label printing
-      if (savedGrn?.items?.length) {
-        const labelItems = savedGrn.items.map(it => ({
-          itemCode: it.itemCode,
-          name: it.itemName,
-          unit: it.unit,
-          barcode: it.inventoryItem?.barcode || '',
-          barcodeType: 'CODE128',
-          location: it.location || {}
-        }));
-        setBarcodePrintItems(labelItems);
-        setBarcodePrintOpen(true);
-      }
     } catch (err) {
-      setError(err.response?.data?.message || 'Failed to create GRN');
+      setError(err.response?.data?.message || 'Failed to save GRN');
     } finally {
       setLoading(false);
     }
@@ -715,7 +863,23 @@ const GoodsReceive = () => {
                     <TableCell>{receive.totalQuantity || 0}</TableCell>
                     <TableCell>
                       <Stack direction="row" gap={0.5} flexWrap="wrap">
-                        <Chip label={receive.status} size="small" color={receive.status === 'Complete' || receive.status === 'Received' ? 'success' : receive.status === 'Partial' ? 'warning' : 'default'} />
+                        {receive.status === 'Returned' ? (
+                          <Tooltip title={`Rejected${receive.procurementReturn?.returnedAt ? ` on ${formatDate(receive.procurementReturn.returnedAt)}` : ''}: ${receive.procurementReturn?.observation || ''}. Stock and journal were reversed — edit and resubmit.`}>
+                            <Chip label="Rejected — correct & resubmit" size="small" color="error" />
+                          </Tooltip>
+                        ) : (
+                          <Chip
+                            label={receive.status === 'Draft' ? 'Draft — not submitted' : receive.status}
+                            size="small"
+                            variant={receive.status === 'Draft' ? 'outlined' : 'filled'}
+                            color={receive.status === 'Complete' || receive.status === 'Received' ? 'success' : receive.status === 'Partial' ? 'warning' : 'default'}
+                          />
+                        )}
+                        {(receive.rejectionHistory || []).length > 0 && receive.status !== 'Returned' && (
+                          <Tooltip title={`Rejected ${receive.rejectionHistory.length} time(s) and resubmitted — last observation: ${receive.rejectionHistory[receive.rejectionHistory.length - 1]?.observation || ''}`}>
+                            <Chip label="Resubmitted" size="small" color="info" variant="outlined" />
+                          </Tooltip>
+                        )}
                         {(receive.bills || []).map((b) => {
                           const rejected = b.status === 'Returned from Audit';
                           const billStage = b.approvalStatus === 'Submitted'
@@ -769,7 +933,28 @@ const GoodsReceive = () => {
                           <ViewIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
-                      {isDeveloper && (
+                      {['Draft', 'Returned'].includes(receive.status) && (
+                        <>
+                          <Tooltip title={receive.status === 'Returned' ? 'Edit rejected GRN' : 'Edit draft'}>
+                            <IconButton size="small" color="primary" onClick={() => handleEditDraft(receive._id)}>
+                              <EditIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          <Tooltip title={receive.status === 'Returned' ? 'Resubmit (posts stock, journal and PO quantities again)' : 'Submit (posts stock, journal and PO quantities)'}>
+                            <IconButton size="small" color="success" onClick={() => setConfirmAction({ type: 'submit', grn: receive })}>
+                              <SendIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          {receive.status === 'Draft' && (
+                          <Tooltip title="Delete draft">
+                            <IconButton size="small" color="error" onClick={() => setConfirmAction({ type: 'delete', grn: receive })}>
+                              <DeleteIcon fontSize="small" />
+                            </IconButton>
+                          </Tooltip>
+                          )}
+                        </>
+                      )}
+                      {isDeveloper && !['Draft', 'Returned'].includes(receive.status) && (
                         <Tooltip title="Developer edit (audited correction)">
                           <IconButton size="small" color="secondary" onClick={() => setDevEditGrnId(receive._id)}>
                             <EditIcon fontSize="small" />
@@ -783,6 +968,7 @@ const GoodsReceive = () => {
                           </IconButton>
                         </Tooltip>
                       )}
+                      {!['Draft', 'Returned'].includes(receive.status) && (
                       <Tooltip title="Sync to inventory">
                         <IconButton size="small" color="primary" onClick={async () => {
                           try {
@@ -797,6 +983,7 @@ const GoodsReceive = () => {
                           <InventoryIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
+                      )}
                     </TableCell>
                   </TableRow>
                 ))
@@ -817,8 +1004,14 @@ const GoodsReceive = () => {
 
       {/* Create Dialog - GRN layout */}
       <Dialog open={formDialog.open} onClose={() => { setFormDialog({ open: false }); setGrnRequiresDeliveryChallan(false); setGrnDcStatusNote(''); setDeliveryChallanOptions([]); }} maxWidth="lg" fullWidth>
-        <DialogTitle>Create GRN (Goods Received Note)</DialogTitle>
+        <DialogTitle>{formDialog.editId ? `${formDialog.status === 'Returned' ? 'Correct Rejected' : 'Edit Draft'} GRN ${formDialog.receiveNumber || ''}` : 'Create GRN (Goods Received Note)'}</DialogTitle>
         <DialogContent>
+          {formDialog.rejection?.observation && (
+            <Alert severity="error" sx={{ mt: 1 }}>
+              <strong>Rejected{formDialog.rejection.returnedAt ? ` on ${formatDate(formDialog.rejection.returnedAt)}` : ''}:</strong> {formDialog.rejection.observation}
+              <Typography variant="caption" display="block">Correct the GRN, save it, then Resubmit it from the GRN list.</Typography>
+            </Alert>
+          )}
           <Grid container spacing={2} sx={{ mt: 1 }}>
             {/* Select QA-passed PO when coming from GRN tab – same prefill as Store Dashboard Create GRN */}
             <Grid item xs={12}>
@@ -872,6 +1065,9 @@ const GoodsReceive = () => {
                 helperText={qaPassedPOs.length === 0 && !qaPassedPOsLoading ? 'No open POs for GRN in this list.' : 'Select a PO to prefill (full-advance: pick QA-passed delivery challan on the form).'}
               >
                 <MenuItem value="">Select QA-passed PO (optional)</MenuItem>
+                {formData.purchaseOrder && !qaPassedPOs.some((po) => String(po._id) === String(formData.purchaseOrder)) && (
+                  <MenuItem value={formData.purchaseOrder}>{formData.poNumber || formData.purchaseOrder} – {formData.supplierName || 'Vendor'}</MenuItem>
+                )}
                 {qaPassedPOs.map((po) => (
                   <MenuItem key={po._id} value={po._id}>
                     {po.orderNumber || po._id} – {po.vendor?.name || 'Vendor'}
@@ -1287,6 +1483,23 @@ const GoodsReceive = () => {
                   }}
                 />
               </Stack>
+              {savedAttachments.filter((a) => !removedAttachmentIds.includes(String(a._id))).length > 0 && (
+                <Stack direction="row" gap={1} flexWrap="wrap" sx={{ mt: 1 }}>
+                  {savedAttachments.filter((a) => !removedAttachmentIds.includes(String(a._id))).map((a) => (
+                    <Chip
+                      key={a._id}
+                      size="small"
+                      icon={<AttachFileIcon />}
+                      label={a.filename || 'Attachment'}
+                      component="a"
+                      href={resolveUploadFileHref(a.path)}
+                      target="_blank"
+                      clickable
+                      onDelete={() => setRemovedAttachmentIds((prev) => [...prev, String(a._id)])}
+                    />
+                  ))}
+                </Stack>
+              )}
               {attachmentFiles.length > 0 && (
                 <Stack spacing={0.5} sx={{ mt: 1 }}>
                   {attachmentFiles.map((file, idx) => (
@@ -1326,8 +1539,13 @@ const GoodsReceive = () => {
         </DialogContent>
         <DialogActions>
           <Button onClick={() => { setFormDialog({ open: false }); setAttachmentFiles([]); setGrnRequiresDeliveryChallan(false); setGrnDcStatusNote(''); setDeliveryChallanOptions([]); }}>Cancel</Button>
+          <Typography variant="caption" color="text.secondary" sx={{ mr: 'auto', pl: 1 }}>
+            {formDialog.status === 'Returned'
+              ? 'Stays rejected until you Resubmit it from the GRN list.'
+              : 'Saved as Draft — stock is updated only when you Submit it from the GRN list.'}
+          </Typography>
           <Button variant="contained" onClick={handleSubmit} disabled={loading || !formData.project || !formData.store || !formData.items.some((i) => (i.selected !== false) && (Number(i.quantity) || 0) > 0)}>
-            Create GRN
+            {formDialog.editId ? (formDialog.status === 'Returned' ? 'Save Changes' : 'Save Draft') : 'Save as Draft'}
           </Button>
         </DialogActions>
       </Dialog>
@@ -1524,7 +1742,41 @@ const GoodsReceive = () => {
           >
             Print Barcodes
           </Button>
+          {['Draft', 'Returned'].includes(viewDialog.data?.status) && (
+            <>
+              <Button startIcon={<EditIcon />} onClick={() => handleEditDraft(viewDialog.data._id)}>{viewDialog.data.status === 'Returned' ? 'Edit' : 'Edit Draft'}</Button>
+              <Button variant="contained" color="success" startIcon={<SendIcon />} onClick={() => setConfirmAction({ type: 'submit', grn: viewDialog.data })}>{viewDialog.data.status === 'Returned' ? 'Resubmit' : 'Submit'}</Button>
+            </>
+          )}
           <Button onClick={() => setViewDialog({ open: false, data: null })}>Close</Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Submit / delete a Draft GRN */}
+      <Dialog open={!!confirmAction} onClose={() => !confirmBusy && setConfirmAction(null)} maxWidth="xs" fullWidth>
+        <DialogTitle>
+          {confirmAction?.type === 'submit'
+            ? `${confirmAction?.grn?.status === 'Returned' ? 'Resubmit' : 'Submit'} GRN ${confirmAction?.grn?.receiveNumber || ''}?`
+            : `Delete draft GRN ${confirmAction?.grn?.receiveNumber || ''}?`}
+        </DialogTitle>
+        <DialogContent>
+          <Typography variant="body2">
+            {confirmAction?.type === 'submit'
+              ? 'Submitting puts the goods into stock, posts the GRN journal and updates the PO received quantities. After this the GRN can no longer be edited.'
+              : 'The draft is removed. Nothing was posted to stock or accounts yet, so nothing else changes.'}
+          </Typography>
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setConfirmAction(null)} disabled={confirmBusy}>Cancel</Button>
+          <Button
+            variant="contained"
+            color={confirmAction?.type === 'submit' ? 'success' : 'error'}
+            onClick={runConfirmAction}
+            disabled={confirmBusy}
+            startIcon={confirmBusy ? <CircularProgress size={16} /> : null}
+          >
+            {confirmAction?.type === 'submit' ? (confirmAction?.grn?.status === 'Returned' ? 'Resubmit' : 'Submit') : 'Delete'}
+          </Button>
         </DialogActions>
       </Dialog>
 

@@ -14,6 +14,7 @@ import api from '../../services/api';
 import { getImageUrl } from '../../utils/imageService';
 import { formatPKR } from '../../utils/currency';
 import { formatDate } from '../../utils/dateUtils';
+import GrnReviewDialog from '../../components/Procurement/Store/GrnReviewDialog';
 
 const ROWS_PER_PAGE_OPTIONS = [25, 50, 100, 200];
 const DEFAULT_ROWS_PER_PAGE = 100;
@@ -141,6 +142,7 @@ const VendorBills = () => {
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [billToDelete, setBillToDelete] = useState(null);
   const [deletingBill, setDeletingBill] = useState(false);
+  const [reviewGrnId, setReviewGrnId] = useState(null); // Unbilled GRN view / reject
 
   const handleOpenDelete = (bill) => {
     setBillToDelete(bill);
@@ -478,6 +480,7 @@ const VendorBills = () => {
                     <TableCell align="right">Billed</TableCell>
                     <TableCell align="right">Remaining</TableCell>
                     <TableCell align="right">Amount</TableCell>
+                    <TableCell align="center">View</TableCell>
                   </TableRow>
                 </TableHead>
                 <TableBody>
@@ -519,10 +522,17 @@ const VendorBills = () => {
                           inputProps={{ min: 0, max: Number(g.remainingAmount) || 0, step: 0.01 }}
                         />
                       </TableCell>
+                      <TableCell align="center">
+                        <Tooltip title="View GRN (reject with observation)">
+                          <IconButton size="small" color="primary" onClick={() => setReviewGrnId(g._id)}>
+                            <ViewIcon fontSize="small" />
+                          </IconButton>
+                        </Tooltip>
+                      </TableCell>
                     </TableRow>
                   ))}
                   {grns.length === 0 && (
-                    <TableRow><TableCell colSpan={11} align="center">No billable GRNs found</TableCell></TableRow>
+                    <TableRow><TableCell colSpan={12} align="center">No billable GRNs found</TableCell></TableRow>
                   )}
                 </TableBody>
               </Table>
@@ -864,6 +874,13 @@ const VendorBills = () => {
           </Button>
         </DialogActions>
       </Dialog>
+
+      <GrnReviewDialog
+        open={!!reviewGrnId}
+        grnId={reviewGrnId}
+        onClose={() => setReviewGrnId(null)}
+        onRejected={(msg) => { setReviewGrnId(null); setSuccess(msg); loadGrns(vendorId); }}
+      />
 
       {/* Delete Confirmation Dialog */}
       <Dialog
