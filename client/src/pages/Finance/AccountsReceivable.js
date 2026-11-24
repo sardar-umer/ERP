@@ -824,7 +824,7 @@ const AccountsReceivable = () => {
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                 <Box>
                   <Typography color="textSecondary" gutterBottom variant="body2">
-                    Total Paid
+                    Total Received
                   </Typography>
                   <Typography variant="h5" sx={{ fontWeight: 'bold', color: 'success.main' }}>
                     {formatPKR(summary.totalPaid)}
