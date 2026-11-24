@@ -51,7 +51,7 @@ import {
 import { useNavigate, useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import { canSeePresidentDashboard } from '../../utils/presidentAccess';
-import { getModuleMenuItems, MODULES, isHigherManagementRestricted } from '../../utils/permissions';
+import { getModuleMenuItems, MODULES, isHigherManagementRestricted, isCeoSecretariatPsUser } from '../../utils/permissions';
 import NotificationService from '../../services/notificationService';
 import { useNotifications } from '../../contexts/NotificationContext';
 import { getImageUrl, handleImageError } from '../../utils/imageService';
@@ -1175,6 +1175,12 @@ const Sidebar = () => {
         <List sx={{ pt: 1 }}>
         {(() => {
           let menuItems = getFilteredMenuItems(user?.role);
+          // PS: Executive Dashboard (view the CEO desk) at the top
+          if (isCeoSecretariatPsUser(user?.roleRef, user?.roles, user?.subRoles)
+            && !menuItems.some((item) => item.path === '/dashboard')) {
+            const dash = (getMenuItems('super_admin') || []).find((item) => item.path === '/dashboard');
+            if (dash) menuItems = [dash, ...menuItems];
+          }
           // President and developer: President Dashboard first, then the usual Dashboard
           if (canSeePresidentDashboard(user)) {
             const at = menuItems.findIndex((item) => item.path === '/dashboard');

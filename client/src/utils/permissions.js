@@ -1424,8 +1424,31 @@ export const getModuleMenuItems = (userRole) => {
   }).filter(module => module !== null); // Remove any null modules
 };
 
+/**
+ * PS / CEO Secretariat role (role named "PS", Personal Secretary or CEO Secretariat), same rule as the server's
+ * isCeoSecretariatPsRole. PS may open the Executive Dashboard (/dashboard) to view the CEO desk; the server keeps
+ * CEO-step documents view-only for PS.
+ */
+export const isCeoSecretariatPsUser = (userRoleRef = null, userRoles = null, userSubRoles = null) => {
+  const labels = [];
+  const add = (r) => {
+    if (!r) return;
+    if (typeof r === 'string') { labels.push(r); return; }
+    labels.push(r.name, r.displayName);
+  };
+  add(userRoleRef);
+  (Array.isArray(userRoles) ? userRoles : []).forEach(add);
+  (Array.isArray(userSubRoles) ? userSubRoles : []).forEach(add);
+  return labels
+    .map((l) => String(l || '').toLowerCase().trim())
+    .some((l) => l === 'ps' || l.includes('personal secretary') || l.includes('ceo secretariat'));
+};
+
 export const isRouteAccessible = (userRole, path, userSubRoles = [], userRoleRef = null, userRoles = null) => {
   if (!path) return false;
+
+  // Executive Dashboard: PS views the CEO desk (no module key exists for /dashboard)
+  if (path === '/dashboard' && isCeoSecretariatPsUser(userRoleRef, userRoles, userSubRoles)) return true;
   
   // Profile is always accessible
   if (path === '/profile') return true;
