@@ -40,6 +40,7 @@ import {
   Add as AddIcon
 } from '@mui/icons-material';
 import api from '../../services/api';
+import CustomerProjectStatement from '../../components/Finance/CustomerProjectStatement';
 import FinanceCompanyPageHeader from '../../components/Finance/FinanceCompanyPageHeader';
 import { useFinanceCompanyReload } from '../../hooks/useFinanceCompanyReload';
 import useClientPagination from '../../hooks/useClientPagination';
@@ -798,103 +799,7 @@ export default function FinanceCustomersList() {
             )}
 
             {detailTab === 5 && (
-              <Box>
-                <Grid container spacing={2} mb={3}>
-                  {[
-                    { label: 'Sales (Open Invoices)', value: detail?.costCenter?.sales, color: 'primary.main' },
-                    { label: 'Cost of Sales (Bills)', value: detail?.costCenter?.costOfSales, color: 'warning.main' },
-                    { label: 'Net Profit', value: detail?.costCenter?.netProfit, color: (detail?.costCenter?.netProfit || 0) >= 0 ? 'success.main' : 'error.main' },
-                    { label: 'Profit %', value: detail?.costCenter?.profitPercent, color: 'info.main', isPct: true }
-                  ].map((c) => (
-                    <Grid item xs={12} sm={6} md={3} key={c.label}>
-                      <Card variant="outlined">
-                        <CardContent sx={{ py: 1.5 }}>
-                          <Typography variant="caption" color="text.secondary">{c.label}</Typography>
-                          <Typography variant="h6" fontWeight={700} color={c.color}>
-                            {c.isPct ? `${Number(c.value || 0).toFixed(2)}%` : `PKR ${fmt(c.value)}`}
-                          </Typography>
-                        </CardContent>
-                      </Card>
-                    </Grid>
-                  ))}
-                </Grid>
-
-                <Typography variant="subtitle1" fontWeight={700} mb={1}>Sales — Open Invoices</Typography>
-                <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ bgcolor: 'grey.50' }}>
-                        <TableCell><b>Invoice #</b></TableCell>
-                        <TableCell><b>Date</b></TableCell>
-                        <TableCell><b>Due</b></TableCell>
-                        <TableCell align="right"><b>Amount</b></TableCell>
-                        <TableCell align="right"><b>Balance</b></TableCell>
-                        <TableCell><b>Status</b></TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(detail?.costCenter?.openInvoices || []).map((inv) => (
-                        <TableRow key={inv._id} hover>
-                          <TableCell sx={{ fontFamily: 'monospace' }}>{inv.invoiceNumber || '—'}</TableCell>
-                          <TableCell>{inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString() : '—'}</TableCell>
-                          <TableCell>{inv.dueDate ? new Date(inv.dueDate).toLocaleDateString() : '—'}</TableCell>
-                          <TableCell align="right">{fmt(inv.totalAmount)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'error.main' }}>{fmt(inv.balance)}</TableCell>
-                          <TableCell>
-                            <Chip label={inv.status || '—'} size="small" color={STATUS_COLOR[inv.status] || 'default'} />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {(detail?.costCenter?.openInvoices || []).length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={6} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                            No open invoices for this customer.
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-
-                <Typography variant="subtitle1" fontWeight={700} mb={1}>Cost of Sales — Bills</Typography>
-                <TableContainer component={Paper} variant="outlined">
-                  <Table size="small">
-                    <TableHead>
-                      <TableRow sx={{ bgcolor: 'grey.50' }}>
-                        <TableCell><b>Bill #</b></TableCell>
-                        <TableCell><b>Vendor</b></TableCell>
-                        <TableCell><b>Bill Date</b></TableCell>
-                        <TableCell align="right"><b>Total</b></TableCell>
-                        <TableCell align="right"><b>Paid</b></TableCell>
-                        <TableCell align="right"><b>Balance</b></TableCell>
-                        <TableCell><b>Status</b></TableCell>
-                      </TableRow>
-                    </TableHead>
-                    <TableBody>
-                      {(detail?.costCenter?.bills || []).map((b) => (
-                        <TableRow key={b._id} hover>
-                          <TableCell sx={{ fontFamily: 'monospace' }}>{b.billNumber || '—'}</TableCell>
-                          <TableCell>{b.vendorName || '—'}</TableCell>
-                          <TableCell>{b.billDate ? new Date(b.billDate).toLocaleDateString() : '—'}</TableCell>
-                          <TableCell align="right">{fmt(b.totalAmount)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'success.main' }}>{fmt(b.amountPaid)}</TableCell>
-                          <TableCell align="right" sx={{ color: 'error.main' }}>{fmt(b.balanceDue)}</TableCell>
-                          <TableCell>
-                            <Chip label={b.status || '—'} size="small" color={STATUS_COLOR[b.status] || 'default'} />
-                          </TableCell>
-                        </TableRow>
-                      ))}
-                      {(detail?.costCenter?.bills || []).length === 0 && (
-                        <TableRow>
-                          <TableCell colSpan={7} align="center" sx={{ py: 3, color: 'text.secondary' }}>
-                            No related cost-of-sales bills found for this customer.
-                          </TableCell>
-                        </TableRow>
-                      )}
-                    </TableBody>
-                  </Table>
-                </TableContainer>
-              </Box>
+              <CustomerProjectStatement statement={detail?.costCenter?.statement} customerName={detail?.customer?.name} />
             )}
 
             {detailTab === 6 && (

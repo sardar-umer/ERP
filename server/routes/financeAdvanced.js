@@ -8365,6 +8365,21 @@ router.get('/customers/:customerId',
         .lean();
     }
 
+    // Full project statement from the posted books for the invoices' cost center(s)
+    let projectStatement = null;
+    try {
+      const { buildCustomerProjectStatement } = require('../utils/customerProjectStatement');
+      const receiptNoByJe = new Map(receipts.map((r) => [String(r._id), r.entryNumber]));
+      projectStatement = await buildCustomerProjectStatement({
+        invoices,
+        payments: payments.map((p) => ({ ...p, receiptNumber: p.journalEntryId ? receiptNoByJe.get(String(p.journalEntryId)) || '' : '' })),
+        ccIds,
+        companyId
+      });
+    } catch (psErr) {
+      console.error('Customer project statement failed:', psErr.message);
+    }
+
     const salesTotal = openInvoices.reduce((s, i) => s + (Number(i.totalAmount) || 0), 0);
     const costOfSalesTotal = costBills.reduce((s, b) => s + (Number(b.totalAmount) || 0), 0);
     const netProfit = Math.round((salesTotal - costOfSalesTotal) * 100) / 100;
@@ -8407,7 +8422,8 @@ router.get('/customers/:customerId',
           sales: Math.round(salesTotal * 100) / 100,
           costOfSales: Math.round(costOfSalesTotal * 100) / 100,
           netProfit,
-          profitPercent
+          profitPercent,
+          statement: projectStatement
         },
         journalEntries: journalEntries.map((je) => ({
           _id: je._id,
