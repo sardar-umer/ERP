@@ -17,8 +17,10 @@ const full = (n) => `PKR ${Math.round(Number(n) || 0).toLocaleString('en-PK')}`;
 const compact = (n) => {
   const v = Number(n) || 0;
   const a = Math.abs(v);
-  if (a >= 1e7) return `${(v / 1e7).toFixed(2)} Cr`;
-  if (a >= 1e5) return `${(v / 1e5).toFixed(1)} Lac`;
+  // International units (accountant's request): thousands / millions / billions, not Lac / Crore
+  if (a >= 1e9) return `${(v / 1e9).toFixed(2)} B`;
+  if (a >= 1e6) return `${(v / 1e6).toFixed(2)} M`;
+  if (a >= 1e5) return `${(v / 1e3).toFixed(1)} K`;
   return Math.round(v).toLocaleString('en-PK');
 };
 const dayLabel = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' }) : '—');

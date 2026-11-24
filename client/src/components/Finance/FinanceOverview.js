@@ -17,19 +17,21 @@ const LINE = '#e2e8f0';
 const C = { revenue: '#0f766e', expenses: '#e11d48', profit: '#4f46e5', cash: '#0369a1', ar: '#15803d', ap: '#b45309', adv: '#7c3aed' };
 
 const full = (n) => `PKR ${Math.round(Number(n) || 0).toLocaleString('en-PK')}`;
-/** Headline money: 12.4 Cr / 45.2 Lac / 12,500 */
+/** Headline money: 1.25 B / 12.40 M / 620.0 K / 12,500 */
 const compact = (n) => {
   const v = Number(n) || 0;
   const a = Math.abs(v);
-  if (a >= 1e7) return `${(v / 1e7).toFixed(2)} Cr`;
-  if (a >= 1e5) return `${(v / 1e5).toFixed(1)} Lac`;
+  // International units (accountant's request): thousands / millions / billions, not Lac / Crore
+  if (a >= 1e9) return `${(v / 1e9).toFixed(2)} B`;
+  if (a >= 1e6) return `${(v / 1e6).toFixed(2)} M`;
+  if (a >= 1e5) return `${(v / 1e3).toFixed(1)} K`;
   return Math.round(v).toLocaleString('en-PK');
 };
 const axisShort = (n) => {
   const a = Math.abs(n);
-  if (a >= 1e7) return `${(n / 1e7).toFixed(1)}Cr`;
-  if (a >= 1e5) return `${(n / 1e5).toFixed(0)}L`;
-  if (a >= 1e3) return `${(n / 1e3).toFixed(0)}k`;
+  if (a >= 1e9) return `${(n / 1e9).toFixed(1)}B`;
+  if (a >= 1e6) return `${(n / 1e6).toFixed(1)}M`;
+  if (a >= 1e3) return `${(n / 1e3).toFixed(0)}K`;
   return String(n);
 };
 
