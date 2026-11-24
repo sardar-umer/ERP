@@ -254,6 +254,19 @@ export default function FinanceCustomersList() {
     return true;
   });
 
+  /** Receipt voucher number (RV-…) for a payment: by its journal link, else same invoice + amount */
+  const receiptNumberFor = (p) => {
+    const receipts = detail?.receipts || [];
+    if (p.journalEntryId) {
+      const byJe = receipts.find((r) => String(r._id) === String(p.journalEntryId));
+      if (byJe) return byJe.entryNumber;
+    }
+    const amt = Math.round((Number(p.amount) || 0) * 100);
+    const same = receipts.filter((r) => r.invoiceNumber && r.invoiceNumber === p.invoiceNumber
+      && Math.round((Number(r.amount) || 0) * 100) === amt);
+    return same.length === 1 ? same[0].entryNumber : '';
+  };
+
   const customerDialog = (
   <Dialog open={dialogOpen} onClose={() => { if (!saving) { setDialogOpen(false); setEditingId(null); } }} maxWidth="sm" fullWidth>
     <DialogTitle>{editingId ? 'Edit Customer' : 'Create Customer'}</DialogTitle>
@@ -683,7 +696,7 @@ export default function FinanceCustomersList() {
                 <Typography variant="subtitle2" fontWeight={700} mb={1}>
                   Invoices
                   <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>
-                    (click a row to highlight its payments)
+                    (click a row to highlight its receipts)
                   </Typography>
                 </Typography>
                 <TableContainer component={Paper} variant="outlined" sx={{ mb: 3 }}>
@@ -712,7 +725,7 @@ export default function FinanceCustomersList() {
                               cursor: 'pointer',
                               bgcolor: selected ? 'warning.50' : undefined
                             }}
-                            title="Highlight payments for this invoice"
+                            title="Highlight receipts for this invoice"
                           >
                             <TableCell sx={{ fontFamily: 'monospace' }}>{inv.invoiceNumber}</TableCell>
                             <TableCell>{inv.invoiceDate ? new Date(inv.invoiceDate).toLocaleDateString() : '—'}</TableCell>
@@ -733,7 +746,7 @@ export default function FinanceCustomersList() {
 
                 <Box ref={paymentsSectionRef}>
                   <Stack direction="row" alignItems="center" gap={1} mb={1}>
-                    <Typography variant="subtitle2" fontWeight={700}>Payments</Typography>
+                    <Typography variant="subtitle2" fontWeight={700}>Receipts</Typography>
                     {highlightedInvoiceKey && (
                       <Chip
                         size="small"
@@ -747,6 +760,7 @@ export default function FinanceCustomersList() {
                     <Table size="small">
                       <TableHead>
                         <TableRow sx={{ bgcolor: 'grey.50' }}>
+                          <TableCell><b>Receipt #</b></TableCell>
                           <TableCell><b>Date</b></TableCell>
                           <TableCell><b>Reference</b></TableCell>
                           <TableCell><b>Invoice</b></TableCell>
@@ -761,6 +775,7 @@ export default function FinanceCustomersList() {
                               key={String(p._id) + '-stmt'}
                               sx={highlighted ? { bgcolor: 'warning.50', outline: '2px solid', outlineColor: 'warning.main' } : undefined}
                             >
+                              <TableCell sx={{ fontFamily: 'monospace' }}>{receiptNumberFor(p) || '—'}</TableCell>
                               <TableCell>{p.paymentDate ? new Date(p.paymentDate).toLocaleDateString() : '—'}</TableCell>
                               <TableCell>{p.reference || '—'}</TableCell>
                               <TableCell sx={{ fontFamily: 'monospace', fontWeight: highlighted ? 700 : 400 }}>
@@ -772,7 +787,7 @@ export default function FinanceCustomersList() {
                         })}
                         {filteredPayments.length === 0 && (
                           <TableRow>
-                            <TableCell colSpan={4} align="center" sx={{ py: 2, color: 'text.secondary' }}>No payments in range</TableCell>
+                            <TableCell colSpan={5} align="center" sx={{ py: 2, color: 'text.secondary' }}>No receipts in range</TableCell>
                           </TableRow>
                         )}
                       </TableBody>
