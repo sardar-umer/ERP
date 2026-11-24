@@ -18,6 +18,17 @@ const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const fmtNum = (n) => Number(n || 0).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
 const fmtQty = (n) => Number(n || 0).toLocaleString('en-PK', { maximumFractionDigits: 3 });
 const fmtShortDate = (d) => (d ? new Date(d).toLocaleDateString('en-GB') : '');
+const METHOD_LABEL = { cash: 'Cash', check: 'Cheque', cheque: 'Cheque', credit_card: 'Card', bank_transfer: 'Bank transfer', bank: 'Bank', ach: 'Bank', other: 'Other' };
+/** Receipts recorded against the invoice, oldest first, with their receipt voucher number */
+const receiptRows = (invoice) => [...(invoice?.payments || [])]
+  .sort((a, b) => new Date(a.paymentDate || 0) - new Date(b.paymentDate || 0))
+  .map((p) => ({
+    date: p.paymentDate,
+    receiptNo: (p.journalEntry && typeof p.journalEntry === 'object' ? p.journalEntry.entryNumber : '') || '',
+    method: METHOD_LABEL[p.paymentMethod] || p.paymentMethod || '',
+    reference: p.reference || '',
+    amount: Number(p.amount) || 0
+  }));
 const fmtDateTime = (d) => new Date(d).toLocaleString('en-GB', { day: '2-digit', month: '2-digit', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true });
 const personName = (u) => (u && typeof u === 'object' ? [u.firstName, u.lastName].filter(Boolean).join(' ').trim() || u.email || '' : '');
 const initials = (name) => String(name || '').split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]).join('').toUpperCase();
@@ -135,7 +146,7 @@ export default function InvoicePrint() {
         img.addEventListener('load', resolve, { once: true });
         img.addEventListener('error', resolve, { once: true });
       })));
-      printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber });
+      printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber, header: false });
     }, 300);
     return () => clearTimeout(timer);
   }, [autoPrint, loading, invoice]);
@@ -235,6 +246,27 @@ export default function InvoicePrint() {
     drawRow('Balance Due:', fmt(invoice.balanceDue || (invoice.totalAmount - (invoice.amountPaid || invoice.paidAmount || 0))), true);
     doc.setTextColor(40, 40, 40);
 
+    // Receipt history
+    const pdfReceipts = receiptRows(invoice);
+    if (pdfReceipts.length) {
+      y += 4;
+      doc.setFont('helvetica', 'bold'); doc.setFontSize(10);
+      doc.text('Receipt History', 14, y);
+      autoTable(doc, {
+        startY: y + 2,
+        margin: { left: 14, right: 14 },
+        head: [['Date', 'Receipt #', 'Method', 'Reference', 'Amount']],
+        body: [
+          ...pdfReceipts.map((r) => [fmtShortDate(r.date), r.receiptNo || '—', r.method, r.reference || '—', fmt(r.amount)]),
+          [{ content: 'Total received', colSpan: 4, styles: { fontStyle: 'bold' } }, { content: fmt(pdfReceipts.reduce((t, r) => t + r.amount, 0)), styles: { fontStyle: 'bold' } }]
+        ],
+        styles: { fontSize: 8.5, cellPadding: 2 },
+        headStyles: { fillColor: [25, 118, 210], textColor: 255, fontStyle: 'bold' },
+        columnStyles: { 4: { halign: 'right' } }
+      });
+      y = doc.lastAutoTable.finalY + 4;
+    }
+
     // Footer
     if (invoice.notes) {
       y += 4;
@@ -318,7 +350,7 @@ export default function InvoicePrint() {
         <Button startIcon={<BackIcon />} onClick={() => navigate(-1)}>Back</Button>
         <Box display="flex" gap={1}>
           <Button variant="outlined" color="error" startIcon={<DownloadIcon />} onClick={handleDownloadPDF}>Download PDF</Button>
-          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber })}>Print</Button>
+          <Button variant="contained" startIcon={<PrintIcon />} onClick={() => printTovusElement(printRef.current, { title: 'Invoice', docRef: invoice?.invoiceNumber, header: false })}>Print</Button>
         </Box>
       </Box>
 
@@ -472,6 +504,39 @@ export default function InvoicePrint() {
             </tbody>
           </Box>
         </Box>
+
+        {/* Receipt history */}
+        {receiptRows(invoice).length > 0 && (
+          <Box sx={{ mt: 3 }}>
+            <Typography sx={{ fontSize: 14, fontWeight: 700, mb: 0.75 }}>Receipt History</Typography>
+            <Box component="table" sx={{ width: '100%', borderCollapse: 'collapse' }}>
+              <thead>
+                <tr>
+                  <Box component="th" sx={{ ...headSx, width: 90 }}>Date</Box>
+                  <Box component="th" sx={{ ...headSx, width: 110 }}>Receipt #</Box>
+                  <Box component="th" sx={{ ...headSx, width: 110 }}>Method</Box>
+                  <Box component="th" sx={{ ...headSx, textAlign: 'left' }}>Reference</Box>
+                  <Box component="th" sx={{ ...headSx, width: 110 }}>Amount</Box>
+                </tr>
+              </thead>
+              <tbody>
+                {receiptRows(invoice).map((r, i) => (
+                  <tr key={i}>
+                    <Box component="td" sx={{ ...cellSx, textAlign: 'center' }}>{fmtShortDate(r.date)}</Box>
+                    <Box component="td" sx={{ ...cellSx, textAlign: 'center', fontFamily: 'monospace' }}>{r.receiptNo || '—'}</Box>
+                    <Box component="td" sx={{ ...cellSx, textAlign: 'center' }}>{r.method}</Box>
+                    <Box component="td" sx={cellSx}>{r.reference || '—'}</Box>
+                    <Box component="td" sx={{ ...cellSx, ...num }}>{fmtNum(r.amount)}</Box>
+                  </tr>
+                ))}
+                <tr>
+                  <Box component="td" colSpan={4} sx={{ ...cellSx, fontWeight: 700, textAlign: 'right' }}>Total Received</Box>
+                  <Box component="td" sx={{ ...cellSx, ...num, fontWeight: 700 }}>{fmtNum(receiptRows(invoice).reduce((t, r) => t + r.amount, 0))}</Box>
+                </tr>
+              </tbody>
+            </Box>
+          </Box>
+        )}
 
         {/* Signatures */}
         <Box sx={{ display: 'grid', gridTemplateColumns: '1fr 1fr', columnGap: 12, mt: 7, alignItems: 'end' }}>

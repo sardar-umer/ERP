@@ -338,6 +338,7 @@ export const tovusPrintFooterHtml = ({ company, docRef } = {}) => {
  * opts.pageSize: 'A4' (default, portrait) or 'A4 landscape'.
  * opts.fitTarget: fit only this part of the copy onto page 1 (e.g. the bill itself, while the
  *   attachments after it keep printing on their own pages). Default: the whole document.
+ * opts.header: false → no Tovus header (the document's own letterhead stays); the Tovus footer is kept.
  */
 export const printTovusElement = async (target, opts = {}) => {
   const {
@@ -348,7 +349,8 @@ export const printTovusElement = async (target, opts = {}) => {
     fitTarget,
     pageSize = 'A4',
     footerSpaceMm = 36,
-    fit = true
+    fit = true,
+    header = true
   } = opts;
   const el = typeof target === 'string' ? document.querySelector(target) : target;
   if (!el) {
@@ -411,7 +413,7 @@ export const printTovusElement = async (target, opts = {}) => {
     </style>
     <table class="tv-page">
       <thead><tr><td><div class="tv-sp-top"></div></td></tr></thead>
-      <tbody><tr><td><div class="tv-fit">${tovusPrintHeaderHtml({ title })}<div class="tv-body"></div></div></td></tr></tbody>
+      <tbody><tr><td><div class="tv-fit">${header ? tovusPrintHeaderHtml({ title }) : ''}<div class="tv-body"></div></div></td></tr></tbody>
       <tfoot><tr><td><div class="tv-sp-bot"></div></td></tr></tfoot>
     </table>
     ${tovusPrintFooterHtml({ company, docRef })}`;

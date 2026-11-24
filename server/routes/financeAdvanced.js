@@ -2850,7 +2850,9 @@ router.get('/accounts-receivable/:id',
       { path: 'costCenter', select: 'name code' },
       { path: 'companyId', select: 'name companyCode website contactInfo' },
       { path: 'lineItems.account', select: 'name accountNumber type category' },
-      { path: 'createdBy', select: 'firstName lastName email digitalSignature' }
+      { path: 'createdBy', select: 'firstName lastName email digitalSignature' },
+      // Receipt voucher (RV-…) of each payment, for the receipt history on the invoice
+      { path: 'payments.journalEntry', select: 'entryNumber status' }
     ]);
     const invoice = doc.toObject ? doc.toObject() : doc;
     // Older invoices didn't copy NTN / STRN / CNIC / address — fill the gaps from the customer record
