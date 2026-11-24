@@ -14,7 +14,7 @@ import api from '../../services/api';
 const INK = '#0f172a';
 const MUTED = '#64748b';
 const LINE = '#e2e8f0';
-const C = { revenue: '#0f766e', expenses: '#e11d48', profit: '#4f46e5', cash: '#0369a1', ar: '#15803d', ap: '#b45309' };
+const C = { revenue: '#0f766e', expenses: '#e11d48', profit: '#4f46e5', cash: '#0369a1', ar: '#15803d', ap: '#b45309', adv: '#7c3aed' };
 
 const full = (n) => `PKR ${Math.round(Number(n) || 0).toLocaleString('en-PK')}`;
 /** Headline money: 12.4 Cr / 45.2 Lac / 12,500 */
@@ -284,6 +284,7 @@ const exportOverview = ({ data, budget, ar, ap, companyName, periodLabel }) => {
   add('Receivables past due', ar?.overdue ?? '');
   add('Payables outstanding', ap?.total ?? '');
   add('Payables past due', ap?.overdue ?? '');
+  add('Vendor advances (paid before bill)', data?.vendorAdvances?.total ?? '');
   add('');
   add('Month', 'Revenue', 'Expenses', 'Net profit', 'Cash in', 'Cash out', 'Closing cash');
   (data?.monthly || []).forEach((m, i) => {
@@ -399,7 +400,7 @@ export default function FinanceOverview({ ar, ap, companyName, reloadKey }) {
       {loading && <LinearProgress sx={{ mb: 1, borderRadius: 1 }} />}
 
       {/* Headline KPIs */}
-      <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(3, 1fr)', xl: 'repeat(6, 1fr)' }, mb: 2 }}>
+      <Box sx={{ display: 'grid', gap: 1.5, gridTemplateColumns: { xs: '1fr', sm: 'repeat(2, 1fr)', lg: 'repeat(4, 1fr)', xl: 'repeat(7, 1fr)' }, mb: 2 }}>
         <Kpi
           title="Cash & bank" value={cash?.total} color={C.cash} loading={!data}
           note={`${banks.length} account${banks.length === 1 ? '' : 's'} · today`}
@@ -435,6 +436,16 @@ export default function FinanceOverview({ ar, ap, companyName, reloadKey }) {
           title="Payables" value={ap?.total} color={C.ap} loading={!ap}
           note={ap?.overdue > 0 ? `${compact(ap.overdue)} past due date` : 'Nothing overdue'}
           onClick={() => navigate('/finance/aged-payables')}
+        />
+        <Kpi
+          title="Vendor advances" value={data?.vendorAdvances?.total} color={C.adv} loading={!data}
+          note={(() => {
+            const va = data?.vendorAdvances;
+            if (!va) return '';
+            const base = va.count ? `Paid before bill · ${va.vendors} vendor${va.vendors === 1 ? '' : 's'}` : 'No open advances';
+            return va.awaitingApproval?.count ? `${base} · ${compact(va.awaitingApproval.total)} awaiting approval` : base;
+          })()}
+          onClick={() => navigate('/finance/vendor-advance')}
         />
       </Box>
 

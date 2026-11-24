@@ -10577,6 +10577,29 @@ router.get('/dashboard/overview',
     const cashTotal = r2(accounts.reduce((t, a) => t + a.balance, 0));
     const prevMonthCash = cashTrend.length > 1 ? cashTrend[cashTrend.length - 2].balance : 0;
 
+    // Vendor advances: money paid to vendors before their bill, not yet set off against a bill.
+    // Only advances whose voucher is posted count (that is what the books show); ones still
+    // waiting for finance approval are reported separately.
+    const openAdvances = await VendorAdvance.find(q({
+      status: { $ne: 'applied' },
+      voucherWorkflowStatus: { $ne: 'rejected' }
+    })).select('amount appliedAmount vendor journalEntryId voucherWorkflowStatus').lean();
+    const advJeIds = openAdvances.map((a) => a.journalEntryId).filter(Boolean);
+    const postedAdvJe = new Set(advJeIds.length
+      ? (await JournalEntry.find({ _id: { $in: advJeIds }, status: 'posted' }).select('_id').lean()).map((j) => String(j._id))
+      : []);
+    const advOpen = (a) => r2((Number(a.amount) || 0) - (Number(a.appliedAmount) || 0));
+    // Legacy advances without a voucher workflow were posted on save
+    const isPostedAdvance = (a) => (a.journalEntryId ? postedAdvJe.has(String(a.journalEntryId)) : (a.voucherWorkflowStatus || 'immediate') === 'immediate');
+    const postedAdvances = openAdvances.filter((a) => isPostedAdvance(a) && advOpen(a) > 0.009);
+    const awaitingAdvances = openAdvances.filter((a) => !isPostedAdvance(a) && advOpen(a) > 0.009);
+    const vendorAdvances = {
+      total: r2(postedAdvances.reduce((t, a) => t + advOpen(a), 0)),
+      count: postedAdvances.length,
+      vendors: new Set(postedAdvances.map((a) => String(a.vendor?.vendorId || a.vendor?.name || ''))).size,
+      awaitingApproval: { count: awaitingAdvances.length, total: r2(awaitingAdvances.reduce((t, a) => t + advOpen(a), 0)) }
+    };
+
     res.json({
       success: true,
       data: {
@@ -10584,7 +10607,8 @@ router.get('/dashboard/overview',
         pl: { current, previous },
         monthly,
         cash: { total: cashTotal, previousMonthEnd: r2(prevMonthCash), accounts, trend: cashTrend },
-        expenses: topExpenses
+        expenses: topExpenses,
+        vendorAdvances
       }
     });
   })
