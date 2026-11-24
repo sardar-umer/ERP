@@ -136,8 +136,8 @@ class FinalSettlementService {
     return response.data;
   }
 
-  async forwardSettlement(id, { assignedHod, assignedAvp }) {
-    const response = await api.put(`/final-settlements/${id}/forward`, { assignedHod, assignedAvp });
+  async forwardSettlement(id, { assignedHod }) {
+    const response = await api.put(`/final-settlements/${id}/forward`, { assignedHod });
     return response.data;
   }
 

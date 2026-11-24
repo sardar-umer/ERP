@@ -231,7 +231,7 @@ const FinalSettlementManagement = () => {
       case 'pending':
         if (canForward(settlement)) {
           buttons.push(
-            <Tooltip key="forward" title="Forward for approval (GM HR → AVP → CEO)">
+            <Tooltip key="forward" title="Forward for approval (GM HR → Audit → CEO)">
               <IconButton size="small" color="primary" onClick={() => setForwardFor(settlement)}>
                 <ForwardIcon />
               </IconButton>

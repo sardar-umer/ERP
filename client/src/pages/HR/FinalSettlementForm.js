@@ -1872,7 +1872,7 @@ const FinalSettlementForm = () => {
                     loanId={id}
                     service={finalSettlementService}
                     documents={existingDocs}
-                    canDelete={!['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'].includes(existingWorkflow)}
+                    canDelete={!['Pending HOD HR', 'Pending AVP', 'Pending Audit', 'Forwarded to Audit Director', 'Forwarded to CEO'].includes(existingWorkflow)}
                     onChange={setExistingDocs}
                     onError={(message) => setSnackbar({ open: true, message, severity: 'error' })}
                   />

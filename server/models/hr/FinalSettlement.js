@@ -233,10 +233,11 @@ const finalSettlementSchema = new mongoose.Schema({
     accountTitle: String
   },
 
-  // Approval workflow (same as Manual Salary): HR forwards → GM HR → AVP → CEO → status "approved"
+  // Approval workflow: HR forwards → GM HR → Audit (pre-audit staff → Audit Director) → CEO → status "approved".
+  // AVP was removed on 2026-11-24; 'Pending AVP' stays only so older records still load.
   workflowStatus: {
     type: String,
-    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Forwarded to CEO', 'Approved by CEO', 'Pending Finance', 'Paid', 'Returned', 'Rejected by CEO'],
+    enum: ['Draft', 'Pending HOD HR', 'Pending AVP', 'Pending Audit', 'Forwarded to Audit Director', 'Forwarded to CEO', 'Approved by CEO', 'Pending Finance', 'Paid', 'Returned', 'Rejected by CEO'],
     default: 'Draft',
     index: true
   },
@@ -250,6 +251,30 @@ const finalSettlementSchema = new mongoose.Schema({
   avpApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   avpApprovedAt: { type: Date },
   avpComments: { type: String, trim: true },
+  // Audit (Pre-Audit screen): initial approval by pre-audit staff → forward → Audit Director final approval
+  preAuditInitialApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  preAuditInitialApprovedAt: { type: Date },
+  preAuditInitialComments: { type: String, trim: true },
+  auditForwardedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  auditForwardedAt: { type: Date },
+  auditApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+  auditApprovedAt: { type: Date },
+  auditComments: { type: String, trim: true },
+  returnedFromStatus: { type: String, trim: true },
+  auditObservations: [{
+    observation: { type: String, trim: true },
+    severity: { type: String, default: 'medium' },
+    addedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    addedAt: { type: Date, default: Date.now }
+  }],
+  workflowHistory: [{
+    fromStatus: String,
+    toStatus: String,
+    changedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
+    changedAt: { type: Date, default: Date.now },
+    comments: String,
+    module: String
+  }],
   ceoApprovedBy: { type: mongoose.Schema.Types.ObjectId, ref: 'User' },
   ceoApprovedAt: { type: Date },
   ceoComments: { type: String, trim: true },

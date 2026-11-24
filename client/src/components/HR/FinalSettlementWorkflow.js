@@ -30,14 +30,17 @@ import { formatPKR } from '../../utils/currency';
 import LoanAttachments from './LoanAttachments';
 
 /**
- * Final settlement approval workflow (same as Manual Salary):
- * HR forwards → GM HR → AVP → CEO → Finance (paid from Payables) → Paid.
+ * Final settlement approval workflow:
+ * HR forwards → GM HR → Audit (Pre-Audit, then Audit Director) → CEO → Finance (paid from Payables) → Paid.
+ * AVP was removed on 2026-11-24; older records that went through AVP still show that step.
  */
 
 export const WORKFLOW_COLORS = {
   Draft: 'default',
   'Pending HOD HR': 'warning',
   'Pending AVP': 'info',
+  'Pending Audit': 'info',
+  'Forwarded to Audit Director': 'info',
   'Forwarded to CEO': 'secondary',
   'Approved by CEO': 'success',
   'Pending Finance': 'primary',
@@ -47,7 +50,7 @@ export const WORKFLOW_COLORS = {
 };
 
 export const workflowLabel = (s) => (s?.workflowStatus === 'Pending HOD HR' ? 'Pending GM HR' : (s?.workflowStatus || 'Draft'));
-export const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Forwarded to CEO'];
+export const IN_APPROVAL = ['Pending HOD HR', 'Pending AVP', 'Pending Audit', 'Forwarded to Audit Director', 'Forwarded to CEO'];
 /** CEO-approved but not yet in Finance (e.g. the hand-off failed or the Finance bill was voided) */
 export const canSendToFinance = (s) => s?.status === 'approved' && s?.workflowStatus === 'Approved by CEO' && !s?.financeApBillId;
 export const inFinance = (s) => Boolean(s?.financeApBillId) || ['Pending Finance', 'Paid'].includes(s?.workflowStatus);
@@ -66,7 +69,26 @@ const approvalSteps = (s) => {
   return [
     { label: 'Forwarded by HR', by: personName(s.forwardedBy), at: s.forwardedAt, done: Boolean(s.forwardedAt), current: ['Draft', 'Returned', 'Rejected by CEO'].includes(ws) },
     { label: 'GM HR', by: personName(s.hodApprovedBy) || personName(s.assignedHod), at: s.hodApprovedAt, done: Boolean(s.hodApprovedAt), current: ws === 'Pending HOD HR', note: s.hodComments },
-    { label: 'AVP', by: personName(s.avpApprovedBy) || personName(s.assignedAvp), at: s.avpApprovedAt, done: Boolean(s.avpApprovedAt), current: ws === 'Pending AVP', note: s.avpComments },
+    // AVP removed 2026-11-24 — shown only for older settlements still at or already past it
+    ...((s.avpApprovedAt || ws === 'Pending AVP')
+      ? [{ label: 'AVP (old flow)', by: personName(s.avpApprovedBy) || personName(s.assignedAvp), at: s.avpApprovedAt, done: Boolean(s.avpApprovedAt), current: ws === 'Pending AVP', note: s.avpComments }]
+      : []),
+    {
+      label: 'Audit — Pre-Audit',
+      by: personName(s.preAuditInitialApprovedBy),
+      at: s.preAuditInitialApprovedAt,
+      done: Boolean(s.preAuditInitialApprovedAt) || Boolean(s.auditApprovedAt),
+      current: ws === 'Pending Audit',
+      note: s.preAuditInitialComments
+    },
+    {
+      label: 'Audit Director',
+      by: personName(s.auditApprovedBy),
+      at: s.auditApprovedAt,
+      done: Boolean(s.auditApprovedAt),
+      current: ws === 'Forwarded to Audit Director',
+      note: s.auditComments
+    },
     { label: 'CEO', by: personName(s.ceoApprovedBy), at: s.ceoApprovedAt, done: Boolean(s.ceoApprovedAt), current: ws === 'Forwarded to CEO', note: s.ceoComments },
     {
       label: 'Finance',
@@ -80,11 +102,10 @@ const approvalSteps = (s) => {
   ];
 };
 
-/** Forward dialog: choose the GM HR and AVP (defaults found like Manual Salary). */
+/** Forward dialog: choose the GM HR (then Audit and CEO follow). */
 export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
   const [users, setUsers] = useState([]);
   const [hod, setHod] = useState('');
-  const [avp, setAvp] = useState('');
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState('');
 
@@ -97,24 +118,18 @@ export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
         setUsers(list);
         const idOf = (u) => (u ? u.id || u._id : '');
         const prevHod = settlement.assignedHod?._id || settlement.assignedHod;
-        const prevAvp = settlement.assignedAvp?._id || settlement.assignedAvp;
         const gmHr = list.find((u) => String(u.department || '').toLowerCase() === 'human resource'
           && String(u.position || '').toLowerCase() === 'general manager');
-        const avpUser = list.find((u) => {
-          const full = `${u.firstName || ''} ${u.lastName || ''}`.trim().toLowerCase();
-          return String(u.position || '').toLowerCase() === 'assistant vice president' || (full.includes('fahad') && full.includes('farid'));
-        });
         setHod(prevHod || idOf(gmHr));
-        setAvp(prevAvp || idOf(avpUser));
       })
       .catch(() => setError('Could not load users'));
   }, [settlement]);
 
   const submit = async () => {
-    if (!hod || !avp) { setError('Select both the GM HR and the AVP'); return; }
+    if (!hod) { setError('Select the GM HR'); return; }
     try {
       setSaving(true);
-      const res = await finalSettlementService.forwardSettlement(settlement._id, { assignedHod: hod, assignedAvp: avp });
+      const res = await finalSettlementService.forwardSettlement(settlement._id, { assignedHod: hod });
       onDone(res.message || 'Settlement forwarded');
     } catch (e) {
       setError(e.response?.data?.message || 'Could not forward the settlement');
@@ -128,7 +143,7 @@ export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
       <DialogTitle>Forward for approval — {settlement?.employeeName}</DialogTitle>
       <DialogContent>
         <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
-          Approval: GM HR → AVP → CEO. After the CEO approves, it goes to Finance and is paid from Payables.
+          Approval: GM HR → Audit (Pre-Audit, then Audit Director) → CEO. After the CEO approves, it goes to Finance and is paid from Payables.
           Net settlement: <strong>{formatPKR(settlement?.netSettlementAmount || 0)}</strong>
         </Typography>
         {settlement?.returnComments && settlement?.workflowStatus === 'Returned' ? (
@@ -141,12 +156,6 @@ export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
           <FormControl fullWidth size="small">
             <InputLabel>GM HR</InputLabel>
             <Select label="GM HR" value={hod} onChange={(e) => setHod(e.target.value)}>
-              {users.map((u) => <MenuItem key={u.id || u._id} value={u.id || u._id}>{userLabel(u)}{u.position ? ` — ${u.position}` : ''}</MenuItem>)}
-            </Select>
-          </FormControl>
-          <FormControl fullWidth size="small">
-            <InputLabel>AVP</InputLabel>
-            <Select label="AVP" value={avp} onChange={(e) => setAvp(e.target.value)}>
               {users.map((u) => <MenuItem key={u.id || u._id} value={u.id || u._id}>{userLabel(u)}{u.position ? ` — ${u.position}` : ''}</MenuItem>)}
             </Select>
           </FormControl>

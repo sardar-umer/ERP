@@ -581,6 +581,14 @@ router.get('/',
       console.error('Error fetching manual salaries for pre-audit:', msErr);
     }
 
+    // HR Final Settlement: after GM HR, before CEO (AVP removed 2026-11-24)
+    try {
+      const { listFinalSettlementsForPreAudit } = require('../utils/finalSettlementAudit');
+      workflowDocs.push(...await listFinalSettlementsForPreAudit(search));
+    } catch (fsErr) {
+      console.error('Error fetching final settlements for pre-audit:', fsErr);
+    }
+
     // Vendor Bills in audit queue (Pending Audit, Forwarded to Audit Director, Returned from Audit, Approved)
     try {
       const AccountsPayableModel = require('../models/finance/AccountsPayable');
@@ -1344,6 +1352,21 @@ router.put('/:id/forward',
           const { forwardToAuditDirector } = require('../utils/manualSalaryAudit');
           const { record, message } = await forwardToAuditDirector(req.params.id, req.user, forwardComments);
           return res.json({ success: true, message, data: { _id: record._id, isManualSalary: true, workflowStatus: record.workflowStatus } });
+        } catch (err) {
+          return res.status(err.statusCode || 400).json({ success: false, message: err.message });
+        }
+      }
+    }
+
+    // HR Final Settlement: Pending Audit -> Forwarded to Audit Director
+    {
+      const FinalSettlement = require('../models/hr/FinalSettlement');
+      const fsDoc = await FinalSettlement.findById(req.params.id).select('_id').lean().catch(() => null);
+      if (fsDoc) {
+        try {
+          const { forwardToAuditDirector } = require('../utils/finalSettlementAudit');
+          const { record, message } = await forwardToAuditDirector(req.params.id, req.user, forwardComments);
+          return res.json({ success: true, message, data: { _id: record._id, isFinalSettlement: true, workflowStatus: record.workflowStatus } });
         } catch (err) {
           return res.status(err.statusCode || 400).json({ success: false, message: err.message });
         }

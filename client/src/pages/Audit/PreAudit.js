@@ -71,6 +71,7 @@ import {
 } from '@mui/icons-material';
 import IpcReviewDialog from '../../components/ProjectManagement/IpcReviewDialog';
 import ManualSalaryAuditView from '../../components/Audit/ManualSalaryAuditView';
+import FinalSettlementAuditView from '../../components/Audit/FinalSettlementAuditView';
 import { useLocation } from 'react-router-dom';
 import { useAuth } from '../../contexts/AuthContext';
 import api from '../../services/api';
@@ -446,6 +447,10 @@ const PreAudit = () => {
         approveResponse = await api.put(`/hr/manual-salary/${doc._id}/audit-approve`, {
           approvalComments
         });
+      } else if (doc.isFinalSettlement) {
+        approveResponse = await api.put(`/final-settlements/${doc._id}/audit-approve`, {
+          approvalComments
+        });
       } else if (doc.isProjectIpc) {
         approveResponse = await api.put(`/project-management/ipcs/${doc._id}/audit-approve`, {
           approvalComments
@@ -511,6 +516,7 @@ const PreAudit = () => {
   const auditDocumentTypeLabel = (doc) => {
     if (!doc) return '';
     if (doc.isManualSalary) return 'Manual Salary';
+    if (doc.isFinalSettlement) return 'Final Settlement';
     if (doc.isProjectIpc) return 'IPC';
     if (doc.isCashApproval) return 'Cash Approval';
     if (doc.isPurchaseOrder) return 'Purchase Order';
@@ -546,6 +552,10 @@ const PreAudit = () => {
       
       if (doc.isManualSalary) {
         await api.put(`/hr/manual-salary/${doc._id}/audit-return`, {
+          returnComments
+        });
+      } else if (doc.isFinalSettlement) {
+        await api.put(`/final-settlements/${doc._id}/audit-return`, {
           returnComments
         });
       } else if (doc.isProjectIpc) {
@@ -616,6 +626,12 @@ const PreAudit = () => {
           observations: observations.length > 0 ? observations : undefined
         });
         setSuccess('Manual salary returned to HR with your observations.');
+      } else if (doc.isFinalSettlement) {
+        await api.put(`/final-settlements/${doc._id}/audit-reject`, {
+          rejectionComments: rejectionComments || 'Returned with observations',
+          observations: observations.length > 0 ? observations : undefined
+        });
+        setSuccess('Final settlement returned to HR with your observations.');
       } else if (doc.isProjectIpc) {
         await api.put(`/project-management/ipcs/${doc._id}/audit-reject`, {
           rejectionComments: rejectionComments || 'Rejected with observations',
@@ -2944,7 +2960,7 @@ const PreAudit = () => {
                                                         setIpcReviewId(doc._id);
                                                         return;
                                                       }
-                                                      if (doc.isManualSalary) {
+                                                      if (doc.isManualSalary || doc.isFinalSettlement) {
                                                         setViewDialog({ open: true, document: doc, fullDocument: doc.originalDocument, loading: false });
                                                         return;
                                                       }
@@ -3181,7 +3197,7 @@ const PreAudit = () => {
                                                             </IconButton>
                                                           </Tooltip>
                                                         )}
-                                                        {!doc.isProjectIpc && !doc.isManualSalary && (
+                                                        {!doc.isProjectIpc && !doc.isManualSalary && !doc.isFinalSettlement && (
                                                         <Tooltip title="Add Observation">
                                                           <IconButton
                                                             size="small"
@@ -3451,6 +3467,8 @@ const PreAudit = () => {
               {/* Show Purchase Order + Comparative Statement + Quotations when it's a PO (for audit) */}
               {(viewDialog.document.isManualSalary && viewDialog.fullDocument) ? (
                 <ManualSalaryAuditView record={viewDialog.fullDocument} />
+              ) : (viewDialog.document.isFinalSettlement && viewDialog.fullDocument) ? (
+                <FinalSettlementAuditView record={viewDialog.fullDocument} />
               ) : (viewDialog.document.isPurchaseOrder && viewDialog.fullDocument) ? (
                 <>
                   <Tabs

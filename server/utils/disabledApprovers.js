@@ -247,7 +247,7 @@ async function skipOnCashApproval(ca, disabled) {
 /** Where each HR workflow goes after its AVP step */
 const HR_AFTER_AVP = {
   ManualSalary: 'Pending Finance', // Manual Salary has no Audit step since 2026-11-23
-  FinalSettlement: 'Forwarded to CEO',
+  FinalSettlement: 'Pending Audit', // AVP removed 2026-11-24: GM HR → Audit → CEO
   Loan: 'Forwarded to CEO'
 };
 
