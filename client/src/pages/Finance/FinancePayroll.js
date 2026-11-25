@@ -100,6 +100,15 @@ const grandTotalRowSx = {
   borderColor: 'divider'
 };
 
+const pageTotalRowSx = {
+  fontWeight: 700,
+  fontSize: '0.85rem',
+  color: 'primary.dark',
+  backgroundColor: 'rgba(25, 118, 210, 0.06)',
+  borderTop: 2,
+  borderColor: 'divider'
+};
+
 const statusChip = (status) => {
   if (status === 'paid') return <Chip size="small" color="success" label="Paid" />;
   if (status === 'payment_pending') return <Chip size="small" color="info" label="Payment Pending Approval" />;
@@ -634,6 +643,9 @@ export default function FinancePayroll() {
   };
 
   const pg = useClientPagination(filteredPayrolls);
+  // Totals of just the rows on the current page (shown above the full total when there is more than one page)
+  const pageDetailTotals = useMemo(() => aggregatePayrollBreakdownFromRows(pg.rows), [pg.rows]);
+  const showPageTotals = pg.total > pg.rowsPerPage;
   return (
     <Box sx={{ p: 3 }}>
       <Stack direction="row" justifyContent="space-between" alignItems="center" sx={{ mb: 2 }}>
@@ -1054,6 +1066,24 @@ export default function FinancePayroll() {
                     ))}
                   </TableBody>
                   <TableFooter>
+                    {showPageTotals && pg.rows.length > 0 ? (
+                      <TableRow>
+                        <TableCell colSpan={7} align="right" sx={pageTotalRowSx}>
+                          <strong>Page Total</strong>
+                          {' '}
+                          (rows {pg.offset + 1}–{pg.offset + pg.rows.length} of {pg.total})
+                        </TableCell>
+                        {PROJECT_SUMMARY_AMOUNT_COLUMNS.map((col) => (
+                          <TableCell key={col.key} align="right" sx={pageTotalRowSx}>
+                            <strong>{fmt(pageDetailTotals[col.key])}</strong>
+                          </TableCell>
+                        ))}
+                        <TableCell align="right" sx={pageTotalRowSx}>
+                          <strong>{fmt(pageDetailTotals.netPayable)}</strong>
+                        </TableCell>
+                        <TableCell sx={pageTotalRowSx} />
+                      </TableRow>
+                    ) : null}
                     <TableRow>
                       <TableCell colSpan={7} align="right" sx={grandTotalRowSx}>
                         <strong>
