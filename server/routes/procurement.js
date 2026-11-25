@@ -3970,7 +3970,7 @@ router.get('/vendors',
     if (trimmedSearch) {
       // Literal match for all fields, match from the start of any word for name
       const escaped = trimmedSearch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
-      const wordStartRegex = `(^|\\\\W)${escaped}`;
+      const wordStartRegex = `(^|\\W)${escaped}`;
       query.$or = [
         { name: { $regex: wordStartRegex, $options: 'i' } },
         { email: { $regex: escaped, $options: 'i' } },

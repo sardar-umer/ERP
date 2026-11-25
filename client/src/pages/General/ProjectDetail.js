@@ -2,7 +2,7 @@ import React, { useCallback, useEffect, useState } from 'react';
 import { useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import ProjectInvoicesTab from './ProjectInvoicesTab';
 import {
-  Alert, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
+  Alert, Autocomplete, Box, Button, Card, CardContent, Chip, CircularProgress, Dialog,
   DialogActions, DialogContent, DialogTitle, Divider, FormControl, Grid,
   IconButton, InputLabel, LinearProgress, MenuItem, Paper, Select, Skeleton,
   Stack, Tab, Table, TableBody, TableCell, TableContainer, TableHead,
@@ -37,6 +37,7 @@ import {
   getProjectWorkflow
 } from '../../services/projectManagementService';
 import api from '../../services/api';
+import useVendorSearch from '../../hooks/useVendorSearch';
 import CheckRequestsTab from './CheckRequestsTab';
 import SubletContractsTab from './SubletContractsTab';
 import UnitsTab, { unitWord } from './UnitsTab';
@@ -177,8 +178,10 @@ const BOQTab = ({ projectId, project }) => {
   const [selectedItems, setSelectedItems] = useState(new Map());
   const [poDialogOpen, setPoDialogOpen] = useState(false);
   const [poSaving, setPoSaving] = useState(false);
-  const [vendors, setVendors] = useState([]);
-  const [vendorsLoading, setVendorsLoading] = useState(false);
+  // Loaded when the Create PO dialog opens; typing searches all vendors on the server
+  const {
+    vendors, loading: vendorsLoading, searching: vendorSearching, onVendorInputChange, reload: reloadVendors
+  } = useVendorSearch({ status: 'Active', enabled: false });
   const [poItems, setPoItems] = useState([]);
   const [poForm, setPoForm] = useState({ vendorId: '', expectedDeliveryDate: '', deliveryAddress: '', notes: '', costCenter: '' });
 
@@ -236,13 +239,8 @@ const BOQTab = ({ projectId, project }) => {
 
   const openCreatePO = async () => {
     if (!selectedItems.size) return;
-    setVendorsLoading(true);
     setPoDialogOpen(true);
-    try {
-      const res = await api.get('/procurement/vendors', { params: { status: 'Active', limit: 500 } });
-      setVendors(res.data?.data?.suppliers || res.data?.data || []);
-    } catch { /* leave empty */ }
-    finally { setVendorsLoading(false); }
+    reloadVendors();
 
     setPoItems(
       [...selectedItems.values()].map(i => ({
@@ -1198,20 +1196,31 @@ const BOQTab = ({ projectId, project }) => {
           {error && <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>{error}</Alert>}
           <Grid container spacing={2}>
             <Grid item xs={12} sm={6}>
-              <FormControl fullWidth required>
-                <InputLabel>Vendor / Supplier</InputLabel>
-                <Select
-                  value={poForm.vendorId}
-                  label="Vendor / Supplier"
-                  onChange={e => setPoForm(p => ({ ...p, vendorId: e.target.value }))}
-                  disabled={vendorsLoading}
-                >
-                  {vendorsLoading
-                    ? <MenuItem disabled>Loading vendors…</MenuItem>
-                    : vendors.map(v => <MenuItem key={v._id} value={v._id}>{v.name}</MenuItem>)
-                  }
-                </Select>
-              </FormControl>
+              <Autocomplete
+                fullWidth
+                options={vendors}
+                loading={vendorsLoading || vendorSearching}
+                value={vendors.find(v => String(v._id) === String(poForm.vendorId)) || null}
+                onChange={(_e, v) => setPoForm(p => ({ ...p, vendorId: v?._id || '' }))}
+                onInputChange={onVendorInputChange}
+                getOptionLabel={(v) => v?.name || ''}
+                isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
+                filterOptions={(opts, state) => {
+                  const term = (state?.inputValue || '').trim().toLowerCase();
+                  if (!term) return opts;
+                  return opts.filter(v => (v.name || '').toLowerCase().includes(term)
+                    || (v.supplierId || '').toLowerCase().includes(term));
+                }}
+                renderOption={(props, v) => (
+                  <li {...props} key={v._id}>
+                    {v.name}
+                    {v.supplierId ? <Typography component="span" variant="caption" color="text.secondary" sx={{ ml: 1 }}>({v.supplierId})</Typography> : null}
+                  </li>
+                )}
+                renderInput={(params) => (
+                  <TextField {...params} required label="Vendor / Supplier" placeholder="Type to search vendors" />
+                )}
+              />
             </Grid>
             <Grid item xs={12} sm={6}>
               <TextField

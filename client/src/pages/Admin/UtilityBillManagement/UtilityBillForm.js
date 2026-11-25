@@ -69,6 +69,7 @@ import {
   storeItemMatchesBillKind
 } from '../../../utils/centralizedStoreBillKind';
 import CentralizedStoreAddItemDialog from '../../../components/UtilityBill/CentralizedStoreAddItemDialog';
+import useVendorSearch from '../../../hooks/useVendorSearch';
 import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../../components/CostCenter/CostCenterSelect';
 
 const userDisplayName = (user) => {
@@ -355,7 +356,8 @@ const UtilityBillForm = () => {
   /** Loaded bill approval state (edit mode only); null before fetch or on create */
   const [loadedApprovalStatus, setLoadedApprovalStatus] = useState(null);
   const [useStoreBill, setUseStoreBill] = useState(isCentralizedStoreBill);
-  const [vendors, setVendors] = useState([]);
+  // Vendors: first 500 A–Z, plus server matches merged in as the user types (724+ vendors on prod)
+  const { vendors, setVendors, onVendorInputChange, searching: vendorSearching } = useVendorSearch({ status: 'Active' });
   const [selectedVendor, setSelectedVendor] = useState(null);
   const [payeeType, setPayeeType] = useState('vendor');
   const [selectedEmployee, setSelectedEmployee] = useState(null);
@@ -487,10 +489,9 @@ const UtilityBillForm = () => {
   const fetchMasterData = async () => {
     try {
       setMasterDataLoading(true);
-      const [res, catalogRes, vendorsRes, companiesRes, projectsRes] = await Promise.all([
+      const [res, catalogRes, companiesRes, projectsRes] = await Promise.all([
         utilityBillService.getFormMasterData(),
         centralizedStoreService.getCatalog().catch(() => ({ data: {} })),
-        api.get('/procurement/vendors', { params: { limit: 500, status: 'Active' } }).catch(() => ({ data: { data: { vendors: [] } } })),
         api.get('/hr/companies', { params: { status: 'active' } }).catch(() => ({ data: { data: [] } })),
         api.get('/hr/projects', { params: { status: 'Active' } }).catch(() => ({ data: { data: [] } }))
       ]);
@@ -500,7 +501,6 @@ const UtilityBillForm = () => {
       setStoreCategories(catalogRes?.data?.categories || []);
       setStoreItems(catalogRes?.data?.items || []);
       setStoreUtilityTypes(catalogRes?.data?.utilityTypes || []);
-      setVendors(vendorsRes?.data?.data?.vendors || vendorsRes?.data?.vendors || []);
       setCompaniesList(companiesRes?.data?.data || []);
       setProjectsList(projectsRes?.data?.data || []);
       if (isCentralizedStoreBill) {
@@ -1537,6 +1537,8 @@ const UtilityBillForm = () => {
                           getOptionLabel={(o) => o?.name || ''}
                           value={selectedVendor}
                           onChange={handleVendorAutocompleteChange}
+                          onInputChange={onVendorInputChange}
+                          loading={vendorSearching}
                           isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
                           filterOptions={(opts, state) => {
                             const term = (state?.inputValue || '').trim().toLowerCase();
@@ -1576,6 +1578,8 @@ const UtilityBillForm = () => {
                         getOptionLabel={(o) => o?.name || ''}
                         value={selectedVendor}
                         onChange={handleVendorAutocompleteChange}
+                          onInputChange={onVendorInputChange}
+                          loading={vendorSearching}
                         isOptionEqualToValue={(a, b) => String(a?._id) === String(b?._id)}
                         filterOptions={(opts, state) => {
                           const term = (state?.inputValue || '').trim().toLowerCase();

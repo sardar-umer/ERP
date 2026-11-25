@@ -46,6 +46,7 @@ import Tab from '@mui/material/Tab';
 import Stack from '@mui/material/Stack';
 import { Link as RouterLink } from 'react-router-dom';
 import api from '../../services/api';
+import useVendorSearch from '../../hooks/useVendorSearch';
 import FinanceCompanySelector from '../../components/Finance/FinanceCompanySelector';
 import { useFinanceCompany } from '../../context/FinanceCompanyContext';
 import AddAccountDialog from '../../components/Finance/AddAccountDialog';
@@ -116,9 +117,11 @@ function getVoucherIssuanceChip(a) {
  * recorded. Without the props the page works as before.
  */
 const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) => {
-  const [vendors, setVendors] = useState([]);
+  // First 500 vendors A–Z, plus server matches merged in as the user types (there are 700+)
+  const {
+    vendors, setVendors, loading: loadingVendors, searching: searchingVendors, onVendorInputChange
+  } = useVendorSearch();
   const [purchaseOrders, setPurchaseOrders] = useState([]);
-  const [loadingVendors, setLoadingVendors] = useState(true);
   const [loadingPos, setLoadingPos] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [selectedVendor, setSelectedVendor] = useState(null);
@@ -371,19 +374,6 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
     setQueuePrefillSnapshot(null);
   }, [selectedCompanyId]);
 
-  const loadVendors = useCallback(async () => {
-    setLoadingVendors(true);
-    try {
-      const res = await api.get('/procurement/vendors', { params: { limit: 500 } });
-      const list = res.data?.data?.vendors || res.data?.data || [];
-      setVendors(Array.isArray(list) ? list : []);
-    } catch (e) {
-      toast.error(e.response?.data?.message || 'Could not load vendors');
-      setVendors([]);
-    } finally {
-      setLoadingVendors(false);
-    }
-  }, []);
 
   const loadPosForVendor = useCallback(async (vendorId) => {
     if (!vendorId) {
@@ -410,9 +400,6 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
   }, []);
 
 
-  useEffect(() => {
-    loadVendors();
-  }, [loadVendors]);
 
   useEffect(() => {
     const targetComp = effectivePayingCompanyId || originalCompanyId;
@@ -1046,8 +1033,9 @@ const VendorAdvance = ({ embedPrefill = null, onEmbedSubmitted = null } = {}) =>
             <Grid container spacing={2} alignItems="flex-start">
               <Grid item xs={12} md={4}>
                 <Autocomplete
-                  loading={loadingVendors}
+                  loading={loadingVendors || searchingVendors}
                   options={vendorOptions}
+                  onInputChange={onVendorInputChange}
                   getOptionLabel={(o) => (o?.name ? `${o.name}${o.email ? ` (${o.email})` : ''}` : '')}
                   value={selectedVendor}
                   onChange={(_, v) => setSelectedVendor(v)}
