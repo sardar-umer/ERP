@@ -2972,6 +2972,12 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
                                 {formatDateTime(auth.at)}
                               </Typography>
                             )}
+                            {auth.comments && (
+                              <Box sx={{ mt: 0.5, mb: 1, p: 1, bgcolor: 'grey.50', border: '1px solid', borderColor: 'divider', borderRadius: 1 }}>
+                                <Typography variant="caption" color="text.secondary" sx={{ fontWeight: 600, display: 'block' }}>Remarks</Typography>
+                                <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', wordBreak: 'break-word' }}>{auth.comments}</Typography>
+                              </Box>
+                            )}
                             {auth.sig ? (
                               <Box sx={{ mt: 1, borderTop: '1px solid', borderColor: 'divider', pt: 1, display: 'inline-block' }}>
                                 <DigitalSignatureImage userOrPath={{ digitalSignature: auth.sig }} alt={`${auth.label} Signature`} />

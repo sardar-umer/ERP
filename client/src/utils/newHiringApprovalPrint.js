@@ -201,6 +201,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
         <div class="auth-label">${escapeHtml(a.label)}</div>
         <div class="auth-name">${escapeHtml(a.statusLabel || formatPerson(a.user))}</div>
         ${a.at ? `<div class="muted">${formatDateTime(a.at)}</div>` : ''}
+        ${a.comments ? `<div class="auth-remarks"><b>Remarks:</b> ${escapeHtml(a.comments)}</div>` : ''}
         ${signatureBlock(signatureSources[idx], `${a.label} Signature`)}
       </div>`
     )
@@ -229,6 +230,7 @@ export const buildNewHiringApprovalPrintHtml = async (record) => {
     .auth-label { font-size: 11px; color: #666; font-weight: 700; margin-bottom: 4px; }
     .auth-name { font-weight: 700; margin-bottom: 2px; }
     .muted { color: #777; font-size: 11px; }
+    .auth-remarks { margin-top: 6px; font-size: 11px; white-space: pre-wrap; word-break: break-word; background: #f7f7f7; border: 1px solid #e2e2e2; border-radius: 3px; padding: 4px 6px; }
     .sig-line { margin-top: 8px; border-top: 1px solid #ddd; padding-top: 6px; min-height: 40px; }
     .sig-line img {
       max-height: 78px;

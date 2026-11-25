@@ -121,6 +121,7 @@ export function getNewHiringAuthorityCards(record) {
       user: record.hodApprovedBy,
       at: record.hodApprovedAt,
       sig: record.hodSignature,
+      comments: String(record.hodComments || '').trim(),
       assigned: record.assignedHod
     },
     {
@@ -129,6 +130,7 @@ export function getNewHiringAuthorityCards(record) {
       user: record.avpApprovedBy,
       at: record.avpApprovedAt,
       sig: record.avpSignature,
+      comments: String(record.avpComments || '').trim(),
       assigned: record.assignedAvp
     },
     {
@@ -137,6 +139,7 @@ export function getNewHiringAuthorityCards(record) {
       user: record.chairmanApprovedBy,
       at: record.chairmanApprovedAt,
       sig: record.chairmanSignature,
+      comments: String(record.chairmanComments || '').trim(),
       assigned: record.assignedChairman
     },
     {
@@ -145,6 +148,7 @@ export function getNewHiringAuthorityCards(record) {
       user: record.srDirectorApprovedBy,
       at: record.srDirectorApprovedAt,
       sig: record.srDirectorSignature,
+      comments: String(record.srDirectorComments || '').trim(),
       assigned: record.assignedSrDirector
     },
     {
@@ -153,6 +157,7 @@ export function getNewHiringAuthorityCards(record) {
       user: record.ceoApprovedBy,
       at: record.ceoApprovedAt,
       sig: record.ceoSignature,
+      comments: String(record.ceoComments || '').trim(),
       assigned: true
     }
   ];
