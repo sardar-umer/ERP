@@ -4149,14 +4149,9 @@ router.get('/accounts-payable/:id',
       const po = await PurchaseOrder.findById(targetPoId)
         .populate('vendor', 'name email phone address payeeName cnic ntnCnic ntnNo')
         .populate('companyId', 'name code symbol')
-        .populate({
-          path: 'indent',
-          populate: [{ path: 'companyId', select: 'name code symbol' }]
-        })
-        .populate('auditApprovedBy', 'firstName lastName email digitalSignature')
-        .populate('auditReturnedBy', 'firstName lastName email')
-        .populate('authorityApprovals.approver', 'firstName lastName email employeeId digitalSignature')
-        .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
+        // Populate every approver with their signature so the PO's Approval Authorities table renders
+        .populate(require('../utils/purchaseOrderPopulate').purchaseOrderIndentPopulateAllFields)
+        .populate(require('../utils/purchaseOrderPopulate').purchaseOrderAuthorityPopulates)
         .lean();
       if (po) {
         const indentId = po.indent?._id || po.indent;

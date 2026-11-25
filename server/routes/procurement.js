@@ -749,28 +749,7 @@ const canViewQuotationsByIndentRead = (user, indent) => {
 };
 
 /** Shared indent populate for PO detail / CEO queue so supporting docs render */
-const purchaseOrderIndentPopulate = {
-  path: 'indent',
-  select:
-    'indentNumber title erpRef requestedDate requiredDate department costCenter requestedBy items notes companyId comparativeStatementApprovals comparativeApproval comparativeApprovals splitPOAssignments approvalChain justification signatures attachments storeRoutingStatus movedToProcurementReason movedToProcurementAt movedToProcurementBy',
-  populate: [
-    { path: 'department', select: 'name code' },
-    { path: 'costCenter', select: 'code name path' },
-    { path: 'companyId', select: 'name code symbol' },
-    { path: 'requestedBy', select: 'firstName lastName email digitalSignature' },
-    { path: 'movedToProcurementBy', select: 'firstName lastName email' },
-    { path: 'approvalChain.approver', select: 'firstName lastName email digitalSignature' },
-    { path: 'comparativeApproval.approvers.approver', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeApproval.submittedBy', select: 'firstName lastName email' },
-    { path: 'comparativeApproval.rejectedBy', select: 'firstName lastName email' },
-    { path: 'comparativeApprovals.approvers.approver', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeStatementApprovals.preparedByUser', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeStatementApprovals.verifiedByUser', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeStatementApprovals.authorisedRepUser', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeStatementApprovals.financeRepUser', select: 'firstName lastName email employeeId digitalSignature' },
-    { path: 'comparativeStatementApprovals.managerProcurementUser', select: 'firstName lastName email employeeId digitalSignature' }
-  ]
-};
+const { purchaseOrderIndentPopulate } = require('../utils/purchaseOrderPopulate');
 
 const userCanViewPurchaseOrder = async (user, purchaseOrder) => {
   if (!user || !purchaseOrder) return false;

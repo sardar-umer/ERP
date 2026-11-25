@@ -856,12 +856,12 @@ router.get('/finance-vendors/bills/:id',
       const Indent = require('../models/general/Indent');
       const GoodsReceive = require('../models/procurement/GoodsReceive');
 
+      // Populate every approver with their signature so the PO's Approval Authorities table renders
+      const { purchaseOrderIndentPopulateAllFields, purchaseOrderAuthorityPopulates } = require('../utils/purchaseOrderPopulate');
       const po = await PurchaseOrder.findById(targetPoId)
         .populate('vendor', 'name email phone address payeeName cnic ntnCnic ntnNo')
-        .populate('indent')
-        .populate('auditApprovedBy', 'firstName lastName email digitalSignature')
-        .populate('auditReturnedBy', 'firstName lastName email')
-        .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
+        .populate(purchaseOrderIndentPopulateAllFields)
+        .populate(purchaseOrderAuthorityPopulates)
         .lean();
 
       if (po) {
