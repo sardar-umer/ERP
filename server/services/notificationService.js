@@ -1,5 +1,17 @@
 const Notification = require('../models/hr/Notification');
 const User = require('../models/User');
+const realtimeNotificationGateway = require('./realtimeNotificationGateway');
+
+/** Push a saved notification to the recipient's open browser tabs (bell updates live). */
+const emitLive = (notification) => {
+  try {
+    if (notification?.recipient) {
+      realtimeNotificationGateway.emitToUser(String(notification.recipient), 'notification:new', notification);
+    }
+  } catch {
+    /* live push is best-effort; the bell also refreshes on its own */
+  }
+};
 
 class NotificationService {
   /**
@@ -61,6 +73,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
       
@@ -127,6 +140,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
       
@@ -187,6 +201,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
       
@@ -248,6 +263,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
 
@@ -296,6 +312,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
 
@@ -343,6 +360,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
       
@@ -384,7 +402,7 @@ class NotificationService {
    */
   static async markAsRead(notificationId, userId) {
     try {
-      return await Notification.markAsRead(notificationId, userId);
+      return await Notification.markAsRead(userId, notificationId);
     } catch (error) {
       console.error('❌ Error marking notification as read:', error);
       throw error;
@@ -396,7 +414,7 @@ class NotificationService {
    */
   static async markAsArchived(notificationId, userId) {
     try {
-      return await Notification.markAsArchived(notificationId, userId);
+      return await Notification.markAsArchived(userId, notificationId);
     } catch (error) {
       console.error('❌ Error marking notification as archived:', error);
       throw error;
@@ -452,6 +470,7 @@ class NotificationService {
         });
 
         await notification.save();
+        emitLive(notification);
         notifications.push(notification);
       }
       

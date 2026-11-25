@@ -21,9 +21,10 @@ async function fixNamesAndCreateBot() {
         email: 'bot@tovus.net',
         firstName: 'TOVUS',
         lastName: 'ERP',
-        role: 'admin',
+        role: 'employee', // send-only system account — no admin rights
         isActive: true,
-        password: 'sardar1Sahab_bot',
+        // Nobody logs in as the bot: random throwaway password, never stored in code
+        password: require('crypto').randomBytes(32).toString('base64url'),
         employeeId: 'BOT-001',
         position: 'System Bot',
         department: 'System'

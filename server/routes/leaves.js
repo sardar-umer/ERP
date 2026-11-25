@@ -12,6 +12,69 @@ const LeaveManagementService = require('../services/leaveManagementService');
 const LeaveIntegrationService = require('../services/leaveIntegrationService');
 const CarryForwardService = require('../services/carryForwardService');
 const AnniversaryLeaveScheduler = require('../services/anniversaryLeaveScheduler');
+const {
+  notifyApprovalAssigned,
+  notifyDocumentOutcome,
+  getActiveUserIdsByRoles
+} = require('../utils/approvalNotify');
+
+const LEAVE_URL = '/hr/leaves';
+const fmtLeaveDate = (d) => (d ? new Date(d).toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' }) : '');
+
+/**
+ * Leave notifications (fire-and-forget):
+ *  - submitted → HR approvers (minus whoever entered it)
+ *  - approved / rejected / cancelled → whoever entered it + the employee's own login, with remarks
+ */
+const notifyLeaveEvent = (leaveId, actor, event) => {
+  (async () => {
+    const leave = await LeaveRequest.findById(leaveId)
+      .populate('employee', 'firstName lastName employeeId user')
+      .populate('leaveType', 'name')
+      .lean();
+    if (!leave) return;
+    const empName = [leave.employee?.firstName, leave.employee?.lastName].filter(Boolean).join(' ') || 'an employee';
+    const typeName = leave.leaveType?.name || 'Leave';
+    const days = leave.totalDays ? `${leave.totalDays} day${leave.totalDays === 1 ? '' : 's'}` : '';
+    const range = `${fmtLeaveDate(leave.startDate)}${leave.endDate && String(leave.endDate) !== String(leave.startDate) ? ` – ${fmtLeaveDate(leave.endDate)}` : ''}`;
+    const summary = [typeName, days && `(${days})`, range && `from ${range}`].filter(Boolean).join(' ');
+    const base = {
+      actor,
+      docType: 'Leave request',
+      url: LEAVE_URL,
+      module: 'hr',
+      entityId: leave._id,
+      entityType: 'LeaveRequest'
+    };
+
+    if (event === 'submitted') {
+      const hrIds = await getActiveUserIdsByRoles(['hr_manager']);
+      await notifyApprovalAssigned({
+        ...base,
+        recipientIds: hrIds,
+        external: false,
+        url: '/hr/leaves/approval',
+        title: `Leave request from ${empName}`,
+        message: `${summary}.${leave.reason ? ` Reason: ${String(leave.reason).slice(0, 160)}` : ''} Awaiting approval.`
+      });
+      return;
+    }
+
+    const recipients = [leave.createdBy, leave.employee?.user];
+    const remarks = event === 'approved' ? leave.approvalComments
+      : event === 'rejected' ? leave.rejectionReason
+        : leave.cancellationReason;
+    await notifyDocumentOutcome({
+      ...base,
+      recipientIds: recipients,
+      outcome: event,
+      remarks,
+      title: `Leave ${event} — ${empName}`,
+      message: [`${summary}.`, remarks ? `Remarks: ${String(remarks).slice(0, 300)}` : '']
+        .filter(Boolean).join(' ')
+    });
+  })().catch((err) => console.warn('[Leaves] notification failed:', err.message));
+};
 const multer = require('multer');
 const path = require('path');
 const fs = require('fs');
@@ -380,6 +443,8 @@ router.post('/requests',
 
     const leaveRequest = await LeaveManagementService.applyForLeave(leaveData, req.user.id);
 
+    notifyLeaveEvent(leaveRequest._id, req.user, 'submitted');
+
     res.status(201).json({
       success: true,
       message: 'Leave request added successfully',
@@ -412,6 +477,8 @@ router.put('/requests/:id/approve',
       req.user.id,
       req.body.comments || ''
     );
+
+    notifyLeaveEvent(leaveRequest._id || req.params.id, req.user, 'approved');
 
     res.json({
       success: true,
@@ -446,6 +513,8 @@ router.put('/requests/:id/reject',
       req.user.id,
       req.body.reason
     );
+
+    notifyLeaveEvent(leaveRequest._id || req.params.id, req.user, 'rejected');
 
     res.json({
       success: true,
@@ -497,6 +566,7 @@ router.put('/requests/:id/cancel',
     leaveRequest.updatedBy = req.user.id;
 
     await leaveRequest.save();
+    notifyLeaveEvent(leaveRequest._id, req.user, 'cancelled');
 
     res.json({
       success: true,

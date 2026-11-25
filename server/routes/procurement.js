@@ -7139,6 +7139,36 @@ router.post('/goods-issue',
       }
     ]);
 
+    // Let the people who asked for these items know they've been issued (indent requester + SIN requester)
+    (async () => {
+      const { notifyDocumentOutcome } = require('../utils/approvalNotify');
+      let indentDoc = null;
+      if (issue.referenceIndent) {
+        indentDoc = await Indent.findById(issue.referenceIndent).select('indentNumber requestedBy').lean();
+      }
+      const recipients = [indentDoc?.requestedBy, issue.requestedBy?._id || issue.requestedBy].filter(Boolean);
+      if (!recipients.length) return;
+      const itemCount = Array.isArray(issue.items) ? issue.items.length : 0;
+      await notifyDocumentOutcome({
+        recipientIds: recipients,
+        actor: req.user,
+        outcome: 'issued',
+        docType: 'Store Issue Note',
+        docNumber: issue.sinNumber || issue.issueNumber || '',
+        url: indentDoc ? '/general/indents' : '/procurement/store',
+        module: 'procurement',
+        entityId: issue._id,
+        entityType: 'GoodsIssue',
+        title: indentDoc
+          ? `Items issued against your indent ${indentDoc.indentNumber || ''}`.trim()
+          : `Store Issue Note ${issue.sinNumber || issue.issueNumber || ''} issued`.trim(),
+        message: [
+          `${itemCount} item${itemCount === 1 ? '' : 's'} issued by the Store on ${issue.sinNumber || issue.issueNumber || 'a Store Issue Note'}.`,
+          issue.purpose ? `Purpose: ${String(issue.purpose).slice(0, 160)}` : ''
+        ].filter(Boolean).join(' ')
+      });
+    })().catch((err) => console.warn('SIN issued notification failed:', err.message));
+
     // COGS / inventory GL: GoodsIssue post-save hook calls postSINJournal per item — do not also postCOGSJournal here (duplicate JE).
 
     res.status(201).json({

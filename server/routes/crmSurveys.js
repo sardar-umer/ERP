@@ -1340,7 +1340,11 @@ router.post('/:id/analysis-report/send',
         },
         createdBy: req.user._id
       }));
-      await Notification.insertMany(notifications);
+      const savedNotifications = await Notification.insertMany(notifications);
+      const realtimeNotificationGateway = require('../services/realtimeNotificationGateway');
+      savedNotifications.forEach((n) => {
+        realtimeNotificationGateway.emitToUser(String(n.recipient), 'notification:new', n);
+      });
     }
 
     res.json({ success: true, message: 'Survey Analysis Report sent to higher management.', data: survey.analysisReport });

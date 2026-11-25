@@ -98,24 +98,7 @@ router.post('/:id/archive', authMiddleware, asyncHandler(async (req, res) => {
 // @desc    Mark all notifications as read for the authenticated user
 // @access  Private
 router.post('/read-all', authMiddleware, asyncHandler(async (req, res) => {
-  const result = await Notification.updateMany(
-    { 
-      'recipients.user': req.user._id,
-      status: 'unread'
-    },
-    { 
-      $set: { 
-        'recipients.$.readAt': new Date(),
-        status: 'read'
-      },
-      $push: {
-        readBy: {
-          user: req.user._id,
-          readAt: new Date()
-        }
-      }
-    }
-  );
+  const result = await Notification.markAllAsRead(req.user._id);
 
   res.json({
     success: true,
@@ -128,24 +111,7 @@ router.post('/read-all', authMiddleware, asyncHandler(async (req, res) => {
 // @desc    Archive all read notifications for the authenticated user
 // @access  Private
 router.post('/archive-all', authMiddleware, asyncHandler(async (req, res) => {
-  const result = await Notification.updateMany(
-    { 
-      'recipients.user': req.user._id,
-      status: 'read'
-    },
-    { 
-      $set: { 
-        'recipients.$.archivedAt': new Date(),
-        status: 'archived'
-      },
-      $push: {
-        archivedBy: {
-          user: req.user._id,
-          archivedAt: new Date()
-        }
-      }
-    }
-  );
+  const result = await Notification.archiveAllRead(req.user._id);
 
   res.json({
     success: true,
@@ -159,18 +125,11 @@ router.post('/archive-all', authMiddleware, asyncHandler(async (req, res) => {
 // @access  Private
 router.delete('/:id', authMiddleware, asyncHandler(async (req, res) => {
   const { id } = req.params;
-  
-  // Remove the user from recipients instead of deleting the entire notification
-  const result = await Notification.updateOne(
-    { _id: id },
-    { 
-      $pull: { 
-        recipients: { user: req.user._id } 
-      }
-    }
-  );
 
-  if (result.modifiedCount === 0) {
+  // Each notification row belongs to exactly one recipient, so deleting it only affects this user
+  const result = await Notification.deleteOne({ _id: id, recipient: req.user._id });
+
+  if (result.deletedCount === 0) {
     return res.status(404).json({
       success: false,
       message: 'Notification not found or already removed'
@@ -187,56 +146,21 @@ router.delete('/:id', authMiddleware, asyncHandler(async (req, res) => {
 // @desc    Get notification statistics for the authenticated user
 // @access  Private
 router.get('/stats', authMiddleware, asyncHandler(async (req, res) => {
-  const [unreadCount, readCount, archivedCount] = await Promise.all([
-    Notification.countDocuments({
-      'recipients.user': req.user._id,
-      status: 'unread'
-    }),
-    Notification.countDocuments({
-      'recipients.user': req.user._id,
-      status: 'read'
-    }),
-    Notification.countDocuments({
-      'recipients.user': req.user._id,
-      status: 'archived'
-    })
-  ]);
-
-  // Get count by type
-  const typeStats = await Notification.aggregate([
-    {
-      $match: {
-        'recipients.user': req.user._id
-      }
-    },
-    {
-      $group: {
-        _id: '$type',
-        count: { $sum: 1 }
-      }
-    },
-    {
-      $sort: { count: -1 }
-    }
-  ]);
-
-  // Get count by priority
-  const priorityStats = await Notification.aggregate([
-    {
-      $match: {
-        'recipients.user': req.user._id,
-        status: 'unread'
-      }
-    },
-    {
-      $group: {
-        _id: '$priority',
-        count: { $sum: 1 }
-      }
-    },
-    {
-      $sort: { count: -1 }
-    }
+  const recipient = req.user._id;
+  const [unreadCount, readCount, archivedCount, typeStats, priorityStats] = await Promise.all([
+    Notification.countDocuments({ recipient, isRead: false, isArchived: { $ne: true } }),
+    Notification.countDocuments({ recipient, isRead: true, isArchived: { $ne: true } }),
+    Notification.countDocuments({ recipient, isArchived: true }),
+    Notification.aggregate([
+      { $match: { recipient } },
+      { $group: { _id: '$type', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ]),
+    Notification.aggregate([
+      { $match: { recipient, isRead: false, isArchived: { $ne: true } } },
+      { $group: { _id: '$priority', count: { $sum: 1 } } },
+      { $sort: { count: -1 } }
+    ])
   ]);
 
   res.json({
@@ -266,34 +190,37 @@ router.get('/admin/all', authorize('super_admin', 'admin', 'hr_manager'), asyncH
   } = req.query;
 
   const query = {};
-  
-  if (status) query.status = status;
+
+  if (status === 'unread') query.isRead = false;
+  else if (status === 'read') query.isRead = true;
+  else if (status === 'archived') query.isArchived = true;
   if (type) query.type = type;
   if (priority) query.priority = priority;
 
-  const options = {
-    page: parseInt(page),
-    limit: parseInt(limit),
-    sort: { [sort]: -1 },
-    populate: [
-      { path: 'recipients.user', select: 'firstName lastName email profileImage' },
-      { path: 'createdBy', select: 'firstName lastName email profileImage' },
-      { path: 'relatedEntityId' }
-    ]
-  };
-
-  const notifications = await Notification.paginate(query, options);
+  const pageNum = Math.max(1, parseInt(page, 10) || 1);
+  const limitNum = Math.min(200, Math.max(1, parseInt(limit, 10) || 50));
+  const [docs, totalDocs] = await Promise.all([
+    Notification.find(query)
+      .sort({ [sort]: -1 })
+      .skip((pageNum - 1) * limitNum)
+      .limit(limitNum)
+      .populate('recipient', 'firstName lastName email profileImage')
+      .populate('createdBy', 'firstName lastName email profileImage')
+      .lean(),
+    Notification.countDocuments(query)
+  ]);
+  const totalPages = Math.max(1, Math.ceil(totalDocs / limitNum));
 
   res.json({
     success: true,
-    data: notifications.docs,
+    data: docs,
     pagination: {
-      page: notifications.page,
-      limit: notifications.limit,
-      totalPages: notifications.totalPages,
-      totalDocs: notifications.totalDocs,
-      hasNextPage: notifications.hasNextPage,
-      hasPrevPage: notifications.hasPrevPage
+      page: pageNum,
+      limit: limitNum,
+      totalPages,
+      totalDocs,
+      hasNextPage: pageNum < totalPages,
+      hasPrevPage: pageNum > 1
     }
   });
 }));
@@ -336,26 +263,8 @@ router.post('/admin/cleanup', authorize('super_admin', 'admin', 'hr_manager'), a
 // @desc    Mark all candidate_hired notifications as read for the authenticated user
 // @access  Private
 router.post('/mark-candidate-hired-read', authMiddleware, asyncHandler(async (req, res) => {
-  const result = await Notification.updateMany(
-    { 
-      'recipients.user': req.user._id,
-      type: 'candidate_hired',
-      status: 'unread'
-    },
-    { 
-      $set: { 
-        'recipients.$.readAt': new Date(),
-        status: 'read'
-      },
-      $push: {
-        readBy: {
-          user: req.user._id,
-          readAt: new Date()
-        }
-      }
-    }
-  );
-  
+  const result = await Notification.markAllAsRead(req.user._id, { type: 'candidate_hired' });
+
   res.json({
     success: true,
     message: `${result.modifiedCount} candidate hired notifications marked as read`,

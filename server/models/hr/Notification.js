@@ -32,6 +32,13 @@ const notificationSchema = new mongoose.Schema({
   readAt: {
     type: Date
   },
+  isArchived: {
+    type: Boolean,
+    default: false
+  },
+  archivedAt: {
+    type: Date
+  },
   priority: {
     type: String,
     enum: ['low', 'medium', 'high', 'urgent'],
@@ -83,7 +90,13 @@ notificationSchema.statics.getForUser = function(userId, options = {}) {
   const { type, status, limit = 50, skip = 0 } = options;
   
   let query = { recipient: userId };
-  
+
+  if (status === 'archived') {
+    query.isArchived = true;
+  } else {
+    query.isArchived = { $ne: true };
+  }
+
   if (type) {
     query.type = type;
   }
@@ -103,9 +116,10 @@ notificationSchema.statics.getForUser = function(userId, options = {}) {
 };
 
 notificationSchema.statics.getUnreadCount = function(userId) {
-  return this.countDocuments({ 
-    recipient: userId, 
-    isRead: false 
+  return this.countDocuments({
+    recipient: userId,
+    isRead: false,
+    isArchived: { $ne: true }
   });
 };
 
@@ -114,7 +128,8 @@ notificationSchema.statics.getModuleCounts = function(userId) {
     {
       $match: {
         recipient: userId,
-        isRead: false
+        isRead: false,
+        isArchived: { $ne: true }
       }
     },
     {
@@ -133,11 +148,14 @@ notificationSchema.statics.getModuleCounts = function(userId) {
   ]);
 };
 
+const toIdArray = (ids) => (Array.isArray(ids) ? ids : [ids]).filter(Boolean);
+
 notificationSchema.statics.markAsRead = function(userId, notificationIds) {
   return this.updateMany(
-    { 
-      _id: { $in: notificationIds }, 
-      recipient: userId 
+    {
+      _id: { $in: toIdArray(notificationIds) },
+      recipient: userId,
+      isRead: false
     },
     { 
       $set: { 
@@ -145,6 +163,36 @@ notificationSchema.statics.markAsRead = function(userId, notificationIds) {
         readAt: new Date() 
       } 
     }
+  );
+};
+
+notificationSchema.statics.markAllAsRead = function(userId, filter = {}) {
+  return this.updateMany(
+    { ...filter, recipient: userId, isRead: false },
+    { $set: { isRead: true, readAt: new Date() } }
+  );
+};
+
+/** Archive = hide from the bell. Archiving also marks it read. */
+notificationSchema.statics.markAsArchived = function(userId, notificationIds) {
+  const now = new Date();
+  return this.updateMany(
+    { _id: { $in: toIdArray(notificationIds) }, recipient: userId, isArchived: { $ne: true } },
+    [{
+      $set: {
+        isArchived: true,
+        archivedAt: now,
+        readAt: { $ifNull: ['$readAt', now] },
+        isRead: true
+      }
+    }]
+  );
+};
+
+notificationSchema.statics.archiveAllRead = function(userId) {
+  return this.updateMany(
+    { recipient: userId, isRead: true, isArchived: { $ne: true } },
+    { $set: { isArchived: true, archivedAt: new Date() } }
   );
 };
 

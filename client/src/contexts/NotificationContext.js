@@ -1,7 +1,10 @@
-import React, { createContext, useContext, useReducer, useCallback, useMemo } from 'react';
+import React, { createContext, useContext, useReducer, useCallback, useMemo, useRef } from 'react';
 import { useAuth } from './AuthContext';
 import NotificationService from '../services/notificationService';
 import { io } from 'socket.io-client';
+import toast from 'react-hot-toast';
+import { useNavigate } from 'react-router-dom';
+import NotificationToast from '../components/Notifications/NotificationToast';
 
 // Optimized notification state structure
 const initialState = {
@@ -43,48 +46,52 @@ const notificationReducer = (state, action) => {
         }
       };
     
-    case 'DECREASE_COUNTS':
-      const { notificationIds, modules } = action.payload;
-      const updatedNotifications = state.notifications.filter(
-        n => !notificationIds.includes(n._id)
-      );
-      
-      // Calculate new counts
-      const newUnreadCount = Math.max(0, state.unreadCount - notificationIds.length);
+    case 'DECREASE_COUNTS': {
+      const idSet = new Set((action.payload.notificationIds || []).map(String));
+      const removed = state.notifications.filter((n) => idSet.has(String(n._id)));
+      const updatedNotifications = state.notifications.filter((n) => !idSet.has(String(n._id)));
+      // Items not loaded in the list (beyond the latest 50) still count toward the badge
+      const removedCount = Math.max(removed.length, idSet.size);
       const decreasedModuleCounts = { ...state.moduleCounts };
-      
-      modules.forEach(module => {
-        if (decreasedModuleCounts[module] > 0) {
-          decreasedModuleCounts[module] = Math.max(0, decreasedModuleCounts[module] - 1);
-        }
+      removed.forEach((n) => {
+        const mod = n.metadata?.module || 'other';
+        decreasedModuleCounts[mod] = Math.max(0, (decreasedModuleCounts[mod] || 0) - 1);
       });
-      
+
       return {
         ...state,
         notifications: updatedNotifications,
-        unreadCount: newUnreadCount,
+        unreadCount: Math.max(0, state.unreadCount - removedCount),
         moduleCounts: decreasedModuleCounts
       };
-    
-    case 'ADD_NOTIFICATION':
-      const newNotification = action.payload;
-      const newNotifications = [newNotification, ...state.notifications];
-      const newCount = state.unreadCount + 1;
-      
-      // Update module count
-      const module = newNotification.metadata?.module || 'other';
-      const increasedModuleCounts = { ...state.moduleCounts };
-      if (increasedModuleCounts[module]) {
-        increasedModuleCounts[module] += 1;
-      }
-      
+    }
+
+    case 'MARK_ALL_READ':
       return {
         ...state,
-        notifications: newNotifications.slice(0, 50), // Keep only latest 50
-        unreadCount: newCount,
-        moduleCounts: increasedModuleCounts
+        notifications: [],
+        unreadCount: 0,
+        moduleCounts: Object.fromEntries(Object.keys(state.moduleCounts).map((k) => [k, 0]))
       };
-    
+
+    case 'ADD_NOTIFICATION': {
+      const newNotification = action.payload;
+      // Same notification can arrive twice (socket + refetch) — don't double count
+      if (state.notifications.some((n) => String(n._id) === String(newNotification._id))) {
+        return state;
+      }
+      const mod = newNotification.metadata?.module || 'other';
+      return {
+        ...state,
+        notifications: [newNotification, ...state.notifications].slice(0, 50),
+        unreadCount: state.unreadCount + 1,
+        moduleCounts: {
+          ...state.moduleCounts,
+          [mod]: (state.moduleCounts[mod] || 0) + 1
+        }
+      };
+    }
+
     case 'CLEAR_ALL':
       return { ...initialState };
     
@@ -154,9 +161,46 @@ const playIncomingChatSound = () => {
   }
 };
 
+/** Softer two-note chime for bell notifications (chat keeps its own tri-tone). */
+const playNotificationChime = () => {
+  if (typeof window === 'undefined') return;
+  try {
+    const Ctx = window.AudioContext || window.webkitAudioContext;
+    if (!Ctx) return;
+    const ctx = new Ctx();
+    const tone = (freq, start, dur) => {
+      const osc = ctx.createOscillator();
+      const g = ctx.createGain();
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, start);
+      g.gain.setValueAtTime(0.0001, start);
+      g.gain.exponentialRampToValueAtTime(0.14, start + 0.01);
+      g.gain.exponentialRampToValueAtTime(0.0001, start + dur);
+      osc.connect(g);
+      g.connect(ctx.destination);
+      osc.start(start);
+      osc.stop(start + dur + 0.02);
+      return osc;
+    };
+    const t0 = ctx.currentTime;
+    tone(880, t0, 0.18);
+    const last = tone(1318.5, t0 + 0.12, 0.32);
+    last.onended = () => ctx.close().catch(() => {});
+  } catch {
+    // Browser may block audio until the user has interacted with the page.
+  }
+};
+
+const desktopSupported = () => typeof window !== 'undefined' && 'Notification' in window;
+const readDesktopPermission = () => (desktopSupported() ? window.Notification.permission : 'unsupported');
+
+const TITLE_COUNT_RE = /^\(\d+\+?\)\s+/;
+
 export const NotificationProvider = ({ children }) => {
   const [state, dispatch] = useReducer(notificationReducer, initialState);
   const { isAuthenticated, user } = useAuth();
+  const navigate = useNavigate();
+  const [desktopPermission, setDesktopPermission] = React.useState(readDesktopPermission);
 
   // Memoized selectors for performance
   const selectors = useMemo(() => ({
@@ -200,6 +244,10 @@ export const NotificationProvider = ({ children }) => {
     }
   }, [isAuthenticated, state.lastUpdated]);
 
+  // Stable handle so long-lived effects (socket, timer) don't restart after every fetch
+  const fetchRef = useRef(fetchNotifications);
+  fetchRef.current = fetchNotifications;
+
   // Fast notification marking with optimistic updates
   const markAsRead = useCallback(async (notificationIds, modules = []) => {
     if (!notificationIds.length) return;
@@ -231,6 +279,124 @@ export const NotificationProvider = ({ children }) => {
     }
   }, [state.notifications, markAsRead]);
 
+  const markAllAsRead = useCallback(async () => {
+    dispatch({ type: 'MARK_ALL_READ' });
+    try {
+      await NotificationService.markAllAsRead();
+    } catch (error) {
+      console.error('Error marking all notifications as read:', error);
+      fetchNotifications(true);
+    }
+  }, [fetchNotifications]);
+
+  const archiveNotification = useCallback(async (notificationId, { wasUnread = true } = {}) => {
+    if (!notificationId) return;
+    if (wasUnread) {
+      dispatch({ type: 'DECREASE_COUNTS', payload: { notificationIds: [notificationId] } });
+    }
+    try {
+      await NotificationService.markAsArchived(notificationId);
+    } catch (error) {
+      console.error('Error archiving notification:', error);
+      fetchNotifications(true);
+    }
+  }, [fetchNotifications]);
+
+  const deleteNotification = useCallback(async (notificationId, { wasUnread = true } = {}) => {
+    if (!notificationId) return;
+    if (wasUnread) {
+      dispatch({ type: 'DECREASE_COUNTS', payload: { notificationIds: [notificationId] } });
+    }
+    try {
+      await NotificationService.deleteNotification(notificationId);
+    } catch (error) {
+      console.error('Error deleting notification:', error);
+      fetchNotifications(true);
+    }
+  }, [fetchNotifications]);
+
+  const requestDesktopPermission = useCallback(async () => {
+    if (!desktopSupported()) return 'unsupported';
+    try {
+      const result = await window.Notification.requestPermission();
+      setDesktopPermission(result);
+      return result;
+    } catch {
+      return readDesktopPermission();
+    }
+  }, []);
+
+  const openNotification = useCallback((notification) => {
+    if (!notification?._id) return;
+    if (!notification.isRead) {
+      markAsRead([notification._id], [notification?.metadata?.module].filter(Boolean));
+    }
+    if (notification.actionUrl) navigate(notification.actionUrl);
+  }, [markAsRead, navigate]);
+
+  /** Toast + chime while the tab is open; desktop pop-up when it's in the background. */
+  const announceNotification = useCallback((notification) => {
+    // Chat has its own sound / unread badge — don't announce it twice
+    if (!notification || notification.type === 'chat_message') return;
+    const myUserId = String(user?.id || user?._id || '');
+    if (isChatSoundEnabled(myUserId)) playNotificationChime();
+
+    const hidden = typeof document !== 'undefined' && document.visibilityState === 'hidden';
+    if (hidden && readDesktopPermission() === 'granted') {
+      try {
+        const desk = new window.Notification(notification.title || 'Tovus ERP', {
+          body: String(notification.message || '').slice(0, 180),
+          tag: String(notification._id),
+          icon: '/favicon.ico'
+        });
+        desk.onclick = () => {
+          window.focus();
+          openNotification(notification);
+          desk.close();
+        };
+      } catch {
+        /* some browsers only allow desktop notifications from a service worker */
+      }
+      return;
+    }
+
+    toast.custom(
+      (t) => (
+        <NotificationToast
+          toastObj={t}
+          notification={notification}
+          onOpen={() => {
+            toast.dismiss(t.id);
+            openNotification(notification);
+          }}
+          onClose={() => toast.dismiss(t.id)}
+        />
+      ),
+      { id: `notif-${notification._id}`, duration: 6000, position: 'bottom-left' }
+    );
+  }, [user?.id, user?._id, openNotification]);
+
+  const announceRef = useRef(announceNotification);
+  announceRef.current = announceNotification;
+
+  // Unread count in the browser tab title, e.g. "(3) Tovus ERP System"
+  React.useEffect(() => {
+    if (typeof document === 'undefined') return undefined;
+    const count = isAuthenticated ? state.unreadCount : 0;
+    const apply = () => {
+      const base = document.title.replace(TITLE_COUNT_RE, '');
+      const next = count > 0 ? `(${count > 99 ? '99+' : count}) ${base}` : base;
+      if (document.title !== next) document.title = next;
+    };
+    apply();
+    // Pages may change the title later — keep the count on it
+    const titleEl = document.querySelector('title');
+    if (!titleEl || typeof MutationObserver === 'undefined') return undefined;
+    const observer = new MutationObserver(apply);
+    observer.observe(titleEl, { childList: true, characterData: true, subtree: true });
+    return () => observer.disconnect();
+  }, [state.unreadCount, isAuthenticated]);
+
   // Add new notification (for real-time updates)
   const addNotification = useCallback((notification) => {
     dispatch({ type: 'ADD_NOTIFICATION', payload: notification });
@@ -248,11 +414,11 @@ export const NotificationProvider = ({ children }) => {
       return;
     }
 
-    fetchNotifications();
-    const interval = setInterval(() => fetchNotifications(), 300000); // 5 minutes
-    
+    fetchRef.current();
+    const interval = setInterval(() => fetchRef.current(), 300000); // 5 minutes
+
     return () => clearInterval(interval);
-  }, [isAuthenticated, fetchNotifications, clearAll]);
+  }, [isAuthenticated, clearAll]);
 
   // Chat page marks conversation + push notifications read — refresh bell counts
   React.useEffect(() => {
@@ -286,8 +452,9 @@ export const NotificationProvider = ({ children }) => {
     const onNotificationNew = (notification) => {
       if (notification && notification._id) {
         addNotification(notification);
+        announceRef.current(notification);
       } else {
-        fetchNotifications(true);
+        fetchRef.current(true);
       }
     };
 
@@ -305,17 +472,34 @@ export const NotificationProvider = ({ children }) => {
       window.dispatchEvent(new Event(EVT_CHAT_UNREAD_CHANGED));
     };
 
+    // After a dropped connection (internet off, server restart, laptop sleep), pull anything missed
+    let hasConnectedOnce = false;
+    const onConnect = () => {
+      if (hasConnectedOnce) fetchRef.current(true);
+      hasConnectedOnce = true;
+    };
+    const onBackOnline = () => fetchRef.current(true);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') fetchRef.current();
+    };
+    socket.on('connect', onConnect);
+    window.addEventListener('online', onBackOnline);
+    document.addEventListener('visibilitychange', onVisible);
+
     socket.on('notification:new', onNotificationNew);
     socket.on('chat:message', onChatMessage);
     socket.on('chat:conversation:updated', onChatConversationUpdated);
 
     return () => {
+      socket.off('connect', onConnect);
+      window.removeEventListener('online', onBackOnline);
+      document.removeEventListener('visibilitychange', onVisible);
       socket.off('notification:new', onNotificationNew);
       socket.off('chat:message', onChatMessage);
       socket.off('chat:conversation:updated', onChatConversationUpdated);
       socket.disconnect();
     };
-  }, [isAuthenticated, user, addNotification, fetchNotifications]);
+  }, [isAuthenticated, user?.id, user?._id, addNotification]);
 
   // Context value memoized to prevent unnecessary re-renders
   const contextValue = useMemo(() => ({
@@ -323,9 +507,15 @@ export const NotificationProvider = ({ children }) => {
     fetchNotifications,
     markAsRead,
     markModuleAsRead,
+    markAllAsRead,
+    archiveNotification,
+    deleteNotification,
+    openNotification,
+    desktopPermission,
+    requestDesktopPermission,
     addNotification,
     clearAll
-  }), [selectors, fetchNotifications, markAsRead, markModuleAsRead, addNotification, clearAll]);
+  }), [selectors, fetchNotifications, markAsRead, markModuleAsRead, markAllAsRead, archiveNotification, deleteNotification, openNotification, desktopPermission, requestDesktopPermission, addNotification, clearAll]);
 
   return (
     <NotificationContext.Provider value={contextValue}>

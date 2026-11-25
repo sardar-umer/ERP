@@ -3,8 +3,96 @@ const { validationResult } = require('express-validator');
 const mongoose = require('mongoose');
 const {
   sameUserId,
-  isDevNewEmployeeSrDirectorApprover
+  isDevNewEmployeeSrDirectorApprover,
+  resolveDesignatedCeoUserIds
 } = require('../../utils/executiveAccess');
+const {
+  notifyApprovalAssigned,
+  notifyDocumentOutcome,
+  getActiveUserIdsByRoles
+} = require('../../utils/approvalNotify');
+
+const NEW_HIRING_URL = '/hr/non-employee-onboarding';
+const NEW_HIRING_STAGE_LABELS = {
+  'Pending HOD HR': 'HOD HR',
+  'Pending AVP': 'AVP',
+  'Pending Chairman': 'Chairman Steering Committee',
+  'Pending Sr Director': 'Sr Director',
+  'Forwarded to CEO': 'CEO Secretariat'
+};
+
+/**
+ * Tell the next approver (or the initiator) where the record now stands.
+ * Fire-and-forget: never delays or fails the HTTP response.
+ */
+const notifyNewHiringTransition = (record, actor) => {
+  (async () => {
+    const status = record.workflowStatus;
+    const base = {
+      actor,
+      docType: 'New-Hiring Approval',
+      docNumber: record.recordNumber || '',
+      url: NEW_HIRING_URL,
+      module: 'hr',
+      entityId: record._id,
+      entityType: 'NonEmployeeRecord'
+    };
+    const count = Array.isArray(record.employees) ? record.employees.length : 0;
+    const candidatesLine = count ? `${count} candidate${count === 1 ? '' : 's'} recommended for hiring.` : '';
+
+    const assignees = {
+      'Pending HOD HR': record.assignedHod,
+      'Pending AVP': record.assignedAvp,
+      'Pending Chairman': record.assignedChairman,
+      'Pending Sr Director': record.assignedSrDirector
+    };
+
+    if (Object.prototype.hasOwnProperty.call(assignees, status)) {
+      if (!assignees[status]) return;
+      await notifyApprovalAssigned({
+        ...base,
+        recipientIds: [assignees[status]],
+        stageLabel: NEW_HIRING_STAGE_LABELS[status],
+        message: [candidatesLine, `Waiting at: ${NEW_HIRING_STAGE_LABELS[status]}.`, 'Please review it in your approval queue.']
+          .filter(Boolean).join(' ')
+      });
+      return;
+    }
+
+    if (status === 'Forwarded to CEO') {
+      let ceoIds = await resolveDesignatedCeoUserIds().catch(() => []);
+      if (!ceoIds.length) ceoIds = await getActiveUserIdsByRoles(['higher_management']);
+      await notifyApprovalAssigned({
+        ...base,
+        recipientIds: ceoIds,
+        stageLabel: NEW_HIRING_STAGE_LABELS[status],
+        message: [candidatesLine, 'Forwarded to CEO for final approval.'].filter(Boolean).join(' ')
+      });
+      return;
+    }
+
+    if (status === 'Approved by CEO') {
+      await notifyDocumentOutcome({
+        ...base,
+        recipientIds: [record.initiator],
+        outcome: 'final_approved',
+        stageLabel: 'CEO Secretariat',
+        remarks: record.ceoComments
+      });
+      return;
+    }
+
+    if (status === 'Returned' || status === 'Rejected by CEO') {
+      await notifyDocumentOutcome({
+        ...base,
+        recipientIds: [record.initiator],
+        outcome: status === 'Rejected by CEO' ? 'rejected' : 'returned',
+        stageLabel: NEW_HIRING_STAGE_LABELS[record.returnedFromStatus] || '',
+        remarks: record.returnComments || record.rejectionComments
+      });
+    }
+  })().catch((err) => console.warn('[NewHiring] notification failed:', err.message));
+};
 
 /** Store a web-friendly relative path under /uploads/... */
 const toPublicUploadUrl = (file) => {
@@ -362,6 +450,7 @@ exports.createRecord = async (req, res) => {
     });
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
 
     res.status(201).json({ success: true, data: record });
   } catch (error) {
@@ -485,6 +574,7 @@ exports.updateRecord = async (req, res) => {
     }
 
     await record.save();
+    if (record.workflowStatus !== status) notifyNewHiringTransition(record, req.user);
     const populated = await populateApprovalAuthorities(NonEmployeeRecord.findById(record._id));
     res.status(200).json({ success: true, data: populated });
   } catch (error) {
@@ -571,6 +661,7 @@ exports.approveByHOD = async (req, res) => {
     record.hodSignature = req.body.signature || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in HOD approval:', error);
@@ -603,6 +694,7 @@ exports.rejectByHOD = async (req, res) => {
     record.hodComments = req.body.comments || '';
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in HOD rejection:', error);
@@ -633,6 +725,7 @@ exports.approveBySrDirector = async (req, res) => {
       || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in Sr Director approval:', error);
@@ -662,6 +755,7 @@ exports.rejectBySrDirector = async (req, res) => {
     record.srDirectorComments = req.body.comments || '';
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in Sr Director rejection:', error);
@@ -694,6 +788,7 @@ exports.approveByAVP = async (req, res) => {
     record.avpSignature = req.body.signature || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in AVP approval:', error);
@@ -726,6 +821,7 @@ exports.rejectByAVP = async (req, res) => {
     record.avpComments = req.body.comments || '';
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in AVP rejection:', error);
@@ -758,6 +854,7 @@ exports.approveByChairman = async (req, res) => {
     record.chairmanSignature = req.body.signature || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in Chairman approval:', error);
@@ -790,6 +887,7 @@ exports.rejectByChairman = async (req, res) => {
     record.chairmanComments = req.body.comments || '';
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in Chairman rejection:', error);
@@ -828,6 +926,7 @@ exports.approveByCEO = async (req, res) => {
     record.ceoSignature = req.body.signature || (req.user.firstName ? `${req.user.firstName} ${req.user.lastName || ''}`.trim() : req.user.email);
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in CEO approval:', error);
@@ -856,6 +955,7 @@ exports.rejectByCEO = async (req, res) => {
     }
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     res.status(200).json({ success: true, data: record });
   } catch (error) {
     console.error('Error in CEO rejection:', error);
@@ -877,6 +977,7 @@ exports.returnByCEO = async (req, res) => {
     });
 
     await record.save();
+    notifyNewHiringTransition(record, req.user);
     const populated = await populateApprovalAuthorities(NonEmployeeRecord.findById(record._id));
     res.status(200).json({ success: true, data: populated });
   } catch (error) {

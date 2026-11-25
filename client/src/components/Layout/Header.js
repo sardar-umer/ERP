@@ -9,6 +9,7 @@ import {
   Avatar,
   Menu,
   MenuItem,
+  Popover,
   Divider,
   useTheme
 } from '@mui/material';
@@ -180,16 +181,27 @@ const Header = () => {
         </IconButton>
 
                 {/* Notifications Menu */}
-        <Menu
+        <Popover
           anchorEl={notificationsAnchor}
           open={isNotificationsOpen}
           onClose={handleMenuClose}
+          anchorOrigin={{ vertical: 'bottom', horizontal: 'right' }}
+          transformOrigin={{ vertical: 'top', horizontal: 'right' }}
           PaperProps={{
-            sx: { width: 400, maxHeight: 600 }
+            sx: {
+              width: { xs: 'calc(100vw - 32px)', sm: 420 },
+              maxHeight: 'min(640px, calc(100vh - 80px))',
+              display: 'flex',
+              flexDirection: 'column',
+              overflow: 'hidden',
+              borderRadius: 2,
+              mt: 1,
+              boxShadow: '0 12px 32px rgba(0,0,0,0.18)'
+            }
           }}
         >
           <Notifications onClose={handleMenuClose} />
-        </Menu>
+        </Popover>
 
         {/* User Profile Menu */}
         <Menu

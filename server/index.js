@@ -938,6 +938,14 @@ server.listen(PORT, '0.0.0.0', async () => {
     console.error('❌ Failed to start Utility Bill Overdue Cron:', error);
   }
 
+  // Notifications: delete ones read more than NOTIFICATION_READ_RETENTION_DAYS (default 90) ago
+  try {
+    const { startNotificationCleanupCron } = require('./utils/notificationCleanupCron');
+    startNotificationCleanupCron();
+  } catch (error) {
+    console.error('❌ Failed to start Notification Cleanup Cron:', error);
+  }
+
   // Project Management: daily reminders for IPCs waiting too long at an approval desk
   try {
     const { startIpcReminderCron } = require('./utils/projectIpcReminders');

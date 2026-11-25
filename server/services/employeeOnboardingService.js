@@ -501,22 +501,25 @@ class EmployeeOnboardingService {
     try {
       console.log(`📧 Sending employee activation notification...`);
       
-      // Create notification for HR
-      const Notification = require('../models/hr/Notification');
-      const notification = new Notification({
-        title: 'Employee Activated',
-        message: `Employee ${employee.firstName} ${employee.lastName} has been activated and is now part of the team.`,
-        type: 'employee_activation',
-        recipient: 'hr_team',
-        data: {
-          employeeId: employee._id,
-          employeeName: `${employee.firstName} ${employee.lastName}`,
-          department: employee.department,
-          position: employee.position
+      // Notify HR managers + admins (the old version used a fake 'hr_team' recipient and always failed)
+      const { createAndEmitNotification } = require('./realtimeNotificationService');
+      const { getActiveUserIdsByRoles } = require('../utils/approvalNotify');
+      const recipientIds = await getActiveUserIdsByRoles(['hr_manager', 'admin']);
+      const name = [employee.firstName, employee.lastName].filter(Boolean).join(' ') || 'An employee';
+      await createAndEmitNotification({
+        recipientIds,
+        title: 'Employee activated',
+        message: `${name}${employee.employeeId ? ` (${employee.employeeId})` : ''} has been activated and is now part of the team.`,
+        type: 'employee_status_change',
+        category: 'employee',
+        priority: 'medium',
+        actionUrl: employee._id ? `/hr/employees/${employee._id}` : '/hr/employees',
+        metadata: {
+          module: 'employees',
+          entityId: employee._id,
+          entityType: 'Employee'
         }
       });
-      
-      await notification.save();
       console.log(`✅ Activation notification sent`);
       
     } catch (error) {
