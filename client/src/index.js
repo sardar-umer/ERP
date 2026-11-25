@@ -10,6 +10,7 @@ import { Toaster } from 'react-hot-toast';
 import './styles/print.css';
 import App from './App';
 import AppUpdateBanner from './components/AppUpdateBanner';
+import NetworkStatusBanner from './components/common/NetworkStatusBanner';
 import { AuthProvider } from './contexts/AuthContext';
 import { NotificationProvider } from './contexts/NotificationContext';
 
@@ -108,6 +109,7 @@ root.render(
             <NotificationProvider>
               <App />
               <AppUpdateBanner />
+              <NetworkStatusBanner />
                             <Toaster
                 position="top-right"
                 toastOptions={{
