@@ -6,8 +6,10 @@ import { isPresidentUser } from '../utils/presidentAccess';
 import { setHigherManagementRestricted } from '../utils/permissions';
 
 // Constants
-const MAX_RETRIES = 3;
-const RETRY_DELAYS = [1000, 2000, 3000];
+// ~35s of retries in total, so a backend that is still starting up (nodemon restart,
+// first boot connecting to Mongo) does not drop the user onto the Connection Issue screen.
+const RETRY_DELAYS = [1000, 2000, 3000, 4000, 5000, 5000, 5000, 5000, 5000];
+const MAX_RETRIES = RETRY_DELAYS.length;
 const ROLE_REDIRECTS = {
   super_admin: '/dashboard',
   admin: '/admin/users',

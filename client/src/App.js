@@ -1,4 +1,5 @@
-import React, { Suspense } from 'react';
+import React, { Suspense, useEffect } from 'react';
+import api from './services/api';
 import lazyWithReload from './utils/lazyWithReload';
 import { Routes, Route, Navigate, useLocation } from 'react-router-dom';
 import { Box, CircularProgress, Typography, Button } from '@mui/material';
@@ -485,8 +486,38 @@ const LoadingScreen = ({ message = 'Loading SGC ERP System...' }) => (
   </Box>
 );
 
-// Network error screen component
-const NetworkErrorScreen = ({ error, onRetry }) => (
+// Network error screen component. While shown, it quietly pings /api/health every few
+// seconds (and when the browser comes back online) and reconnects by itself once the
+// server answers, so a backend that was still starting up recovers without a click.
+const NetworkErrorScreen = ({ error, onRetry }) => {
+  useEffect(() => {
+    let stopped = false;
+    let busy = false;
+    const ping = async () => {
+      if (stopped || busy) return;
+      busy = true;
+      try {
+        const res = await fetch(`${api.defaults.baseURL}/health`, { cache: 'no-store' });
+        if (res.ok && !stopped) {
+          stopped = true;
+          onRetry();
+        }
+      } catch (_) {
+        // server still unreachable; try again on the next tick
+      } finally {
+        busy = false;
+      }
+    };
+    const timer = setInterval(ping, 3000);
+    window.addEventListener('online', ping);
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener('online', ping);
+    };
+  }, [onRetry]);
+
+  return (
   <Box
     display="flex"
     justifyContent="center"
@@ -513,9 +544,13 @@ const NetworkErrorScreen = ({ error, onRetry }) => (
           Refresh Page
         </Button>
       </Box>
+      <Typography variant="caption" sx={{ display: 'block', mt: 3, opacity: 0.75 }}>
+        Reconnecting automatically when the server is reachable…
+      </Typography>
     </Box>
   </Box>
-);
+  );
+};
 
 function App() {
   const { user, loading, token, error, retryAuth } = useAuth();
