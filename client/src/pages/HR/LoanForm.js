@@ -41,6 +41,17 @@ import LoanAttachments, { LOAN_ATTACHMENT_ACCEPT, splitLoanFiles } from '../../c
 
 const steps = ['Basic Information', 'Loan Details', 'Guarantor & Documents'];
 
+/** "YYYY-MM" for an <input type="month"> */
+const toMonthInput = (month, year) =>
+  month && year ? `${year}-${String(month).padStart(2, '0')}` : '';
+/** New loans start deducting from next month unless HR picks another month */
+const defaultDeductionStartMonth = () => {
+  const d = new Date();
+  d.setDate(1);
+  d.setMonth(d.getMonth() + 1);
+  return toMonthInput(d.getMonth() + 1, d.getFullYear());
+};
+
 const LoanForm = () => {
   const navigate = useNavigate();
   const { id } = useParams();
@@ -65,6 +76,7 @@ const LoanForm = () => {
   const [employeesLoading, setEmployeesLoading] = useState(true);
 
   const [formData, setFormData] = useState({
+    deductionStartMonth: defaultDeductionStartMonth(),
     employee: '',
     loanType: '',
     loanAmount: '',
@@ -156,6 +168,7 @@ const LoanForm = () => {
         collateral: loan.collateral || '',
         collateralValue: loan.collateralValue || '',
         directApproval: Boolean(loan.directApproval),
+        deductionStartMonth: toMonthInput(loan.deductionStartMonth, loan.deductionStartYear),
         guarantor: {
           name: loan.guarantor?.name || '',
           relationship: loan.guarantor?.relationship || '',
@@ -315,6 +328,9 @@ const LoanForm = () => {
         if (emiPlanError) {
           newErrors.monthlyInstallment = emiPlanError;
         }
+        if (!formData.isOngoingLoan && !/^\d{4}-\d{2}$/.test(formData.deductionStartMonth || '')) {
+          newErrors.deductionStartMonth = 'Choose the month payroll deduction starts';
+        }
         if (formData.isOngoingLoan) {
           if (!formData.loanStartDate) {
             newErrors.loanStartDate = 'Start date is required for ongoing loans';
@@ -379,6 +395,7 @@ const LoanForm = () => {
         isOngoingLoan: Boolean(formData.isOngoingLoan),
         directApproval: !formData.isOngoingLoan && Boolean(formData.directApproval),
         loanStartDate: formData.isOngoingLoan ? formData.loanStartDate : undefined,
+        deductionStartMonth: formData.deductionStartMonth || undefined,
         installmentsAlreadyPaid: formData.isOngoingLoan
           ? (parseInt(formData.installmentsAlreadyPaid, 10) || 0)
           : 0
@@ -532,6 +549,24 @@ const LoanForm = () => {
               />
             </Grid>
 
+            <Grid item xs={12} md={4}>
+              <TextField
+                fullWidth
+                type="month"
+                label="Deduction Start Month"
+                value={formData.deductionStartMonth || ''}
+                onChange={(e) => handleInputChange('deductionStartMonth', e.target.value)}
+                error={!!errors.deductionStartMonth}
+                helperText={
+                  errors.deductionStartMonth ||
+                  (formData.isOngoingLoan
+                    ? 'First payroll month for the installment — leave blank to use the Loan Start Date month'
+                    : 'First payroll month the installment is deducted — no deduction before this month')
+                }
+                InputLabelProps={{ shrink: true }}
+              />
+            </Grid>
+
             <Grid item xs={12}>
               <Card sx={{ bgcolor: 'grey.50' }}>
                 <CardContent>
@@ -641,6 +676,8 @@ const LoanForm = () => {
                           onChange={(e) => {
                             const on = e.target.checked;
                             handleInputChange('isOngoingLoan', on);
+                            // Ongoing imports take their start month from Loan Start Date unless HR sets one
+                            handleInputChange('deductionStartMonth', on ? '' : defaultDeductionStartMonth());
                             if (on && !formData.purpose) {
                               handleInputChange('purpose', 'Existing ongoing loan imported into system');
                             }

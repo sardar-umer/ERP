@@ -50,12 +50,27 @@ function isLoanFullyPaid(loan) {
  * Amount to deduct from payroll for this loan in month/year.
  * Returns 0 when paused, completed, or fully paid; otherwise EMI capped to remaining.
  */
+/**
+ * True when the payroll month is before the loan's Deduction Start Month (deduct nothing yet).
+ * Loans without a start month set are never held back.
+ */
+function isBeforeDeductionStart(loan, month, year) {
+  const sm = Number(loan?.deductionStartMonth);
+  const sy = Number(loan?.deductionStartYear);
+  if (!sm || !sy) return false;
+  const m = Number(month);
+  const y = Number(year);
+  if (!m || !y) return false;
+  return y * 12 + m < sy * 12 + sm;
+}
+
 function effectiveLoanDeductionForPayroll(loan, month, year) {
   if (!loan) return 0;
   if (!ACTIVE_LOAN_STATUSES.includes(loan.status)) return 0;
 
   const m = Number(month);
   const y = Number(year);
+  if (isBeforeDeductionStart(loan, m, y)) return 0;
   if (
     Array.isArray(loan.pausedMonths) &&
     loan.pausedMonths.some((p) => Number(p.month) === m && Number(p.year) === y)
@@ -131,6 +146,7 @@ module.exports = {
   getLoanRemainingBalance,
   isLoanFullyPaid,
   effectiveLoanDeductionForPayroll,
+  isBeforeDeductionStart,
   activeLoanStatusFilter,
   markLoanCompletedIfPaid
 };

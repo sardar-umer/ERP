@@ -31,6 +31,7 @@ class LoanPayrollService {
         getLoanRemainingBalance,
         markLoanCompletedIfPaid,
         effectiveLoanDeductionForPayroll,
+        isBeforeDeductionStart,
         payrollAlreadyRecordedOnLoan
       } = require('../utils/loanPayrollDeduction');
 
@@ -62,8 +63,11 @@ class LoanPayrollService {
       const month = payroll.month;
       const year = payroll.year;
       // Process each loan by distributing loan deductions by remaining EMI share
+      // A loan whose Deduction Start Month is after this payroll month gets no share at all
       const shareWeights = activeLoans.map((loan) =>
-        effectiveLoanDeductionForPayroll(loan, month, year) || getLoanRemainingBalance(loan) || 0
+        isBeforeDeductionStart(loan, month, year)
+          ? 0
+          : (effectiveLoanDeductionForPayroll(loan, month, year) || getLoanRemainingBalance(loan) || 0)
       );
       const totalInstallments = shareWeights.reduce((sum, w) => sum + w, 0);
       

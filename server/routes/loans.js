@@ -55,6 +55,33 @@ const APPROVER_FIELDS = ['forwardedBy', 'assignedHod', 'hodApprovedBy', 'assigne
 const approverPopulate = APPROVER_FIELDS.map((path) => ({ path, select: 'firstName lastName email digitalSignature' }));
 const sameUser = (a, b) => Boolean(a && b) && String(a._id || a) === String(b._id || b);
 
+// ─── Deduction Start Month ───
+const MONTH_NAMES = ['January', 'February', 'March', 'April', 'May', 'June', 'July', 'August', 'September', 'October', 'November', 'December'];
+const monthLabel = (m, y) => `${MONTH_NAMES[m - 1]} ${y}`;
+/** Accepts "YYYY-MM" or { deductionStartMonth, deductionStartYear } numbers. Returns { month, year } | null | false (invalid). */
+const parseDeductionStart = (body = {}) => {
+  let { deductionStartMonth: m, deductionStartYear: y } = body;
+  if (typeof m === 'string' && /^\d{4}-\d{1,2}$/.test(m.trim())) {
+    const [yy, mm] = m.trim().split('-');
+    y = yy;
+    m = mm;
+  }
+  if ((m === undefined || m === null || m === '') && (y === undefined || y === null || y === '')) return null;
+  const month = parseInt(m, 10);
+  const year = parseInt(y, 10);
+  if (!(month >= 1 && month <= 12) || !(year >= 2000 && year <= 2100)) return false;
+  return { month, year };
+};
+const nextMonthFrom = (date = new Date()) => {
+  const d = new Date(date);
+  return { month: d.getMonth() === 11 ? 1 : d.getMonth() + 2, year: d.getMonth() === 11 ? d.getFullYear() + 1 : d.getFullYear() };
+};
+/** True once any installment has been recovered (payroll, lump sum, import or manual). */
+const deductionHasStarted = (loan) =>
+  (Number(loan.totalPaid) || 0) > 0.009 ||
+  (loan.appliedPayrolls || []).length > 0 ||
+  (loan.loanSchedule || []).some((i) => ['Paid', 'Partial'].includes(i.status) || (Number(i.paidAmount) || 0) > 0);
+
 /** Which step the user can act on: 'HOD' | 'AVP' | 'CEO' | null */
 const workflowRoleFor = (loan, user) => {
   const ws = loan.workflowStatus;
@@ -498,6 +525,21 @@ router.post('/', authMiddleware, async (req, res) => {
       return res.status(400).json({ message: 'Loan start date is required for ongoing loans' });
     }
 
+    // Deduction Start Month: chosen by HR; ongoing loans default to their start date's month,
+    // new loans to next month.
+    let deductionStart = parseDeductionStart(req.body);
+    if (deductionStart === false) {
+      return res.status(400).json({ message: 'Deduction start month is not valid' });
+    }
+    if (!deductionStart) {
+      if (ongoing) {
+        const sd = new Date(loanStartDate);
+        deductionStart = { month: sd.getMonth() + 1, year: sd.getFullYear() };
+      } else {
+        deductionStart = nextMonthFrom(new Date());
+      }
+    }
+
     const paidEmiCount = Math.max(0, parseInt(installmentsAlreadyPaid, 10) || 0);
     if (ongoing && paidEmiCount < 0) {
       return res.status(400).json({ message: 'EMIs already paid must be 0 or greater' });
@@ -555,6 +597,8 @@ router.post('/', authMiddleware, async (req, res) => {
       emiManuallyAdjusted: useManualEmi,
       isOngoingLoan: ongoing,
       loanStartDate: startDate,
+      deductionStartMonth: deductionStart.month,
+      deductionStartYear: deductionStart.year,
       installmentsAlreadyPaid: ongoing ? paidEmiCount : 0,
       amountAlreadyPaid: 0,
       purpose,
@@ -679,6 +723,15 @@ router.put('/:id', authMiddleware, async (req, res) => {
         }
         loan.directApproval = wantDirect;
       }
+    }
+
+    const deductionStart = parseDeductionStart(updateData);
+    if (deductionStart === false) {
+      return res.status(400).json({ message: 'Deduction start month is not valid' });
+    }
+    if (deductionStart) {
+      loan.deductionStartMonth = deductionStart.month;
+      loan.deductionStartYear = deductionStart.year;
     }
 
     if (manualEmi) {
@@ -1072,6 +1125,58 @@ router.patch('/:id/resume-month', authMiddleware, async (req, res) => {
   } catch (error) {
     console.error('Error resuming loan month:', error);
     res.status(500).json({ message: 'Error resuming loan month', error: error.message });
+  }
+});
+
+// @route   PATCH /api/loans/:id/deduction-start — { deductionStartMonth: 'YYYY-MM' | 1-12, deductionStartYear?, reason? }
+// Change the first payroll month the installment is deducted. Allowed until the first deduction;
+// after that, skip months with Pause instead.
+router.patch('/:id/deduction-start', authMiddleware, async (req, res) => {
+  try {
+    const loan = await Loan.findById(req.params.id);
+    if (!loan) return res.status(404).json({ message: 'Loan not found' });
+
+    if (['Completed', 'Rejected', 'Cancelled', 'Defaulted'].includes(loan.status)) {
+      return res.status(400).json({ message: `Cannot change the deduction start month of a ${loan.status} loan` });
+    }
+    if (deductionHasStarted(loan)) {
+      return res.status(400).json({
+        message: 'Deduction has already started on this loan, so its start month is locked. Use Pause to skip a month.'
+      });
+    }
+    const next = parseDeductionStart(req.body);
+    if (!next) {
+      return res.status(400).json({ message: 'Choose a valid deduction start month' });
+    }
+    const prevM = loan.deductionStartMonth;
+    const prevY = loan.deductionStartYear;
+    if (prevM === next.month && prevY === next.year) {
+      return res.status(400).json({ message: `Deduction already starts in ${monthLabel(next.month, next.year)}` });
+    }
+
+    loan.deductionStartMonth = next.month;
+    loan.deductionStartYear = next.year;
+    // Nothing recovered yet, so the schedule can be rebuilt from the new first month
+    loan.generateLoanSchedule();
+    if ((loan.pausedMonths || []).length > 0) loan.reconcileScheduleWithPauses();
+    loan.markModified('loanSchedule');
+
+    const reason = String(req.body.reason || '').trim();
+    loan.notes.push({
+      content: `Deduction start month changed from ${prevM && prevY ? monthLabel(prevM, prevY) : 'not set'} to ${monthLabel(next.month, next.year)}.${reason ? ` Reason: ${reason}` : ''}`,
+      addedBy: req.user.id
+    });
+    loan.updatedBy = req.user.id;
+    await loan.save();
+    await loan.populate('employee', 'employeeId firstName lastName email');
+
+    res.json({
+      message: `Payroll deduction will start from ${monthLabel(next.month, next.year)}`,
+      loan
+    });
+  } catch (error) {
+    console.error('Error changing loan deduction start month:', error);
+    res.status(500).json({ message: 'Error changing deduction start month', error: error.message });
   }
 });
 

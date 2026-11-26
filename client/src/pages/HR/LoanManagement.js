@@ -419,6 +419,7 @@ const LoanManagement = () => {
                 <TableCell>Loan Type</TableCell>
                 <TableCell>Amount</TableCell>
                 <TableCell>Monthly EMI</TableCell>
+                <TableCell>Deduction Starts</TableCell>
                 <TableCell>Status</TableCell>
                 <TableCell>Application Date</TableCell>
                 <TableCell>Progress</TableCell>
@@ -428,13 +429,13 @@ const LoanManagement = () => {
             <TableBody>
               {loading ? (
                 <TableRow>
-                  <TableCell colSpan={8} align="center">
+                  <TableCell colSpan={9} align="center">
                     <CircularProgress />
                   </TableCell>
                 </TableRow>
               ) : loans.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={8} align="center">
+                  <TableCell colSpan={9} align="center">
                     No loans found
                   </TableCell>
                 </TableRow>
@@ -452,6 +453,12 @@ const LoanManagement = () => {
                     <TableCell>{loan.loanType}</TableCell>
                                       <TableCell>{formatPKR(loan.loanAmount)}</TableCell>
                   <TableCell>{formatPKR(loan.monthlyInstallment)}</TableCell>
+                    <TableCell>
+                      {loan.deductionStartMonth && loan.deductionStartYear
+                        ? new Date(loan.deductionStartYear, loan.deductionStartMonth - 1, 1)
+                            .toLocaleDateString('en-GB', { month: 'short', year: 'numeric' })
+                        : '—'}
+                    </TableCell>
                     <TableCell>
                       <Stack direction="row" gap={0.5} flexWrap="wrap" useFlexGap>
                         <Chip

@@ -158,6 +158,16 @@ export const loanService = {
     }
   },
 
+  // Change the first payroll month the installment is deducted (only before the first deduction)
+  setDeductionStart: async (id, deductionStartMonth, reason = '') => {
+    try {
+      const response = await api.patch(`${LOAN_API_BASE}/${id}/deduction-start`, { deductionStartMonth, reason });
+      return response.data;
+    } catch (error) {
+      throw error.response?.data || error.message;
+    }
+  },
+
   // Permanently adjust monthly installment
   adjustInstallment: async (id, newAmount, reason = '') => {
     try {

@@ -72,6 +72,12 @@ const loanSchema = new mongoose.Schema({
   loanStartDate: {
     type: Date
   },
+  /**
+   * First payroll month the installment is deducted. Payroll deducts nothing for earlier months,
+   * and installment 1 of the schedule falls in this month. Editable until the first deduction.
+   */
+  deductionStartMonth: { type: Number, min: 1, max: 12 },
+  deductionStartYear: { type: Number, min: 2000, max: 2100 },
   /** How many EMIs were already paid before import into ERP */
   installmentsAlreadyPaid: {
     type: Number,
@@ -476,12 +482,18 @@ loanSchema.methods.generateLoanSchedule = function () {
       remainingBalance = round2(Math.max(0, remainingBalance - principalPart));
     }
 
-    const baseDate = new Date(
-      this.loanStartDate || this.disbursementDate || this.applicationDate || Date.now()
-    );
-    const dueDate = new Date(baseDate);
-    // Ongoing loans: first EMI on start month; new loans: first EMI one month after application
-    dueDate.setMonth(dueDate.getMonth() + (this.isOngoingLoan || this.loanStartDate ? (i - 1) : i));
+    let dueDate;
+    if (this.deductionStartMonth && this.deductionStartYear) {
+      // First EMI in the chosen deduction start month, then one per month
+      dueDate = new Date(this.deductionStartYear, this.deductionStartMonth - 1 + (i - 1), 1);
+    } else {
+      const baseDate = new Date(
+        this.loanStartDate || this.disbursementDate || this.applicationDate || Date.now()
+      );
+      dueDate = new Date(baseDate);
+      // Ongoing loans: first EMI on start month; new loans: first EMI one month after application
+      dueDate.setMonth(dueDate.getMonth() + (this.isOngoingLoan || this.loanStartDate ? (i - 1) : i));
+    }
 
     schedule.push({
       installmentNumber: i,

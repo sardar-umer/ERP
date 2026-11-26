@@ -83,6 +83,15 @@ const MONTH_NAMES = [
 /** Loans that can have payroll deductions paused or adjusted */
 const DEDUCTION_MANAGE_STATUSES = ['Approved', 'Active', 'Disbursed'];
 
+/** "YYYY-MM" for <input type="month"> */
+const toMonthInput = (month, year) =>
+  month && year ? `${year}-${String(month).padStart(2, '0')}` : '';
+/** Start month can change only until something has been recovered on the loan */
+const loanDeductionHasStarted = (loan) =>
+  (Number(loan?.totalPaid) || 0) > 0.009 ||
+  (loan?.appliedPayrolls || []).length > 0 ||
+  (loan?.loanSchedule || []).some((i) => ['Paid', 'Partial'].includes(i.status) || (Number(i.paidAmount) || 0) > 0);
+
 const buildConsecutivePauseMonths = (startMonth, startYear, monthCount) => {
   const result = [];
   let m = Number(startMonth);
@@ -158,6 +167,9 @@ const LoanDetail = () => {
   const [pauseSubmitting, setPauseSubmitting] = useState(false);
   const [adjustData, setAdjustData] = useState({ newAmount: '', reason: '' });
   const [adjustSubmitting, setAdjustSubmitting] = useState(false);
+  const [startDialog, setStartDialog] = useState(false);
+  const [startData, setStartData] = useState({ month: '', reason: '' });
+  const [startSubmitting, setStartSubmitting] = useState(false);
 
   useEffect(() => {
     fetchLoan();
@@ -283,6 +295,21 @@ const LoanDetail = () => {
       fetchLoan();
     } catch (error) {
       setError(error.message || 'Failed to resume loan');
+    }
+  };
+
+  const handleChangeDeductionStart = async () => {
+    try {
+      setStartSubmitting(true);
+      setError('');
+      const result = await loanService.setDeductionStart(id, startData.month, startData.reason);
+      setSuccess(result.message || 'Deduction start month updated');
+      setStartDialog(false);
+      fetchLoan();
+    } catch (error) {
+      setError(error.message || 'Failed to change deduction start month');
+    } finally {
+      setStartSubmitting(false);
     }
   };
 
@@ -431,6 +458,16 @@ const LoanDetail = () => {
             </Box>
             <Box sx={{ mb: 2 }}>
               <Typography variant="body2" color="text.secondary">
+                Deduction Starts
+              </Typography>
+              <Typography variant="h6">
+                {loan.deductionStartMonth && loan.deductionStartYear
+                  ? `${MONTH_NAMES[loan.deductionStartMonth - 1]} ${loan.deductionStartYear}`
+                  : '—'}
+              </Typography>
+            </Box>
+            <Box sx={{ mb: 2 }}>
+              <Typography variant="body2" color="text.secondary">
                 Remaining Installments
               </Typography>
               <Typography variant="h6">
@@ -569,12 +606,14 @@ const LoanDetail = () => {
               <Typography variant="body2" color="text.secondary">
                 <strong>Adjust EMI</strong> — permanently change monthly deduction; remaining installments recalculate automatically.
                 <br />
+                <strong>Change Start Month</strong> — first payroll month the EMI is deducted; allowed until the first deduction.
+                <br />
                 <strong>Pause Months</strong> — no payroll deduction that month; loan schedule extends with extra installment(s) at the end.
                 <br />
                 <strong>Send Payment to Finance</strong> — employee pays an amount directly; once Finance posts the voucher the balance drops and remaining installments are rebuilt.
               </Typography>
               <Alert severity="success" sx={{ mt: 1.5 }}>
-                Payroll deducts the current EMI each month (except paused months). When payroll is marked <strong>Paid</strong>, the loan schedule updates automatically.
+                Payroll deducts the current EMI each month from the deduction start month (except paused months). When payroll is marked <strong>Paid</strong>, the loan schedule updates automatically.
               </Alert>
               <Typography variant="body2" sx={{ mt: 1 }}>
                 Current EMI: <strong>{formatPKR(loan.monthlyInstallment)}</strong>
@@ -595,6 +634,21 @@ const LoanDetail = () => {
                       onClick={() => { setResubmitRequest(null); setLumpSumDialog(true); }}
                     >
                       Send Payment to Finance
+                    </Button>
+                  </span>
+                </Tooltip>
+                <Tooltip title={loanDeductionHasStarted(loan) ? 'Deduction has already started — use Pause Months to skip a month' : ''}>
+                  <span>
+                    <Button
+                      size="small"
+                      variant="outlined"
+                      disabled={loanDeductionHasStarted(loan)}
+                      onClick={() => {
+                        setStartData({ month: toMonthInput(loan.deductionStartMonth, loan.deductionStartYear), reason: '' });
+                        setStartDialog(true);
+                      }}
+                    >
+                      Change Start Month
                     </Button>
                   </span>
                 </Tooltip>
@@ -1326,6 +1380,43 @@ const LoanDetail = () => {
             {pauseSubmitting
               ? 'Pausing...'
               : `Pause ${pauseData.monthCount} Month${pauseData.monthCount > 1 ? 's' : ''}`}
+          </Button>
+        </DialogActions>
+      </Dialog>
+
+      {/* Deduction Start Month Dialog */}
+      <Dialog open={startDialog} onClose={() => setStartDialog(false)} maxWidth="xs" fullWidth>
+        <DialogTitle>Change Deduction Start Month</DialogTitle>
+        <DialogContent>
+          <Alert severity="info" sx={{ mb: 2 }}>
+            Payroll will not deduct this loan before the chosen month. The installment schedule is rebuilt to start in that month.
+          </Alert>
+          <TextField
+            fullWidth
+            type="month"
+            label="Deduction Start Month"
+            value={startData.month}
+            onChange={(e) => setStartData((p) => ({ ...p, month: e.target.value }))}
+            InputLabelProps={{ shrink: true }}
+            sx={{ mb: 2 }}
+          />
+          <TextField
+            fullWidth
+            multiline
+            minRows={2}
+            label="Reason (optional)"
+            value={startData.reason}
+            onChange={(e) => setStartData((p) => ({ ...p, reason: e.target.value }))}
+          />
+        </DialogContent>
+        <DialogActions>
+          <Button onClick={() => setStartDialog(false)}>Cancel</Button>
+          <Button
+            variant="contained"
+            onClick={handleChangeDeductionStart}
+            disabled={startSubmitting || !/^\d{4}-\d{2}$/.test(startData.month)}
+          >
+            {startSubmitting ? 'Saving…' : 'Save'}
           </Button>
         </DialogActions>
       </Dialog>
