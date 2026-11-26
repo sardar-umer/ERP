@@ -977,6 +977,65 @@ router.get('/:id/audit-attachments',
   })
 );
 
+// @route   GET /api/pre-audit/purchase-order/:id/previous-audit-history
+// @desc    When a PO replaces one that Audit rejected (revisedFrom chain), return the audit
+//          feedback left on those earlier POs (rejection comments, observations, attachments)
+//          so Audit sees it while reviewing the replacement PO.
+// @access  Private
+router.get('/purchase-order/:id/previous-audit-history',
+  authMiddleware,
+  asyncHandler(async (req, res) => {
+    const mongoose = require('mongoose');
+    const PurchaseOrder = require('../models/procurement/PurchaseOrder');
+    const AuditActionAttachment = require('../models/audit/AuditActionAttachment');
+    if (!mongoose.Types.ObjectId.isValid(req.params.id)) {
+      return res.json({ success: true, data: [] });
+    }
+    const userFields = 'firstName lastName email';
+    const history = [];
+    const seen = new Set([String(req.params.id)]);
+    let current = await PurchaseOrder.findById(req.params.id).select('revisedFrom').lean();
+    // Walk back through every earlier PO this one replaced (newest first), guarding against loops
+    while (current?.revisedFrom && !seen.has(String(current.revisedFrom)) && history.length < 10) {
+      seen.add(String(current.revisedFrom));
+      const prev = await PurchaseOrder.findById(current.revisedFrom)
+        .select('orderNumber status totalAmount revisedFrom replacementJustification auditRejectedAt auditRejectedBy auditRejectionComments auditReturnedAt auditReturnedBy auditReturnComments auditObservations auditRejectObservations workflowHistory')
+        .populate('auditRejectedBy', userFields)
+        .populate('auditObservations.addedBy', userFields)
+        .populate('workflowHistory.changedBy', userFields)
+        .lean();
+      if (!prev) break;
+      const attachments = await AuditActionAttachment.find({ documentId: prev._id })
+        .sort({ createdAt: -1 })
+        .populate('uploadedBy', userFields)
+        .lean();
+      // Rejection / return steps from the history, in case the top-level fields were not set
+      const auditSteps = (prev.workflowHistory || [])
+        .filter((h) => /pending audit|forwarded to audit director/i.test(String(h?.fromStatus || ''))
+          && /rejected|returned from audit/i.test(String(h?.toStatus || '')))
+        .map((h) => ({ toStatus: h.toStatus, comments: h.comments || '', changedBy: h.changedBy || null, changedAt: h.changedAt }));
+      history.push({
+        _id: prev._id,
+        orderNumber: prev.orderNumber,
+        status: prev.status,
+        totalAmount: prev.totalAmount,
+        replacementJustification: prev.replacementJustification || '',
+        auditRejectedAt: prev.auditRejectedAt || null,
+        auditRejectedBy: prev.auditRejectedBy || null,
+        auditRejectionComments: prev.auditRejectionComments || '',
+        auditReturnedAt: prev.auditReturnedAt || null,
+        auditReturnComments: prev.auditReturnComments || '',
+        auditObservations: prev.auditObservations || [],
+        auditRejectObservations: prev.auditRejectObservations || [],
+        auditSteps,
+        attachments
+      });
+      current = prev;
+    }
+    res.json({ success: true, data: history });
+  })
+);
+
 // @route   GET /api/pre-audit/:id
 // @desc    Get a single pre-audit document by ID
 // @access  Private (Super Admin, Audit Manager, Auditor)

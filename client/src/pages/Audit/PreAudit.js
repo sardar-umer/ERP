@@ -101,6 +101,7 @@ import {
   AuditAttachmentPicker,
   uploadAuditActionAttachments
 } from '../../components/Audit/AuditActionAttachments';
+import PreviousPoAuditHistory from '../../components/Audit/PreviousPoAuditHistory';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import DuplicateConfirmationNote from '../../components/UtilityBill/DuplicateConfirmationNote';
 import CentralizedStoreItemsAuditPanel from '../../components/Audit/CentralizedStoreItemsAuditPanel';
@@ -3471,6 +3472,9 @@ const PreAudit = () => {
                 <FinalSettlementAuditView record={viewDialog.fullDocument} />
               ) : (viewDialog.document.isPurchaseOrder && viewDialog.fullDocument) ? (
                 <>
+                  {viewDialog.fullDocument.revisedFrom && (
+                    <PreviousPoAuditHistory purchaseOrderId={viewDialog.fullDocument._id} />
+                  )}
                   <Tabs
                     value={viewDialog.poAuditTab ?? 0}
                     onChange={(_, v) => setViewDialog(prev => ({ ...prev, poAuditTab: v }))}
