@@ -42,8 +42,11 @@ const PERIODS = [
   { value: 'lastMonth', label: 'Last month' },
   { value: 'quarter', label: 'This quarter' },
   { value: 'ytd', label: 'Year to date' },
-  { value: '12m', label: 'Last 12 months' }
+  { value: '12m', label: 'Last 12 months' },
+  { value: 'itd', label: 'Inception to date' }
 ];
+/** Financial year starts 1 July (Jul–Jun), so "Year to date" runs from the latest 1 July */
+const FY_START_MONTH = 6; // 0-based: July
 const rangeFor = (preset) => {
   const t = new Date();
   const utc = (y, m, d) => new Date(Date.UTC(y, m, d));
@@ -53,8 +56,10 @@ const rangeFor = (preset) => {
   switch (preset) {
     case 'lastMonth': return { fromDate: ymd(utc(y, m - 1, 1)), toDate: ymd(utc(y, m, 0)) };
     case 'quarter': return { fromDate: ymd(utc(y, Math.floor(m / 3) * 3, 1)), toDate: ymd(today) };
-    case 'ytd': return { fromDate: ymd(utc(y, 0, 1)), toDate: ymd(today) };
+    case 'ytd': return { fromDate: ymd(utc(m >= FY_START_MONTH ? y : y - 1, FY_START_MONTH, 1)), toDate: ymd(today) };
     case '12m': return { fromDate: ymd(utc(y, m - 11, 1)), toDate: ymd(today) };
+    // Server swaps fromDate for the first posted journal date; the early fromDate keeps other calls (budget) all-time
+    case 'itd': return { fromDate: '2000-01-01', toDate: ymd(today), inception: 'true' };
     default: return { fromDate: ymd(utc(y, m, 1)), toDate: ymd(today) };
   }
 };

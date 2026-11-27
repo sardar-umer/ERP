@@ -10455,9 +10455,18 @@ router.get('/dashboard/overview',
     const dayEnd = (d) => new Date(`${d}T23:59:59.999Z`);
     const now = new Date();
     const to = req.query.toDate ? dayEnd(req.query.toDate) : now;
-    const from = req.query.fromDate
-      ? dayStart(req.query.fromDate)
-      : new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+    // Inception to date: start at this company's first posted journal; there is no earlier period to compare with
+    const inception = req.query.inception === 'true';
+    let from;
+    if (inception) {
+      const first = await JournalEntry.findOne(jeMatch({ status: 'posted', ...notClosingEntry })).sort({ date: 1 }).select('date').lean();
+      const d = first?.date ? new Date(first.date) : to;
+      from = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+    } else {
+      from = req.query.fromDate
+        ? dayStart(req.query.fromDate)
+        : new Date(Date.UTC(to.getUTCFullYear(), to.getUTCMonth(), 1));
+    }
     const span = to.getTime() - from.getTime();
     const prevTo = new Date(from.getTime() - 1);
     const prevFrom = new Date(prevTo.getTime() - span);
@@ -10499,7 +10508,7 @@ router.get('/dashboard/overview',
 
     const [current, previous, monthlyPl, cashTotals, cashMonthly] = await Promise.all([
       plFor(from, to),
-      plFor(prevFrom, prevTo),
+      inception ? Promise.resolve(null) : plFor(prevFrom, prevTo),
       JournalEntry.aggregate([
         { $match: jeMatch({ status: 'posted', ...notClosingEntry, date: { $gte: firstMonth, $lte: to } }) },
         { $unwind: '$lines' },
