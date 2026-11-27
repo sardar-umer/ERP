@@ -3790,6 +3790,15 @@ router.get('/', authMiddleware, asyncHandler(async (req, res) => {
     }
     // For open invoices with DB-level search, total from countDocuments is already correct
     
+    // Accumulated totals across ALL filtered invoices (not just this page) for the summary cards
+    const { getAdjustedGrandTotal, getAdjustedBalance } = require('../utils/invoiceGracePeriod');
+    const totals = invoices.reduce((acc, inv) => {
+      acc.totalAmount += getAdjustedGrandTotal(inv);
+      acc.totalPaid += inv.totalPaid || 0;
+      acc.totalBalance += getAdjustedBalance(inv);
+      return acc;
+    }, { totalAmount: 0, totalPaid: 0, totalBalance: 0 });
+
     // Apply pagination after all filtering
     invoices = invoices.slice(skip, skip + limit);
 
@@ -3797,6 +3806,7 @@ router.get('/', authMiddleware, asyncHandler(async (req, res) => {
     const response = { 
       success: true, 
       data: invoices,
+      totals,
       pagination: {
         page,
         limit,

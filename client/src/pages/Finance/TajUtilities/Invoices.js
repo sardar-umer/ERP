@@ -95,6 +95,8 @@ const Invoices = () => {
   const [monthYearFilter, setMonthYearFilter] = useState('');
   const [expandedMonths, setExpandedMonths] = useState([]);
   const [monthSummary, setMonthSummary] = useState({});
+  // Accumulated totals across ALL pages for the current filters (from the list API)
+  const [filteredTotals, setFilteredTotals] = useState(null);
   const [exporting, setExporting] = useState(false);
 
   // Pagination
@@ -138,6 +140,7 @@ const Invoices = () => {
       const invoicesData = response.data?.data || [];
       
       setInvoices(invoicesData);
+      setFilteredTotals(response.data?.totals || null);
       if (response.data?.pagination) {
         pagination.setTotal(response.data.pagination.total);
       }
@@ -990,17 +993,25 @@ const Invoices = () => {
         </Card>
         <Card sx={{ flex: 1 }}>
           <CardContent>
-            <Typography variant="caption" color="text.secondary">Total Amount</Typography>
+            <Typography variant="caption" color="text.secondary">Total Amount (all pages)</Typography>
             <Typography variant="h5" fontWeight={600}>
-              {formatCurrency(invoices.reduce((sum, inv) => sum + getAdjustedGrandTotal(inv), 0))}
+              {formatCurrency(filteredTotals?.totalAmount ?? invoices.reduce((sum, inv) => sum + getAdjustedGrandTotal(inv), 0))}
             </Typography>
           </CardContent>
         </Card>
         <Card sx={{ flex: 1 }}>
           <CardContent>
-            <Typography variant="caption" color="text.secondary">Total Balance</Typography>
+            <Typography variant="caption" color="text.secondary">Total Paid (all pages)</Typography>
+            <Typography variant="h5" fontWeight={600} color="success.main">
+              {formatCurrency(filteredTotals?.totalPaid ?? invoices.reduce((sum, inv) => sum + (inv.totalPaid || 0), 0))}
+            </Typography>
+          </CardContent>
+        </Card>
+        <Card sx={{ flex: 1 }}>
+          <CardContent>
+            <Typography variant="caption" color="text.secondary">Total Balance (all pages)</Typography>
             <Typography variant="h5" fontWeight={600} color="error.main">
-              {formatCurrency(invoices.reduce((sum, inv) => sum + getAdjustedBalance(inv), 0))}
+              {formatCurrency(filteredTotals?.totalBalance ?? invoices.reduce((sum, inv) => sum + getAdjustedBalance(inv), 0))}
             </Typography>
           </CardContent>
         </Card>
