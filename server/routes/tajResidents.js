@@ -2186,67 +2186,7 @@ const propertyLabel = (property) => {
 };
 
 // Same rules as the Resident Ledger (client/src/utils/residentLedgerDisplay.js) so totals match it
-const LEDGER_GRACE_PERIOD_DAYS = 6;
-const LEDGER_SECTION_TYPES = ['CAM', 'WATER', 'ELECTRICITY', 'RENT'];
-
-const ledgerInvoiceDisplayAmount = (inv) => {
-  let chargesForMonth = Number(inv.subtotal) || 0;
-  if (Array.isArray(inv.charges) && inv.charges.length > 0) {
-    const totalChargesAmount = inv.charges.reduce((sum, charge) => sum + (Number(charge.amount) || 0), 0);
-    if (totalChargesAmount > 0) chargesForMonth = totalChargesAmount;
-  }
-  const totalArrears = Number(inv.totalArrears) || 0;
-  const baseAmount = chargesForMonth + totalArrears;
-  if (!inv.dueDate) return Number(inv.grandTotal) || baseAmount;
-
-  const todayStart = new Date();
-  todayStart.setHours(0, 0, 0, 0);
-  const graceEndDate = new Date(inv.dueDate);
-  graceEndDate.setHours(0, 0, 0, 0);
-  graceEndDate.setDate(graceEndDate.getDate() + LEDGER_GRACE_PERIOD_DAYS);
-  const isUnpaid = inv.paymentStatus === 'unpaid' || inv.paymentStatus === 'partial_paid' || (Number(inv.balance) || 0) > 0;
-  if (!(todayStart > graceEndDate) || !isUnpaid) return Number(inv.grandTotal) || baseAmount;
-
-  const latePaymentSurcharge = Math.max(Math.round(chargesForMonth * 0.1), 0);
-  const storedGrandTotal = Number(inv.grandTotal) || 0;
-  return storedGrandTotal > baseAmount ? storedGrandTotal : baseAmount + latePaymentSurcharge;
-};
-
-const ledgerSectionKey = (inv) => {
-  const types = inv.chargeTypes || [];
-  return types.length === 1 && LEDGER_SECTION_TYPES.includes(types[0]) ? types[0] : 'OTHER';
-};
-
-const ledgerPeriodKey = (value) => (value ? new Date(value).toISOString() : '');
-
-/**
- * A resident's outstanding split per invoice without double-counting carried arrears:
- * per charge-type section only the earliest unpaid invoice keeps its arrears.
- * Returns the invoices that still owe, with { inv, balance }.
- */
-const ledgerOutstandingRows = (invoices) => {
-  const sections = {};
-  invoices.forEach(inv => { (sections[ledgerSectionKey(inv)] = sections[ledgerSectionKey(inv)] || []).push(inv); });
-  const rows = [];
-  Object.values(sections).forEach(list => {
-    const sorted = [...list].sort((a, b) => {
-      const cmp = ledgerPeriodKey(a.periodFrom || a.invoiceDate).localeCompare(ledgerPeriodKey(b.periodFrom || b.invoiceDate));
-      return cmp !== 0 ? cmp : ledgerPeriodKey(a.invoiceDate).localeCompare(ledgerPeriodKey(b.invoiceDate));
-    });
-    const stillOwes = (inv) => (Number(inv.balance) || 0) > 0 || ['unpaid', 'partial_paid'].includes(String(inv.paymentStatus || '').toLowerCase());
-    const firstId = (sorted.find(stillOwes) || sorted[0])?._id?.toString();
-    sorted.forEach(inv => {
-      const displayAmount = ledgerInvoiceDisplayAmount(inv);
-      const totalPaid = Number(inv.totalPaid) || 0;
-      const totalArrears = Number(inv.totalArrears) || 0;
-      const balance = inv._id.toString() === firstId
-        ? Math.max(0, displayAmount - totalPaid)
-        : Math.max(0, displayAmount - totalArrears - totalPaid);
-      if (balance > 0.005) rows.push({ inv, balance });
-    });
-  });
-  return rows;
-};
+const { ledgerOutstandingRows } = require('../utils/tajReceivableRollForward');
 
 // Invoices billed in a month, bucketed exactly like the Month-wise Breakdown (periodTo, else invoiceDate, by UTC month)
 const findMonthInvoices = async (month) => {

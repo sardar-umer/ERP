@@ -43,6 +43,10 @@ export const fetchReports = (params = {}) =>
 export const fetchReportsOpenInvoiceBucket = (params = {}) =>
   api.get(`${base}/reports/open-invoice-bucket`, { params });
 
+/** Receivable roll-forward per month and charge type (Opening + Billed − Received = Closing). */
+export const fetchReceivableRollForward = (params = {}) =>
+  api.get(`${base}/reports/receivable-rollforward`, { params });
+
 /** Dashboard: top residents by outstanding for charge types (CAM,WATER,...) or total balance when chargeTypes omitted. */
 export const fetchDashboardResidentsOutstanding = (params = {}) =>
   api.get(`${base}/dashboard-residents-outstanding`, { params });

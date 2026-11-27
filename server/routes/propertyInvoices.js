@@ -2942,6 +2942,42 @@ router.get('/charge-rollups', authMiddleware, asyncHandler(async (req, res) => {
 }));
 
 /**
+ * Receivable roll-forward per month and charge type (accountant's view):
+ * Opening + Billed + Adjustments − Received = Closing, with bank deposits and a Resident Ledger check.
+ * Query: startMonth, endMonth (YYYY-MM, required), timezone (default Asia/Karachi),
+ *        chargeTypes (comma list of ELECTRICITY,CAM,RENT,WATER,GROUND,OTHER; default all),
+ *        ledgerCheck=true (also compare with the Resident Ledger total — slower),
+ *        refresh=true (skip the 2-minute cache). Read-only.
+ */
+router.get('/reports/receivable-rollforward', authMiddleware, asyncHandler(async (req, res) => {
+  const { buildReceivableRollForward, CHARGE_KEYS } = require('../utils/tajReceivableRollForward');
+  const { startMonth, endMonth } = req.query;
+  const monthPattern = /^\d{4}-\d{2}$/;
+  if (!monthPattern.test(String(startMonth || '')) || !monthPattern.test(String(endMonth || ''))) {
+    return res.status(400).json({ success: false, message: 'startMonth and endMonth (YYYY-MM) are required' });
+  }
+  let timezone = String(req.query.timezone || 'Asia/Karachi');
+  try {
+    new Intl.DateTimeFormat('en-US', { timeZone: timezone });
+  } catch {
+    timezone = 'Asia/Karachi';
+  }
+  const chargeKeys = String(req.query.chargeTypes || '')
+    .split(',')
+    .map(s => s.trim().toUpperCase())
+    .filter(s => CHARGE_KEYS.includes(s));
+  const data = await buildReceivableRollForward({
+    startMonth,
+    endMonth,
+    timezone,
+    chargeKeys,
+    includeLedgerCheck: req.query.ledgerCheck === 'true',
+    refresh: req.query.refresh === 'true'
+  });
+  res.json({ success: true, data });
+}));
+
+/**
  * Open invoices (no property) split by charge-line bucket GROUND vs OTHER.
  * Billing month = periodTo ?? invoiceDate (same window as GET /reports).
  */

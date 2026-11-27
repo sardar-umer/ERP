@@ -52,6 +52,7 @@ import { fetchProperties as fetchTajProperties } from '../../../services/tajProp
 import { fetchResidents } from '../../../services/tajResidentsService';
 import { fetchProperties as fetchRentalProperties } from '../../../services/tajRentalManagementService';
 import { fetchAllDeposits, fetchDepositCollections } from '../../../services/tajResidentsService';
+import ReceivablesView from './ReceivablesView';
 
 const PRIMARY_BLUE = '#1565C0';
 const LIGHT_BLUE = '#64B5F6';
@@ -452,9 +453,12 @@ const Dashboard = () => {
     }
   }, [startMonth, endMonth, chargeFilterKey]);
 
+  // 'receivables' = accountant's roll-forward (default); 'old' = previous charge summary, kept for comparison
+  const [view, setView] = useState('receivables');
+
   useEffect(() => {
-    loadDashboard();
-  }, [loadDashboard]);
+    if (view === 'old') loadDashboard();
+  }, [loadDashboard, view]);
 
   const monthlyChargeTables = useMemo(() => {
     const mk = (id, label, s, collected) => {
@@ -614,21 +618,38 @@ const Dashboard = () => {
               Taj Utilities & Charges — Dashboard
             </Typography>
             <Typography variant="body2" color="text.secondary">
-              Utility and charge management summary (filters apply to the charge summary, charts, and resident balance).
+              {view === 'receivables'
+                ? 'What residents owe: opening + billed − received = closing, by month and charge type.'
+                : 'Utility and charge management summary (filters apply to the charge summary, charts, and resident balance).'}
             </Typography>
           </Box>
-          <Button
-            variant="outlined"
-            size="small"
-            startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />}
-            onClick={loadDashboard}
-            disabled={loading}
-            sx={{ borderColor: PRIMARY_BLUE, color: PRIMARY_BLUE }}
-          >
-            Refresh
-          </Button>
+          {view === 'old' && (
+            <Button
+              variant="outlined"
+              size="small"
+              startIcon={loading ? <CircularProgress size={16} /> : <RefreshIcon />}
+              onClick={loadDashboard}
+              disabled={loading}
+              sx={{ borderColor: PRIMARY_BLUE, color: PRIMARY_BLUE }}
+            >
+              Refresh
+            </Button>
+          )}
         </Stack>
 
+        <Tabs
+          value={view}
+          onChange={(_e, v) => setView(v)}
+          sx={{ mb: 2, borderBottom: BORDER, '& .MuiTab-root': { textTransform: 'none', fontWeight: 600 } }}
+        >
+          <Tab value="receivables" label="Receivables" />
+          <Tab value="old" label="Old view" />
+        </Tabs>
+
+        {view === 'receivables' ? (
+          <ReceivablesView />
+        ) : (
+        <>
         {error && (
           <Alert severity="error" sx={{ mb: 2 }} onClose={() => setError('')}>
             {error}
@@ -1003,6 +1024,8 @@ const Dashboard = () => {
             </Paper>
           </Grid>
         </Grid>
+        </>
+        )}
       </Box>
     </LocalizationProvider>
   );
