@@ -176,6 +176,9 @@ export const generateResidentLedgerPDF = async (ledger, options = {}) => {
       head: invoiceTableHead,
       body,
       foot,
+      // Grand total only at the end of the table — autotable's default ('everyPage') repeats it
+      // on every page, which reads as a wrong page-1 total when a section spills onto page 2.
+      showFoot: 'lastPage',
       margin: { left: margin, right: margin },
       theme: 'grid',
       styles: { 
