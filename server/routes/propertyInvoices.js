@@ -2529,6 +2529,7 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
         invoiceAmount: 0,
         arrears: 0,
         paymentsReceived: 0,
+        receivedInMonth: 0,
         invoiceCount: 0
       };
       m = m.add(1, 'month');
@@ -2572,7 +2573,7 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
     depositQuery.createdAt = { $gte: depositRangeStart, $lt: depositRangeEnd };
 
     const deposits = await TajTransaction.find(depositQuery)
-      .select('amount createdAt')
+      .select('amount createdAt paymentMethod bank referenceNumberExternal')
       .populate('resident', 'residentId name')
       .sort({ createdAt: 1 })
       .lean();
@@ -2584,8 +2585,12 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
           depositDate: d.createdAt,
           residentId: d.resident?.residentId || '—',
           residentName: d.resident?.name || '—',
+          paymentMethod: d.paymentMethod || '',
+          bank: d.bank || '',
+          reference: d.referenceNumberExternal || '',
           amount: d.amount || 0
         }));
+      monthMap[key].suspenseDeposits = [];
       monthMap[key].depositTotal = (monthMap[key].deposits || []).reduce((s, d) => s + (d.amount || 0), 0);
       monthMap[key].suspenseAmount = 0;
     }
@@ -2601,15 +2606,31 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
           { referenceNumberExternal: null }
         ]
       })
-        .select('amount createdAt')
+        .select('amount createdAt paymentMethod bank referenceNumberExternal')
+        .sort({ createdAt: 1 })
         .lean();
       for (const d of suspenseDeposits || []) {
         if (!d.createdAt) continue;
         const monthKey = depositMonthKey(d.createdAt);
         if (monthMap[monthKey]) {
           monthMap[monthKey].suspenseAmount = (monthMap[monthKey].suspenseAmount || 0) + (d.amount || 0);
+          monthMap[monthKey].suspenseDeposits.push({
+            depositDate: d.createdAt,
+            paymentMethod: d.paymentMethod || '',
+            bank: d.bank || '',
+            reference: d.referenceNumberExternal || '',
+            amount: d.amount || 0
+          });
         }
       }
+    }
+
+    // "Deposited in Month (bank)": deposits + suspense by deposit date (Pakistan month) — the same
+    // money shown on the Deposits / Banks pages and Reconciliation, so it matches the bank statement.
+    // Not filtered by charge type (a deposit is not tied to one charge type).
+    for (const key of Object.keys(monthMap)) {
+      const row = monthMap[key];
+      row.receivedInMonth = (row.depositTotal || 0) + (row.suspenseAmount || 0);
     }
 
     if (chargeType === 'DEPOSITS') {
@@ -2632,6 +2653,7 @@ router.get('/reports', authMiddleware, asyncHandler(async (req, res) => {
       invoiceAmount: byMonth.reduce((s, r) => s + r.invoiceAmount, 0),
       arrears: byMonth.reduce((s, r) => s + r.arrears, 0),
       paymentsReceived: byMonth.reduce((s, r) => s + r.paymentsReceived, 0),
+      receivedInMonth: byMonth.reduce((s, r) => s + (r.receivedInMonth || 0), 0),
       invoiceCount: byMonth.reduce((s, r) => s + r.invoiceCount, 0),
       /** Same as Reconciliation "Amount (Deposit + Suspense)" summed over months. */
       depositPlusSuspense: byMonth.reduce(

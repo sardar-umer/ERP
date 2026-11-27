@@ -280,19 +280,35 @@ const TajUtilitiesReports = () => {
       totalsRowNode.getCell(14).numFmt = '#,##0.00';
       totalsRowNode.getCell(15).numFmt = '#,##0.00';
 
-      const depositHeaders = ['Deposit Date', 'Resident ID', 'Resident Name', 'Amount'];
-      const depositRows = deposits.map((d) => [
-        d.depositDate ? dayjs(d.depositDate).format('DD MMM YYYY HH:mm') : '—',
-        d.residentId || '—',
-        d.residentName || '—',
-        Number(d.amount) || 0
-      ]);
-      const depositSheet = workbook.addWorksheet('Deposits', { views: [{ state: 'frozen', ySplit: 1 }] });
-      [14, 14, 22, 14].forEach((w, i) => depositSheet.getColumn(i + 1).width = w);
+      // "Deposited (bank)" evidence sheet: every deposit + suspense entry for the month.
+      // Its total equals the "Deposited in Month (bank)" figure, so it can be ticked against the bank statement.
+      const suspenseDeposits = monthData?.suspenseDeposits || [];
+      const depositHeaders = ['Deposit Date', 'Type', 'Resident ID', 'Resident Name', 'Method', 'Bank', 'Reference', 'Amount'];
+      const depositRows = [
+        ...deposits.map((d) => ({ ...d, type: 'Deposit' })),
+        ...suspenseDeposits.map((d) => ({ ...d, type: 'Suspense', residentId: '—', residentName: 'Unknown (Suspense)' }))
+      ]
+        .sort((a, b) => new Date(a.depositDate || 0) - new Date(b.depositDate || 0))
+        .map((d) => [
+          d.depositDate ? dayjs(d.depositDate).format('DD MMM YYYY HH:mm') : '—',
+          d.type,
+          d.residentId || '—',
+          d.residentName || '—',
+          d.paymentMethod || '—',
+          d.bank || '—',
+          d.reference || '—',
+          Number(d.amount) || 0
+        ]);
+      const depositSheet = workbook.addWorksheet('Deposited (bank)', { views: [{ state: 'frozen', ySplit: 1 }] });
+      [18, 10, 12, 26, 14, 20, 22, 14].forEach((w, i) => depositSheet.getColumn(i + 1).width = w);
       const depositHeaderRow = depositSheet.addRow(depositHeaders);
       depositHeaderRow.font = { bold: true, size: 12 };
       depositHeaderRow.alignment = { vertical: 'middle' };
       depositRows.forEach((row) => depositSheet.addRow(row));
+      const depositGrandTotal = depositRows.reduce((sum, r) => sum + r[7], 0);
+      const depositTotalRow = depositSheet.addRow(['Total', '', '', '', '', '', `${depositRows.length} entries`, depositGrandTotal]);
+      depositTotalRow.font = { bold: true };
+      depositSheet.getColumn(8).numFmt = '#,##0.00';
 
       const filename = `report-${monthKey}.xlsx`;
       const buffer = await workbook.xlsx.writeBuffer();
@@ -409,11 +425,16 @@ const TajUtilitiesReports = () => {
           <Card>
             <CardContent>
               <Typography variant="body2" color="text.secondary" gutterBottom>
-                Total Payments Received
+                {chargeTypeFilter === 'DEPOSITS' ? 'Total Payments Received' : 'Total Deposited (bank)'}
               </Typography>
               <Typography variant="h6" fontWeight={700} color="success.main">
-                {formatCurrency(report.totals.paymentsReceived)}
+                {formatCurrency(chargeTypeFilter === 'DEPOSITS' ? report.totals.paymentsReceived : (report.totals.receivedInMonth ?? 0))}
               </Typography>
+              {chargeTypeFilter !== 'DEPOSITS' && (
+                <Typography variant="caption" color="text.secondary">
+                  Collected against these months' invoices: {formatCurrency(report.totals.paymentsReceived)}
+                </Typography>
+              )}
             </CardContent>
           </Card>
         </Grid>
@@ -440,7 +461,7 @@ const TajUtilitiesReports = () => {
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
             {chargeTypeFilter === 'DEPOSITS'
               ? 'Suspense Amount and Deposits by month; Payments Received = Suspense + Deposits.'
-              : 'Invoice Amount, Arrears, and Payments Received are all grouped by billing period (invoice month), matching the Invoices page.'}
+              : 'Invoice Amount, Arrears and "Collected (invoice month)" are grouped by billing period, matching the Invoices page. "Deposited in Month (bank)" is deposits + suspense by deposit date — same as the Deposits / Banks pages, to match with the bank statement (not filtered by charge type).'}
           </Typography>
           {loading ? (
             <Box sx={{ display: 'flex', justifyContent: 'center', p: 4 }}>
@@ -460,7 +481,22 @@ const TajUtilitiesReports = () => {
                     <TableCell><strong>Month</strong></TableCell>
                     <TableCell align="right"><strong>{chargeTypeFilter === 'DEPOSITS' ? 'Suspense Amount' : 'Invoice Amount'}</strong></TableCell>
                     <TableCell align="right"><strong>{chargeTypeFilter === 'DEPOSITS' ? 'Deposits' : 'Arrears'}</strong></TableCell>
-                    <TableCell align="right"><strong>Payments Received</strong></TableCell>
+                    {chargeTypeFilter === 'DEPOSITS' ? (
+                      <TableCell align="right"><strong>Payments Received</strong></TableCell>
+                    ) : (
+                      <>
+                        <TableCell align="right">
+                          <Tooltip title="Payments made against invoices billed for this month, whenever they were paid">
+                            <strong>Collected (invoice month)</strong>
+                          </Tooltip>
+                        </TableCell>
+                        <TableCell align="right">
+                          <Tooltip title="Deposits + suspense received this month by deposit date — same as Deposits / Banks pages and the bank statement. Not filtered by charge type.">
+                            <strong>Deposited in Month (bank)</strong>
+                          </Tooltip>
+                        </TableCell>
+                      </>
+                    )}
                     <TableCell align="right"><strong>Invoices</strong></TableCell>
                   </TableRow>
                 </TableHead>
@@ -475,11 +511,16 @@ const TajUtilitiesReports = () => {
                       <TableCell align="right" sx={{ color: 'success.main' }}>
                         {formatCurrency(row.paymentsReceived)}
                       </TableCell>
+                      {chargeTypeFilter !== 'DEPOSITS' && (
+                        <TableCell align="right" sx={{ color: 'success.dark', fontWeight: 600 }}>
+                          {formatCurrency(row.receivedInMonth || 0)}
+                        </TableCell>
+                      )}
                       <TableCell align="right">
                         <Stack direction="row" alignItems="center" justifyContent="flex-end" spacing={0.5}>
                           <span>{row.invoiceCount}</span>
                           {row.invoiceCount > 0 && (
-                            <Tooltip title="Download invoices report (Excel)">
+                            <Tooltip title="Download month report (Excel): invoices + Deposited (bank) sheet listing every deposit for this month">
                               <IconButton
                                 size="small"
                                 color="success"
