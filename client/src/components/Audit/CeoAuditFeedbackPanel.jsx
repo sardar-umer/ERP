@@ -1,12 +1,34 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { Box, Chip, Stack, Typography } from '@mui/material';
 import { getWorkflowFeedbackObservations } from '../Admin/workflowAuditReturn';
 import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from './auditRedBoxStyles';
 import { getInitialAuditNotes, auditPersonName } from './auditInitialNotes';
 import PreviousPoAuditHistory from './PreviousPoAuditHistory';
 import { formatDateTime } from '../../utils/dateUtils';
+import api from '../../services/api';
+import { AuditFileChips, auditAttachmentByLine } from './AuditActionAttachments';
 
 const text = (v) => String(v || '').trim();
+const norm = (v) => text(v).toLowerCase().replace(/\s+/g, ' ');
+
+/** Files Audit attached to this document (reject / return / observation uploads). */
+const useAuditAttachments = (documentId) => {
+  const [rows, setRows] = useState([]);
+  useEffect(() => {
+    let cancelled = false;
+    setRows([]);
+    if (!documentId) return undefined;
+    api.get(`/pre-audit/${documentId}/audit-attachments`)
+      .then((res) => {
+        if (cancelled) return;
+        const list = Array.isArray(res.data?.data) ? res.data.data : [];
+        setRows(list.filter((r) => Array.isArray(r.files) && r.files.length > 0));
+      })
+      .catch(() => { if (!cancelled) setRows([]); });
+    return () => { cancelled = true; };
+  }, [documentId]);
+  return rows;
+};
 
 /**
  * Read-only audit feedback for the CEO desk, in the red audit box:
@@ -20,6 +42,7 @@ const text = (v) => String(v || '').trim();
  * @param {boolean} [showEarlierPoFeedback=false] PO only: show earlier rejected POs' feedback
  */
 export default function CeoAuditFeedbackPanel({ doc, showObservations = true, showEarlierPoFeedback = false, sx }) {
+  const attachmentRows = useAuditAttachments(doc?._id);
   if (!doc) return null;
 
   const { entries } = getInitialAuditNotes(doc);
@@ -45,7 +68,33 @@ export default function CeoAuditFeedbackPanel({ doc, showObservations = true, sh
     }
   }
 
-  const hasMain = entries.length > 0 || observations.length > 0 || comments.length > 0;
+  // Each upload is saved with the comment Audit typed with it: show the files under that comment / observation,
+  // and anything that matches nothing in a list of its own
+  const used = new Set();
+  const filesFor = (value) => {
+    const n = norm(value);
+    if (!n) return [];
+    return attachmentRows.filter((r) => {
+      const c = norm(r.comments);
+      const partOf = (a, b) => b.length >= 15 && a.includes(b);
+      if (!c || used.has(r._id) || !(c === n || partOf(c, n) || partOf(n, c))) return false;
+      used.add(r._id);
+      return true;
+    });
+  };
+  const commentFiles = comments.map((c) => filesFor(c.text));
+  const observationFiles = observations.map((o) => filesFor(o.observation));
+  const otherFiles = attachmentRows.filter((r) => !used.has(r._id));
+  const renderFiles = (rows) => rows.map((r) => (
+    <Box key={r._id} sx={{ mt: 1 }}>
+      <AuditFileChips files={r.files} />
+      <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+        Attached: {auditAttachmentByLine(r)}
+      </Typography>
+    </Box>
+  ));
+
+  const hasMain = entries.length > 0 || observations.length > 0 || comments.length > 0 || otherFiles.length > 0;
   const earlier = showEarlierPoFeedback && doc.revisedFrom && doc._id
     ? <PreviousPoAuditHistory purchaseOrderId={doc._id} sx={{ m: 0, mb: 2 }} />
     : null;
@@ -56,12 +105,12 @@ export default function CeoAuditFeedbackPanel({ doc, showObservations = true, sh
       {hasMain && (
         <Box sx={{ p: 2, mb: 2, ...AUDIT_RED_BOX_SX }}>
           <Typography variant="subtitle1" sx={{ mb: 1.5, ...AUDIT_RED_TITLE_SX }}>
-            {observations.length || comments.length ? 'Audit observations' : 'Pre-audit notes'}
+            {observations.length || comments.length || otherFiles.length ? 'Audit observations' : 'Pre-audit notes'}
           </Typography>
 
           {entries.length > 0 && (
             <Box sx={{ mb: observations.length || comments.length ? 2 : 0 }}>
-              {(observations.length > 0 || comments.length > 0) && (
+              {(observations.length > 0 || comments.length > 0 || otherFiles.length > 0) && (
                 <Typography variant="subtitle2" sx={{ fontWeight: 700, mb: 0.5 }}>Observation from initial pre-audit</Typography>
               )}
               {entries.map((e, i) => (
@@ -84,6 +133,7 @@ export default function CeoAuditFeedbackPanel({ doc, showObservations = true, sh
                   {c.by}{c.at ? `${c.by ? ', ' : ''}${formatDateTime(c.at)}` : ''}
                 </Typography>
               )}
+              {renderFiles(commentFiles[i])}
             </Box>
           ))}
 
@@ -102,6 +152,7 @@ export default function CeoAuditFeedbackPanel({ doc, showObservations = true, sh
                     )}
                   </Stack>
                   <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap' }}>{o.observation}</Typography>
+                  {renderFiles(observationFiles[i])}
                   {text(o.answer) ? (
                     <Box sx={{ mt: 1.5, p: 1.5, bgcolor: '#e8f5e9', borderTop: '1px solid #4caf50', borderRadius: 1 }}>
                       <Typography variant="caption" sx={{ fontWeight: 700, display: 'block', mb: 0.5, color: '#2e7d32' }}>
@@ -122,6 +173,23 @@ export default function CeoAuditFeedbackPanel({ doc, showObservations = true, sh
                 </Box>
               ))}
             </Stack>
+          )}
+
+          {otherFiles.length > 0 && (
+            <Box sx={{ mt: observations.length || comments.length || entries.length ? 2 : 0 }}>
+              <Typography variant="subtitle2" sx={{ fontWeight: 700 }}>Files attached by Audit</Typography>
+              {otherFiles.map((r) => (
+                <Box key={r._id} sx={{ mt: 1 }}>
+                  {text(r.comments) && (
+                    <Typography variant="body2" sx={{ whiteSpace: 'pre-wrap', mb: 0.5 }}>{r.comments}</Typography>
+                  )}
+                  <AuditFileChips files={r.files} />
+                  <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.25 }}>
+                    {auditAttachmentByLine(r)}
+                  </Typography>
+                </Box>
+              ))}
+            </Box>
           )}
         </Box>
       )}

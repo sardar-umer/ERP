@@ -116,6 +116,34 @@ export function AuditAttachmentPicker({ files = [], onChange, label = 'Attachmen
   );
 }
 
+/** Chips linking to the files of one audit attachment record (opens each file in a new tab). */
+export function AuditFileChips({ files = [], sx }) {
+  if (!files.length) return null;
+  return (
+    <Stack direction="row" spacing={1} flexWrap="wrap" useFlexGap sx={sx}>
+      {files.map((f) => (
+        <Chip
+          key={f._id || f.filename}
+          icon={fileIcon(f.mimeType)}
+          label={
+            <Link href={getImageUrl(f.path)} target="_blank" rel="noopener noreferrer" underline="hover" color="inherit">
+              {f.originalName || f.filename}
+            </Link>
+          }
+          size="small"
+          variant="outlined"
+          clickable
+          sx={{ bgcolor: '#fff' }}
+        />
+      ))}
+    </Stack>
+  );
+}
+
+/** "Rejected by X • date" line for an audit attachment record. */
+export const auditAttachmentByLine = (r) =>
+  `${ACTION_LABEL[r.action] || 'Audit'} by ${userName(r.uploadedBy) || 'Audit'}${r.createdAt ? ` • ${formatDateTime(r.createdAt)}` : ''}`;
+
 /**
  * Read-only list of files Audit attached when rejecting / returning this document.
  * Renders nothing when there are none, so it can be dropped into any returned-document view.
