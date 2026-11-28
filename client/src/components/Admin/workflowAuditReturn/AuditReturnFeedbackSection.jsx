@@ -3,7 +3,6 @@ import {
   Alert,
   Box,
   Chip,
-  Divider,
   Stack,
   Typography
 } from '@mui/material';
@@ -21,13 +20,14 @@ const SETTLEMENT_PANEL_SX = {
   bgcolor: '#ffebee'
 };
 
+// Same red look as the settlement panel and Pre-Audit observations
 const DEFAULT_PANEL_SX = {
   mb: 3,
   p: 2,
   borderRadius: 1,
-  border: '1px solid',
-  borderColor: 'warning.light',
-  bgcolor: 'warning.50'
+  border: '2px solid',
+  borderColor: '#d32f2f',
+  bgcolor: '#ffebee'
 };
 
 function severityIsElevated(sev) {
@@ -92,7 +92,7 @@ export function AuditReturnFeedbackSection({
   if (!showPanel) return null;
 
   const panelSx = isSettlement ? SETTLEMENT_PANEL_SX : DEFAULT_PANEL_SX;
-  const returnAlertSeverity = isSettlement ? 'error' : 'warning';
+  const returnAlertSeverity = 'error';
   const panelTitle = isSettlement
     ? 'Critical observations'
     : isRejected && !isReturned
@@ -106,7 +106,7 @@ export function AuditReturnFeedbackSection({
         sx={
           isSettlement
             ? { fontWeight: 700, fontSize: '15px', color: '#d32f2f', textTransform: 'uppercase', mb: 2 }
-            : { fontWeight: 800, mb: 1 }
+            : { fontWeight: 800, mb: 1, color: '#d32f2f' }
         }
       >
         {panelTitle}
@@ -133,7 +133,7 @@ export function AuditReturnFeedbackSection({
         </Typography>
       )}
       {obsList.length > 0 && (
-        <Stack spacing={isSettlement ? 2 : 1.5} divider={isSettlement ? undefined : <Divider flexItem />}>
+        <Stack spacing={isSettlement ? 2 : 1.5}>
           {obsList.map((obs, idx) => {
             const k = keyFn(obs, idx);
             const sev = String(obs.severity || 'medium');
@@ -152,7 +152,7 @@ export function AuditReturnFeedbackSection({
                           ? { borderBottom: '1px dashed', borderColor: 'error.light', pb: 2, mb: 0 }
                           : {})
                       }
-                    : undefined
+                    : { p: 1.5, borderRadius: 1, bgcolor: '#fff', border: '1px solid #ef5350' }
                 }
               >
                 <Stack direction="row" spacing={1} alignItems="center" flexWrap="wrap" sx={{ mb: 0.5 }}>

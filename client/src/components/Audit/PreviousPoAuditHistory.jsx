@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
-import { Alert, Box, Chip, Divider, Link, Stack, Typography } from '@mui/material';
+import { Box, Chip, Divider, Link, Stack, Typography } from '@mui/material';
+import { AUDIT_RED, AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX } from './auditRedBoxStyles';
 import {
   History as HistoryIcon,
   PictureAsPdf as PdfIcon,
@@ -55,15 +56,12 @@ export default function PreviousPoAuditHistory({ purchaseOrderId, sx }) {
   if (rows.length === 0) return null;
 
   return (
-    <Alert
-      severity="warning"
-      icon={<HistoryIcon />}
-      sx={{ m: 2, '& .MuiAlert-message': { width: '100%' }, '@media print': { display: 'none' }, ...sx }}
-    >
-      <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>
+    <Box sx={{ m: 2, p: 2, ...AUDIT_RED_BOX_SX, '@media print': { display: 'none' }, ...sx }}>
+      <Typography variant="subtitle2" sx={{ mb: 1, display: 'flex', alignItems: 'center', gap: 1, ...AUDIT_RED_TITLE_SX }}>
+        <HistoryIcon fontSize="small" sx={{ color: AUDIT_RED }} />
         Earlier audit feedback — this PO replaces {rows.length === 1 ? 'a rejected PO' : `${rows.length} earlier POs`}
       </Typography>
-      <Stack spacing={1.5} divider={<Divider flexItem />}>
+      <Stack spacing={1.5} divider={<Divider flexItem sx={{ borderColor: '#ef9a9a' }} />}>
         {rows.map((po) => {
           const observations = [...(po.auditObservations || []), ...(po.auditRejectObservations || [])]
             .filter((o) => obsText(o).trim());
@@ -140,6 +138,6 @@ export default function PreviousPoAuditHistory({ purchaseOrderId, sx }) {
           );
         })}
       </Stack>
-    </Alert>
+    </Box>
   );
 }

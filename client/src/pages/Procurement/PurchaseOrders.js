@@ -85,6 +85,7 @@ import { ProjectBudgetCheck } from '../../components/Procurement/ProjectBudgetCh
 import CostCenterSelect, { loadCostCenterPolicy, isCostCenterRequiredNow } from '../../components/CostCenter/CostCenterSelect';
 import { scopeComparativeToDocumentLot } from '../../utils/comparativeQuoteItemMatch';
 import { poAuthorityLabel } from '../../utils/poAuthorityLabel';
+import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../components/Audit/auditRedBoxStyles';
 
 const PO_APPROVAL_AUTHORITY_FIELDS = [
   { key: 'preparedBy', label: 'Prepared By' },
@@ -1673,8 +1674,8 @@ const PurchaseOrders = () => {
             {/* Audit Observations with Answer Fields - Show when PO was returned from audit or finance */}
             {formDialog.mode === 'edit' && ['Returned from Audit', 'Returned from Finance'].includes(formDialog.data?.status) && formDialog.data?.auditObservations && formDialog.data.auditObservations.length > 0 && (
               <Grid item xs={12}>
-                <Alert severity="warning" sx={{ mb: 2 }}>
-                  <Typography variant="subtitle1" sx={{ fontWeight: 'bold', mb: 2 }}>
+                <Box sx={{ mb: 2, p: 2, ...AUDIT_RED_BOX_SX }}>
+                  <Typography variant="subtitle1" sx={{ mb: 2, ...AUDIT_RED_TITLE_SX }}>
                     {formDialog.data.status === 'Returned from Finance' ? 'Finance Observations' : 'Audit Observations'} - Please provide responses before resubmitting:
                   </Typography>
                   {(formDialog.data.auditReturnComments || formDialog.data.financeReturnComments) && (
@@ -1686,7 +1687,7 @@ const PurchaseOrders = () => {
                     </Box>
                   )}
                   {formDialog.data.auditObservations.map((obs, index) => (
-                    <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, bgcolor: alpha(theme.palette.warning.main, 0.05), borderRadius: 1, border: '1px solid', borderColor: 'warning.light' }}>
+                    <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, ...AUDIT_RED_ITEM_SX }}>
                       <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 1 }}>
                         <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                           Observation {index + 1}
@@ -1733,7 +1734,7 @@ const PurchaseOrders = () => {
                       />
                     </Box>
                   ))}
-                </Alert>
+                </Box>
               </Grid>
             )}
             {/* Quotation Prefill Notification */}

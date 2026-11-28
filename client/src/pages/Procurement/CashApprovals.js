@@ -45,6 +45,7 @@ import {
 import { resolveUploadPublicUrl } from '../../components/CashApprovals/cashApprovalGeneralDocumentUtils';
 import { AuditActionAttachmentsPanel } from '../../components/Audit/AuditActionAttachments';
 import { printFitToOneA4 } from '../../utils/printFitToOneA4';
+import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../components/Audit/auditRedBoxStyles';
 
 // ─── Status helpers ───────────────────────────────────────────────────────────
 const STATUS_COLORS = {
@@ -1894,13 +1895,13 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
 
             {formDialog.mode === 'edit' && formDialog.data?.status === 'Returned from Audit' && formDialog.data?.auditObservations?.length > 0 && (
               <Grid item xs={12}>
-                <Alert severity="warning" sx={{ mb: 1 }}>
-                  <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 1 }}>Audit observations — respond before sending back to Pre-Audit</Typography>
+                <Box sx={{ mb: 1, p: 2, ...AUDIT_RED_BOX_SX }}>
+                  <Typography variant="subtitle2" sx={{ mb: 1, ...AUDIT_RED_TITLE_SX }}>Audit observations — respond before sending back to Pre-Audit</Typography>
                   {formDialog.data.auditReturnComments && (
                     <Typography variant="body2" sx={{ mb: 1, whiteSpace: 'pre-wrap' }}>{formDialog.data.auditReturnComments}</Typography>
                   )}
                   {formDialog.data.auditObservations.map((obs, index) => (
-                    <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, bgcolor: alpha(theme.palette.warning.main, 0.06), borderRadius: 1 }}>
+                    <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, ...AUDIT_RED_ITEM_SX }}>
                       <Typography variant="caption" fontWeight={600}>Observation {index + 1}</Typography>
                       <Typography variant="body2" sx={{ my: 1 }}>{obs.observation}</Typography>
                       <TextField
@@ -1914,7 +1915,7 @@ const CashApprovalsPage = ({ embedCaId = null, embedViewCaId = null, onEmbedClos
                       />
                     </Box>
                   ))}
-                </Alert>
+                </Box>
               </Grid>
             )}
 

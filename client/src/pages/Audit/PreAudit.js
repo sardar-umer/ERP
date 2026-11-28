@@ -102,6 +102,7 @@ import {
   uploadAuditActionAttachments
 } from '../../components/Audit/AuditActionAttachments';
 import PreviousPoAuditHistory from '../../components/Audit/PreviousPoAuditHistory';
+import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../components/Audit/auditRedBoxStyles';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import DuplicateConfirmationNote from '../../components/UtilityBill/DuplicateConfirmationNote';
 import CentralizedStoreItemsAuditPanel from '../../components/Audit/CentralizedStoreItemsAuditPanel';
@@ -1978,8 +1979,8 @@ const PreAudit = () => {
 
         {/* Audit Rejection Observations - Show if status is Rejected */}
         {poData.status === 'Rejected' && poData.auditRejectObservations && poData.auditRejectObservations.length > 0 && (
-          <Box sx={{ mb: 3, p: 2, bgcolor: alpha(theme.palette.error.main, 0.1), border: `1px solid ${theme.palette.error.main}`, borderRadius: 1 }}>
-            <Typography variant="h6" sx={{ mb: 2, color: 'error.main', fontWeight: 'bold' }}>
+          <Box sx={{ mb: 3, p: 2, ...AUDIT_RED_BOX_SX }}>
+            <Typography variant="h6" sx={{ mb: 2, ...AUDIT_RED_TITLE_SX }}>
               Audit Rejection Observations
             </Typography>
             {poData.auditRejectionComments && (
@@ -1991,7 +1992,7 @@ const PreAudit = () => {
               </Box>
             )}
             {poData.auditRejectObservations.map((obs, index) => (
-              <Box key={index} sx={{ mb: 1.5, p: 1.5, bgcolor: '#fff', borderRadius: 1, border: '1px solid', borderColor: 'error.light' }}>
+              <Box key={index} sx={{ mb: 1.5, p: 1.5, ...AUDIT_RED_ITEM_SX }}>
                 <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
                   <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                     Observation {index + 1}
@@ -2036,8 +2037,8 @@ const PreAudit = () => {
           const hasChangeSummary = poData.resubmissionChangeSummary && String(poData.resubmissionChangeSummary).trim().length > 0;
           if (!showSection) return null;
           return (
-            <Box sx={{ mb: 3, p: 2, bgcolor: alpha(theme.palette.warning.main, 0.08), border: '1px solid', borderColor: 'warning.main', borderRadius: 1 }}>
-              <Typography variant="h6" sx={{ mb: 2, color: 'warning.dark', fontWeight: 'bold' }}>
+            <Box sx={{ mb: 3, p: 2, ...AUDIT_RED_BOX_SX }}>
+              <Typography variant="h6" sx={{ mb: 2, ...AUDIT_RED_TITLE_SX }}>
                 Audit Observations &amp; Procurement Responses
               </Typography>
               {poData.auditReturnComments && poData.status === 'Returned from Audit' && (
@@ -2068,7 +2069,7 @@ const PreAudit = () => {
                 </Box>
               )}
               {observations.map((obs, index) => (
-                <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, bgcolor: '#fff', borderRadius: 1, border: '1px solid', borderColor: 'warning.light' }}>
+                <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, ...AUDIT_RED_ITEM_SX }}>
                   <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
                     <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>
                       Observation {index + 1}
@@ -3429,8 +3430,8 @@ const PreAudit = () => {
             const observations = viewDialog.document?.isPurchaseOrder ? [] : allObs;
             if (entries.length === 0 && observations.length === 0) return null;
             return (
-              <Alert severity="warning" icon={false} sx={{ m: 2, '@media print': { display: 'none' } }}>
-                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+              <Box sx={{ m: 2, p: 2, ...AUDIT_RED_BOX_SX, '@media print': { display: 'none' } }}>
+                <Typography variant="subtitle2" sx={{ mb: 0.5, ...AUDIT_RED_TITLE_SX }}>
                   Observation from initial pre-audit
                 </Typography>
                 {entries.map((e, i) => (
@@ -3451,7 +3452,7 @@ const PreAudit = () => {
                     </Typography>
                   </Box>
                 ))}
-              </Alert>
+              </Box>
             );
           })()}
           {viewDialog.loading ? (
@@ -5037,9 +5038,9 @@ const PreAudit = () => {
                    !(viewDialog.document.isWorkflowDocument && viewDialog.fullDocument?.isPurchaseOrder) &&
                    viewDialog.document.observations.length > 0 && (
                     <Grid item xs={12}>
-                      <Typography variant="subtitle2" sx={{ mb: 1 }}>Observations</Typography>
+                      <Typography variant="subtitle2" sx={{ mb: 1, ...AUDIT_RED_TITLE_SX }}>Observations</Typography>
                       {viewDialog.document.observations.map((obs, idx) => (
-                        <Paper key={idx} sx={{ p: 2, mb: 1, bgcolor: alpha(theme.palette.warning.main, 0.1) }}>
+                        <Paper key={idx} elevation={0} sx={{ p: 2, mb: 1, ...AUDIT_RED_BOX_SX }}>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                             <Chip
                               label={obs.severity}
@@ -5077,9 +5078,9 @@ const PreAudit = () => {
                     return isPO && hasObservations;
                   })() && (
                     <Grid item xs={12}>
-                      <Typography variant="subtitle2" sx={{ mb: 1, fontWeight: 'bold' }}>Audit Observations</Typography>
+                      <Typography variant="subtitle2" sx={{ mb: 1, ...AUDIT_RED_TITLE_SX }}>Audit Observations</Typography>
                       {(viewDialog.fullDocument?.auditObservations || viewDialog.document?.auditObservations || []).map((obs, idx) => (
-                        <Paper key={obs._id || idx} sx={{ p: 2, mb: 1, bgcolor: alpha(theme.palette.warning.main, 0.1), border: '1px solid', borderColor: 'warning.light' }}>
+                        <Paper key={obs._id || idx} elevation={0} sx={{ p: 2, mb: 1, ...AUDIT_RED_BOX_SX }}>
                           <Box sx={{ display: 'flex', justifyContent: 'space-between', mb: 1 }}>
                             <Chip
                               label={obs.severity || 'medium'}
@@ -5527,8 +5528,8 @@ const PreAudit = () => {
               );
             }
             return (
-              <Alert severity="warning" icon={false} sx={{ mt: 1, maxWidth: 560 }}>
-                <Typography variant="subtitle2" fontWeight={700} sx={{ mb: 0.5 }}>
+              <Box sx={{ mt: 1, maxWidth: 560, p: 2, ...AUDIT_RED_BOX_SX }}>
+                <Typography variant="subtitle2" sx={{ mb: 0.5, ...AUDIT_RED_TITLE_SX }}>
                   Observation from initial pre-audit
                 </Typography>
                 {entries.map((e, i) => (
@@ -5549,7 +5550,7 @@ const PreAudit = () => {
                     )}
                   </Box>
                 ))}
-              </Alert>
+              </Box>
             );
           })()}
           <TextField

@@ -8,6 +8,7 @@ import { PurchaseOrderAttachmentsPanel } from '../../../components/Procurement/P
 import { ChargedToPanel } from '../../../components/Procurement/ChargedToPanel';
 import { ProjectBudgetCheck } from '../../../components/Procurement/ProjectBudgetCheck';
 import { poAuthorityLabel } from '../../../utils/poAuthorityLabel';
+import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../../components/Audit/auditRedBoxStyles';
 
 const formatDateForPrint = (date) => {
   if (!date) return '';
@@ -204,8 +205,8 @@ const PODocumentView = ({ data }) => {
 
       {/* Audit Observations & Procurement Responses */}
       {hasObservations && (
-        <Box sx={{ mb: 3, p: 2, bgcolor: alpha(theme.palette.warning.main, 0.08), border: '1px solid', borderColor: 'warning.main', borderRadius: 1 }}>
-          <Typography variant="h6" sx={{ mb: 2, color: 'warning.dark', fontWeight: 'bold' }}>
+        <Box sx={{ mb: 3, p: 2, ...AUDIT_RED_BOX_SX }}>
+          <Typography variant="h6" sx={{ mb: 2, ...AUDIT_RED_TITLE_SX }}>
             Audit Observations &amp; Procurement Responses
           </Typography>
           {data.auditReturnComments && (
@@ -231,7 +232,7 @@ const PODocumentView = ({ data }) => {
             </Box>
           )}
           {observations.map((obs, index) => (
-            <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, bgcolor: '#fff', borderRadius: 1, border: '1px solid', borderColor: 'warning.light' }}>
+            <Box key={obs._id || index} sx={{ mb: 2, p: 1.5, ...AUDIT_RED_ITEM_SX }}>
               <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', mb: 0.5 }}>
                 <Typography variant="subtitle2" sx={{ fontWeight: 600 }}>Observation {index + 1}</Typography>
                 {obs.severity && (

@@ -301,6 +301,20 @@ const LedgerCheck = ({ check, loading, onRun }) => {
             <TableCell align="right" sx={numCell}>{money(check.receivableAsOfToday)}</TableCell>
           </TableRow>
           <TableRow>
+            <TableCell sx={{ color: 'text.secondary', pl: 4 }}>
+              Late surcharge accrued, not billed (memo — not in the receivable)
+            </TableCell>
+            <TableCell align="right" sx={{ ...numCell, color: 'text.secondary' }}>
+              {money(check.ledgerLatePaymentSurchargeNotOnBills)}
+            </TableCell>
+          </TableRow>
+          <TableRow>
+            <TableCell sx={{ color: 'text.secondary', pl: 4 }}>Receivable incl. accrued surcharge</TableCell>
+            <TableCell align="right" sx={{ ...numCell, color: 'text.secondary' }}>
+              {money((Number(check.receivableAsOfToday) || 0) + (Number(check.ledgerLatePaymentSurchargeNotOnBills) || 0))}
+            </TableCell>
+          </TableRow>
+          <TableRow>
             <TableCell>Total of all Resident Ledgers</TableCell>
             <TableCell align="right" sx={numCell}>{money(check.residentLedgerTotal)}</TableCell>
           </TableRow>
@@ -310,26 +324,6 @@ const LedgerCheck = ({ check, loading, onRun }) => {
           </TableRow>
         </TableBody>
       </Table>
-      <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
-        Known reasons the two differ:
-        <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
-          <li>
-            The ledgers add a 10% late-payment surcharge on overdue unpaid bills that is not saved on any bill
-            (up to {money(check.ledgerLatePaymentSurchargeNotOnBills)} today). This page counts only what is on the bills.
-          </li>
-          <li>
-            Some bills were paid more than their total ({money(check.paidAboveBill)}): mostly a 10% late surcharge paid in
-            cash that was never saved on the bill, and some arrears recorded as paid twice. This page counts the extra as
-            received (a credit); the ledgers show those bills as 0.
-          </li>
-          <li>
-            For properties with more than one electricity meter, the ledgers keep the opening arrears of only one meter;
-            this page counts every meter.
-          </li>
-        </Box>
-        Adding up the balance stored on every bill would give {money(check.storedInvoiceBalanceSum)}. That counts the same unpaid
-        amount again on every later bill (as arrears), so it is not used.
-      </Typography>
     </Box>
   );
 };
@@ -666,12 +660,6 @@ const ReceivablesView = () => {
         </Paper>
       )}
 
-      <Typography variant="caption" color="text.secondary" sx={{ display: 'block' }}>
-        How these figures are built: Billed is each bill's own charges in its billing month; arrears printed on a bill are a copy of
-        earlier unpaid bills and are not added again. Received is payments recorded on bills, by payment date ({TIMEZONE}).
-        Brought forward is what residents owed before the system went live.
-        {data?.generatedAt ? ` Updated ${formatDateFns(new Date(data.generatedAt), 'd MMM yyyy, h:mm a')}.` : ''}
-      </Typography>
     </Box>
   );
 };
