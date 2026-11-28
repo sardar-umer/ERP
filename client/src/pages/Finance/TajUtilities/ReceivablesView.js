@@ -311,11 +311,16 @@ const LedgerCheck = ({ check, loading, onRun }) => {
         </TableBody>
       </Table>
       <Typography variant="caption" color="text.secondary" component="div" sx={{ mt: 1 }}>
-        Known reasons the two differ, until they are fixed in the Resident Ledger:
+        Known reasons the two differ:
         <Box component="ul" sx={{ m: 0, pl: 2.5 }}>
           <li>
             The ledgers add a 10% late-payment surcharge on overdue unpaid bills that is not saved on any bill
             (up to {money(check.ledgerLatePaymentSurchargeNotOnBills)} today). This page counts only what is on the bills.
+          </li>
+          <li>
+            Some bills were paid more than their total ({money(check.paidAboveBill)}): mostly a 10% late surcharge paid in
+            cash that was never saved on the bill, and some arrears recorded as paid twice. This page counts the extra as
+            received (a credit); the ledgers show those bills as 0.
           </li>
           <li>
             For properties with more than one electricity meter, the ledgers keep the opening arrears of only one meter;

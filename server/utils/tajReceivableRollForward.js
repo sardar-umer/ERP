@@ -86,7 +86,7 @@ const ledgerPeriodKey = (value) => (value ? new Date(value).toISOString() : '');
 
 /**
  * A resident's outstanding split per invoice without double-counting carried arrears:
- * per charge-type section only the earliest unpaid invoice keeps its arrears.
+ * per charge-type section and property only the earliest unpaid invoice keeps its arrears.
  * Returns the invoices that still owe, with { inv, balance }.
  */
 const ledgerOutstandingRows = (invoices) => {
@@ -99,12 +99,15 @@ const ledgerOutstandingRows = (invoices) => {
       return cmp !== 0 ? cmp : ledgerPeriodKey(a.invoiceDate).localeCompare(ledgerPeriodKey(b.invoiceDate));
     });
     const stillOwes = (inv) => (Number(inv.balance) || 0) > 0 || ['unpaid', 'partial_paid'].includes(String(inv.paymentStatus || '').toLowerCase());
-    const firstId = (sorted.find(stillOwes) || sorted[0])?._id?.toString();
+    // One arrears chain per property: each property's earliest owing invoice keeps its arrears
+    const byProperty = {};
+    sorted.forEach(inv => { const k = String(inv.property?._id || inv.property || ''); (byProperty[k] = byProperty[k] || []).push(inv); });
+    const firstIds = new Set(Object.values(byProperty).map(l => (l.find(stillOwes) || l[0])._id.toString()));
     sorted.forEach(inv => {
       const displayAmount = ledgerInvoiceDisplayAmount(inv);
       const totalPaid = Number(inv.totalPaid) || 0;
       const totalArrears = Number(inv.totalArrears) || 0;
-      const balance = inv._id.toString() === firstId
+      const balance = firstIds.has(inv._id.toString())
         ? Math.max(0, displayAmount - totalPaid)
         : Math.max(0, displayAmount - totalArrears - totalPaid);
       if (balance > 0.005) rows.push({ inv, balance });
@@ -384,7 +387,13 @@ const buildLedgerCheck = async (keySet) => {
     }
   }
   const storedBalanceSum = invoices.reduce((s, inv) => s + Math.max(0, Number(inv.balance) || 0) * shareOf(inv), 0);
-  return { ledgerTotal, surchargeNotOnBills, storedBalanceSum };
+  // Paid more than the bill's total (late surcharge paid but never saved on the bill, arrears paid twice):
+  // this page counts the extra as received, the ledger shows such bills as 0
+  const paidAboveBill = invoices.reduce((s, inv) => {
+    const over = (Number(inv.totalPaid) || 0) - (Number(inv.grandTotal) || 0);
+    return over > 0.5 ? s + over * shareOf(inv) : s;
+  }, 0);
+  return { ledgerTotal, surchargeNotOnBills, storedBalanceSum, paidAboveBill };
 };
 
 const CACHE_TTL_MS = 2 * 60 * 1000;
@@ -543,6 +552,7 @@ const buildReceivableRollForward = async ({ startMonth, endMonth, timezone = 'As
   if (ledger) {
     check.residentLedgerTotal = round2(ledger.ledgerTotal);
     check.ledgerLatePaymentSurchargeNotOnBills = round2(ledger.surchargeNotOnBills);
+    check.paidAboveBill = round2(ledger.paidAboveBill);
     check.difference = round2(ledger.ledgerTotal - receivableNow);
     // What summing stored invoice balances gives (carried arrears counted again on every later bill)
     check.storedInvoiceBalanceSum = round2(ledger.storedBalanceSum);

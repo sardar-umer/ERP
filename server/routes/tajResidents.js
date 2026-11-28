@@ -507,7 +507,7 @@ router.get('/ledger', authMiddleware, asyncHandler(async (req, res) => {
         property: { $in: invoicePropertyIds },
         status: { $ne: 'Cancelled' }
       })
-        .select('invoiceNumber invoiceDate periodFrom periodTo dueDate chargeTypes charges subtotal totalArrears grandTotal totalPaid balance paymentStatus status')
+        .select('invoiceNumber invoiceDate periodFrom periodTo dueDate chargeTypes charges subtotal totalArrears grandTotal totalPaid balance paymentStatus status property')
         .populate('property', 'propertyName plotNumber sector')
         .sort({ periodTo: -1, invoiceDate: -1 })
         .limit(200)

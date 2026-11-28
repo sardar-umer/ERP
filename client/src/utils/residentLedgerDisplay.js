@@ -1,6 +1,6 @@
 /**
  * Resident ledger display — matches "Pay Invoices from Deposit" (Taj Residents):
- * arrears appear only on the earliest invoice per charge-type section;
+ * arrears appear only on the earliest owing invoice per property within each charge-type section;
  * later invoices show current-period amount/balance only.
  */
 
@@ -64,17 +64,26 @@ const invoiceStillOwes = (inv) => {
   return status === 'unpaid' || status === 'partial_paid';
 };
 
+const ledgerPropertyKey = (inv) => String(inv?.property?._id ?? inv?.property ?? '');
+
 export const buildLedgerSectionDisplayRows = (invoices = []) => {
   const sorted = sortLedgerInvoicesByPeriod(invoices);
-  // Same as Pay Invoices from Deposit: earliest period among invoices that still owe.
-  const firstUnpaid = sorted.find(invoiceStillOwes);
-  const firstId = firstUnpaid?._id ?? sorted[0]?._id;
+  // Same as Pay Invoices from Deposit (one property at a time): per property, the earliest period
+  // among invoices that still owe carries the arrears. A resident with several properties has one
+  // arrears chain per property, so each property's opening arrears is kept.
+  const firstIds = new Set();
+  const byProperty = {};
+  sorted.forEach((inv) => { (byProperty[ledgerPropertyKey(inv)] = byProperty[ledgerPropertyKey(inv)] || []).push(inv); });
+  Object.values(byProperty).forEach((list) => {
+    const first = list.find(invoiceStillOwes) ?? list[0];
+    if (first) firstIds.add(String(first._id));
+  });
 
   return sorted.map((inv) => {
     const displayAmount = getLedgerInvoiceDisplayAmount(inv);
     const totalPaid = Number(inv.totalPaid) || 0;
     const totalArrears = Number(inv.totalArrears) || 0;
-    const isFirst = inv._id === firstId;
+    const isFirst = firstIds.has(String(inv._id));
 
     const invoiceAmount = Math.max(0, displayAmount - totalArrears);
     const arrears = isFirst && totalArrears > 0 ? totalArrears : null;
