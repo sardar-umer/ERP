@@ -103,6 +103,7 @@ import {
 } from '../../components/Audit/AuditActionAttachments';
 import PreviousPoAuditHistory from '../../components/Audit/PreviousPoAuditHistory';
 import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../components/Audit/auditRedBoxStyles';
+import { getInitialAuditNotes as sharedInitialAuditNotes } from '../../components/Audit/auditInitialNotes';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
 import DuplicateConfirmationNote from '../../components/UtilityBill/DuplicateConfirmationNote';
 import CentralizedStoreItemsAuditPanel from '../../components/Audit/CentralizedStoreItemsAuditPanel';
@@ -322,39 +323,7 @@ const PreAudit = () => {
     ? `${u.firstName || ''} ${u.lastName || ''}`.trim() || u.name || u.email || ''
     : '');
   // Notes left by the first (initial) pre-audit reviewer, for the Audit Director to see before final approval.
-  const getInitialAuditNotes = (doc) => {
-    if (!doc) return { entries: [], observations: [] };
-    const DEFAULT_TEXT = /^(initial pre-audit approval recorded|forwarded to audit director for approval)/i;
-    const history = Array.isArray(doc.workflowHistory) ? doc.workflowHistory : [];
-    const initialAt = doc.preAuditInitialApprovedAt || doc.initialAuditApprovedAt || doc.originalDocument?.preAuditInitialApprovedAt;
-    const initialMs = initialAt ? new Date(initialAt).getTime() : null;
-    const entries = [];
-    history.forEach((h) => {
-      const to = String(h?.toStatus || '').toLowerCase();
-      const from = String(h?.fromStatus || '').toLowerCase();
-      const isInitial = to === 'initial audit approval' || to === 'initial pre-audit approved'
-        || (from === 'pending audit' && to === 'pending audit' && String(h?.module || '') === 'Pre-Audit'
-          && initialMs && Math.abs(new Date(h.changedAt).getTime() - initialMs) < 60000);
-      const isForward = to === 'forwarded to audit director' || to === 'forwarded_to_director';
-      if (!isInitial && !isForward) return;
-      const text = String(h?.comments || '').trim();
-      if (!text || DEFAULT_TEXT.test(text) || entries.some((e) => e.text === text)) return;
-      entries.push({ label: isInitial ? 'Initial approval' : 'Forwarded', text, by: personName(h.changedBy), at: h.changedAt });
-    });
-    // Fall back to stored initial comments when the history entry is missing
-    const stored = String(doc.preAuditInitialComments || doc.originalDocument?.preAuditInitialComments || doc.reviewComments || '').trim();
-    if (stored && !DEFAULT_TEXT.test(stored) && !entries.some((e) => e.text === stored)) {
-      entries.unshift({ label: 'Initial approval', text: stored, by: personName(doc.reviewedBy), at: initialAt || doc.reviewedAt });
-    }
-    const rawObs = [
-      ...(Array.isArray(doc.auditObservations) ? doc.auditObservations : []),
-      ...(Array.isArray(doc.observations) ? doc.observations : [])
-    ];
-    const observations = rawObs
-      .map((o) => (typeof o === 'object' ? o : { observation: o }))
-      .filter((o) => o?.observation && !o.resolved);
-    return { entries, observations };
-  };
+  const getInitialAuditNotes = sharedInitialAuditNotes;
 
   const fetchDocuments = useCallback(async () => {
     try {

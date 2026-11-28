@@ -82,6 +82,7 @@ import CashApprovalGeneralDetailShell from '../CashApprovals/CashApprovalGeneral
 import { isGeneralModuleCashApproval } from '../CashApprovals/cashApprovalGeneralDocumentUtils';
 import ComparativeStatementView from '../Procurement/ComparativeStatementView';
 import { WorkflowAuditFeedbackPanel } from '../Admin/workflowAuditReturn';
+import CeoAuditFeedbackPanel from '../Audit/CeoAuditFeedbackPanel';
 import IndentDetail from '../../pages/General/Indents/IndentDetail';
 import UtilityBillDetails from '../../pages/Admin/UtilityBillManagement/UtilityBillDetails';
 import CentralizedStoreBillInvoiceBody from '../UtilityBill/CentralizedStoreBillInvoiceBody';
@@ -2380,6 +2381,12 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
               }}
               className={(viewDialog.isPurchaseOrder || viewDialog.isCashApproval) ? 'print-content' : ''}
             >
+              {/* Audit observations for the CEO (read-only, red box). POs list their own observations below. */}
+              {viewDialog.isPurchaseOrder ? (
+                <CeoAuditFeedbackPanel doc={viewDialog.settlement} showObservations={false} showEarlierPoFeedback />
+              ) : ((viewDialog.isCashApproval && !isGeneralModuleCashApproval(viewDialog.settlement)) || viewDialog.isVendorBill || viewDialog.isManualSalary) ? (
+                <CeoAuditFeedbackPanel doc={viewDialog.settlement} />
+              ) : null}
               {/* Show Purchase Order view if it's a PO */}
               {viewDialog.isPurchaseOrder ? (
                 <>
@@ -3810,7 +3817,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
           }
         />
       )}
-      <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
+      <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} showAuditFeedback />
       {loanDialog && (
         <LoanApprovalDialog
           loan={loanDialog}
@@ -3824,6 +3831,7 @@ const ExecutiveCeoPaymentsSection = ({ showIpcTab = false } = {}) => {
       )}
       {finalSettlementDialog && (
         <SettlementProcessDialog
+          showAuditFeedback
           settlement={finalSettlementDialog}
           onClose={() => setFinalSettlementDialog(null)}
           onDone={(message) => {

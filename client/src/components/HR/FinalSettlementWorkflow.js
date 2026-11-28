@@ -28,6 +28,7 @@ import api from '../../services/api';
 import finalSettlementService from '../../services/finalSettlementService';
 import { formatPKR } from '../../utils/currency';
 import LoanAttachments from './LoanAttachments';
+import CeoAuditFeedbackPanel from '../Audit/CeoAuditFeedbackPanel';
 
 /**
  * Final settlement approval workflow:
@@ -173,7 +174,8 @@ export const ForwardSettlementDialog = ({ settlement, onClose, onDone }) => {
 };
 
 /** Process dialog: settlement figures + approval trail, with Approve / Return when it is the user's turn. */
-export const SettlementProcessDialog = ({ settlement, onClose, onDone, onEdit }) => {
+/** showAuditFeedback: CEO desk shows Audit's notes and observations (read-only) at the top */
+export const SettlementProcessDialog = ({ settlement, onClose, onDone, onEdit, showAuditFeedback = false }) => {
   const [comments, setComments] = useState('');
   const [busy, setBusy] = useState('');
   const [error, setError] = useState('');
@@ -220,6 +222,7 @@ export const SettlementProcessDialog = ({ settlement, onClose, onDone, onEdit })
         </Stack>
       </DialogTitle>
       <DialogContent dividers>
+        {showAuditFeedback && <CeoAuditFeedbackPanel doc={s} sx={{ px: 0, pt: 0 }} />}
         <Grid container spacing={1.5} sx={{ mb: 2 }}>
           {figures.map(([label, v]) => (
             <Grid item xs={6} md={3} key={label}>

@@ -11,6 +11,7 @@ import { BudgetDocumentFrame } from './ProjectBudgetPanel';
 import { CheckRequestAttachmentsList } from './CheckRequestAttachments';
 import { certificateTitle, day, ipcCertificateHtml, money, pkr, printIpcCertificate } from './ipcCertificateDocument';
 import { AuditActionAttachmentsPanel } from '../Audit/AuditActionAttachments';
+import CeoAuditFeedbackPanel from '../Audit/CeoAuditFeedbackPanel';
 
 // Same quiet document style as the certificate: hairline rules, small uppercase labels, no colour
 const INK = '#18181b';
@@ -116,7 +117,8 @@ const position = (p) => p && [
  * the certificate plus the contract, check request, inspections with site evidence, payment history and project
  * documents. Each page keeps its own Approve / Reject buttons; `actions` renders them here.
  */
-export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }) {
+/** showAuditFeedback: CEO desk shows Audit's notes and observations (read-only) above the tabs */
+export default function IpcReviewDialog({ ipcId, open, onClose, actions = null, showAuditFeedback = false }) {
   const [dossier, setDossier] = useState(null);
   const [error, setError] = useState('');
   const [tab, setTab] = useState('certificate');
@@ -183,6 +185,7 @@ export default function IpcReviewDialog({ ipcId, open, onClose, actions = null }
         <Button color="inherit" size="small" onClick={onClose}>Close</Button>
       </Stack>
 
+      {showAuditFeedback && dossier?.ipc && <CeoAuditFeedbackPanel doc={dossier.ipc} />}
       {dossier && (
         <Tabs value={tab} onChange={(_, v) => setTab(v)} variant="scrollable" scrollButtons="auto"
           TabIndicatorProps={{ sx: { bgcolor: INK, height: 2 } }}
