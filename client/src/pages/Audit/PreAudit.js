@@ -102,6 +102,7 @@ import {
   uploadAuditActionAttachments
 } from '../../components/Audit/AuditActionAttachments';
 import PreviousPoAuditHistory from '../../components/Audit/PreviousPoAuditHistory';
+import PoItemHistoryDialog from '../../components/Audit/PoItemHistoryDialog';
 import { AUDIT_RED_BOX_SX, AUDIT_RED_TITLE_SX, AUDIT_RED_ITEM_SX } from '../../components/Audit/auditRedBoxStyles';
 import { getInitialAuditNotes as sharedInitialAuditNotes } from '../../components/Audit/auditInitialNotes';
 import CentralizedStoreBillInvoiceBody from '../../components/UtilityBill/CentralizedStoreBillInvoiceBody';
@@ -166,7 +167,19 @@ const PreAudit = () => {
   const [page, setPage] = useState(0);
   const [rowsPerPage, setRowsPerPage] = useState(20);
   const [totalCount, setTotalCount] = useState(0);
+  const [searchInput, setSearchInput] = useState('');
+  // What is sent to the server: the typed text, once typing pauses
   const [searchQuery, setSearchQuery] = useState('');
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const next = searchInput.trim();
+      setSearchQuery((prev) => {
+        if (prev !== next) setPage(0);
+        return next;
+      });
+    }, 400);
+    return () => clearTimeout(t);
+  }, [searchInput]);
   const [filters, setFilters] = useState({
     status: '',
     sourceDepartment: '',
@@ -204,6 +217,8 @@ const PreAudit = () => {
   const [viewDialog, setViewDialog] = useState({ open: false, document: null, fullDocument: null, loading: false, quotations: [], grns: [], caLinkedDocs: [], poAuditTab: 0 });
   // Project Management subcontractor IPC opened for review
   const [ipcReviewId, setIpcReviewId] = useState(null);
+  // Item purchase history dialog: { purchaseOrderId, lineIndex }
+  const [itemHistory, setItemHistory] = useState(null);
   const [imageViewer, setImageViewer] = useState({ open: false, imageUrl: '', imageName: '', isBlob: false });
   const [imageZoom, setImageZoom] = useState(1);
   const [imageOffset, setImageOffset] = useState({ x: 0, y: 0 });
@@ -2210,6 +2225,19 @@ const PreAudit = () => {
                     </td>
                     <td style={{ border: '1px solid #000', padding: '10px 8px', verticalAlign: 'top' }}>
                       {item.description || poData.indent?.items?.[index]?.itemName || '___________'}
+                      {poData._id && item.description && (
+                        <Box sx={{ mt: 0.5, '@media print': { display: 'none' } }}>
+                          <Button
+                            size="small"
+                            variant="outlined"
+                            startIcon={<HistoryIcon sx={{ fontSize: 16 }} />}
+                            onClick={() => setItemHistory({ purchaseOrderId: poData._id, lineIndex: index })}
+                            sx={{ textTransform: 'none', fontSize: 12, py: 0, px: 1, minWidth: 0 }}
+                          >
+                            Bought before?
+                          </Button>
+                        </Box>
+                      )}
                     </td>
                     <td style={{ border: '1px solid #000', padding: '10px 8px', verticalAlign: 'top' }}>
                       {item.specification || poData.indent?.items?.[index]?.specification || poData.indent?.items?.[index]?.description || poData.indent?.items?.[index]?.purpose || '___________'}
@@ -2496,12 +2524,19 @@ const PreAudit = () => {
           >
             <TextField
               size="small"
-              placeholder="Search by number, title, vendor…"
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              sx={{ flex: '1 1 240px', minWidth: 200, maxWidth: 420 }}
+              placeholder="Search: number, vendor, item, indent, employee, amount…"
+              title="Every word must match (any order). Searches number, vendor / contractor / employee, items, indent, project, department, amount, status, observations and comments."
+              value={searchInput}
+              onChange={(e) => setSearchInput(e.target.value)}
+              onKeyDown={(e) => { if (e.key === 'Escape') setSearchInput(''); }}
+              sx={{ flex: '1 1 300px', minWidth: 220, maxWidth: 480 }}
               InputProps={{
-                startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 20 }} />
+                startAdornment: <SearchIcon sx={{ mr: 1, color: 'text.secondary', fontSize: 20 }} />,
+                endAdornment: searchInput ? (
+                  <IconButton size="small" aria-label="Clear search" onClick={() => setSearchInput('')} edge="end">
+                    <CloseIcon fontSize="small" />
+                  </IconButton>
+                ) : null
               }}
             />
             <Button
@@ -5558,6 +5593,11 @@ const PreAudit = () => {
       </Dialog>
 
       <IpcReviewDialog open={Boolean(ipcReviewId)} ipcId={ipcReviewId} onClose={() => setIpcReviewId(null)} />
+      <PoItemHistoryDialog
+        purchaseOrderId={itemHistory?.purchaseOrderId}
+        lineIndex={itemHistory?.lineIndex}
+        onClose={() => setItemHistory(null)}
+      />
 
       {/* Add Observation Dialog */}
       <Dialog

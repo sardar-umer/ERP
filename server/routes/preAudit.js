@@ -9,6 +9,7 @@ const { authMiddleware } = require('../middleware/auth');
 const permissions = require('../middleware/permissions');
 const asyncHandler = require('../middleware/errorHandler').asyncHandler;
 const { authorize } = require('../middleware/auth');
+const { preAuditSearchTerms, matchesPreAuditSearch } = require('../utils/preAuditSearch');
 const { getWorkflowModules, getModuleConfig } = require('../utils/adminWorkflowConfig');
 const {
   hasWorkflowInitialAuditApproval,
@@ -194,10 +195,14 @@ router.get('/',
       sourceModule,
       documentType,
       priority,
-      search,
+      search: rawSearch,
       sortBy = 'createdAt',
       sortOrder = 'desc'
     } = req.query;
+
+    // Search runs on the combined list below, over each document's full content (number, vendor, items,
+    // indent, people, amount, observations …), so the per-type queries load the same set with or without it
+    const searchTerms = preAuditSearchTerms(rawSearch);
 
     // Build filter object
     const filters = { isActive: true };
@@ -207,17 +212,6 @@ router.get('/',
     if (sourceModule) filters.sourceModule = sourceModule;
     if (documentType) filters.documentType = documentType;
     if (priority) filters.priority = priority;
-
-    // Search functionality
-    if (search) {
-      filters.$or = [
-        { title: { $regex: search, $options: 'i' } },
-        { description: { $regex: search, $options: 'i' } },
-        { documentNumber: { $regex: search, $options: 'i' } },
-        { referenceNumber: { $regex: search, $options: 'i' } },
-        { sourceDepartmentName: { $regex: search, $options: 'i' } }
-      ];
-    }
 
     // Sort configuration
     const sort = {};
@@ -272,19 +266,7 @@ router.get('/',
         const workflowQuery = {
           $or: statusConditions
         };
-        
-        // Apply search filter if provided
-        if (search) {
-          const searchConditions = [
-            { [config.titleField]: { $regex: search, $options: 'i' } },
-            { [config.descriptionField]: { $regex: search, $options: 'i' } }
-          ];
-          workflowQuery.$and = [
-            { $or: statusConditions },
-            { $or: searchConditions }
-          ];
-        }
-        
+
         let docsQuery = Model.find(workflowQuery)
           .populate('createdBy', 'firstName lastName email')
           .populate('updatedBy', 'firstName lastName email')
@@ -371,19 +353,9 @@ router.get('/',
         ]
       };
       const poQuery = { ...poVisible };
-      if (search) {
-        delete poQuery.$or;
-        poQuery.$and = [
-          poVisible,
-          { $or: [
-            { orderNumber: { $regex: search, $options: 'i' } },
-            { notes: { $regex: search, $options: 'i' } },
-            { internalNotes: { $regex: search, $options: 'i' } }
-          ]}
-        ];
-      }
       const poDocs = await PurchaseOrder.find(poQuery)
         .populate('vendor', 'name email phone')
+        .populate('indent', 'indentNumber title department')
         .populate('createdBy', 'firstName lastName email')
         .populate('auditObservations.addedBy', 'firstName lastName email')
         .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
@@ -441,20 +413,9 @@ router.get('/',
         ]
       };
       const caQuery = { ...caVisible };
-      if (search) {
-        delete caQuery.$or;
-        caQuery.$and = [
-          caVisible,
-          {
-            $or: [
-              { caNumber: { $regex: search, $options: 'i' } },
-              { notes: { $regex: search, $options: 'i' } }
-            ]
-          }
-        ];
-      }
       const caDocs = await CashApproval.find(caQuery)
         .populate('vendor', 'name email phone')
+        .populate('indent', 'indentNumber title department')
         .populate('createdBy', 'firstName lastName email')
         .populate('auditObservations.addedBy', 'firstName lastName email')
         .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
@@ -507,12 +468,6 @@ router.get('/',
           { approvalStatus: 'Rejected', auditApprovedAt: { $ne: null } }
         ]
       };
-      if (search) {
-        ipcQuery.$and = [{ $or: [
-          { invoiceNumber: { $regex: search, $options: 'i' } },
-          { description: { $regex: search, $options: 'i' } }
-        ] }];
-      }
       const ipcDocs = await ProjectInvoice.find(ipcQuery)
         .populate('contractor', 'name')
         .populate({ path: 'project', select: 'name projectNumber parentProject', populate: { path: 'parentProject', select: 'name' } })
@@ -520,7 +475,7 @@ router.get('/',
         .populate('workflowHistory.changedBy', 'firstName lastName email employeeId digitalSignature approvalStamp')
         .populate('observations.addedBy', 'firstName lastName email')
         .sort({ updatedAt: -1 })
-        .limit(300)
+        .limit(searchTerms.length ? 3000 : 300)
         .lean();
       const { ipcCompanyNames } = require('../utils/projectIpcFinance');
       const ipcCompanies = await ipcCompanyNames(ipcDocs);
@@ -576,7 +531,7 @@ router.get('/',
     // HR Manual Salary: only older records still in the Audit queue (new ones go GM HR → Finance) (same lifecycle as IPCs)
     try {
       const { listManualSalariesForPreAudit } = require('../utils/manualSalaryAudit');
-      workflowDocs.push(...await listManualSalariesForPreAudit(search));
+      workflowDocs.push(...await listManualSalariesForPreAudit());
     } catch (msErr) {
       console.error('Error fetching manual salaries for pre-audit:', msErr);
     }
@@ -584,7 +539,7 @@ router.get('/',
     // HR Final Settlement: after GM HR, before CEO (AVP removed 2026-11-24)
     try {
       const { listFinalSettlementsForPreAudit } = require('../utils/finalSettlementAudit');
-      workflowDocs.push(...await listFinalSettlementsForPreAudit(search));
+      workflowDocs.push(...await listFinalSettlementsForPreAudit());
     } catch (fsErr) {
       console.error('Error fetching final settlements for pre-audit:', fsErr);
     }
@@ -604,20 +559,6 @@ router.get('/',
         ]
       };
       const vbQuery = { ...vbVisible, referenceType: { $ne: 'utility_bill' } };
-      if (search) {
-        delete vbQuery.$or;
-        vbQuery.$and = [
-          vbVisible,
-          {
-            $or: [
-              { billNumber: { $regex: search, $options: 'i' } },
-              { vendorInvoiceNumber: { $regex: search, $options: 'i' } },
-              { 'vendor.name': { $regex: search, $options: 'i' } },
-              { notes: { $regex: search, $options: 'i' } }
-            ]
-          }
-        ];
-      }
       const vbDocs = await AccountsPayableModel.find(vbQuery)
         .populate('vendor.vendorId', 'name email phone')
         .populate('createdBy', 'firstName lastName email')
@@ -696,9 +637,11 @@ router.get('/',
     }
     
     // Apply status filter if provided (for tab filtering)
-    let filteredDocuments = allDocuments;
+    let filteredDocuments = searchTerms.length
+      ? allDocuments.filter((doc) => matchesPreAuditSearch(doc, searchTerms))
+      : allDocuments;
     if (status) {
-      filteredDocuments = allDocuments.filter(doc => {
+      filteredDocuments = filteredDocuments.filter(doc => {
         // For workflow documents, check the mapped status (must match exactly)
         if (doc.isWorkflowDocument) {
           // Ensure status matches exactly - no partial matches
@@ -974,6 +917,25 @@ router.get('/:id/audit-attachments',
       .populate('uploadedBy', 'firstName lastName email')
       .lean();
     res.json({ success: true, data: rows });
+  })
+);
+
+// @route   GET /api/pre-audit/purchase-order/:id/item-history/:lineIndex
+// @desc    Earlier POs that bought the same or a similar item as this PO line, with their rates
+//          (last / lowest / average and how this PO's rate compares). Read-only.
+// @access  Private (Audit roles)
+router.get('/purchase-order/:id/item-history/:lineIndex',
+  authMiddleware,
+  authorize('super_admin', 'audit_manager', 'auditor', 'audit_director'),
+  asyncHandler(async (req, res) => {
+    const mongoose = require('mongoose');
+    if (!mongoose.Types.ObjectId.isValid(req.params.id) || !/^\d+$/.test(String(req.params.lineIndex))) {
+      return res.status(400).json({ success: false, message: 'Invalid purchase order or line' });
+    }
+    const { buildPoItemHistory } = require('../utils/poItemHistory');
+    const data = await buildPoItemHistory(req.params.id, Number(req.params.lineIndex));
+    if (!data) return res.status(404).json({ success: false, message: 'Purchase order line not found' });
+    res.json({ success: true, data });
   })
 );
 
